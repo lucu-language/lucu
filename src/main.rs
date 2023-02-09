@@ -5,12 +5,12 @@ use parcelr::parcelr;
 type Members<'a> = HashMap<&'a str, Value<'a>>;
 type Values<'a> = Vec<Value<'a>>;
 
-struct BracketL();
-struct BracketR();
-struct BraceL();
-struct BraceR();
-struct Colon();
-struct Comma();
+type BracketL = ();
+type BracketR = ();
+type BraceL = ();
+type BraceR = ();
+type Colon = ();
+type Comma = ();
 
 type String<'a> = &'a str;
 type Number = f64;
@@ -18,8 +18,10 @@ type Boolean = bool;
 
 parcelr! {
 
+    #[derive(Debug)]
     struct Json<'a>(Value<'a>);
 
+    #[derive(Debug)]
     enum Value<'a> {
         Object(Object<'a>),
         Array(Array<'a>),
@@ -29,10 +31,16 @@ parcelr! {
     }
 
     // { members }
+    #[derive(Debug)]
     struct Object<'a>(BraceL, Members<'a>, BraceR);
 
     // [ values ]
+    #[derive(Debug)]
     struct Array<'a>(BracketL, Values<'a>, BracketR);
+
+    fn object_emptier_test() -> Object<'static> {
+        Object((), HashMap::new(), ())
+    }
 
     // { }
     fn object_empty(l: BraceL, r: BraceR) -> Object<'static> {
@@ -69,5 +77,5 @@ parcelr! {
 }
 
 fn main() {
-    println!("Hello, world!");
+    println!("{:?}", Token::Object(object_empty((), ())));
 }

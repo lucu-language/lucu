@@ -3,7 +3,7 @@ use std::{collections::{HashMap, HashSet, BTreeMap, btree_map::Entry}, fmt, hash
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
-use syn::{Item, parse_macro_input, parse::{Parse, ParseStream}, ReturnType, Type, FnArg, Fields, Generics, ItemEnum, ItemStruct, Error};
+use syn::{Item, parse_macro_input, parse::{Parse, ParseStream}, ReturnType, Type, FnArg, Fields, Generics, ItemEnum, ItemStruct};
 
 type Symbols = HashMap<String, TokenStream>;
 type SymbolSet<'a> = HashSet<&'a str>;
@@ -228,7 +228,7 @@ fn grammar<'a>(rules: &'a Vec<Rule>, lexemes: &SymbolSet<'a>) -> Result<Grammar<
     start.insert(ParseItem {
         rule: &rules[0],
         index: 0,
-    }, HashSet::from_iter(vec!["$"]));
+    }, HashSet::from_iter(vec!["EOF"]));
 
     let mut processed: HashMap<Vec<ParseItem<'a>>, (ItemSet<'a>, usize)> = HashMap::new();
     let mut stack: Vec<(ItemSet<'a>, usize)> = Vec::new();
@@ -506,27 +506,105 @@ pub fn parcelr(mut item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     item.extend(enum_def.into_iter());
 
     // analyse grammar
-    println!("RULES");
-    for rule in &rules {
-        println!("{}", rule);
-    }
-    println!();
-
-    let empty = empty_set(&rules);
-    let first = first_set(&rules, &lexemes, &empty);
-
-    let mut items = ItemSet::new();
-    items.insert(ParseItem {
-        rule: &rules[0],
-        index: 0,
-    }, HashSet::from_iter(vec!["EOF".into()]));
-
-    println!("EMPTY\n{:?}\n", empty);
-    println!("FIRST\n{:?}\n", first);
-
     match grammar(&rules, &lexemes) {
         Ok(grammar) => {
             println!("GRAMMAR\n{}\n", grammar);
+
+            let result = symbols.get(rules[1].lhs.as_str()).unwrap();
+            let states = grammar.0.iter().enumerate().map(|(i, state)| {
+                let options = state.iter().map(|(sym, decision)| {
+                    let variant = if *sym == "EOF" {
+                        quote! { Token::EOF }
+                    } else {
+                        let ident = Ident::new(sym, Span::call_site());
+                        quote! { Token::#ident(t) }
+                    };
+                    match decision {
+                        Decision::Shift(i) => quote! {
+                            #variant => {
+                                stack.push((reduced.pop().unwrap(), state));
+                                state = #i;
+                            }
+                        },
+                        Decision::Reduce(r) => {
+                            if r.lhs == "" {
+                                let ident = Ident::new(rules[1].lhs.as_str(), Span::call_site());
+                                quote! {
+                                    #variant => return match stack.pop().unwrap().0 {
+                                        Token::#ident(t) => Some(t),
+                                        _ => None,
+                                    }.unwrap(),
+                                }
+                            } else {
+                                let pops = r.rhs.iter().enumerate().map(|(i, lhs)| {
+                                    let ident = Ident::new(format!("_{}", i).as_str(), Span::call_site());
+                                    let variant = Ident::new(lhs, Span::call_site());
+                                    if i == 0 {
+                                        quote! {
+                                            let first = stack.pop().unwrap();
+                                            state = first.1;
+                                            let #ident = match first.0 {
+                                                Token::#variant(t) => Some(t),
+                                                _ => None,
+                                            }.unwrap();
+                                        }
+                                    } else {
+                                        quote! {
+                                            let #ident = match stack.pop().unwrap().0 {
+                                                Token::#variant(t) => Some(t),
+                                                _ => None,
+                                            }.unwrap();
+                                        }
+                                    }
+                                }).rev();
+                                let args = r.rhs.iter().enumerate().map(|(i, _)| {
+                                    let ident = Ident::new(format!("_{}", i).as_str(), Span::call_site());
+                                    quote! {
+                                        #ident,
+                                    }
+                                });
+                                let call = &r.name;
+                                let ident = Ident::new(r.lhs.as_str(), Span::call_site());
+                                quote! {
+                                    #variant => {
+                                        #(#pops)*
+                                        reduced.push(Token::#ident(#call(#(#args)*)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+                quote! {
+                    #i => {
+                        match token {
+                            #(#options)*
+                            _ => panic!("{: <3}: {:?}", state, token)
+                        }
+                    }
+                }
+            });
+            
+            let parser: proc_macro::TokenStream = quote! {
+                fn parse<'a, T>(it: &mut T) -> #result
+                where T : std::iter::Iterator<Item = Token<'a>> {
+                    let mut stack: std::vec::Vec<(Token<'a>, usize)> = std::vec::Vec::new();
+                    let mut reduced: std::vec::Vec<Token<'a>> = std::vec::Vec::new();
+                    let mut state: usize = 0;
+
+                    loop {
+                        if reduced.is_empty() {
+                            reduced.push(it.next().unwrap_or(Token::EOF));
+                        }
+                        let token = reduced.last().unwrap();
+                        match state {
+                            #(#states)*
+                            _ => panic!()
+                        }
+                    }
+                }
+            }.into();
+            item.extend(parser.into_iter());
         }
         Err(err) => {
             let error: proc_macro::TokenStream = err.into();

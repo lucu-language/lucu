@@ -39,10 +39,6 @@ parcelr! {
     #[derive(Debug)]
     struct Array<'a>(BracketL, Values<'a>, BracketR);
 
-    // fn object_emptier() -> Object<'static> {
-    //     Object((), HashMap::new(), ())
-    // }
-
     // { }
     fn object_empty(l: BraceL, r: BraceR) -> Object<'static> {
         Object(l, HashMap::new(), r)
@@ -78,5 +74,11 @@ parcelr! {
 }
 
 fn main() {
-    println!("{:?}", Token::Object(object_empty((), ())));
+    let tokens = vec![
+        Token::BracketL(()),
+        Token::Value(Value::Null),
+        Token::BracketR(()),
+    ];
+    println!("{:?}", tokens);
+    println!("{:?}", parse(&mut tokens.into_iter()));
 }

@@ -28,6 +28,7 @@ parcelr! {
         String(String<'a>),
         Number(Number),
         Boolean(Boolean),
+        Null,
     }
 
     // { members }
@@ -38,9 +39,9 @@ parcelr! {
     #[derive(Debug)]
     struct Array<'a>(BracketL, Values<'a>, BracketR);
 
-    fn object_emptier_test() -> Object<'static> {
-        Object((), HashMap::new(), ())
-    }
+    // fn object_emptier() -> Object<'static> {
+    //     Object((), HashMap::new(), ())
+    // }
 
     // { }
     fn object_empty(l: BraceL, r: BraceR) -> Object<'static> {

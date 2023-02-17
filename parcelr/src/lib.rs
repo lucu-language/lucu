@@ -1,21 +1,23 @@
 extern crate proc_macro;
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, fmt, hash::Hash};
+use std::{collections::{HashMap, HashSet, BTreeMap, btree_map::Entry}, fmt, hash::Hash};
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
-use syn::{Item, parse_macro_input, parse::{Parse, ParseStream}, ReturnType, Type, FnArg, Fields, Generics, ItemEnum, ItemStruct};
+use quote::{quote, quote_spanned};
+use syn::{Item, parse_macro_input, parse::{Parse, ParseStream}, ReturnType, Type, FnArg, Fields, Generics, ItemEnum, ItemStruct, Error};
 
 type Symbols = HashMap<String, TokenStream>;
 type SymbolSet<'a> = HashSet<&'a str>;
 type SymbolMap<'a> = HashMap<&'a str, SymbolSet<'a>>;
-type ItemSet<'a> = HashMap<ParseItem<'a>, SymbolSet<'a>>;
 
+type ItemSet<'a> = BTreeMap<ParseItem<'a>, SymbolSet<'a>>;
+
+#[derive(Clone, Copy)]
 enum Decision<'a> {
     Shift(usize), // state index in grammar
     Reduce(&'a Rule),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 struct ParseItem<'a> {
     rule: &'a Rule,
     index: usize,
@@ -24,6 +26,18 @@ struct ParseItem<'a> {
 impl PartialEq for &Rule {
     fn eq(&self, other: &&Rule) -> bool {
         std::ptr::eq(*self, *other)
+    }
+}
+
+impl PartialOrd for &Rule {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (*self as *const Rule).partial_cmp(&(*other as *const Rule))
+    }
+}
+
+impl Ord for &Rule {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (*self as *const Rule).cmp(&(*other as *const Rule))
     }
 }
 
@@ -36,9 +50,10 @@ impl Hash for &Rule {
 }
 
 type State<'a> = HashMap<&'a str, Decision<'a>>;
-type Grammar<'a> = Vec<State<'a>>;
+struct Grammar<'a>(Vec<State<'a>>);
 
 struct Rule {
+    error_spot: Span,
     name: TokenStream,
     lhs: String,
     rhs: Vec<String>,
@@ -65,38 +80,44 @@ fn empty_set<'a>(rules: &'a Vec<Rule>) -> SymbolSet<'a> {
 fn insert<K, V>(map: &mut HashMap<K, HashSet<V>>, key: K, value: V) -> bool
 where K: Eq + Hash, V: Eq + Hash {
     match map.entry(key) {
-        Entry::Occupied(mut e) => e.get_mut().insert(value),
-        Entry::Vacant(e) => e.insert(HashSet::new()).insert(value),
+        std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().insert(value),
+        std::collections::hash_map::Entry::Vacant(e) => e.insert(HashSet::new()).insert(value),
     }
 }
 
-fn insert_from<K, V>(map: &mut HashMap<K, HashSet<V>>, key: K, value: &K) -> bool
+fn extend_hash<K, V>(map: &mut HashMap<K, HashSet<V>>, key: K, value: HashSet<V>) -> bool
 where K: Eq + Hash, V: Eq + Hash + Copy {
-    match map.get(value) {
-        Some(set) => {
-            let clone = set.clone();
-            match map.entry(key) {
-                Entry::Occupied(mut e) => {
-                    if e.get().is_superset(&clone) {
-                        false
-                    } else {
-                        e.get_mut().extend(clone);
-                        true
-                    }
-                }
-                Entry::Vacant(e) => {
-                    e.insert(clone);
-                    true
-                }
+    match map.entry(key) {
+        std::collections::hash_map::Entry::Occupied(mut e) => {
+            if e.get().is_superset(&value) {
+                false
+            } else {
+                e.get_mut().extend(value);
+                true
             }
         }
-        None => false
+        std::collections::hash_map::Entry::Vacant(e) => {
+            e.insert(value);
+            true
+        }
     }
 }
 
-fn extend_from<'a>(set: &mut SymbolSet<'a>, map: &SymbolMap<'a>, key: &'a str) {
-    if let Some(val) = map.get(key) {
-        set.extend(val);
+fn extend<K, V>(map: &mut BTreeMap<K, HashSet<V>>, key: K, value: HashSet<V>) -> bool
+where K: Eq + Ord, V: Eq + Hash + Copy {
+    match map.entry(key) {
+        Entry::Occupied(mut e) => {
+            if e.get().is_superset(&value) {
+                false
+            } else {
+                e.get_mut().extend(value);
+                true
+            }
+        }
+        Entry::Vacant(e) => {
+            e.insert(value);
+            true
+        }
     }
 }
 
@@ -118,9 +139,12 @@ fn first_set<'a>(rules: &'a Vec<Rule>, lexemes: &SymbolSet<'a>, empty: &SymbolSe
     let mut repeat = true;
     while repeat {
         repeat = false;
-        for (key, value) in &routes {
-            if insert_from(&mut first, key, value) {
-                repeat = true;
+        for (from, to) in &routes {
+            if let Some(starts) = first.get(to) {
+                let clone = starts.clone();
+                if extend_hash(&mut first, from, clone) {
+                    repeat = true;
+                }
             }
         }
     }
@@ -130,7 +154,13 @@ fn first_set<'a>(rules: &'a Vec<Rule>, lexemes: &SymbolSet<'a>, empty: &SymbolSe
 
 fn predict<'a>(rules: &'a Vec<Rule>, mut set: ItemSet<'a>, first: &SymbolMap<'a>, empty: &SymbolSet<'a>) -> ItemSet<'a> {
     let mut prediction: ItemSet<'a> = ItemSet::new();
-    for (item, lookahead) in &set {
+
+    while let Some((item, lookahead)) = set.pop_first() {
+        // add or merge new items (this is what differentiates an SLR1 and LALR1 parser)
+        if !extend(&mut prediction, item, lookahead.clone()) {
+            continue;
+        }
+
         // check if we are at the end
         if item.rule.rhs.len() <= item.index {
             continue;
@@ -143,7 +173,10 @@ fn predict<'a>(rules: &'a Vec<Rule>, mut set: ItemSet<'a>, first: &SymbolMap<'a>
         let mut lah = SymbolSet::new();
         let mut i = item.index + 1;
         while i < item.rule.rhs.len() {
-            extend_from(&mut lah, &first, item.rule.rhs[i].as_str());
+            if let Some(starts) = first.get(item.rule.rhs[i].as_str()) {
+                lah.extend(starts);
+            }
+
             if !empty.contains(item.rule.rhs[i].as_str()) { break; };
             i += 1;
         }
@@ -153,20 +186,11 @@ fn predict<'a>(rules: &'a Vec<Rule>, mut set: ItemSet<'a>, first: &SymbolMap<'a>
 
         // find prediuctions
         for rule in rules.iter().filter(|rule| rule.lhs == next) {
-            let mut start = ItemSet::new();
-            start.insert(ParseItem { rule, index: 0 }, lah.clone());
-            prediction.extend(predict(rules, start, first, empty));
+            set.insert(ParseItem { rule, index: 0 }, lah.clone());
         }
     }
 
-    // add or merge new items (this is what differentiates an SLR1 and LALR1 parser)
-    for (item, lookahead) in prediction {
-        match set.entry(item) {
-            Entry::Occupied(mut e) => { e.get_mut().extend(lookahead); }
-            Entry::Vacant(e)       => { e.insert(lookahead); }
-        }
-    }
-    set
+    prediction
 }
 
 fn partition<'a>(set: ItemSet<'a>) -> HashMap<&'a str, ItemSet<'a>> {
@@ -182,19 +206,105 @@ fn partition<'a>(set: ItemSet<'a>) -> HashMap<&'a str, ItemSet<'a>> {
         )};
 
         match groups.entry(sym) {
-            Entry::Occupied(mut e) => {
-                match e.get_mut().entry(put) {
-                    Entry::Occupied(mut e) => { e.get_mut().extend(lookahead); }
-                    Entry::Vacant(e)       => { e.insert(lookahead); }
-                }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                extend(e.get_mut(), put, lookahead);
             }
-            Entry::Vacant(e) => {
+            std::collections::hash_map::Entry::Vacant(e) => {
                 e.insert(ItemSet::new()).insert(put, lookahead);
             }
         }
     }
     
     groups
+}
+
+fn grammar<'a>(rules: &'a Vec<Rule>, lexemes: &SymbolSet<'a>) -> Result<Grammar<'a>, TokenStream> {
+    let mut grammar = Vec::new();
+
+    let empty = empty_set(rules);
+    let first = first_set(rules, lexemes, &empty);
+
+    let mut start = ItemSet::new();
+    start.insert(ParseItem {
+        rule: &rules[0],
+        index: 0,
+    }, HashSet::from_iter(vec!["$"]));
+
+    let mut processed: HashMap<Vec<ParseItem<'a>>, (ItemSet<'a>, usize)> = HashMap::new();
+    let mut stack: Vec<(ItemSet<'a>, usize)> = Vec::new();
+
+    processed.insert(start.keys().copied().collect(), (start.clone(), 0));
+    stack.push((start, 0));
+
+    grammar.push(State::new());
+    while let Some((set, index)) = stack.pop() {
+        let pset = predict(rules, set, &first, &empty);
+        let part = partition(pset);
+
+        for (sym, items) in part {
+            if sym == "" {
+                // REDUCE
+                for (item, lah) in items {
+                    let r = Decision::Reduce(item.rule);
+                    for sym in lah {
+                        if let Some(decision) = grammar[index].get(sym) {
+                            match decision {
+                                Decision::Shift(_)  => return Err(quote_spanned! {
+                                    item.rule.error_spot => compile_error!("SHIFT/REDUCE CONFLICT");
+                                }),
+                                Decision::Reduce(_) => return Err(quote_spanned! {
+                                    item.rule.error_spot => compile_error!("REDUCE/REDUCE CONFLICT");
+                                }),
+                            }
+                        } else {
+                            grammar[index].insert(sym, r);
+                        }
+                    }
+                }
+            } else {
+                if let Some(decision) = grammar[index].get(sym) {
+                    match decision {
+                        Decision::Shift(_)  => {},
+                        Decision::Reduce(r) => return Err(quote_spanned! {
+                            r.error_spot => compile_error!("SHIFT/REDUCE CONFLICT");
+                        }),
+                    }
+                }
+
+                // SHIFT
+                let keys: Vec<ParseItem<'a>> = items.keys().copied().collect();
+
+                if let Some(prev) = processed.get_mut(&keys) {
+                    grammar[index].insert(sym, Decision::Shift(prev.1));
+
+                    // get unprocessed lookaheads
+                    let mut new_item = ItemSet::new();
+
+                    for (item, lah) in items {
+                        let prev_lah = prev.0.get_mut(&item).unwrap();
+                        let diff: SymbolSet<'a> = lah.difference(prev_lah).copied().collect();
+                        if diff.is_empty() { continue; }
+
+                        prev_lah.extend(&diff);
+                        new_item.insert(item, diff);
+                    }
+
+                    if !new_item.is_empty() {
+                        stack.push((new_item, prev.1));
+                    }
+                } else {
+                    let len = grammar.len();
+                    grammar[index].insert(sym, Decision::Shift(len));
+                    grammar.push(State::new());
+
+                    processed.insert(keys, (items.clone(), len));
+                    stack.push((items, len));
+                };
+            }
+        }
+    }
+
+    Ok(Grammar(grammar))
 }
 
 impl fmt::Display for Rule {
@@ -209,9 +319,20 @@ impl fmt::Display for Rule {
     }
 }
 
-impl fmt::Debug for Rule {
+impl<'a> fmt::Display for Grammar<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
+        let mut i = 0;
+        for state in &self.0 {
+            write!(f, "{}\n", i)?;
+            for (sym, decision) in state {
+                match decision {
+                    Decision::Shift(i)  => write!(f, "  {: <10}: shift {}\n", sym, i)?,
+                    Decision::Reduce(r) => write!(f, "  {: <10}: {}\n", sym, r)?,
+                }
+            }
+            i += 1;
+        }
+        Ok(())
     }
 }
 
@@ -272,6 +393,7 @@ fn next_rules(item: Item, symbols: &mut Symbols) -> Vec<Rule> {
             let name = f.sig.ident;
             vec![Rule {
                 name: quote!{ #name },
+                error_spot: name.span(),
                 lhs, rhs,
             }]
         }
@@ -283,19 +405,28 @@ fn next_rules(item: Item, symbols: &mut Symbols) -> Vec<Rule> {
             let mut variants = Vec::new();
             for variant in e.variants {
                 let name = variant.ident;
-                let Fields::Unnamed(fields) = variant.fields else { return vec![]; };
 
-                let mut rhs = Vec::new();
-                for field in fields.unnamed {
-                    let Some(str) = type_name(&field.ty) else { return vec![]; };
-                    put_type(symbols, &str, &field.ty);
-                    rhs.push(str);
+                match variant.fields {
+                    Fields::Unnamed(fields) => {
+                        let mut rhs = Vec::new();
+                        for field in fields.unnamed {
+                            let Some(str) = type_name(&field.ty) else { return vec![]; };
+                            put_type(symbols, &str, &field.ty);
+                            rhs.push(str);
+                        }
+
+                        variants.push(Rule {
+                            name: quote!{ #base::#name },
+                            error_spot: name.span(),
+                            lhs: lhs.clone(), rhs,
+                        });
+                    }
+                    Fields::Named(_) => {
+                        return vec![];
+                    }
+                    Fields::Unit => {
+                    }
                 }
-
-                variants.push(Rule {
-                    name: quote!{ #base::#name },
-                    lhs: lhs.clone(), rhs,
-                });
             }
             variants
         }
@@ -314,6 +445,7 @@ fn next_rules(item: Item, symbols: &mut Symbols) -> Vec<Rule> {
 
             vec![Rule {
                 name: quote!{ #name },
+                error_spot: name.span(),
                 lhs, rhs,
             }]
         }
@@ -347,6 +479,7 @@ pub fn parcelr(mut item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // insert root rule
     rules.insert(0, Rule {
+        error_spot: Span::call_site(),
         name: quote!{ std::convert::identity }.into(),
         lhs: "".into(),
         rhs: vec![rules[0].lhs.clone()],
@@ -370,7 +503,9 @@ pub fn parcelr(mut item: proc_macro::TokenStream) -> proc_macro::TokenStream {
             EOF,
         }
     }.into();
+    item.extend(enum_def.into_iter());
 
+    // analyse grammar
     println!("RULES");
     for rule in &rules {
         println!("{}", rule);
@@ -386,13 +521,18 @@ pub fn parcelr(mut item: proc_macro::TokenStream) -> proc_macro::TokenStream {
         index: 0,
     }, HashSet::from_iter(vec!["EOF".into()]));
 
-    let prediction = predict(&rules, items, &first, &empty);
     println!("EMPTY\n{:?}\n", empty);
     println!("FIRST\n{:?}\n", first);
-    println!("PREDICT\n{:?}\n", prediction);
-    let partition = partition(prediction);
-    println!("PARTITION\n{:?}\n", partition);
 
-    item.extend(enum_def.into_iter());
+    match grammar(&rules, &lexemes) {
+        Ok(grammar) => {
+            println!("GRAMMAR\n{}\n", grammar);
+        }
+        Err(err) => {
+            let error: proc_macro::TokenStream = err.into();
+            item.extend(error.into_iter());
+        }
+    }
+
     item
 }

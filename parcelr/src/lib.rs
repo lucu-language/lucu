@@ -1,5 +1,5 @@
 extern crate proc_macro;
-use std::{collections::{HashMap, HashSet, hash_map::Entry}, fmt};
+use std::{collections::{HashMap, HashSet, hash_map::Entry}, fmt, hash::Hash};
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -8,17 +8,31 @@ use syn::{Item, parse_macro_input, parse::{Parse, ParseStream}, ReturnType, Type
 type Symbols = HashMap<String, TokenStream>;
 type SymbolSet<'a> = HashSet<&'a str>;
 type SymbolMap<'a> = HashMap<&'a str, SymbolSet<'a>>;
+type ItemSet<'a> = HashMap<ParseItem<'a>, SymbolSet<'a>>;
 
 enum Decision<'a> {
     Shift(usize), // state index in grammar
     Reduce(&'a Rule),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ParseItem<'a> {
     rule: &'a Rule,
     index: usize,
-    lookahead: SymbolSet<'a>,
+}
+
+impl PartialEq for &Rule {
+    fn eq(&self, other: &&Rule) -> bool {
+        std::ptr::eq(*self, *other)
+    }
+}
+
+impl Eq for &Rule {}
+
+impl Hash for &Rule {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (*self as *const Rule).hash(state);
+    }
 }
 
 type State<'a> = HashMap<&'a str, Decision<'a>>;
@@ -48,14 +62,16 @@ fn empty_set<'a>(rules: &'a Vec<Rule>) -> SymbolSet<'a> {
     empty
 }
 
-fn insert<'a>(map: &mut SymbolMap<'a>, key: &'a str, value: &'a str) -> bool {
+fn insert<K, V>(map: &mut HashMap<K, HashSet<V>>, key: K, value: V) -> bool
+where K: Eq + Hash, V: Eq + Hash {
     match map.entry(key) {
         Entry::Occupied(mut e) => e.get_mut().insert(value),
-        Entry::Vacant(e) => e.insert(SymbolSet::new()).insert(value),
+        Entry::Vacant(e) => e.insert(HashSet::new()).insert(value),
     }
 }
 
-fn insert_from<'a>(map: &mut SymbolMap<'a>, key: &'a str, value: &'a str) -> bool {
+fn insert_from<K, V>(map: &mut HashMap<K, HashSet<V>>, key: K, value: &K) -> bool
+where K: Eq + Hash, V: Eq + Hash + Copy {
     match map.get(value) {
         Some(set) => {
             let clone = set.clone();
@@ -112,9 +128,9 @@ fn first_set<'a>(rules: &'a Vec<Rule>, lexemes: &SymbolSet<'a>, empty: &SymbolSe
     first
 }
 
-fn predict<'a>(rules: &'a Vec<Rule>, mut set: Vec<ParseItem<'a>>, first: &SymbolMap<'a>, empty: &SymbolSet<'a>) -> Vec<ParseItem<'a>> {
-    let mut prediction: Vec<ParseItem<'a>> = Vec::new();
-    for item in &set {
+fn predict<'a>(rules: &'a Vec<Rule>, mut set: ItemSet<'a>, first: &SymbolMap<'a>, empty: &SymbolSet<'a>) -> ItemSet<'a> {
+    let mut prediction: ItemSet<'a> = ItemSet::new();
+    for (item, lookahead) in &set {
         // check if we are at the end
         if item.rule.rhs.len() <= item.index {
             continue;
@@ -132,27 +148,53 @@ fn predict<'a>(rules: &'a Vec<Rule>, mut set: Vec<ParseItem<'a>>, first: &Symbol
             i += 1;
         }
         if i == item.rule.rhs.len() {
-            lah.extend(&item.lookahead);
+            lah.extend(lookahead);
         }
 
         // find prediuctions
         for rule in rules.iter().filter(|rule| rule.lhs == next) {
-            prediction.extend(predict(rules, vec![ParseItem {
-                rule,
-                index: 0,
-                lookahead: lah.clone(),
-            }], first, empty));
+            let mut start = ItemSet::new();
+            start.insert(ParseItem { rule, index: 0 }, lah.clone());
+            prediction.extend(predict(rules, start, first, empty));
         }
     }
 
     // add or merge new items (this is what differentiates an SLR1 and LALR1 parser)
-    for item in prediction {
-        match set.iter_mut().find(|prev| std::ptr::eq(prev.rule, item.rule) && prev.index == item.index) {
-            Some(prev) => prev.lookahead.extend(item.lookahead),
-            None       => set.push(item),
+    for (item, lookahead) in prediction {
+        match set.entry(item) {
+            Entry::Occupied(mut e) => { e.get_mut().extend(lookahead); }
+            Entry::Vacant(e)       => { e.insert(lookahead); }
         }
     }
     set
+}
+
+fn partition<'a>(set: ItemSet<'a>) -> HashMap<&'a str, ItemSet<'a>> {
+    let mut groups: HashMap<&'a str, ItemSet<'a>> = HashMap::new();
+
+    for (item, lookahead) in set {
+        let (sym, put) = if item.rule.rhs.len() > item.index {(
+            item.rule.rhs[item.index].as_str(),
+            ParseItem { rule: item.rule, index: item.index + 1 },
+        )} else {(
+            "",
+            item,
+        )};
+
+        match groups.entry(sym) {
+            Entry::Occupied(mut e) => {
+                match e.get_mut().entry(put) {
+                    Entry::Occupied(mut e) => { e.get_mut().extend(lookahead); }
+                    Entry::Vacant(e)       => { e.insert(lookahead); }
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(ItemSet::new()).insert(put, lookahead);
+            }
+        }
+    }
+    
+    groups
 }
 
 impl fmt::Display for Rule {
@@ -337,14 +379,19 @@ pub fn parcelr(mut item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let empty = empty_set(&rules);
     let first = first_set(&rules, &lexemes, &empty);
-    let prediction = predict(&rules, vec![ParseItem {
+
+    let mut items = ItemSet::new();
+    items.insert(ParseItem {
         rule: &rules[0],
         index: 0,
-        lookahead: HashSet::from_iter(vec!["EOF".into()]),
-    }], &first, &empty);
+    }, HashSet::from_iter(vec!["EOF".into()]));
+
+    let prediction = predict(&rules, items, &first, &empty);
     println!("EMPTY\n{:?}\n", empty);
     println!("FIRST\n{:?}\n", first);
     println!("PREDICT\n{:?}\n", prediction);
+    let partition = partition(prediction);
+    println!("PARTITION\n{:?}\n", partition);
 
     item.extend(enum_def.into_iter());
     item

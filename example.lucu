@@ -7,7 +7,7 @@ effect log {
 }
 
 # effect group
-effect sysio = (stdout write) (stderr write);
+effect sysio = write@stdout write@stderr;
 
 fun main() / sysio {
 

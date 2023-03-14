@@ -279,21 +279,19 @@ fn parse_effects<'a>(file: &'a str, peek: &mut Tokens) -> Result<Vec<EffectName<
 
     loop {
         // FIXME: assumes types start with an identifier
-        if check(peek, lexer::TokenType::Identifier) {
-            // unnamed
-            effects.push(EffectName::Unnamed(parse_path(file, peek)?));
-        } else if check(peek, lexer::TokenType::Group(lexer::GroupType::Paren)) {
-            // named
-            let vec = group(peek, lexer::GroupType::Paren)?;
-            let mut inner = vec.iter().peekable();
-
-            let name = ident(file, &mut inner)?;
-            let eff = parse_path(file, &mut inner)?;
-            empty(&mut inner)?;
-
-            effects.push(EffectName::Named(name, eff));
-        } else {
+        if !check(peek, lexer::TokenType::Identifier) {
             break;
+        }
+
+        let path = parse_path(file, peek)?;
+
+        if check(peek, lexer::TokenType::At) {
+            // named
+            expect(peek, lexer::TokenType::At)?;
+            effects.push(EffectName::Named(ident(file, peek)?, path));
+        } else {
+            // unnamed
+            effects.push(EffectName::Unnamed(path));
         }
     }
 

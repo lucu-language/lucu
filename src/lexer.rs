@@ -9,6 +9,7 @@ pub enum TokenType {
     Fun,
 
     // symbols
+    At,
     Comma,
     Equals,
     Slash,
@@ -67,6 +68,7 @@ fn fmt(tokens: &[Token], f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Resu
             TokenType::Doublecolon => f.write_str(":: ")?,
             TokenType::Identifier => f.write_str("id ")?,
             TokenType::String => f.write_str("\"...\" ")?,
+            TokenType::At => f.write_str("@ ")?,
         }
     }
     Ok(())
@@ -189,6 +191,7 @@ fn next(l: &mut Lexer) -> Next {
             ';' => l.push(TokenType::Semicolon),
             ',' => l.push(TokenType::Comma),
             '/' => l.push(TokenType::Slash),
+            '@' => l.push(TokenType::At),
             '=' => l.push(TokenType::Equals),
             ':' => {
                 let p = l.next();

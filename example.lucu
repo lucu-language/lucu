@@ -6,10 +6,7 @@ effect log {
 	fun log(s str);
 }
 
-# effect group
-effect sysio = write@stdout write@stderr;
-
-fun main() / sysio {
+fun main() / write {
 
 	try {
 
@@ -18,9 +15,9 @@ fun main() / sysio {
 	} with log {
 
 		fun log(s str) {
-			stdout::write("\"");
-			stdout::write(s);
-			stdout::write("\"\n");
+			write.write("\"");
+			write.write(s);
+			write.write("\"\n");
 		}
 
 	};

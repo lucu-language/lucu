@@ -1,14 +1,14 @@
-#![feature(is_some_and)]
-
 use std::fs::read_to_string;
 
+use lexer::Tokenizer;
+
+// mod analyzer;
 mod lexer;
-mod parser;
+// mod parser;
 
 fn main() {
-    let str = read_to_string("example.lucu").unwrap();
-    let tok = lexer::tokenize(str.as_str());
-    println!("{}", tok);
-    let ast = parser::parse(str.as_str(), tok).unwrap();
-    println!("{:?}", ast);
+    let file = read_to_string("example.lucu").unwrap();
+    let tokenizer = Tokenizer::new(file.as_str());
+    let tokens: Result<Vec<_>, ()> = tokenizer.collect();
+    println!("{:?}", tokens);
 }

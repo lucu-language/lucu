@@ -1,6 +1,6 @@
 use std::{iter::Peekable, str::Chars};
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum Token {
     // Keywords
     Effect,
@@ -12,30 +12,39 @@ pub enum Token {
     Semicolon,
     Period,
     Slash,
-    GroupOpen(Group),
-    GroupClose(Group),
+    Open(Group),
+    Close(Group),
 
     // Literals
-    String,
-    Identifier,
+    String(String),
+    Ident(String),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Group {
     Brace,
-    Parenthesis,
+    Paren,
     Bracket,
 }
 
 pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
-    pos: usize,
+    pub pos: usize,
 }
 
 #[derive(Debug)]
-pub struct TokenElem {
-    pub token: Token,
-    pub pos: usize,
+pub enum TokenErr {
+    UnknownSymbol,
+    UnclosedString,
+}
+
+#[derive(Debug)]
+pub struct Ranged<T>(pub T, pub usize, pub usize);
+
+impl<T> Ranged<T> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Ranged<U> {
+        Ranged(f(self.0), self.1, self.2)
+    }
 }
 
 impl<'a> Tokenizer<'a> {
@@ -43,12 +52,6 @@ impl<'a> Tokenizer<'a> {
         Self {
             next: s.chars().peekable(),
             pos: 0,
-        }
-    }
-    fn token(&self, token: Token, len: usize) -> TokenElem {
-        TokenElem {
-            token,
-            pos: self.pos - len,
         }
     }
     fn next_char(&mut self) -> Option<char> {
@@ -63,7 +66,7 @@ impl<'a> Tokenizer<'a> {
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Result<TokenElem, ()>;
+    type Item = Result<Ranged<Token>, Ranged<TokenErr>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // get next char
@@ -83,33 +86,38 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
         };
 
+        let pos = self.pos - 1;
+        let token = |token| Ranged(token, pos, self.pos);
+
         // get next token
         Some(match char {
-            ';' => Ok(self.token(Token::Semicolon, 1)),
-            '.' => Ok(self.token(Token::Period, 1)),
-            '/' => Ok(self.token(Token::Slash, 1)),
-            '(' => Ok(self.token(Token::GroupOpen(Group::Parenthesis), 1)),
-            '[' => Ok(self.token(Token::GroupOpen(Group::Bracket), 1)),
-            '{' => Ok(self.token(Token::GroupOpen(Group::Brace), 1)),
-            ')' => Ok(self.token(Token::GroupClose(Group::Parenthesis), 1)),
-            ']' => Ok(self.token(Token::GroupClose(Group::Bracket), 1)),
-            '}' => Ok(self.token(Token::GroupClose(Group::Brace), 1)),
+            ';' => Ok(token(Token::Semicolon)),
+            '.' => Ok(token(Token::Period)),
+            '/' => Ok(token(Token::Slash)),
+            '(' => Ok(token(Token::Open(Group::Paren))),
+            '[' => Ok(token(Token::Open(Group::Bracket))),
+            '{' => Ok(token(Token::Open(Group::Brace))),
+            ')' => Ok(token(Token::Close(Group::Paren))),
+            ']' => Ok(token(Token::Close(Group::Bracket))),
+            '}' => Ok(token(Token::Close(Group::Brace))),
             '"' => {
                 // string
                 let mut escaped = false;
-                let mut len = 2;
                 loop {
                     match self.next_char() {
-                        Some('"') if !escaped => break Ok(self.token(Token::String, len)),
-                        Some('\\') => {
-                            escaped = !escaped;
-                            len += 1;
+                        Some('"') if !escaped => {
+                            break Ok(Ranged(
+                                Token::String("todo parse str".to_owned()),
+                                pos,
+                                self.pos,
+                            ))
                         }
-                        Some(_) => {
-                            escaped = false;
-                            len += 1;
+                        Some('\n') | None => {
+                            break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1))
                         }
-                        None => break Err(()),
+
+                        Some('\\') => escaped = !escaped,
+                        Some(_) => escaped = false,
                     }
                 }
             }
@@ -132,18 +140,19 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
 
                 // find keyword
-                Ok(self.token(
+                Ok(Ranged(
                     match word.as_str() {
                         "effect" => Token::Effect,
                         "fun" => Token::Fun,
                         "try" => Token::Try,
                         "with" => Token::With,
-                        _ => Token::Identifier,
+                        _ => Token::Ident(word),
                     },
-                    word.len(),
+                    pos,
+                    self.pos,
                 ))
             }
-            _ => Err(()),
+            _ => Err(Ranged(TokenErr::UnknownSymbol, pos, self.pos)),
         })
     }
 

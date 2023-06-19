@@ -12,12 +12,29 @@ pub enum Token {
     Semicolon,
     Period,
     Slash,
+    Comma,
     Open(Group),
     Close(Group),
 
     // Literals
     String(String),
     Ident(String),
+}
+
+impl Token {
+    pub fn is_anchor(&self) -> bool {
+        matches!(
+            self,
+            Token::Effect
+                | Token::Fun
+                | Token::Try
+                | Token::With
+                | Token::Semicolon
+                | Token::Comma
+                | Token::Open(_)
+                | Token::Close(_)
+        )
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -94,6 +111,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             ';' => Ok(token(Token::Semicolon)),
             '.' => Ok(token(Token::Period)),
             '/' => Ok(token(Token::Slash)),
+            ',' => Ok(token(Token::Comma)),
             '(' => Ok(token(Token::Open(Group::Paren))),
             '[' => Ok(token(Token::Open(Group::Bracket))),
             '{' => Ok(token(Token::Open(Group::Brace))),

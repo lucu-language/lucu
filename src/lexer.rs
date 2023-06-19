@@ -1,6 +1,6 @@
 use std::{iter::Peekable, str::Chars};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Token {
     // Keywords
     Effect,
@@ -29,7 +29,7 @@ pub enum Group {
 
 pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
-    pub pos: usize,
+    pos: usize,
 }
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ pub enum TokenErr {
     UnclosedString,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Ranged<T>(pub T, pub usize, pub usize);
 
 impl<T> Ranged<T> {
@@ -102,26 +102,29 @@ impl<'a> Iterator for Tokenizer<'a> {
             '}' => Ok(token(Token::Close(Group::Brace))),
             '"' => {
                 // string
-                let mut escaped = false;
+                let mut full = String::new();
                 loop {
                     match self.next_char() {
-                        Some('"') if !escaped => {
-                            break Ok(Ranged(
-                                Token::String("todo parse str".to_owned()),
-                                pos,
-                                self.pos,
-                            ))
-                        }
-                        Some('\n') | None => {
-                            break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1))
-                        }
+                        Some('"') => break Ok(Ranged(Token::String(full), pos, self.pos)),
+                        Some('\n') => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos)),
+                        None => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)),
 
-                        Some('\\') => escaped = !escaped,
-                        Some(_) => escaped = false,
+                        Some('\\') => full.push(match self.next_char() {
+                            Some('n') => '\n',
+                            Some('t') => '\t',
+                            Some('r') => '\r',
+                            Some('"') => '"',
+                            Some('\\') => '\\',
+                            Some('\n') => '\n',
+
+                            Some(c) => c, // TODO: give error
+                            None => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)),
+                        }),
+                        Some(c) => full.push(c),
                     }
                 }
             }
-            'a'..='z' | 'A'..='Z' => {
+            'a'..='z' | 'A'..='Z' | '_' => {
                 // get word
                 let mut word = String::new();
                 word.push(char);
@@ -129,7 +132,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 loop {
                     match self.next.peek() {
                         Some(&c) => match c {
-                            'a'..='z' | 'A'..='Z' | '0'..='9' => {
+                            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
                                 self.next_char();
                                 word.push(c);
                             }

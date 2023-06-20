@@ -31,7 +31,6 @@ impl Token {
                 | Token::With
                 | Token::Semicolon
                 | Token::Comma
-                | Token::Open(_)
                 | Token::Close(_)
         )
     }
@@ -46,7 +45,7 @@ pub enum Group {
 
 pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
-    pos: usize,
+    pub pos: usize,
 }
 
 #[derive(Debug)]

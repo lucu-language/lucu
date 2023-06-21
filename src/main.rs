@@ -10,13 +10,8 @@ mod parser;
 fn main() {
     let file = read_to_string("example.lucu").unwrap();
     let tokenizer = Tokenizer::new(file.as_str());
-    let tokens: Result<Vec<_>, _> = tokenizer.collect();
-    println!("{:#?}\n", tokens);
-
-    let tokenizer = Tokenizer::new(file.as_str());
     let mut errors = Vec::new();
     let ast = parser::parse_ast(tokenizer, &mut errors);
-    println!("{:#?}\n", ast);
     println!("{:#?}\n", errors);
 
     eval_ast(ast.unwrap())
@@ -72,12 +67,13 @@ fn create_func(func: &Function, scope: &HashMap<String, Value>) -> Value {
 fn eval_expr(expr: usize, exprs: &Vec<Expression>, scope: &mut HashMap<String, Value>) -> Value {
     match &exprs[expr] {
         Expression::Body(b) => {
+            let mut inner_scope = scope.clone();
             for main in b.main.iter() {
-                eval_expr(*main, exprs, scope);
+                eval_expr(*main, exprs, &mut inner_scope);
             }
 
             if let Some(last) = b.last {
-                eval_expr(last, exprs, scope)
+                eval_expr(last, exprs, &mut inner_scope)
             } else {
                 Value::None
             }

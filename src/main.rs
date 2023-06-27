@@ -1,9 +1,9 @@
-use std::{collections::HashMap, fs::read_to_string, rc::Rc};
+use std::{collections::HashMap, fs::read_to_string, println, rc::Rc};
 
 use lexer::Tokenizer;
 use parser::{Expression, Function, ParseContext, AST};
 
-// mod analyzer;
+mod analyzer;
 mod lexer;
 mod parser;
 
@@ -12,6 +12,15 @@ fn main() {
     let tokenizer = Tokenizer::new(file.as_str());
     let (ast, ctx) = parser::parse_ast(tokenizer);
     println!("{:#?}\n", &ctx.errors);
+
+    let actx = analyzer::analyze(&ast, &ctx);
+    println!(
+        "{:#?}",
+        actx.values
+            .iter()
+            .zip(ctx.idents.iter())
+            .collect::<Vec<_>>()
+    );
 
     eval_ast(ast, ctx);
 }
@@ -49,7 +58,7 @@ fn create_func(func: &Function, scope: &HashMap<String, Value>, ctx: &ParseConte
         .sign
         .inputs
         .iter()
-        .map(|r| ctx.idents[r.0 .0 .0].clone())
+        .map(|r| ctx.idents[r.0].0.clone())
         .collect();
 
     Value::Function(Rc::new(move |vals, ctx| {
@@ -76,7 +85,7 @@ fn eval_expr(expr: usize, scope: &mut HashMap<String, Value>, ctx: &ParseContext
             }
         }
         Expression::String(s) => Value::String(s.clone()),
-        Expression::Ident(p) => scope.get(&ctx.idents[p.0 .0]).unwrap().clone(),
+        Expression::Ident(p) => scope.get(&ctx.idents[*p].0).unwrap().clone(),
         Expression::Call(expr, args) => {
             let f = match eval_expr(*expr, scope, ctx) {
                 Value::Function(f) => f,
@@ -85,16 +94,18 @@ fn eval_expr(expr: usize, scope: &mut HashMap<String, Value>, ctx: &ParseContext
             let args = args.iter().map(|e| eval_expr(*e, scope, ctx)).collect();
             f(args, ctx)
         }
-        Expression::TryWith(inner, handlers) => {
+        Expression::TryWith(inner, handler) => {
             let mut inner_scope = scope.clone();
-            for handler in handlers.iter() {
-                for func in handler.functions.iter() {
-                    inner_scope.insert(func.0.clone(), create_func(func.1, scope, ctx));
-                }
-            }
+            eval_expr(*handler, &mut inner_scope, ctx);
             eval_expr(*inner, &mut inner_scope, ctx)
         }
         Expression::Member(_, _) => todo!(),
         Expression::Error => todo!(),
+        Expression::Handler(handler) => {
+            for func in handler.functions.iter() {
+                scope.insert(func.0.clone(), create_func(func.1, scope, ctx));
+            }
+            Value::None
+        }
     }
 }

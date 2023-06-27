@@ -8,11 +8,16 @@ pub type Ident = usize;
 #[derive(Debug, Default)]
 pub enum Expression {
     Body(Body),
-    String(String),
-    Ident(Identifier),
+
     Call(Expr, Vec<Expr>),
-    TryWith(Expr, Vec<Handler>),
     Member(Expr, Ranged<String>),
+
+    TryWith(Expr, Expr),
+    Handler(Handler),
+
+    String(String),
+    Ident(Ident),
+
     #[default]
     Error, // error at parsing, coerces to any type
 }
@@ -25,27 +30,24 @@ pub struct Body {
 
 #[derive(Debug)]
 pub struct Handler {
-    effect: Identifier,
+    pub effect: Ident,
     pub functions: HashMap<String, Function>,
 }
 
 #[derive(Debug)]
-pub struct Identifier(pub Ranged<Ident>);
-
-#[derive(Debug)]
 pub struct Type {
-    ident: Identifier,
+    pub ident: Ident,
 }
 
 #[derive(Debug)]
 pub struct FunSign {
-    pub inputs: Vec<(Identifier, Type)>,
-    effects: Vec<Identifier>,
+    pub inputs: Vec<(Ident, Type)>,
+    pub effects: Vec<Ident>,
 }
 
 #[derive(Debug)]
 pub struct FunDecl {
-    name: Ranged<String>,
+    pub name: Ident,
     pub sign: FunSign,
 }
 
@@ -57,13 +59,13 @@ pub struct Function {
 
 #[derive(Debug)]
 pub struct Effect {
-    name: Ranged<String>,
-    functions: HashMap<String, FunDecl>,
+    pub name: Ident,
+    pub functions: HashMap<String, FunDecl>,
 }
 
 #[derive(Debug)]
 pub struct AST {
-    effects: HashMap<String, Effect>,
+    pub effects: HashMap<String, Effect>,
     pub functions: HashMap<String, Function>,
 }
 
@@ -79,7 +81,7 @@ pub enum ParseErr {
 pub struct ParseContext {
     pub errors: Vec<Ranged<ParseErr>>,
     pub exprs: Vec<Ranged<Expression>>,
-    pub idents: Vec<String>,
+    pub idents: Vec<Ranged<String>>,
 }
 
 struct Tokens<'a> {
@@ -175,7 +177,7 @@ impl<'a> Tokens<'a> {
         self.context.exprs.push(expr);
         n
     }
-    fn push_ident(&mut self, ident: String) -> Ident {
+    fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
         let n = self.context.idents.len();
         self.context.idents.push(ident);
         n
@@ -294,14 +296,16 @@ impl Parse for AST {
                 // effect
                 Some(Ok(Ranged(Token::Effect, ..))) => {
                     if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(tk) {
-                        ast.effects.insert(effect.name.0.clone(), effect);
+                        ast.effects
+                            .insert(tk.context.idents[effect.name].0.clone(), effect);
                     }
                 }
 
                 // function
                 Some(Ok(Ranged(Token::Fun, ..))) => {
                     if let Some(Ranged(function, ..)) = Function::parse_or_skip(tk) {
-                        ast.functions.insert(function.decl.name.0.clone(), function);
+                        ast.functions
+                            .insert(tk.context.idents[function.decl.name].0.clone(), function);
                     }
                 }
 
@@ -322,16 +326,11 @@ impl Parse for AST {
     }
 }
 
-impl Parse for Identifier {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
-        Some(Identifier(tk.ident()?.map(|s| tk.push_ident(s))))
-    }
-}
-
 impl Parse for Type {
     fn parse(tk: &mut Tokens) -> Option<Self> {
+        let id = tk.ident()?;
         Some(Type {
-            ident: Identifier::parse_or_skip(tk)?.0,
+            ident: tk.push_ident(id),
         })
     }
 }
@@ -344,7 +343,8 @@ impl Parse for FunSign {
         };
 
         tk.group(Group::Paren, true, |tk| {
-            let name = Identifier::parse_or_skip(tk)?.0;
+            let id = tk.ident()?;
+            let name = tk.push_ident(id);
             let typ = Type::parse_or_skip(tk)?.0;
             decl.inputs.push((name, typ));
             Some(())
@@ -352,7 +352,8 @@ impl Parse for FunSign {
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ok(Ranged(Token::Ident(_), ..)))) {
-                let Some(Ranged(effect, ..)) = Identifier::parse_or_skip(tk) else { continue };
+                let Some(effect) = tk.ident() else { continue };
+                let effect = tk.push_ident(effect);
                 decl.effects.push(effect);
             }
         }
@@ -367,7 +368,7 @@ impl Parse for FunDecl {
         let name = tk.ident()?;
 
         let decl = FunDecl {
-            name,
+            name: tk.push_ident(name),
             sign: FunSign::parse(tk)?,
         };
 
@@ -381,13 +382,15 @@ impl Parse for Effect {
         let name = tk.ident()?;
 
         let mut effect = Effect {
-            name,
+            name: tk.push_ident(name),
             functions: HashMap::new(),
         };
 
         tk.group(Group::Brace, false, |tk| {
             let f = FunDecl::parse_or_skip(tk)?.0;
-            effect.functions.insert(f.name.0.clone(), f);
+            effect
+                .functions
+                .insert(tk.context.idents[f.name].0.clone(), f);
 
             tk.expect(Token::Semicolon)?;
             Some(())
@@ -417,12 +420,13 @@ impl Parse for Function {
 
 impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        let ident = Identifier::parse_or_skip(tk)?.0;
+        let id = tk.ident()?;
+        let ident = tk.push_ident(id);
         let mut funcs = HashMap::new();
 
         tk.group(Group::Brace, false, |tk| {
             let func = Function::parse_or_skip(tk)?.0;
-            funcs.insert(func.decl.name.0.clone(), func);
+            funcs.insert(tk.context.idents[func.decl.name].0.clone(), func);
             Some(())
         })?;
 
@@ -441,18 +445,16 @@ impl Parse for Expression {
             Some(Ok(Ranged(Token::Try, ..))) => {
                 tk.expect(Token::Try)?;
                 let body = Expression::parse_or_default(tk);
-                let mut handlers = Vec::new();
-                while matches!(tk.peek(), Some(Ok(Ranged(Token::With, ..)))) {
-                    tk.expect(Token::With)?;
-                    let Some(Ranged(handler, ..)) = Handler::parse_or_skip(tk) else { continue };
-                    handlers.push(handler);
-                }
-                Some(Expression::TryWith(tk.push_expr(body), handlers))
+                tk.expect(Token::With)?;
+                let handler = Handler::parse_or_skip(tk)?;
+                let handler = tk.push_expr(handler.map(Expression::Handler));
+                Some(Expression::TryWith(tk.push_expr(body), handler))
             }
 
             // ident
             Some(Ok(Ranged(Token::Ident(_), ..))) => {
-                let path = Identifier::parse_or_skip(tk)?.0;
+                let id = tk.ident()?;
+                let path = tk.push_ident(id);
                 Some(Expression::Ident(path))
             }
 

@@ -1,0 +1,105 @@
+# an effect to handle division by zero
+effect div_by_zero {
+
+    # as input it gets the dividend
+    # it may resume with an integer or end the try block
+    fun div_by_zero(dividend int) int
+
+}
+
+# an effect that mimics basic exceptions
+effect catch {
+
+    # this function may never resume with a value and must end the try block
+    fun throw() !
+    
+}
+
+##
+# we define a zero-safe division function with an effect
+# when a division by zero is detected,
+# this will be handled by "performing" the div_by_zero effect
+##
+fun divide(a int, b int) int / div_by_zero {
+
+	if b == 0 {
+		div_by_zero(a)
+	} else {
+		a / b
+	}
+
+}
+
+##
+# we define a zero-safe division function with a default
+# when a division by zero is detected,
+# this will resume the division function with a provided default value
+##
+fun divide_default(a int, b int, default int) int {
+
+	try {
+
+		divide(a, b)
+
+	} with div_by_zero {
+
+		fun div_by_zero(dividend int) int {
+			default
+		}
+
+	}
+
+}
+
+##
+# we define a zero-safe division function that throws an exception
+# when a division by zero is detected,
+# this will bubble up the effect "perform" to the catch effect
+##
+fun divide_throw(a int, b int) int / catch {
+
+	try {
+
+		divide(a, b)
+		
+	} with div_by_zero {
+
+		fun div_by_zero(dividend int) int {
+			throw()
+		}
+		
+	}
+	
+}
+
+##
+# our main function
+# a function "print" exists that can print numbers
+##
+fun main() {
+
+	try {
+
+		print(divide_default(12, 4, 1))
+		print(divide_default(12, 0, 1))
+		print(divide_throw(56, 0))
+		print(divide_throw(56, 8))
+		
+	} with catch {
+
+		fun throw() ! {
+			# this may not return a value
+			# we end the entire try block early
+			break
+		}
+		
+	}
+
+	print(420)
+	
+}
+
+# expected output:
+# 3
+# 1
+# 420

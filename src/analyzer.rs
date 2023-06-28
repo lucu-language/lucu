@@ -58,11 +58,31 @@ impl Analysis {
                 self.traverse(ctx, expr, data, f);
                 f(self, ctx, start, data);
             }
+            Expression::IfElse(cond, no, yes) => {
+                self.traverse(ctx, cond, data, f);
+                self.traverse(ctx, no, data, f);
+                if let Some(yes) = yes {
+                    self.traverse(ctx, yes, data, f);
+                }
+                f(self, ctx, start, data);
+            }
+            Expression::Op(left, _, right) => {
+                self.traverse(ctx, left, data, f);
+                self.traverse(ctx, right, data, f);
+                f(self, ctx, start, data);
+            }
+            Expression::Break(val) => {
+                if let Some(val) = val {
+                    self.traverse(ctx, val, data, f);
+                }
+                f(self, ctx, start, data);
+            }
 
             Expression::Error => f(self, ctx, start, data),
             Expression::String(_) => f(self, ctx, start, data),
             Expression::Ident(_) => f(self, ctx, start, data),
             Expression::Handler(_) => f(self, ctx, start, data),
+            Expression::Int(_) => f(self, ctx, start, data),
         }
     }
     fn push_val(&mut self, id: Ident) -> Val {
@@ -118,6 +138,10 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
             Expression::TryWith(_, _) => {}
             Expression::String(_) => {}
             Expression::Error => {}
+            Expression::IfElse(_, _, _) => {}
+            Expression::Op(_, _, _) => {}
+            Expression::Break(_) => {}
+            Expression::Int(_) => {}
         },
     );
 }
@@ -158,6 +182,18 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
         scope_effect(actx, ctx, effect, scope);
     }
 
+    // resolve return
+    match func.output {
+        Some(Some(ref typ)) => {
+            let name = &ctx.idents[typ.ident].0;
+            match scope.values.get(name) {
+                Some(&val) => actx.values[typ.ident] = val,
+                None => println!("unknown value {}", name),
+            }
+        }
+        _ => {}
+    }
+
     // put args in scope
     for &(param, ref typ) in func.inputs.iter() {
         // resolve type
@@ -183,8 +219,15 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut scope = Scope::default();
 
     // built-in values
-    scope.values.insert("str".to_owned(), actx.types);
-    actx.types += 1;
+    scope.values.insert("str".to_owned(), 0);
+    scope.values.insert("int".to_owned(), 1);
+    scope.values.insert("debug".to_owned(), 2);
+
+    let mut debug = HashMap::new();
+    debug.insert("putint".to_owned(), 3);
+    scope.effects.insert(2, debug);
+
+    actx.types = 4;
 
     // put names in scope
     // TODO: error on conflict

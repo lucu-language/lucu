@@ -7,18 +7,25 @@ pub enum Token {
     Fun,
     Try,
     With,
+    If,
+    Else,
+    Break,
 
     // Symbols
     Semicolon,
     Period,
     Slash,
     Comma,
+    Equals,
+    Bang,
+    DoubleEquals,
     Open(Group),
     Close(Group),
 
     // Literals
     String(String),
     Ident(String),
+    Int(i128),
 }
 
 impl Token {
@@ -117,6 +124,17 @@ impl<'a> Iterator for Tokenizer<'a> {
             ')' => Ok(token(Token::Close(Group::Paren))),
             ']' => Ok(token(Token::Close(Group::Bracket))),
             '}' => Ok(token(Token::Close(Group::Brace))),
+            '!' => Ok(token(Token::Bang)),
+            '=' => match self.next.peek() {
+                Some(&'=') => {
+                    self.next_char();
+                    Ok(Ranged(Token::DoubleEquals, pos, self.pos))
+                }
+                _ => {
+                    // single
+                    Ok(Ranged(Token::Equals, pos, self.pos))
+                }
+            },
             '"' => {
                 // string
                 let mut full = String::new();
@@ -166,11 +184,28 @@ impl<'a> Iterator for Tokenizer<'a> {
                         "fun" => Token::Fun,
                         "try" => Token::Try,
                         "with" => Token::With,
+                        "if" => Token::If,
+                        "else" => Token::Else,
+                        "break" => Token::Break,
                         _ => Token::Ident(word),
                     },
                     pos,
                     self.pos,
                 ))
+            }
+            '0'..='9' => {
+                let mut num = i128::from(char.to_digit(10).unwrap());
+                loop {
+                    match self.next.peek() {
+                        Some(&'_') => {}
+                        Some(&('0'..='9')) => {
+                            num *= 10;
+                            num += i128::from(self.next_char().unwrap().to_digit(10).unwrap());
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(Ranged(Token::Int(num), pos, self.pos))
             }
             _ => Err(Ranged(TokenErr::UnknownSymbol, pos, self.pos)),
         })

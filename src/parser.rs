@@ -1,9 +1,15 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, matches};
 
 use crate::lexer::{Group, Ranged, Token, TokenErr, Tokenizer};
 
 pub type Expr = usize;
 pub type Ident = usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    Equals,
+    Divide,
+}
 
 #[derive(Debug, Default)]
 pub enum Expression {
@@ -11,11 +17,15 @@ pub enum Expression {
 
     Call(Expr, Vec<Expr>),
     Member(Expr, Ranged<String>),
+    IfElse(Expr, Expr, Option<Expr>),
+    Op(Expr, Op, Expr),
+    Break(Option<Expr>),
 
     TryWith(Expr, Expr),
     Handler(Handler),
 
     String(String),
+    Int(i128),
     Ident(Ident),
 
     #[default]
@@ -42,6 +52,7 @@ pub struct Type {
 #[derive(Debug)]
 pub struct FunSign {
     pub inputs: Vec<(Ident, Type)>,
+    pub output: Option<Option<Type>>,
     pub effects: Vec<Ident>,
 }
 
@@ -340,6 +351,7 @@ impl Parse for FunSign {
         let mut decl = FunSign {
             inputs: Vec::new(),
             effects: Vec::new(),
+            output: None,
         };
 
         tk.group(Group::Paren, true, |tk| {
@@ -349,6 +361,19 @@ impl Parse for FunSign {
             decl.inputs.push((name, typ));
             Some(())
         })?;
+
+        match tk.peek() {
+            // TODO: better check if type follows
+            Some(Ok(Ranged(Token::Ident(_), ..))) => {
+                let typ = Type::parse_or_skip(tk)?.0;
+                decl.output = Some(Some(typ));
+            }
+            Some(Ok(Ranged(Token::Bang, ..))) => {
+                tk.expect(Token::Bang)?;
+                decl.output = Some(None);
+            }
+            _ => {}
+        }
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ok(Ranged(Token::Ident(_), ..)))) {
@@ -451,6 +476,39 @@ impl Parse for Expression {
                 Some(Expression::TryWith(tk.push_expr(body), handler))
             }
 
+            // if-(else)
+            Some(Ok(Ranged(Token::If, ..))) => {
+                tk.expect(Token::If)?;
+
+                let condition = Expression::parse_or_default(tk);
+                let condition = tk.push_expr(condition);
+
+                let yes = Body::parse_or_skip(tk)?.map(Expression::Body);
+                let yes = tk.push_expr(yes);
+
+                let no = if tk.check(Token::Else).is_some() {
+                    let no = Body::parse_or_skip(tk)?.map(Expression::Body);
+                    Some(tk.push_expr(no))
+                } else {
+                    None
+                };
+
+                Some(Expression::IfElse(condition, yes, no))
+            }
+
+            // break
+            Some(Ok(Ranged(Token::Break, ..))) => {
+                tk.expect(Token::Break)?;
+
+                if matches!(tk.peek(), Some(Ok(Ranged(Token::Semicolon, ..)))) {
+                    Some(Expression::Break(None))
+                } else {
+                    let value = Expression::parse_or_default(tk);
+                    let value = tk.push_expr(value);
+                    Some(Expression::Break(Some(value)))
+                }
+            }
+
             // ident
             Some(Ok(Ranged(Token::Ident(_), ..))) => {
                 let id = tk.ident()?;
@@ -463,6 +521,12 @@ impl Parse for Expression {
                 let s = s.clone();
                 tk.next();
                 Some(Expression::String(s))
+            }
+
+            // int
+            Some(&Ok(Ranged(Token::Int(num), ..))) => {
+                tk.next();
+                Some(Expression::Int(num))
             }
 
             // block
@@ -508,6 +572,34 @@ impl Parse for Expression {
                         start,
                         tk.pos_end(),
                     );
+                }
+
+                // binary ops
+                // TODO: operator precedence
+                Some(Ok(Ranged(Token::DoubleEquals, ..))) => {
+                    tk.expect(Token::DoubleEquals)?;
+
+                    let right = Expression::parse_or_default(tk);
+                    let right = tk.push_expr(right);
+
+                    expr = Ranged(
+                        Expression::Op(tk.push_expr(expr), Op::Equals, right),
+                        start,
+                        tk.pos_end(),
+                    )
+                }
+
+                Some(Ok(Ranged(Token::Slash, ..))) => {
+                    tk.expect(Token::Slash)?;
+
+                    let right = Expression::parse_or_default(tk);
+                    let right = tk.push_expr(right);
+
+                    expr = Ranged(
+                        Expression::Op(tk.push_expr(expr), Op::Divide, right),
+                        start,
+                        tk.pos_end(),
+                    )
                 }
 
                 _ => break Some(expr.0),

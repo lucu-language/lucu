@@ -3,7 +3,7 @@ effect div_by_zero {
 
     # as input it gets the dividend
     # it may resume with an integer or end the try block
-    fun div_by_zero(dividend int) int
+    fun div_by_zero(dividend int) int;
 
 }
 
@@ -11,8 +11,8 @@ effect div_by_zero {
 effect catch {
 
     # this function may never resume with a value and must end the try block
-    fun throw() !
-    
+    fun throw() !;
+
 }
 
 ##
@@ -22,11 +22,11 @@ effect catch {
 ##
 fun divide(a int, b int) int / div_by_zero {
 
-	if b == 0 {
-		div_by_zero(a)
-	} else {
-		a / b
-	}
+    if b == 0 {
+        div_by_zero(a)
+    } else {
+        a / b
+    }
 
 }
 
@@ -37,17 +37,17 @@ fun divide(a int, b int) int / div_by_zero {
 ##
 fun divide_default(a int, b int, default int) int {
 
-	try {
+    try {
 
-		divide(a, b)
+        divide(a, b)
 
-	} with div_by_zero {
+    } with div_by_zero {
 
-		fun div_by_zero(dividend int) int {
-			default
-		}
+        fun div_by_zero(dividend int) int {
+            default
+        }
 
-	}
+    }
 
 }
 
@@ -58,45 +58,45 @@ fun divide_default(a int, b int, default int) int {
 ##
 fun divide_throw(a int, b int) int / catch {
 
-	try {
+    try {
 
-		divide(a, b)
-		
-	} with div_by_zero {
+        divide(a, b)
 
-		fun div_by_zero(dividend int) int {
-			throw()
-		}
-		
-	}
-	
+    } with div_by_zero {
+
+        fun div_by_zero(dividend int) int {
+            throw()
+        }
+        
+    }
+    
 }
 
 ##
 # our main function
-# a function "print" exists that can print numbers
+# a function "putint" exists inside the "debug" effect that can print numbers
 ##
-fun main() {
+fun main() / debug {
 
-	try {
+    try {
 
-		print(divide_default(12, 4, 1))
-		print(divide_default(12, 0, 1))
-		print(divide_throw(56, 0))
-		print(divide_throw(56, 8))
-		
-	} with catch {
+        putint(divide_default(12, 4, 1));
+        putint(divide_default(12, 0, 1));
+        putint(divide_throw(56, 0));
+        putint(divide_throw(56, 8));
 
-		fun throw() ! {
-			# this may not return a value
-			# we end the entire try block early
-			break
-		}
-		
-	}
+    } with catch {
 
-	print(420)
-	
+        fun throw() ! {
+            # this may not return a value
+            # we end the entire try block early
+            break;
+        }
+
+    };
+
+    putint(420);
+    
 }
 
 # expected output:

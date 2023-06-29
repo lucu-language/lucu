@@ -1,0 +1,25 @@
+effect write {
+	fun write(s str)
+}
+
+effect log {
+	fun log(s str)
+}
+
+fun main() / write {
+
+	try {
+
+		log("Hello, World!")
+
+	} with log {
+
+		fun log(s str) {
+			write("\"")
+			write(s)
+			write("\"\n")
+		}
+
+	}
+
+}

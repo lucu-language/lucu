@@ -1,6 +1,6 @@
 use std::{collections::HashMap, println};
 
-use crate::parser::{Expr, Expression, FunSign, Ident, ParseContext, AST};
+use crate::parser::{Expr, Expression, FunSign, Ident, ParseContext, ReturnType, AST};
 
 pub type Val = usize;
 
@@ -164,7 +164,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
 
     // resolve return
     match func.output {
-        Some(Some(ref typ)) => {
+        Some(ReturnType::Type(ref typ)) => {
             let name = &ctx.idents[typ.ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[typ.ident] = val,

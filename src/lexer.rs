@@ -36,9 +36,55 @@ impl Token {
                 | Token::Fun
                 | Token::Try
                 | Token::With
+                | Token::Else
                 | Token::Semicolon
                 | Token::Comma
                 | Token::Close(_)
+        )
+    }
+
+    /// if a statement line ends with this token, it must continue on the next line
+    /// these include all prefix and infix operators
+    pub fn unfinished_statement(&self) -> bool {
+        matches!(
+            self,
+            Token::With
+                | Token::Else
+                | Token::Period
+                | Token::Bang
+                | Token::Break
+                | Token::Try
+                | Token::If
+                | Token::Effect
+                | Token::Fun
+                | Token::Slash
+                | Token::Equals
+                | Token::DoubleEquals
+                | Token::Comma
+                | Token::Open(_)
+
+                // prevents double semicolons
+                | Token::Semicolon
+        )
+    }
+
+    /// if a statement line starts with this token, it must be attached to the previous line
+    /// these include all infix and suffix operators
+    pub fn continues_statement(&self) -> bool {
+        matches!(
+            self,
+            Token::With
+                | Token::Else
+                | Token::Comma
+                | Token::Close(_)
+                | Token::Open(Group::Brace)
+                | Token::Period
+                | Token::Slash
+                | Token::Equals
+                | Token::DoubleEquals
+
+                // prevents double semicolons
+                | Token::Semicolon
         )
     }
 }
@@ -52,7 +98,11 @@ pub enum Group {
 
 pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
-    pub pos: usize,
+    pos: usize,
+
+    depth: usize,
+    prev_unfinished: bool,
+    peek: Option<Ranged<Token>>,
 }
 
 #[derive(Debug)]
@@ -75,6 +125,9 @@ impl<'a> Tokenizer<'a> {
         Self {
             next: s.chars().peekable(),
             pos: 0,
+            depth: 0,
+            prev_unfinished: true,
+            peek: None,
         }
     }
     fn next_char(&mut self) -> Option<char> {
@@ -92,57 +145,88 @@ impl<'a> Iterator for Tokenizer<'a> {
     type Item = Result<Ranged<Token>, Ranged<TokenErr>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // peeked token?
+        if let Some(token) = self.peek.take() {
+            self.prev_unfinished = token.0.unfinished_statement();
+            return Some(Ok(token));
+        }
+
+        // remember newline between tokens
+        let mut prev_newline = None;
+
         // get next char
         let char = loop {
             match self.next_char() {
+                // skip newline
+                Some('\n') => {
+                    if prev_newline.is_none() {
+                        prev_newline = Some(self.pos - 1);
+                    }
+                }
                 // skip whitespace
-                Some(' ') | Some('\t') | Some('\r') | Some('\n') => {}
+                Some(' ') | Some('\t') | Some('\r') => {}
                 // skip comment
                 Some('#') => loop {
+                    if prev_newline.is_none() {
+                        prev_newline = Some(self.pos - 1);
+                    }
                     match self.next_char() {
                         Some('\n') | None => break,
                         Some(_) => {}
                     }
                 },
                 Some(c) => break c,
-                None => return None,
+                None => {
+                    if let Some(newline) =
+                        prev_newline.filter(|_| self.depth == 0 && !self.prev_unfinished)
+                    {
+                        return Some(Ok(Ranged(Token::Semicolon, newline, newline + 1)));
+                    } else {
+                        return None;
+                    }
+                }
             }
         };
 
         let pos = self.pos - 1;
-        let token = |token| Ranged(token, pos, self.pos);
 
         // get next token
-        Some(match char {
-            ';' => Ok(token(Token::Semicolon)),
-            '.' => Ok(token(Token::Period)),
-            '/' => Ok(token(Token::Slash)),
-            ',' => Ok(token(Token::Comma)),
-            '(' => Ok(token(Token::Open(Group::Paren))),
-            '[' => Ok(token(Token::Open(Group::Bracket))),
-            '{' => Ok(token(Token::Open(Group::Brace))),
-            ')' => Ok(token(Token::Close(Group::Paren))),
-            ']' => Ok(token(Token::Close(Group::Bracket))),
-            '}' => Ok(token(Token::Close(Group::Brace))),
-            '!' => Ok(token(Token::Bang)),
-            '=' => match self.next.peek() {
-                Some(&'=') => {
-                    self.next_char();
-                    Ok(Ranged(Token::DoubleEquals, pos, self.pos))
+        let token = match char {
+            ';' => Token::Semicolon,
+            '.' => Token::Period,
+            '/' => Token::Slash,
+            ',' => Token::Comma,
+            '(' => Token::Open(Group::Paren),
+            '[' => Token::Open(Group::Bracket),
+            '{' => Token::Open(Group::Brace),
+            ')' => Token::Close(Group::Paren),
+            ']' => Token::Close(Group::Bracket),
+            '}' => Token::Close(Group::Brace),
+            '!' => Token::Bang,
+            '=' => {
+                match self.next.peek() {
+                    Some(&'=') => {
+                        self.next_char();
+                        Token::DoubleEquals
+                    }
+                    _ => {
+                        // single
+                        Token::Equals
+                    }
                 }
-                _ => {
-                    // single
-                    Ok(Ranged(Token::Equals, pos, self.pos))
-                }
-            },
+            }
             '"' => {
                 // string
                 let mut full = String::new();
                 loop {
                     match self.next_char() {
-                        Some('"') => break Ok(Ranged(Token::String(full), pos, self.pos)),
-                        Some('\n') => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos)),
-                        None => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)),
+                        Some('"') => break Token::String(full),
+                        Some('\n') => {
+                            return Some(Err(Ranged(TokenErr::UnclosedString, pos, self.pos)))
+                        }
+                        None => {
+                            return Some(Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)))
+                        }
 
                         Some('\\') => full.push(match self.next_char() {
                             Some('n') => '\n',
@@ -153,7 +237,13 @@ impl<'a> Iterator for Tokenizer<'a> {
                             Some('\n') => '\n',
 
                             Some(c) => c, // TODO: give error
-                            None => break Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)),
+                            None => {
+                                return Some(Err(Ranged(
+                                    TokenErr::UnclosedString,
+                                    pos,
+                                    self.pos + 1,
+                                )))
+                            }
                         }),
                         Some(c) => full.push(c),
                     }
@@ -178,37 +268,60 @@ impl<'a> Iterator for Tokenizer<'a> {
                 }
 
                 // find keyword
-                Ok(Ranged(
-                    match word.as_str() {
-                        "effect" => Token::Effect,
-                        "fun" => Token::Fun,
-                        "try" => Token::Try,
-                        "with" => Token::With,
-                        "if" => Token::If,
-                        "else" => Token::Else,
-                        "break" => Token::Break,
-                        _ => Token::Ident(word),
-                    },
-                    pos,
-                    self.pos,
-                ))
+                match word.as_str() {
+                    "effect" => Token::Effect,
+                    "fun" => Token::Fun,
+                    "try" => Token::Try,
+                    "with" => Token::With,
+                    "if" => Token::If,
+                    "else" => Token::Else,
+                    "break" => Token::Break,
+                    _ => Token::Ident(word),
+                }
             }
             '0'..='9' => {
+                self.prev_unfinished = false;
+
+                // number
                 let mut num = i128::from(char.to_digit(10).unwrap());
                 loop {
                     match self.next.peek() {
                         Some(&'_') => {}
                         Some(&('0'..='9')) => {
+                            // TODO: error if too big
                             num *= 10;
                             num += i128::from(self.next_char().unwrap().to_digit(10).unwrap());
                         }
                         _ => break,
                     }
                 }
-                Ok(Ranged(Token::Int(num), pos, self.pos))
+                Token::Int(num)
             }
-            _ => Err(Ranged(TokenErr::UnknownSymbol, pos, self.pos)),
-        })
+            _ => {
+                self.prev_unfinished = false;
+                return Some(Err(Ranged(TokenErr::UnknownSymbol, pos, self.pos)));
+            }
+        };
+
+        match token {
+            Token::Open(g) if g != Group::Brace => {
+                self.depth += 1;
+            }
+            Token::Close(g) if g != Group::Brace => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+
+        if let Some(newline) = prev_newline
+            .filter(|_| self.depth == 0 && !self.prev_unfinished && !token.continues_statement())
+        {
+            self.peek = Some(Ranged(token, pos, self.pos));
+            Some(Ok(Ranged(Token::Semicolon, newline, newline + 1)))
+        } else {
+            self.prev_unfinished = token.unfinished_statement();
+            Some(Ok(Ranged(token, pos, self.pos)))
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

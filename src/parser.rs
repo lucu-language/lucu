@@ -50,9 +50,15 @@ pub struct Type {
 }
 
 #[derive(Debug)]
+pub enum ReturnType {
+    Never,
+    Type(Type),
+}
+
+#[derive(Debug)]
 pub struct FunSign {
     pub inputs: Vec<(Ident, Type)>,
-    pub output: Option<Option<Type>>,
+    pub output: Option<ReturnType>,
     pub effects: Vec<Ident>,
 }
 
@@ -109,7 +115,7 @@ impl<'a> Tokens<'a> {
                 Ok(r) => r.1,
                 Err(r) => r.1,
             })
-            .unwrap_or(self.iter.pos)
+            .unwrap_or(usize::MAX)
     }
     fn pos_end(&self) -> usize {
         self.last
@@ -129,7 +135,7 @@ impl<'a> Tokens<'a> {
                 Ok(r) => r.2,
                 Err(r) => r.2,
             })
-            .unwrap_or(self.iter.pos);
+            .unwrap_or(usize::MAX);
         tok
     }
     fn ranged<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<Ranged<T>> {
@@ -318,6 +324,11 @@ impl Parse for AST {
                     }
                 }
 
+                // ignore semicolons
+                Some(Ok(Ranged(Token::Semicolon, ..))) => {
+                    tk.next();
+                }
+
                 // unexpected
                 Some(Ok(_)) => {
                     let err = tk.next().unwrap().unwrap().map(ParseErr::Unexpected);
@@ -361,16 +372,21 @@ impl Parse for FunSign {
         })?;
 
         match tk.peek() {
-            // TODO: better check if type follows
-            Some(Ok(Ranged(Token::Ident(_), ..))) => {
-                let typ = Type::parse_or_skip(tk)?.0;
-                decl.output = Some(Some(typ));
-            }
+            // never returns
             Some(Ok(Ranged(Token::Bang, ..))) => {
                 tk.expect(Token::Bang)?;
-                decl.output = Some(None);
+                decl.output = Some(ReturnType::Never);
             }
-            _ => {}
+
+            // no return type
+            Some(Ok(Ranged(t, ..))) if t.continues_statement() => {}
+            None => {}
+
+            // some return type
+            _ => {
+                let typ = Type::parse_or_skip(tk)?.0;
+                decl.output = Some(ReturnType::Type(typ));
+            }
         }
 
         if tk.check(Token::Slash).is_some() {
@@ -410,10 +426,16 @@ impl Parse for Effect {
         };
 
         tk.group(Group::Brace, false, |tk| {
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
+            // parse function
             let f = FunDecl::parse_or_skip(tk)?.0;
             effect.functions.push(f);
 
-            tk.expect(Token::Semicolon)?;
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
             Some(())
         })?;
 
@@ -496,7 +518,10 @@ impl Parse for Expression {
             Some(Ok(Ranged(Token::Break, ..))) => {
                 tk.expect(Token::Break)?;
 
-                if matches!(tk.peek(), Some(Ok(Ranged(Token::Semicolon, ..)))) {
+                if matches!(
+                    tk.peek(),
+                    Some(Ok(Ranged(t, ..), ..)) if t.continues_statement()
+                ) {
                     Some(Expression::Break(None))
                 } else {
                     let value = Expression::parse_or_default(tk);
@@ -615,12 +640,18 @@ impl Parse for Body {
                 tk.expect(Token::Close(Group::Brace))?;
             }
 
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
+            // parse expression
             let expr = Expression::parse_or_default(tk);
             let n = tk.push_expr(expr);
 
             if tk.check(Token::Semicolon).is_none() {
                 last = Some(n);
             } else {
+                // skip semicolons
+                while tk.check(Token::Semicolon).is_some() {}
                 main.push(n);
             }
 

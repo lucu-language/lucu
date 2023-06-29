@@ -3,7 +3,7 @@ effect div_by_zero {
 
     # as input it gets the dividend
     # it may resume with an integer or end the try block
-    fun div_by_zero(dividend int) int;
+    fun div_by_zero(dividend int) int
 
 }
 
@@ -11,7 +11,7 @@ effect div_by_zero {
 effect catch {
 
     # this function may never resume with a value and must end the try block
-    fun throw() !;
+    fun throw() !
 
 }
 
@@ -80,22 +80,22 @@ fun main() / debug {
 
     try {
 
-        putint(divide_default(12, 4, 1));
-        putint(divide_default(12, 0, 1));
-        putint(divide_throw(56, 0));
-        putint(divide_throw(56, 8));
+        putint(divide_default(12, 4, 1)) # 12 / 4
+        putint(divide_default(12, 0, 1)) # 12 / 0
+        putint(divide_throw(56, 0))      # 56 / 0
+        putint(divide_throw(56, 8))      # 56 / 8
 
     } with catch {
 
         fun throw() ! {
             # this may not return a value
             # we end the entire try block early
-            break;
+            break
         }
 
-    };
+    }
 
-    putint(420);
+    putint(420)
     
 }
 

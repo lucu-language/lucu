@@ -1,5 +1,3 @@
-#![feature(let_chains)]
-
 use std::{fs::read_to_string, print, println};
 
 mod analyzer;
@@ -30,7 +28,7 @@ fn main() {
     let mut idents = idents.into_iter().peekable();
 
     while let Some((i, char)) = chars.next() {
-        if let Some(id) = idents.peek() && id.1.1 == i {
+        if let Some(id) = idents.peek().filter(|id| id.1 .1 == i) {
             // background!
             let mut bg = 100;
 
@@ -44,10 +42,10 @@ fn main() {
 
             print!("\x1b[{};30m{} {}", bg, id.0, char);
 
-            if id.1.2 != i + 1 {
+            if id.1 .2 != i + 1 {
                 while let Some((i, char)) = chars.next() {
                     print!("{}", char);
-                    if id.1.2 == i + 1 {
+                    if id.1 .2 == i + 1 {
                         break;
                     }
                 }

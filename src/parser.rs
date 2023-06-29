@@ -1,4 +1,4 @@
-use std::{collections::HashMap, matches};
+use std::matches;
 
 use crate::lexer::{Group, Ranged, Token, TokenErr, Tokenizer};
 
@@ -41,7 +41,7 @@ pub struct Body {
 #[derive(Debug)]
 pub struct Handler {
     pub effect: Ident,
-    pub functions: HashMap<String, Function>,
+    pub functions: Vec<Function>,
 }
 
 #[derive(Debug)]
@@ -71,13 +71,13 @@ pub struct Function {
 #[derive(Debug)]
 pub struct Effect {
     pub name: Ident,
-    pub functions: HashMap<String, FunDecl>,
+    pub functions: Vec<FunDecl>,
 }
 
 #[derive(Debug)]
 pub struct AST {
-    pub effects: HashMap<String, Effect>,
-    pub functions: HashMap<String, Function>,
+    pub effects: Vec<Effect>,
+    pub functions: Vec<Function>,
 }
 
 #[derive(Debug)]
@@ -299,24 +299,22 @@ pub fn parse_ast(tk: Tokenizer) -> (AST, ParseContext) {
 impl Parse for AST {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let mut ast = AST {
-            effects: HashMap::new(),
-            functions: HashMap::new(),
+            effects: Vec::new(),
+            functions: Vec::new(),
         };
         loop {
             match tk.peek() {
                 // effect
                 Some(Ok(Ranged(Token::Effect, ..))) => {
                     if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(tk) {
-                        ast.effects
-                            .insert(tk.context.idents[effect.name].0.clone(), effect);
+                        ast.effects.push(effect);
                     }
                 }
 
                 // function
                 Some(Ok(Ranged(Token::Fun, ..))) => {
                     if let Some(Ranged(function, ..)) = Function::parse_or_skip(tk) {
-                        ast.functions
-                            .insert(tk.context.idents[function.decl.name].0.clone(), function);
+                        ast.functions.push(function);
                     }
                 }
 
@@ -408,14 +406,12 @@ impl Parse for Effect {
 
         let mut effect = Effect {
             name: tk.push_ident(name),
-            functions: HashMap::new(),
+            functions: Vec::new(),
         };
 
         tk.group(Group::Brace, false, |tk| {
             let f = FunDecl::parse_or_skip(tk)?.0;
-            effect
-                .functions
-                .insert(tk.context.idents[f.name].0.clone(), f);
+            effect.functions.push(f);
 
             tk.expect(Token::Semicolon)?;
             Some(())
@@ -447,11 +443,11 @@ impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
         let ident = tk.push_ident(id);
-        let mut funcs = HashMap::new();
+        let mut funcs = Vec::new();
 
         tk.group(Group::Brace, false, |tk| {
             let func = Function::parse_or_skip(tk)?.0;
-            funcs.insert(tk.context.idents[func.decl.name].0.clone(), func);
+            funcs.push(func);
             Some(())
         })?;
 

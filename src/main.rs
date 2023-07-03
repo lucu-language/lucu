@@ -5,6 +5,7 @@ use crate::lexer::{Ranged, Token};
 mod analyzer;
 mod lexer;
 mod parser;
+mod vm;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -91,6 +92,49 @@ fn main() {
         } else {
             print!("{}", char);
         }
+    }
+
+    // VM test
+    println!("\n--- VM TEST ---");
+    let main = vm::Chunk {
+        bytecode: Box::new([
+            vm::Opcode::ResetRel as u8,
+            1, // jmp
+            vm::Opcode::Print as u8,
+            vm::Opcode::Halt as u8,
+        ]),
+        constants: Box::new([]),
+    };
+
+    let foo = vm::Chunk {
+        bytecode: Box::new([
+            vm::Opcode::PushRel as u8,
+            1, // from stack
+            vm::Opcode::ShiftRel as u8,
+            1, // jmp
+            vm::Opcode::Push as u8,
+            0, // constant
+            vm::Opcode::Add as u8,
+            vm::Opcode::ReturnVal as u8,
+        ]),
+        constants: Box::new([vm::Value::Int(2)]),
+    };
+
+    let bar = vm::Chunk {
+        bytecode: Box::new([
+            vm::Opcode::Pop as u8,
+            vm::Opcode::Push as u8,
+            0, // consyant
+            vm::Opcode::ReturnVal as u8,
+        ]),
+        constants: Box::new([vm::Value::Int(3)]),
+    };
+
+    let mut vm = vm::VM::new(Box::new([main, foo, bar]));
+
+    while !vm.halted() {
+        vm.dump();
+        vm.next_instruction();
     }
 
     // execute

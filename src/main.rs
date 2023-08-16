@@ -99,6 +99,7 @@ fn main() {
     let main = vm::Chunk {
         bytecode: Box::new([
             vm::Opcode::ResetRel as u8,
+            0, // params
             1, // jmp
             vm::Opcode::Print as u8,
             vm::Opcode::Halt as u8,
@@ -108,9 +109,10 @@ fn main() {
 
     let foo = vm::Chunk {
         bytecode: Box::new([
-            vm::Opcode::PushRel as u8,
-            1, // from stack
+            vm::Opcode::PushParam as u8,
+            0, // param 0
             vm::Opcode::ShiftRel as u8,
+            0, // params
             1, // jmp
             vm::Opcode::Push as u8,
             0, // constant
@@ -122,9 +124,11 @@ fn main() {
 
     let bar = vm::Chunk {
         bytecode: Box::new([
-            vm::Opcode::Pop as u8,
             vm::Opcode::Push as u8,
-            0, // consyant
+            0, // constant
+            vm::Opcode::PushParam as u8,
+            0, // param 0
+            vm::Opcode::ContinueVal as u8,
             vm::Opcode::ReturnVal as u8,
         ]),
         constants: Box::new([vm::Value::Int(3)]),

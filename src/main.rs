@@ -17,10 +17,7 @@ fn main() {
     let mut chars = file.chars().enumerate().peekable();
 
     for tok in lexer::Tokenizer::new(file.as_str()) {
-        let start = match tok {
-            Ok(Ranged(_, start, _)) => start,
-            Err(Ranged(_, start, _)) => start,
-        };
+        let start = tok.1;
 
         // print until start
         while let Some(char) = chars.peek().filter(|&(i, _)| *i < start).map(|&(_, c)| c) {
@@ -29,7 +26,7 @@ fn main() {
         }
 
         // print extra semicolon
-        if matches!(tok, Ok(Ranged(Token::Semicolon, ..)))
+        if matches!(tok, Ranged(Token::Semicolon, ..))
             && !chars.peek().is_some_and(|&(_, c)| c == ';')
         {
             print!("\x1b[7m;\x1b[0m");

@@ -110,12 +110,7 @@ struct Tokens<'a> {
 
 impl<'a> Tokens<'a> {
     fn pos_start(&mut self) -> usize {
-        self.peek()
-            .map(|p| match p {
-                Ok(r) => r.1,
-                Err(r) => r.1,
-            })
-            .unwrap_or(usize::MAX)
+        self.peek().map(|p| p.1).unwrap_or(usize::MAX)
     }
     fn pos_end(&self) -> usize {
         self.last
@@ -129,13 +124,7 @@ impl<'a> Tokens<'a> {
             Some(v) => v,
             None => self.iter.next(),
         };
-        self.last = tok
-            .as_ref()
-            .map(|p| match p {
-                Ok(r) => r.2,
-                Err(r) => r.2,
-            })
-            .unwrap_or(usize::MAX);
+        self.last = tok.as_ref().map(|p| p.2).unwrap_or(usize::MAX);
         tok
     }
     fn ranged<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<Ranged<T>> {
@@ -145,15 +134,14 @@ impl<'a> Tokens<'a> {
     }
     fn check(&mut self, token: Token) -> Option<Ranged<()>> {
         match self.peek() {
-            Some(Ok(t)) if t.0 == token => Some(self.next().unwrap().unwrap().map(|_| ())),
+            Some(t) if t.0 == token => Some(self.next().unwrap().map(|_| ())),
             _ => None,
         }
     }
     fn expect(&mut self, token: Token) -> Option<Ranged<()>> {
         let err = match self.next() {
-            Some(Ok(t)) if t.0 == token => return Some(t.map(|_| ())),
-            Some(Ok(t)) => t.map(ParseErr::Unexpected),
-            Some(Err(e)) => e.map(ParseErr::Token),
+            Some(t) if t.0 == token => return Some(t.map(|_| ())),
+            Some(t) => t.map(ParseErr::Unexpected),
             None => Ranged(ParseErr::UnexpectedEOF, usize::MAX, usize::MAX),
         };
         self.context.errors.push(err);
@@ -163,18 +151,18 @@ impl<'a> Tokens<'a> {
         loop {
             match self.next() {
                 // open new group, needs to be skipped first
-                Some(Ok(Ranged(Token::Open(g), start, end))) => {
+                Some(Ranged(Token::Open(g), start, end)) => {
                     self.skip_close(Ranged(g, start, end))?;
                 }
 
                 // error on close different group
-                Some(Ok(Ranged(Token::Close(g), ..))) if g != group.0 => {
+                Some(Ranged(Token::Close(g), ..)) if g != group.0 => {
                     self.context.errors.push(group.map(ParseErr::Unclosed));
                     break None;
                 }
 
                 // we found it
-                Some(Ok(Ranged(Token::Close(_), _, end))) => {
+                Some(Ranged(Token::Close(_), _, end)) => {
                     break Some(Ranged((), group.1, end));
                 }
 
@@ -201,9 +189,8 @@ impl<'a> Tokens<'a> {
     }
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {
-            Some(Ok(Ranged(Token::Ident(s), start, end))) => return Some(Ranged(s, start, end)),
-            Some(Ok(t)) => t.map(ParseErr::Unexpected),
-            Some(Err(e)) => e.map(ParseErr::Token),
+            Some(Ranged(Token::Ident(s), start, end)) => return Some(Ranged(s, start, end)),
+            Some(t) => t.map(ParseErr::Unexpected),
             None => Ranged(ParseErr::UnexpectedEOF, usize::MAX, usize::MAX),
         };
         self.context.errors.push(err);
@@ -218,8 +205,8 @@ impl<'a> Tokens<'a> {
         let open = self.expect(Token::Open(group))?;
         loop {
             match self.peek() {
-                Some(Ok(t)) if t.0 == Token::Close(group) => {
-                    let t = self.next().unwrap().unwrap();
+                Some(t) if t.0 == Token::Close(group) => {
+                    let t = self.next().unwrap();
                     break Some(Ranged((), open.1, t.2));
                 }
                 None => {
@@ -236,7 +223,7 @@ impl<'a> Tokens<'a> {
                     if comma_separated {
                         match self.peek() {
                             // we are closing next
-                            Some(Ok(t)) if t.0 == Token::Close(group) => {}
+                            Some(t) if t.0 == Token::Close(group) => {}
 
                             // else expect comma
                             _ => match self.expect(Token::Comma) {
@@ -264,14 +251,14 @@ trait Parse: Sized {
             // skip to anchor
             None => loop {
                 match tk.peek() {
-                    Some(Ok(Ranged(Token::Open(g), start, end))) => {
+                    Some(Ranged(Token::Open(g), start, end)) => {
                         let g = *g;
                         let start = *start;
                         let end = *end;
                         tk.next();
                         tk.skip_close(Ranged(g, start, end));
                     }
-                    Some(Ok(Ranged(t, ..))) if t.is_anchor() => break None,
+                    Some(Ranged(t, ..)) if t.is_anchor() => break None,
                     None => break None,
                     _ => {
                         tk.next();
@@ -298,7 +285,16 @@ pub fn parse_ast(tk: Tokenizer) -> (AST, ParseContext) {
         last: 0,
         context: ParseContext::default(),
     };
+
+    // parse ast
     let ast = AST::parse(&mut tk).unwrap();
+
+    // add token errors
+    tk.context
+        .errors
+        .extend(tk.iter.errors.into_iter().map(|r| r.map(ParseErr::Token)));
+
+    // return
     (ast, tk.context)
 }
 
@@ -311,31 +307,27 @@ impl Parse for AST {
         loop {
             match tk.peek() {
                 // effect
-                Some(Ok(Ranged(Token::Effect, ..))) => {
+                Some(Ranged(Token::Effect, ..)) => {
                     if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(tk) {
                         ast.effects.push(effect);
                     }
                 }
 
                 // function
-                Some(Ok(Ranged(Token::Fun, ..))) => {
+                Some(Ranged(Token::Fun, ..)) => {
                     if let Some(Ranged(function, ..)) = Function::parse_or_skip(tk) {
                         ast.functions.push(function);
                     }
                 }
 
                 // ignore semicolons
-                Some(Ok(Ranged(Token::Semicolon, ..))) => {
+                Some(Ranged(Token::Semicolon, ..)) => {
                     tk.next();
                 }
 
                 // unexpected
-                Some(Ok(_)) => {
-                    let err = tk.next().unwrap().unwrap().map(ParseErr::Unexpected);
-                    tk.context.errors.push(err);
-                }
-                Some(Err(_)) => {
-                    let err = tk.next().unwrap().unwrap_err().map(ParseErr::Token);
+                Some(_) => {
+                    let err = tk.next().unwrap().map(ParseErr::Unexpected);
                     tk.context.errors.push(err);
                 }
 
@@ -373,13 +365,13 @@ impl Parse for FunSign {
 
         match tk.peek() {
             // never returns
-            Some(Ok(Ranged(Token::Bang, ..))) => {
+            Some(Ranged(Token::Bang, ..)) => {
                 tk.expect(Token::Bang)?;
                 decl.output = Some(ReturnType::Never);
             }
 
             // no return type
-            Some(Ok(Ranged(t, ..))) if t.continues_statement() => {}
+            Some(Ranged(t, ..)) if t.continues_statement() => {}
             None => {}
 
             // some return type
@@ -390,7 +382,7 @@ impl Parse for FunSign {
         }
 
         if tk.check(Token::Slash).is_some() {
-            while matches!(tk.peek(), Some(Ok(Ranged(Token::Ident(_), ..)))) {
+            while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
                 let Some(effect) = tk.ident() else { continue };
                 let effect = tk.push_ident(effect);
                 decl.effects.push(effect);
@@ -485,7 +477,7 @@ impl Parse for Expression {
         let start = tk.pos_start();
         let mut expr = tk.ranged(|tk| match tk.peek() {
             // try-with
-            Some(Ok(Ranged(Token::Try, ..))) => {
+            Some(Ranged(Token::Try, ..)) => {
                 tk.expect(Token::Try)?;
                 let body = Expression::parse_or_default(tk);
                 tk.expect(Token::With)?;
@@ -495,7 +487,7 @@ impl Parse for Expression {
             }
 
             // if-(else)
-            Some(Ok(Ranged(Token::If, ..))) => {
+            Some(Ranged(Token::If, ..)) => {
                 tk.expect(Token::If)?;
 
                 let condition = Expression::parse_or_default(tk);
@@ -515,12 +507,12 @@ impl Parse for Expression {
             }
 
             // break
-            Some(Ok(Ranged(Token::Break, ..))) => {
+            Some(Ranged(Token::Break, ..)) => {
                 tk.expect(Token::Break)?;
 
                 if matches!(
                     tk.peek(),
-                    Some(Ok(Ranged(t, ..), ..)) if t.continues_statement()
+                    Some(Ranged(t, ..), ..) if t.continues_statement()
                 ) {
                     Some(Expression::Break(None))
                 } else {
@@ -531,34 +523,33 @@ impl Parse for Expression {
             }
 
             // ident
-            Some(Ok(Ranged(Token::Ident(_), ..))) => {
+            Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
                 let path = tk.push_ident(id);
                 Some(Expression::Ident(path))
             }
 
             // string
-            Some(Ok(Ranged(Token::String(s), ..))) => {
+            Some(Ranged(Token::String(s), ..)) => {
                 let s = s.clone();
                 tk.next();
                 Some(Expression::String(s))
             }
 
             // int
-            Some(&Ok(Ranged(Token::Int(num), ..))) => {
+            Some(&Ranged(Token::Int(num), ..)) => {
                 tk.next();
                 Some(Expression::Int(num))
             }
 
             // block
-            Some(Ok(Ranged(Token::Open(Group::Brace), ..))) => {
+            Some(Ranged(Token::Open(Group::Brace), ..)) => {
                 Some(Expression::Body(Body::parse_or_skip(tk)?.0))
             }
 
             _ => {
                 let err = match tk.next() {
-                    Some(Ok(t)) => t.map(ParseErr::Unexpected),
-                    Some(Err(e)) => e.map(ParseErr::Token),
+                    Some(t) => t.map(ParseErr::Unexpected),
                     None => Ranged(ParseErr::UnexpectedEOF, tk.pos_end(), tk.pos_end()),
                 };
                 tk.context.errors.push(err);
@@ -570,7 +561,7 @@ impl Parse for Expression {
         loop {
             match tk.peek() {
                 // member
-                Some(Ok(Ranged(Token::Period, ..))) => {
+                Some(Ranged(Token::Period, ..)) => {
                     tk.expect(Token::Period)?;
                     let member = tk.ident()?;
                     expr = Ranged(
@@ -581,7 +572,7 @@ impl Parse for Expression {
                 }
 
                 // call
-                Some(Ok(Ranged(Token::Open(Group::Paren), ..))) => {
+                Some(Ranged(Token::Open(Group::Paren), ..)) => {
                     let mut args = Vec::new();
                     tk.group(Group::Paren, true, |tk| {
                         let expr = Expression::parse_or_default(tk);
@@ -597,7 +588,7 @@ impl Parse for Expression {
 
                 // binary ops
                 // TODO: operator precedence
-                Some(Ok(Ranged(Token::DoubleEquals, ..))) => {
+                Some(Ranged(Token::DoubleEquals, ..)) => {
                     tk.expect(Token::DoubleEquals)?;
 
                     let right = Expression::parse_or_default(tk);
@@ -610,7 +601,7 @@ impl Parse for Expression {
                     )
                 }
 
-                Some(Ok(Ranged(Token::Slash, ..))) => {
+                Some(Ranged(Token::Slash, ..)) => {
                     tk.expect(Token::Slash)?;
 
                     let right = Expression::parse_or_default(tk);

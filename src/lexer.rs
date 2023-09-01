@@ -26,6 +26,9 @@ pub enum Token {
     String(String),
     Ident(String),
     Int(i128),
+
+    // Error
+    UnknownSymbol,
 }
 
 impl Token {
@@ -100,6 +103,7 @@ pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
     pos: usize,
 
+    pub errors: Vec<Ranged<TokenErr>>,
     depth: usize,
     prev_unfinished: bool,
     peek: Option<Ranged<Token>>,
@@ -128,6 +132,7 @@ impl<'a> Tokenizer<'a> {
             depth: 0,
             prev_unfinished: true,
             peek: None,
+            errors: Vec::new(),
         }
     }
     fn next_char(&mut self) -> Option<char> {
@@ -142,13 +147,13 @@ impl<'a> Tokenizer<'a> {
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Result<Ranged<Token>, Ranged<TokenErr>>;
+    type Item = Ranged<Token>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // peeked token?
         if let Some(token) = self.peek.take() {
             self.prev_unfinished = token.0.unfinished_statement();
-            return Some(Ok(token));
+            return Some(token);
         }
 
         // remember newline between tokens
@@ -180,7 +185,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     if let Some(newline) =
                         prev_newline.filter(|_| self.depth == 0 && !self.prev_unfinished)
                     {
-                        return Some(Ok(Ranged(Token::Semicolon, newline, newline + 1)));
+                        return Some(Ranged(Token::Semicolon, newline, newline + 1));
                     } else {
                         return None;
                     }
@@ -222,10 +227,14 @@ impl<'a> Iterator for Tokenizer<'a> {
                     match self.next_char() {
                         Some('"') => break Token::String(full),
                         Some('\n') => {
-                            return Some(Err(Ranged(TokenErr::UnclosedString, pos, self.pos)))
+                            self.errors
+                                .push(Ranged(TokenErr::UnclosedString, pos, self.pos));
+                            break Token::String(full);
                         }
                         None => {
-                            return Some(Err(Ranged(TokenErr::UnclosedString, pos, self.pos + 1)))
+                            self.errors
+                                .push(Ranged(TokenErr::UnclosedString, pos, self.pos + 1));
+                            break Token::String(full);
                         }
 
                         Some('\\') => full.push(match self.next_char() {
@@ -238,11 +247,12 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                             Some(c) => c, // TODO: give error
                             None => {
-                                return Some(Err(Ranged(
+                                self.errors.push(Ranged(
                                     TokenErr::UnclosedString,
                                     pos,
                                     self.pos + 1,
-                                )))
+                                ));
+                                break Token::String(full);
                             }
                         }),
                         Some(c) => full.push(c),
@@ -299,7 +309,10 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
             _ => {
                 self.prev_unfinished = false;
-                return Some(Err(Ranged(TokenErr::UnknownSymbol, pos, self.pos)));
+
+                self.errors
+                    .push(Ranged(TokenErr::UnknownSymbol, pos, self.pos));
+                Token::UnknownSymbol
             }
         };
 
@@ -317,10 +330,10 @@ impl<'a> Iterator for Tokenizer<'a> {
             .filter(|_| self.depth == 0 && !self.prev_unfinished && !token.continues_statement())
         {
             self.peek = Some(Ranged(token, pos, self.pos));
-            Some(Ok(Ranged(Token::Semicolon, newline, newline + 1)))
+            Some(Ranged(Token::Semicolon, newline, newline + 1))
         } else {
             self.prev_unfinished = token.unfinished_statement();
-            Some(Ok(Ranged(token, pos, self.pos)))
+            Some(Ranged(token, pos, self.pos))
         }
     }
 

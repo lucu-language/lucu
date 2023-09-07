@@ -1,12 +1,21 @@
 use std::{collections::HashMap, println};
 
-use crate::parser::{Expr, Expression, FunSign, Ident, ParseContext, ReturnType, AST};
+use crate::{
+    parser::{Expr, Expression, FunSign, Ident, ParseContext, ReturnType, AST},
+    vecmap::VecMap,
+};
 
-pub type Val = usize;
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Val(usize);
+
+impl From<Val> for usize {
+    fn from(value: Val) -> Self {
+        value.0
+    }
+}
 
 pub struct Analysis {
-    // Scope Analysis: translation from Ident to Val
-    pub values: Vec<Val>,
+    pub values: VecMap<Ident, Val>,
     types: usize,
 }
 
@@ -34,7 +43,7 @@ impl<'a> Scope<'a> {
 
 impl Analysis {
     fn push_val(&mut self, id: Ident) -> Val {
-        self.values[id] = self.types;
+        self.values[id] = Val(self.types);
         self.types += 1;
         self.values[id]
     }
@@ -129,7 +138,7 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
 fn scope_effect<'a>(
     actx: &mut Analysis,
     ctx: &ParseContext,
-    ident: usize,
+    ident: Ident,
     scope: &'a mut Scope,
 ) -> Option<&'a HashMap<String, Val>> {
     let name = &ctx.idents[ident].0;
@@ -192,7 +201,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
 
 pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut actx = Analysis {
-        values: vec![usize::MAX; ctx.idents.len()],
+        values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
         types: 0,
     };
 
@@ -200,13 +209,13 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut values = HashMap::new();
 
     // built-in values
-    values.insert("str".to_owned(), 0);
-    values.insert("int".to_owned(), 1);
-    values.insert("debug".to_owned(), 2);
+    values.insert("str".to_owned(), Val(0));
+    values.insert("int".to_owned(), Val(1));
+    values.insert("debug".to_owned(), Val(2));
 
     let mut debug = HashMap::new();
-    debug.insert("putint".to_owned(), 3);
-    effects.insert(2, debug);
+    debug.insert("putint".to_owned(), Val(3));
+    effects.insert(Val(2), debug);
 
     actx.types = 4;
 

@@ -5,6 +5,7 @@ use crate::lexer::{Ranged, Token};
 mod analyzer;
 mod lexer;
 mod parser;
+mod vecmap;
 mod vm;
 
 fn main() {
@@ -65,15 +66,15 @@ fn main() {
             // background!
             let mut bg = 100;
 
-            if *id.0 != usize::MAX {
-                bg = 41 + (*id.0 % 14);
+            if usize::from(*id.0) != usize::MAX {
+                bg = 41 + (usize::from(*id.0) % 14);
 
                 if bg >= 48 {
                     bg = 101 + (bg - 48)
                 }
             }
 
-            print!("\x1b[{};30m{} {}", bg, id.0, char);
+            print!("\x1b[{};30m{} {}", bg, usize::from(*id.0), char);
 
             if id.1 .2 != i + 1 {
                 while let Some((i, char)) = chars.next() {

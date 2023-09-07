@@ -1,9 +1,27 @@
 use std::matches;
 
-use crate::lexer::{Group, Ranged, Token, TokenErr, Tokenizer};
+use crate::{
+    lexer::{Group, Ranged, Token, TokenErr, Tokenizer},
+    vecmap::VecMap,
+};
 
-pub type Expr = usize;
-pub type Ident = usize;
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Expr(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Ident(usize);
+
+impl From<Expr> for usize {
+    fn from(value: Expr) -> Self {
+        value.0
+    }
+}
+
+impl From<Ident> for usize {
+    fn from(value: Ident) -> Self {
+        value.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
@@ -97,8 +115,8 @@ pub enum ParseErr {
 #[derive(Default)]
 pub struct ParseContext {
     pub errors: Vec<Ranged<ParseErr>>,
-    pub exprs: Vec<Ranged<Expression>>,
-    pub idents: Vec<Ranged<String>>,
+    pub exprs: VecMap<Expr, Ranged<Expression>>,
+    pub idents: VecMap<Ident, Ranged<String>>,
 }
 
 struct Tokens<'a> {
@@ -178,14 +196,10 @@ impl<'a> Tokens<'a> {
         }
     }
     fn push_expr(&mut self, expr: Ranged<Expression>) -> Expr {
-        let n = self.context.exprs.len();
-        self.context.exprs.push(expr);
-        n
+        self.context.exprs.push(Expr, expr)
     }
     fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
-        let n = self.context.idents.len();
-        self.context.idents.push(ident);
-        n
+        self.context.idents.push(Ident, ident)
     }
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {

@@ -1,8 +1,10 @@
-use std::{env, fs::read_to_string, print, println};
+use std::{env, fs::read_to_string, print, println, rc::Rc};
 
 use crate::lexer::{Ranged, Token};
 
 mod analyzer;
+mod compiler;
+mod ir;
 mod lexer;
 mod parser;
 mod vecmap;
@@ -42,7 +44,9 @@ fn main() {
     // compile
     let tokenizer = lexer::Tokenizer::new(file.as_str());
     let (ast, ctx) = parser::parse_ast(tokenizer);
-    let actx = analyzer::analyze(&ast, &ctx);
+    let asys = analyzer::analyze(&ast, &ctx);
+    let ir = ir::generate_ir(&ast, &ctx, &asys);
+    let bytecode = compiler::compile(&ir);
 
     // print errors
     println!("\n--- ERRORS ---");
@@ -51,10 +55,10 @@ fn main() {
     // visualize idents
     println!("\n--- SCOPE ANALYSIS ---");
 
-    let mut idents = actx
+    let mut idents = asys
         .values
-        .iter()
-        .zip(ctx.idents.iter())
+        .values()
+        .zip(ctx.idents.values())
         .collect::<Vec<_>>();
     idents.sort_by_key(|(_, range)| range.1);
 
@@ -66,15 +70,16 @@ fn main() {
             // background!
             let mut bg = 100;
 
-            if usize::from(*id.0) != usize::MAX {
-                bg = 41 + (usize::from(*id.0) % 14);
+            let num = usize::from(*id.0);
+            if num != usize::MAX {
+                bg = 41 + (num % 14);
 
                 if bg >= 48 {
                     bg = 101 + (bg - 48)
                 }
             }
 
-            print!("\x1b[{};30m{} {}", bg, usize::from(*id.0), char);
+            print!("\x1b[{};30m{} {}", bg, num, char);
 
             if id.1 .2 != i + 1 {
                 while let Some((i, char)) = chars.next() {
@@ -91,6 +96,15 @@ fn main() {
             print!("{}", char);
         }
     }
+
+    // TODO: pretty print the following
+    // print ir
+    println!("\n--- IR ---");
+    println!("{:#?}", ir);
+
+    // print bytecode
+    println!("\n--- BYTECODE ---");
+    println!("{:#?}", bytecode);
 
     // VM test
     println!("\n--- VM TEST ---");
@@ -141,5 +155,11 @@ fn main() {
 
     // execute
     println!("\n--- OUTPUT ---");
-    todo!();
+
+    let mut vm = vm::VM::new_back(bytecode, Rc::new([vm::Value::Empty]));
+
+    while !vm.halted() {
+        // vm.dump();
+        vm.next_instruction();
+    }
 }

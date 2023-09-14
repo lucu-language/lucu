@@ -199,6 +199,9 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
     }
 }
 
+pub const DEBUG: Val = Val(2);
+pub const PUTINT: Val = Val(3);
+
 pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut actx = Analysis {
         values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
@@ -211,10 +214,10 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     // built-in values
     values.insert("str".to_owned(), Val(0));
     values.insert("int".to_owned(), Val(1));
-    values.insert("debug".to_owned(), Val(2));
+    values.insert("debug".to_owned(), DEBUG);
 
     let mut debug = HashMap::new();
-    debug.insert("putint".to_owned(), Val(3));
+    debug.insert("putint".to_owned(), PUTINT);
     effects.insert(Val(2), debug);
 
     actx.types = 4;

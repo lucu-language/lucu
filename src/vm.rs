@@ -9,6 +9,8 @@ pub enum Value {
     Continuation(Box<Continuation>),
 
     Address(u32, u32), // block, byte
+
+    Empty,
 }
 
 #[repr(u8)]
@@ -54,6 +56,7 @@ pub struct CallStack {
     ret: (u32, u32),
 }
 
+#[derive(Debug)]
 pub struct Chunk {
     pub bytecode: Box<[u8]>,
     pub constants: Box<[Value]>,
@@ -107,6 +110,20 @@ impl VM {
 
             chunks,
             ip: (0, 0),
+            halted: false,
+        }
+    }
+    pub fn new_back(chunks: Box<[Chunk]>, initial_params: Rc<[Value]>) -> Self {
+        VM {
+            callstack: vec![CallStack {
+                parameters: initial_params,
+                stack: Vec::new(),
+                ret: (0, 0),
+            }],
+            reset_frames: Vec::new(),
+
+            ip: (chunks.len() as u32 - 1, 0),
+            chunks,
             halted: false,
         }
     }
@@ -266,9 +283,11 @@ impl VM {
                 self.ip = cont.ret;
                 self.push_val(val);
             }
-            Opcode::Print => {
-                println!("{:?}", self.pop_val());
-            }
+            Opcode::Print => match self.pop_val() {
+                Value::Str(s) => println!("{}", s),
+                Value::Int(i) => println!("{}", i),
+                _ => todo!(),
+            },
             Opcode::Halt => {
                 self.halted = true;
             }

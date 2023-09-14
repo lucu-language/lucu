@@ -1,0 +1,11 @@
+fun puttwice(n int) / debug {
+	putint(n)
+	putint(n)
+}
+
+fun main() / debug {
+	putint(420)
+	puttwice(69)
+
+	putint("Hello, World!")
+}

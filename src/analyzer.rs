@@ -1,12 +1,24 @@
 use std::{collections::HashMap, println};
 
 use crate::{
-    parser::{Expr, Expression, FunSign, Ident, ParseContext, ReturnType, AST},
+    parser::{ExprIdx, Expression, FunSign, Ident, ParseContext, ReturnType, AST},
     vecmap::VecMap,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Val(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct ParamIdx(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct FunIdx(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct EffIdx(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct EffFunIdx(usize);
 
 impl From<Val> for usize {
     fn from(value: Val) -> Self {
@@ -14,9 +26,46 @@ impl From<Val> for usize {
     }
 }
 
+impl From<ParamIdx> for usize {
+    fn from(value: ParamIdx) -> Self {
+        value.0
+    }
+}
+
+impl From<FunIdx> for usize {
+    fn from(value: FunIdx) -> Self {
+        value.0
+    }
+}
+
+impl From<EffIdx> for usize {
+    fn from(value: EffIdx) -> Self {
+        value.0
+    }
+}
+
+impl From<EffFunIdx> for usize {
+    fn from(value: EffFunIdx) -> Self {
+        value.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Definition {
+    Parameter(ParamIdx), // parameter index in function
+
+    Effect(EffIdx),                 // effect index in ast
+    EffectFunction(Val, EffFunIdx), // effect value, function index in effect
+
+    Function(FunIdx), // function index in ast
+
+    Builtin, // builtin effects
+}
+
 pub struct Analysis {
     pub values: VecMap<Ident, Val>,
-    types: usize,
+    pub defs: VecMap<Val, Definition>,
+    pub main: Option<FunIdx>,
 }
 
 struct Scope<'a> {
@@ -42,14 +91,14 @@ impl<'a> Scope<'a> {
 }
 
 impl Analysis {
-    fn push_val(&mut self, id: Ident) -> Val {
-        self.values[id] = Val(self.types);
-        self.types += 1;
-        self.values[id]
+    fn push_val(&mut self, id: Ident, def: Definition) -> Val {
+        let val = self.defs.push(Val, def);
+        self.values[id] = val;
+        val
     }
 }
 
-fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr: Expr) {
+fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr: ExprIdx) {
     match ctx.exprs[expr].0 {
         // analyze
         Expression::Handler(ref handler) => {
@@ -59,7 +108,7 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
 
             // match func names to effect
             if let Some(funcs) = funcs {
-                for func in handler.functions.iter() {
+                for func in handler.functions.values() {
                     let name = &ctx.idents[func.decl.name].0;
                     match funcs.get(name) {
                         Some(&val) => actx.values[func.decl.name] = val,
@@ -72,7 +121,7 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
             }
 
             // analyze functions
-            for func in handler.functions.iter() {
+            for func in handler.functions.values() {
                 let mut scope = scope.child();
                 scope_sign(actx, &mut scope, ctx, &func.decl.sign);
                 analyze_expr(actx, &mut scope, ctx, func.body);
@@ -184,7 +233,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
     }
 
     // put args in scope
-    for &(param, ref typ) in func.inputs.iter() {
+    for (i, &(param, ref typ)) in func.inputs.values().enumerate() {
         // resolve type
         let name = &ctx.idents[typ.ident].0;
         match scope.get(name) {
@@ -193,9 +242,10 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
         }
 
         // add parameter to scope
-        scope
-            .values
-            .insert(ctx.idents[param].0.clone(), actx.push_val(param));
+        scope.values.insert(
+            ctx.idents[param].0.clone(),
+            actx.push_val(param, Definition::Parameter(ParamIdx(i))),
+        );
     }
 }
 
@@ -205,7 +255,8 @@ pub const PUTINT: Val = Val(3);
 pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut actx = Analysis {
         values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
-        types: 0,
+        defs: VecMap::new(),
+        main: None,
     };
 
     let mut effects = HashMap::new();
@@ -220,29 +271,38 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     debug.insert("putint".to_owned(), PUTINT);
     effects.insert(Val(2), debug);
 
-    actx.types = 4;
+    actx.defs = VecMap::filled(4, Definition::Builtin);
+    actx.defs[PUTINT] = Definition::EffectFunction(DEBUG, EffFunIdx(0));
 
     // put names in scope
     // TODO: error on conflict
-    for effect in ast.effects.iter() {
+    for (i, effect) in ast.effects.values().enumerate() {
         // add effect to scope
-        let val = actx.push_val(effect.name);
+        let val = actx.push_val(effect.name, Definition::Effect(EffIdx(i)));
         values.insert(ctx.idents[effect.name].0.clone(), val);
 
         // remember effect functions
         let mut funcs = HashMap::new();
-        for func in effect.functions.iter() {
-            funcs.insert(ctx.idents[func.name].0.clone(), actx.push_val(func.name));
+        for (i, func) in effect.functions.values().enumerate() {
+            funcs.insert(
+                ctx.idents[func.name].0.clone(),
+                actx.push_val(func.name, Definition::EffectFunction(val, EffFunIdx(i))),
+            );
         }
 
         effects.insert(val, funcs);
     }
-    for func in ast.functions.iter() {
+    for (i, func) in ast.functions.values().enumerate() {
         // add function to scope
         values.insert(
             ctx.idents[func.decl.name].0.clone(),
-            actx.push_val(func.decl.name),
+            actx.push_val(func.decl.name, Definition::Function(FunIdx(i))),
         );
+
+        // check if main
+        if ctx.idents[func.decl.name].0 == "main" {
+            actx.main = Some(FunIdx(i));
+        }
     }
 
     // analyze effects and functions
@@ -252,13 +312,13 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
         effects: &effects,
     };
 
-    for effect in ast.effects.iter() {
-        for func in effect.functions.iter() {
+    for effect in ast.effects.values() {
+        for func in effect.functions.values() {
             let mut scope = scope.child();
             scope_sign(&mut actx, &mut scope, ctx, &func.sign);
         }
     }
-    for func in ast.functions.iter() {
+    for func in ast.functions.values() {
         let mut scope = scope.child();
         scope_sign(&mut actx, &mut scope, ctx, &func.decl.sign);
         analyze_expr(&mut actx, &mut scope, ctx, func.body);

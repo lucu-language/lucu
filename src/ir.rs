@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    analyzer::{Analysis, Val, DEBUG, PUTINT},
-    parser::{Expr, Expression, ParseContext, ReturnType, AST},
+    analyzer::{Analysis, Definition, EffFunIdx, FunIdx, Val, DEBUG, PUTINT},
+    parser::{ExprIdx, Expression, ParseContext, ReturnType, AST},
     vecmap::VecMap,
 };
 
@@ -52,7 +52,7 @@ struct HandlerProcIdent {
 #[derive(Debug)]
 struct Handler {
     effect: Val,
-    procs: HashMap<Val, HandlerProcIdent>,
+    procs: VecMap<EffFunIdx, HandlerProcIdent>,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -101,7 +101,7 @@ fn generate_expr(
     asys: &Analysis,
     handlers: &[HandlerIdx],
     params: &[Val],
-    expr: Expr,
+    expr: ExprIdx,
     pop_ret: bool,
     block: &mut Block,
     proc: &mut Procedure,
@@ -117,7 +117,16 @@ fn generate_expr(
             }
             if let Some(expr) = b.last {
                 generate_expr(
-                    ast, ctx, asys, handlers, params, expr, pop_ret, block, proc, out,
+                    ast,
+                    ctx,
+                    asys,
+                    handlers,
+                    params,
+                    expr,
+                    proc.outputs > 0,
+                    block,
+                    proc,
+                    out,
                 );
                 block.instructions.push(Instruction::Return(proc.outputs))
             }
@@ -136,14 +145,17 @@ fn generate_expr(
                     let val = asys.values[id];
 
                     // check handlers
-                    let option = handlers
-                        .iter()
-                        .map(|&idx| out.handlers[idx].procs.get(&val).map(|proc| (idx, proc)))
-                        .flatten()
-                        .next();
+                    match asys.defs[val] {
+                        Definition::EffectFunction(eff_val, eff_idx) => {
+                            // get handler
+                            let (closure, handler) = handlers
+                                .iter()
+                                .map(|&idx| (idx, &out.handlers[idx]))
+                                .find(|(_, handler)| handler.effect == eff_val)
+                                .unwrap();
 
-                    match option {
-                        Some((closure, proc_idx)) => {
+                            let proc_idx = &handler.procs[eff_idx];
+
                             // push handler closures
                             for &closure in proc_idx.proc.handlers.iter() {
                                 let pos = handlers
@@ -177,15 +189,9 @@ fn generate_expr(
                                     .push(Instruction::Call(out.func_map[&proc_idx.proc]));
                             }
                         }
-                        None => {
+                        Definition::Function(func_idx) => {
                             // find function
-                            let (func_idx, decl) = ast
-                                .functions
-                                .iter()
-                                .enumerate()
-                                .find(|(_, p)| asys.values[p.decl.name] == val)
-                                .map(|(i, f)| (i, &f.decl))
-                                .unwrap();
+                            let decl = &ast.functions[func_idx].decl;
 
                             // get handler vec of function
                             let effects: Box<[HandlerIdx]> = decl
@@ -238,6 +244,9 @@ fn generate_expr(
                             // call function
                             block.instructions.push(Instruction::Call(idx));
                         }
+                        Definition::Parameter(_) => todo!(),
+                        Definition::Effect(_) => todo!(),
+                        Definition::Builtin => todo!(),
                     }
                 }
                 _ => todo!(),
@@ -266,12 +275,12 @@ fn generate_expr(
             if !pop_ret {
                 let val = asys.values[id];
 
-                // TODO: global and local variables
-
-                // TODO: handle not found
-                let param = params.iter().position(|&p| p == val).unwrap();
-
-                block.instructions.push(Instruction::PushParam(param))
+                match asys.defs[val] {
+                    Definition::Parameter(param) => block
+                        .instructions
+                        .push(Instruction::PushParam(param.into())),
+                    _ => todo!(),
+                }
             }
         }
         E::Error => todo!(),
@@ -283,7 +292,7 @@ fn generate_func(
     ctx: &ParseContext,
     asys: &Analysis,
     handlers: &[HandlerIdx],
-    func: usize,
+    func: FunIdx,
     out: &mut IR,
 ) -> ProcIdx {
     let func = &ast.functions[func];
@@ -303,7 +312,7 @@ fn generate_func(
         .decl
         .sign
         .inputs
-        .iter()
+        .values()
         .map(|&(ident, _)| asys.values[ident])
         .collect();
 
@@ -331,13 +340,8 @@ fn generate_func(
 }
 
 pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> Vec<Procedure> {
-    let main = ast
-        .functions
-        .iter()
-        .enumerate()
-        .find(|(_, f)| ctx.idents[f.decl.name].0 == "main")
-        .unwrap()
-        .0;
+    // TODO: main not found
+    let main = asys.main.unwrap();
 
     let mut out = IR::default();
 
@@ -366,20 +370,16 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> Vec<Proced
     out.func_map.insert(putint_ident.clone(), putint);
 
     // define debug
-    let mut debug_procs = HashMap::new();
-    debug_procs.insert(
-        PUTINT,
-        HandlerProcIdent {
-            proc: putint_ident,
-            has_cont: false,
-        },
-    );
+    let debug_procs = vec![HandlerProcIdent {
+        proc: putint_ident,
+        has_cont: false,
+    }];
 
     let debug = out.handlers.push(
         HandlerIdx,
         Handler {
             effect: DEBUG,
-            procs: debug_procs,
+            procs: debug_procs.into(),
         },
     );
 

@@ -1,18 +1,19 @@
 use std::matches;
 
 use crate::{
+    analyzer::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
     lexer::{Group, Ranged, Token, TokenErr, Tokenizer},
     vecmap::VecMap,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct Expr(usize);
+pub struct ExprIdx(usize);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Ident(usize);
 
-impl From<Expr> for usize {
-    fn from(value: Expr) -> Self {
+impl From<ExprIdx> for usize {
+    fn from(value: ExprIdx) -> Self {
         value.0
     }
 }
@@ -33,13 +34,13 @@ pub enum Op {
 pub enum Expression {
     Body(Body),
 
-    Call(Expr, Vec<Expr>),
-    Member(Expr, Ranged<String>),
-    IfElse(Expr, Expr, Option<Expr>),
-    Op(Expr, Op, Expr),
-    Break(Option<Expr>),
+    Call(ExprIdx, Vec<ExprIdx>),
+    Member(ExprIdx, Ranged<String>),
+    IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
+    Op(ExprIdx, Op, ExprIdx),
+    Break(Option<ExprIdx>),
 
-    TryWith(Expr, Expr),
+    TryWith(ExprIdx, ExprIdx),
     Handler(Handler),
 
     String(String),
@@ -52,14 +53,14 @@ pub enum Expression {
 
 #[derive(Debug)]
 pub struct Body {
-    pub main: Vec<Expr>,
-    pub last: Option<Expr>,
+    pub main: Vec<ExprIdx>,
+    pub last: Option<ExprIdx>,
 }
 
 #[derive(Debug)]
 pub struct Handler {
     pub effect: Ident,
-    pub functions: Vec<Function>,
+    pub functions: VecMap<EffFunIdx, Function>,
 }
 
 #[derive(Debug)]
@@ -75,7 +76,7 @@ pub enum ReturnType {
 
 #[derive(Debug)]
 pub struct FunSign {
-    pub inputs: Vec<(Ident, Type)>,
+    pub inputs: VecMap<ParamIdx, (Ident, Type)>,
     pub output: Option<ReturnType>,
     pub effects: Vec<Ident>,
 }
@@ -89,19 +90,19 @@ pub struct FunDecl {
 #[derive(Debug)]
 pub struct Function {
     pub decl: FunDecl,
-    pub body: Expr,
+    pub body: ExprIdx,
 }
 
 #[derive(Debug)]
 pub struct Effect {
     pub name: Ident,
-    pub functions: Vec<FunDecl>,
+    pub functions: VecMap<EffFunIdx, FunDecl>,
 }
 
 #[derive(Debug)]
 pub struct AST {
-    pub effects: Vec<Effect>,
-    pub functions: Vec<Function>,
+    pub effects: VecMap<EffIdx, Effect>,
+    pub functions: VecMap<FunIdx, Function>,
 }
 
 #[derive(Debug)]
@@ -115,7 +116,7 @@ pub enum ParseErr {
 #[derive(Default)]
 pub struct ParseContext {
     pub errors: Vec<Ranged<ParseErr>>,
-    pub exprs: VecMap<Expr, Ranged<Expression>>,
+    pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
     pub idents: VecMap<Ident, Ranged<String>>,
 }
 
@@ -195,8 +196,8 @@ impl<'a> Tokens<'a> {
             }
         }
     }
-    fn push_expr(&mut self, expr: Ranged<Expression>) -> Expr {
-        self.context.exprs.push(Expr, expr)
+    fn push_expr(&mut self, expr: Ranged<Expression>) -> ExprIdx {
+        self.context.exprs.push(ExprIdx, expr)
     }
     fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
         self.context.idents.push(Ident, ident)
@@ -315,22 +316,22 @@ pub fn parse_ast(tk: Tokenizer) -> (AST, ParseContext) {
 impl Parse for AST {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let mut ast = AST {
-            effects: Vec::new(),
-            functions: Vec::new(),
+            effects: VecMap::new(),
+            functions: VecMap::new(),
         };
         loop {
             match tk.peek() {
                 // effect
                 Some(Ranged(Token::Effect, ..)) => {
                     if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(tk) {
-                        ast.effects.push(effect);
+                        ast.effects.push_value(effect);
                     }
                 }
 
                 // function
                 Some(Ranged(Token::Fun, ..)) => {
                     if let Some(Ranged(function, ..)) = Function::parse_or_skip(tk) {
-                        ast.functions.push(function);
+                        ast.functions.push_value(function);
                     }
                 }
 
@@ -364,7 +365,7 @@ impl Parse for Type {
 impl Parse for FunSign {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let mut decl = FunSign {
-            inputs: Vec::new(),
+            inputs: VecMap::new(),
             effects: Vec::new(),
             output: None,
         };
@@ -373,7 +374,7 @@ impl Parse for FunSign {
             let id = tk.ident()?;
             let name = tk.push_ident(id);
             let typ = Type::parse_or_skip(tk)?.0;
-            decl.inputs.push((name, typ));
+            decl.inputs.push_value((name, typ));
             Some(())
         })?;
 
@@ -428,7 +429,7 @@ impl Parse for Effect {
 
         let mut effect = Effect {
             name: tk.push_ident(name),
-            functions: Vec::new(),
+            functions: VecMap::new(),
         };
 
         tk.group(Group::Brace, false, |tk| {
@@ -437,7 +438,7 @@ impl Parse for Effect {
 
             // parse function
             let f = FunDecl::parse_or_skip(tk)?.0;
-            effect.functions.push(f);
+            effect.functions.push_value(f);
 
             // skip semicolons
             while tk.check(Token::Semicolon).is_some() {}
@@ -471,11 +472,11 @@ impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
         let ident = tk.push_ident(id);
-        let mut funcs = Vec::new();
+        let mut funcs = VecMap::new();
 
         tk.group(Group::Brace, false, |tk| {
             let func = Function::parse_or_skip(tk)?.0;
-            funcs.push(func);
+            funcs.push_value(func);
             Some(())
         })?;
 

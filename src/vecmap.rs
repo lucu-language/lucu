@@ -48,6 +48,9 @@ where
         self.vec.push(value);
         k
     }
+    pub fn push_value(&mut self, value: V) {
+        self.vec.push(value);
+    }
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.vec.iter()
     }

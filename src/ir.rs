@@ -14,6 +14,7 @@ pub struct Procedure {
     pub inputs: usize,
 
     // extra values from the parent function(s) to use as inputs
+    // TODO: is Val accurate enough or will this take the wrong value during recursion?
     pub closure_inputs: Vec<Val>,
 
     // whether or not this is an effect handler that accepts a continuation parameter
@@ -23,6 +24,8 @@ pub struct Procedure {
     pub outputs: bool,
     pub blocks: VecMap<BlockIdx, Block>,
     pub start: BlockIdx,
+
+    pub debug_name: String,
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -204,6 +207,7 @@ pub fn generate_ir(
             }]
             .into(),
             start: BlockIdx(0),
+            debug_name: "debug#0__putint".into(),
         },
     );
 
@@ -232,6 +236,7 @@ fn generate_reset(
     handlers: &[HandlerIdx],
     body: ExprIdx,
     closure_scope: &mut Box<ClosureScope>,
+    debug_name: String,
 ) -> ProcIdx {
     ClosureScope::child(closure_scope);
 
@@ -249,6 +254,7 @@ fn generate_reset(
         closure_scope,
         false,
         &mut 0,
+        &debug_name,
     );
 
     if !matches!(
@@ -273,6 +279,7 @@ fn generate_reset(
             outputs: ret.is_some(),
             blocks,
             start,
+            debug_name,
         },
     )
 }
@@ -297,6 +304,31 @@ fn generate_func(
         closure_scope.base_params += 1;
     }
 
+    // generate debug name
+    let mut debug_name = ir.ctx.idents[func.decl.name].0.clone();
+
+    if handlers.len() > 0 {
+        debug_name += "/";
+
+        for &handler in handlers {
+            let eff_val = ir.handlers[handler].effect;
+            let eff_name = ir
+                .ast
+                .effects
+                .values()
+                .find(|e| ir.asys.values[e.name] == eff_val)
+                .map(|e| ir.ctx.idents[e.name].0.as_str())
+                .unwrap_or("debug"); // TODO: support other builtin effects
+
+            debug_name += eff_name;
+            debug_name += "#";
+            debug_name += usize::from(handler).to_string().as_str();
+            debug_name += ",";
+        }
+
+        debug_name.pop();
+    }
+
     // generate code
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
@@ -313,6 +345,7 @@ fn generate_func(
         closure_scope,
         is_handler,
         &mut 0,
+        &debug_name,
     )
     .filter(|_| func.decl.sign.output.is_some());
 
@@ -348,6 +381,7 @@ fn generate_func(
             outputs: ret.is_some(),
             blocks,
             start,
+            debug_name,
         },
     )
 }
@@ -369,6 +403,7 @@ fn generate_expr(
     closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
     regs: &mut usize,
+    parent_name: &str,
 ) -> Option<Reg> {
     use Expression as E;
     match ir.ctx.exprs[expr].0 {
@@ -383,6 +418,7 @@ fn generate_expr(
                     closure_scope,
                     is_handler,
                     regs,
+                    parent_name,
                 );
             }
             body.last.and_then(|expr| {
@@ -395,6 +431,7 @@ fn generate_expr(
                     closure_scope,
                     is_handler,
                     regs,
+                    parent_name,
                 )
             })
         }
@@ -416,6 +453,7 @@ fn generate_expr(
                             closure_scope,
                             is_handler,
                             regs,
+                            parent_name,
                         )
                         .expect("function call argument does not return a value");
                         reg_args.push(reg);
@@ -549,6 +587,7 @@ fn generate_expr(
                 closure_scope,
                 is_handler,
                 regs,
+                parent_name,
             )
             .expect("condition has no value");
 
@@ -575,6 +614,7 @@ fn generate_expr(
                 closure_scope,
                 is_handler,
                 regs,
+                parent_name,
             );
 
             match no {
@@ -597,6 +637,7 @@ fn generate_expr(
                         closure_scope,
                         is_handler,
                         regs,
+                        parent_name,
                     );
 
                     *block = endblock;
@@ -627,6 +668,7 @@ fn generate_expr(
                 closure_scope,
                 is_handler,
                 regs,
+                parent_name,
             )
             .expect("left operand has no value");
 
@@ -639,6 +681,7 @@ fn generate_expr(
                 closure_scope,
                 is_handler,
                 regs,
+                parent_name,
             )
             .expect("right operand has no value");
 
@@ -667,6 +710,7 @@ fn generate_expr(
                     closure_scope,
                     is_handler,
                     regs,
+                    parent_name,
                 )
             });
 
@@ -684,7 +728,8 @@ fn generate_expr(
             };
 
             // get effect
-            let eff_val = ir.asys.values[ast_handler.effect];
+            let eff_ident = ast_handler.effect;
+            let eff_val = ir.asys.values[eff_ident];
             let eff_idx = match ir.asys.defs[eff_val] {
                 Definition::Effect(eff_idx) => eff_idx,
                 _ => panic!("handler has non-effect as effect value"),
@@ -696,10 +741,14 @@ fn generate_expr(
             closure_scope.vars.insert(eff_val, frame_reg);
 
             // generate handler
-            let mut handler = Handler {
-                effect: eff_val,
-                procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
-            };
+            let handler_idx = ir.handlers.push(
+                HandlerIdx,
+                Handler {
+                    effect: eff_val,
+                    procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
+                },
+            );
+
             for func in ast_handler.functions.iter() {
                 let val = ir.asys.values[func.decl.name];
                 let eff_fun_idx = match ir.asys.defs[val] {
@@ -719,6 +768,13 @@ fn generate_expr(
                         closure_scope.base_params += 1;
                     }
 
+                    // generate debug name
+                    let eff_name = ir.ctx.idents[eff_ident].0.as_str();
+                    let proc_name = ir.ctx.idents[func.decl.name].0.as_str();
+                    let debug_name =
+                        format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+                    // TODO: add handlers of proc
+
                     // generate code
                     let mut blocks = VecMap::new();
                     let start = blocks.push(BlockIdx, Block::default());
@@ -735,6 +791,7 @@ fn generate_expr(
                         closure_scope,
                         true,
                         &mut 0,
+                        debug_name.as_str(),
                     )
                     .filter(|_| func.decl.sign.output.is_some());
 
@@ -760,23 +817,27 @@ fn generate_expr(
                             outputs: ret.is_some(),
                             blocks,
                             start,
+                            debug_name,
                         },
                     )
                 };
 
                 // add to handler
-                handler.procs[eff_fun_idx] = proc_idx;
+                ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
             }
-
-            // add handler to list
-            let handler_idx = ir.handlers.push(HandlerIdx, handler);
 
             let mut subhandlers = Vec::new();
             subhandlers.extend_from_slice(handlers);
             subhandlers.push(handler_idx);
 
             // generate reset
-            let proc_idx = generate_reset(ir, &subhandlers, body, closure_scope);
+            let debug_name = format!(
+                "{}__reset#{}",
+                parent_name,
+                usize::from(frame_reg) - MAX_PARAMS
+            );
+
+            let proc_idx = generate_reset(ir, &subhandlers, body, closure_scope, debug_name);
             let proc = &ir.procs[proc_idx];
 
             // get closure registers

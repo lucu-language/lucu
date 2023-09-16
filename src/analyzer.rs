@@ -52,12 +52,10 @@ impl From<EffFunIdx> for usize {
 
 #[derive(Debug, Clone)]
 pub enum Definition {
-    Parameter(ParamIdx), // parameter index in function
-
+    Parameter(ParamIdx),            // parameter index in function
     Effect(EffIdx),                 // effect index in ast
     EffectFunction(Val, EffFunIdx), // effect value, function index in effect
-
-    Function(FunIdx), // function index in ast
+    Function(FunIdx),               // function index in ast
 
     Builtin, // builtin effects
 }
@@ -66,6 +64,8 @@ pub struct Analysis {
     pub values: VecMap<Ident, Val>,
     pub defs: VecMap<Val, Definition>,
     pub main: Option<FunIdx>,
+
+    pub closures: HashMap<ExprIdx, Vec<Val>>,
 }
 
 struct Scope<'a> {
@@ -108,7 +108,7 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
 
             // match func names to effect
             if let Some(funcs) = funcs {
-                for func in handler.functions.values() {
+                for func in handler.functions.iter() {
                     let name = &ctx.idents[func.decl.name].0;
                     match funcs.get(name) {
                         Some(&val) => actx.values[func.decl.name] = val,
@@ -121,7 +121,7 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
             }
 
             // analyze functions
-            for func in handler.functions.values() {
+            for func in handler.functions.iter() {
                 let mut scope = scope.child();
                 scope_sign(actx, &mut scope, ctx, &func.decl.sign);
                 analyze_expr(actx, &mut scope, ctx, func.body);
@@ -257,6 +257,7 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
         values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
         defs: VecMap::new(),
         main: None,
+        closures: HashMap::new(),
     };
 
     let mut effects = HashMap::new();

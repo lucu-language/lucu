@@ -1,11 +1,19 @@
+effect get {
+    fun get() int
+}
+
 fun puttwice(n int) / debug {
-	putint(n)
-	putint(n)
+	try {
+		putint(get())
+		putint(get())
+	} with get {
+		fun get() int {
+			n
+		}
+	}
 }
 
 fun main() / debug {
 	putint(420)
 	puttwice(69)
-
-	putint("Hello, World!")
 }

@@ -1,9 +1,8 @@
-use std::{env, fs::read_to_string, print, println, rc::Rc};
+use std::{env, fs::read_to_string, print, println};
 
 use crate::lexer::{Ranged, Token};
 
 mod analyzer;
-mod compiler;
 mod ir;
 mod lexer;
 mod parser;
@@ -46,7 +45,6 @@ fn main() {
     let (ast, ctx) = parser::parse_ast(tokenizer);
     let asys = analyzer::analyze(&ast, &ctx);
     let ir = ir::generate_ir(&ast, &ctx, &asys);
-    let bytecode = compiler::compile(&ir);
 
     // print errors
     println!("\n--- ERRORS ---");
@@ -102,10 +100,6 @@ fn main() {
     println!("\n--- IR ---");
     println!("{:#?}", ir);
 
-    // print bytecode
-    println!("\n--- BYTECODE ---");
-    println!("{:#?}", bytecode);
-
     // VM test
     println!("\n--- VM TEST ---");
     let main = vm::Chunk {
@@ -155,11 +149,5 @@ fn main() {
 
     // execute
     println!("\n--- OUTPUT ---");
-
-    let mut vm = vm::VM::new_back(bytecode, Rc::new([vm::Value::Empty]));
-
-    while !vm.halted() {
-        // vm.dump();
-        vm.next_instruction();
-    }
+    todo!();
 }

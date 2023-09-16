@@ -60,7 +60,7 @@ pub struct Body {
 #[derive(Debug)]
 pub struct Handler {
     pub effect: Ident,
-    pub functions: VecMap<EffFunIdx, Function>,
+    pub functions: Vec<Function>,
 }
 
 #[derive(Debug)]
@@ -472,11 +472,11 @@ impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
         let ident = tk.push_ident(id);
-        let mut funcs = VecMap::new();
+        let mut funcs = Vec::new();
 
         tk.group(Group::Brace, false, |tk| {
             let func = Function::parse_or_skip(tk)?.0;
-            funcs.push_value(func);
+            funcs.push(func);
             Some(())
         })?;
 

@@ -44,7 +44,6 @@ fn main() {
     let tokenizer = lexer::Tokenizer::new(file.as_str());
     let (ast, ctx) = parser::parse_ast(tokenizer);
     let asys = analyzer::analyze(&ast, &ctx);
-    let ir = ir::generate_ir(&ast, &ctx, &asys);
 
     // print errors
     println!("\n--- ERRORS ---");
@@ -97,6 +96,7 @@ fn main() {
 
     // TODO: pretty print the following
     // print ir
+    let ir = ir::generate_ir(&ast, &ctx, &asys);
     println!("\n--- IR ---");
     println!("{:#?}", ir);
 

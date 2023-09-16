@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     analyzer::{Analysis, Definition, EffFunIdx, FunIdx, Val, DEBUG},
-    parser::{ExprIdx, Expression, ParseContext, ReturnType, AST},
+    parser::{ExprIdx, Expression, Op, ParseContext, AST},
     vecmap::VecMap,
 };
 
@@ -19,6 +19,7 @@ pub struct Procedure {
     // whether or not this is an effect handler that accepts a continuation parameter
     pub is_handler: bool,
 
+    // TODO: add never return type in the IR
     pub outputs: bool,
     pub blocks: VecMap<BlockIdx, Block>,
     pub start: BlockIdx,
@@ -42,7 +43,7 @@ impl From<Reg> for usize {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Block {
     pub instructions: Vec<Instruction>,
     pub next: Option<BlockIdx>,
@@ -119,6 +120,7 @@ struct IR<'a> {
     asys: &'a Analysis,
 }
 
+#[derive(Default)]
 struct ClosureScope {
     parent: Option<Box<ClosureScope>>,
     vars: HashMap<Val, Reg>,
@@ -215,7 +217,13 @@ pub fn generate_ir(
     );
 
     // generate
-    let main = generate_func(&mut ir, &[debug], main, None, false);
+    let main = generate_func(
+        &mut ir,
+        &[debug],
+        main,
+        &mut Box::new(ClosureScope::default()),
+        false,
+    );
     (ir.procs, main)
 }
 
@@ -229,31 +237,27 @@ fn generate_reset(
 
     // generate code
     let mut blocks = VecMap::new();
-    let mut start_block = Block {
-        instructions: Vec::new(),
-        next: None,
-    };
+    let start = blocks.push(BlockIdx, Block::default());
 
+    let mut end = start;
     let ret = generate_expr(
         ir,
         handlers,
         body,
         &mut blocks,
-        &mut start_block,
+        &mut end,
         closure_scope,
         false,
         &mut 0,
     );
 
     if !matches!(
-        start_block.instructions.last(),
+        blocks[end].instructions.last(),
         Some(Instruction::Return(_))
     ) {
         // add return if we haven't already
-        start_block.instructions.push(Instruction::Return(ret));
+        blocks[end].instructions.push(Instruction::Return(ret));
     }
-
-    let start = blocks.push(BlockIdx, start_block);
 
     // return proc
     let base_params = closure_scope.base_params;
@@ -277,18 +281,13 @@ fn generate_func(
     ir: &mut IR,
     handlers: &[HandlerIdx],
     func: FunIdx,
-    parent_closure: Option<Box<ClosureScope>>,
+    closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
 ) -> ProcIdx {
     let func = &ir.ast.functions[func];
 
     // create this closure scope
-    let mut closure_scope = Box::new(ClosureScope {
-        parent: parent_closure,
-        vars: HashMap::new(),
-        base_params: 0,
-        extra_inputs: Vec::new(),
-    });
+    ClosureScope::child(closure_scope);
 
     // add params to vars
     // TODO: we assume all input types fit in a register
@@ -300,51 +299,50 @@ fn generate_func(
 
     // generate code
     let mut blocks = VecMap::new();
-    let mut start_block = Block {
-        instructions: Vec::new(),
-        next: None,
-    };
+    let start = blocks.push(BlockIdx, Block::default());
 
     let body = func.body;
 
+    let mut end = start;
     let ret = generate_expr(
         ir,
         handlers,
         body,
         &mut blocks,
-        &mut start_block,
-        &mut closure_scope,
+        &mut end,
+        closure_scope,
         is_handler,
         &mut 0,
     )
-    .filter(|_| matches!(func.decl.sign.output, Some(ReturnType::Type(_))));
+    .filter(|_| func.decl.sign.output.is_some());
 
     if is_handler {
         if !matches!(
-            start_block.instructions.last(),
+            blocks[end].instructions.last(),
             Some(Instruction::Resume(_))
         ) {
             // add resume if we haven't already
-            start_block.instructions.push(Instruction::Resume(ret));
+            blocks[end].instructions.push(Instruction::Resume(ret));
         }
     } else {
         if !matches!(
-            start_block.instructions.last(),
+            blocks[end].instructions.last(),
             Some(Instruction::Return(_))
         ) {
             // add return if we haven't already
-            start_block.instructions.push(Instruction::Return(ret));
+            blocks[end].instructions.push(Instruction::Return(ret));
         }
     }
 
-    let start = blocks.push(BlockIdx, start_block);
-
     // return proc
+    let base_params = closure_scope.base_params;
+    let extra_inputs = ClosureScope::parent(closure_scope);
+
     ir.procs.push(
         ProcIdx,
         Procedure {
-            inputs: closure_scope.base_params,
-            closure_inputs: closure_scope.extra_inputs,
+            inputs: base_params,
+            closure_inputs: extra_inputs,
 
             is_handler,
             outputs: ret.is_some(),
@@ -367,7 +365,7 @@ fn generate_expr(
     handlers: &[HandlerIdx],
     expr: ExprIdx,
     blocks: &mut VecMap<BlockIdx, Block>,
-    block: &mut Block,
+    block: &mut BlockIdx,
     closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
     regs: &mut usize,
@@ -387,8 +385,8 @@ fn generate_expr(
                     regs,
                 );
             }
-            match body.last {
-                Some(expr) => generate_expr(
+            body.last.and_then(|expr| {
+                generate_expr(
                     ir,
                     handlers,
                     expr,
@@ -397,9 +395,8 @@ fn generate_expr(
                     closure_scope,
                     is_handler,
                     regs,
-                ),
-                None => None,
-            }
+                )
+            })
         }
         E::Call(func, ref args) => {
             // TODO: currently we assume func is an Ident expr
@@ -439,9 +436,10 @@ fn generate_expr(
 
                             // get closure registers
                             for &val in proc.closure_inputs.iter() {
-                                let reg = closure_scope
-                                    .find_reg(val)
-                                    .expect("value is not loaded in scope");
+                                let reg = closure_scope.find_reg(val).expect(
+                                    format!("value {} is not loaded in scope", usize::from(val))
+                                        .as_str(),
+                                );
                                 reg_args.push(reg);
                             }
 
@@ -458,7 +456,7 @@ fn generate_expr(
                                     .expect("frame parameter is not in scope");
 
                                 // shift to handler
-                                block.instructions.push(Instruction::Shift(
+                                blocks[*block].instructions.push(Instruction::Shift(
                                     proc_idx,
                                     output,
                                     reg_args,
@@ -466,7 +464,7 @@ fn generate_expr(
                                 ));
                             } else {
                                 // call handler as function
-                                block
+                                blocks[*block]
                                     .instructions
                                     .push(Instruction::Call(proc_idx, output, reg_args));
                             }
@@ -498,8 +496,13 @@ fn generate_expr(
 
                             // get proc
                             let proc_idx = if !ir.proc_map.contains_key(&procident) {
-                                let idx =
-                                    generate_func(ir, &procident.handlers, func_idx, None, false);
+                                let idx = generate_func(
+                                    ir,
+                                    &procident.handlers,
+                                    func_idx,
+                                    closure_scope,
+                                    false,
+                                );
                                 ir.proc_map.insert(procident, idx);
                                 idx
                             } else {
@@ -521,7 +524,7 @@ fn generate_expr(
                             } else {
                                 None
                             };
-                            block
+                            blocks[*block]
                                 .instructions
                                 .push(Instruction::Call(proc_idx, output, reg_args));
                             output
@@ -536,9 +539,143 @@ fn generate_expr(
             }
         }
         E::Member(_, _) => todo!(),
-        E::IfElse(_, _, _) => todo!(),
-        E::Op(_, _, _) => todo!(),
-        E::Break(_) => todo!(),
+        E::IfElse(cond, yes, no) => {
+            let cond = generate_expr(
+                ir,
+                handlers,
+                cond,
+                blocks,
+                block,
+                closure_scope,
+                is_handler,
+                regs,
+            )
+            .expect("condition has no value");
+
+            let endblock = blocks.push(BlockIdx, Block::default());
+
+            let yesblock = blocks.push(
+                BlockIdx,
+                Block {
+                    instructions: Vec::new(),
+                    next: Some(endblock),
+                },
+            );
+
+            blocks[*block]
+                .instructions
+                .push(Instruction::JmpNZ(cond, yesblock));
+
+            let yes_reg = generate_expr(
+                ir,
+                handlers,
+                yes,
+                blocks,
+                &mut BlockIdx(yesblock.0),
+                closure_scope,
+                is_handler,
+                regs,
+            );
+
+            match no {
+                Some(no) => {
+                    let noblock = blocks.push(
+                        BlockIdx,
+                        Block {
+                            instructions: Vec::new(),
+                            next: Some(endblock),
+                        },
+                    );
+                    blocks[*block].next = Some(noblock);
+
+                    let no_reg = generate_expr(
+                        ir,
+                        handlers,
+                        no,
+                        blocks,
+                        &mut BlockIdx(noblock.0),
+                        closure_scope,
+                        is_handler,
+                        regs,
+                    );
+
+                    *block = endblock;
+                    if let (Some(yes), Some(no)) = (yes_reg, no_reg) {
+                        let out = next_reg(regs);
+                        blocks[*block]
+                            .instructions
+                            .push(Instruction::Phi(out, [(yes, yesblock), (no, noblock)]));
+                        Some(out)
+                    } else {
+                        None
+                    }
+                }
+                None => {
+                    blocks[*block].next = Some(endblock);
+                    *block = endblock;
+                    None
+                }
+            }
+        }
+        E::Op(left, op, right) => {
+            let left = generate_expr(
+                ir,
+                handlers,
+                left,
+                blocks,
+                block,
+                closure_scope,
+                is_handler,
+                regs,
+            )
+            .expect("left operand has no value");
+
+            let right = generate_expr(
+                ir,
+                handlers,
+                right,
+                blocks,
+                block,
+                closure_scope,
+                is_handler,
+                regs,
+            )
+            .expect("right operand has no value");
+
+            let out = next_reg(regs);
+
+            match op {
+                Op::Equals => blocks[*block]
+                    .instructions
+                    .push(Instruction::Equals(out, left, right)),
+                Op::Divide => blocks[*block]
+                    .instructions
+                    .push(Instruction::Div(out, left, right)),
+            }
+
+            Some(out)
+        }
+        E::Break(value) => {
+            // get break value
+            let reg = value.and_then(|expr| {
+                generate_expr(
+                    ir,
+                    handlers,
+                    expr,
+                    blocks,
+                    block,
+                    closure_scope,
+                    is_handler,
+                    regs,
+                )
+            });
+
+            // TODO: we assume this is top level inside a handler
+            blocks[*block].instructions.push(Instruction::Discard(reg));
+
+            // break returns any type
+            Some(next_reg(regs))
+        }
         E::TryWith(body, handler) => {
             // get handler
             let ast_handler = match ir.ctx.exprs[handler].0 {
@@ -584,34 +721,30 @@ fn generate_expr(
 
                     // generate code
                     let mut blocks = VecMap::new();
-                    let mut start_block = Block {
-                        instructions: Vec::new(),
-                        next: None,
-                    };
+                    let start = blocks.push(BlockIdx, Block::default());
 
                     let body = func.body;
 
+                    let mut end = start;
                     let ret = generate_expr(
                         ir,
                         handlers, // TODO: add handlers of proc
                         body,
                         &mut blocks,
-                        &mut start_block,
+                        &mut end,
                         closure_scope,
                         true,
                         &mut 0,
                     )
-                    .filter(|_| matches!(func.decl.sign.output, Some(ReturnType::Type(_))));
+                    .filter(|_| func.decl.sign.output.is_some());
 
                     if !matches!(
-                        start_block.instructions.last(),
+                        blocks[end].instructions.last(),
                         Some(Instruction::Resume(_))
                     ) {
                         // add resume if we haven't already
-                        start_block.instructions.push(Instruction::Resume(ret));
+                        blocks[end].instructions.push(Instruction::Resume(ret));
                     }
-
-                    let start = blocks.push(BlockIdx, start_block);
 
                     // return proc
                     let base_params = closure_scope.base_params;
@@ -662,7 +795,7 @@ fn generate_expr(
             } else {
                 None
             };
-            block
+            blocks[*block]
                 .instructions
                 .push(Instruction::Reset(proc_idx, output, reg_args, frame_reg));
             output
@@ -674,7 +807,7 @@ fn generate_expr(
             let reg = next_reg(regs);
 
             // TODO: handle overflow
-            block
+            blocks[*block]
                 .instructions
                 .push(Instruction::Init(reg, i as i64 as u64));
 

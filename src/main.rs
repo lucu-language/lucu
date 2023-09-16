@@ -98,7 +98,7 @@ fn main() {
     // print ir
     let ir = ir::generate_ir(&ast, &ctx, &asys);
     println!("\n--- IR ---");
-    println!("{:#?}", ir);
+    println!("{}", ir.0);
 
     // VM test
     println!("\n--- VM TEST ---");

@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
+    fmt::{self, Display},
     mem::{self, MaybeUninit},
+    write,
 };
 
 use crate::{
@@ -174,6 +176,148 @@ impl ClosureScope {
     }
 }
 
+impl Display for VecMap<ProcIdx, Procedure> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for proc in self.values() {
+            // write proc signature
+            write!(f, "{}(", proc.debug_name)?;
+            let params = proc.inputs + proc.closure_inputs.len();
+
+            for i in 0..params {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "R{}", i)?;
+            }
+
+            if proc.is_handler {
+                if params > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "resume")?;
+            }
+
+            write!(f, ") {{\n")?;
+
+            // write blocks
+            for (i, block) in proc.blocks.values().enumerate() {
+                // write label
+                if i > 0 {
+                    writeln!(f, "L{}:", i)?;
+                }
+
+                // write instructions
+                for instr in block.instructions.iter() {
+                    write!(f, "  ")?;
+                    match *instr {
+                        Instruction::Init(r, v) => writeln!(f, "R{} <- {}", usize::from(r), v)?,
+                        Instruction::Copy(r, v) => {
+                            writeln!(f, "R{} <- R{}", usize::from(r), usize::from(v))?
+                        }
+                        Instruction::JmpNZ(r, b) => {
+                            writeln!(f, "       jnz R{}, L{}", usize::from(r), usize::from(b))?
+                        }
+                        Instruction::Phi(r, [(r1, b1), (r2, b2)]) => writeln!(
+                            f,
+                            "R{} <- phi [ R{}, L{} ], [ R{}, L{} ]",
+                            usize::from(r),
+                            usize::from(r1),
+                            usize::from(b1),
+                            usize::from(r2),
+                            usize::from(b2),
+                        )?,
+                        Instruction::Equals(out, left, right) => writeln!(
+                            f,
+                            "R{} <- R{} == R{}",
+                            usize::from(out),
+                            usize::from(left),
+                            usize::from(right)
+                        )?,
+                        Instruction::Div(out, left, right) => writeln!(
+                            f,
+                            "R{} <- R{} / R{}",
+                            usize::from(out),
+                            usize::from(left),
+                            usize::from(right)
+                        )?,
+                        Instruction::Mul(out, left, right) => writeln!(
+                            f,
+                            "R{} <- R{} * R{}",
+                            usize::from(out),
+                            usize::from(left),
+                            usize::from(right)
+                        )?,
+                        Instruction::Add(out, left, right) => writeln!(
+                            f,
+                            "R{} <- R{} + R{}",
+                            usize::from(out),
+                            usize::from(left),
+                            usize::from(right)
+                        )?,
+                        Instruction::Reset(proc, out, ref args, frame) => writeln!(
+                            f,
+                            "{}rst {}, R{}, [ {} ]",
+                            out.map(|r| format!("R{} <- ", usize::from(r)))
+                                .unwrap_or("       ".into()),
+                            self[proc].debug_name,
+                            usize::from(frame),
+                            args.iter()
+                                .map(|&r| format!("R{}", usize::from(r)))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )?,
+                        Instruction::Shift(proc, out, ref args, frame) => writeln!(
+                            f,
+                            "{}sft {}, R{}, [ {} ]",
+                            out.map(|r| format!("R{} <- ", usize::from(r)))
+                                .unwrap_or("       ".into()),
+                            self[proc].debug_name,
+                            usize::from(frame),
+                            args.iter()
+                                .map(|&r| format!("R{}", usize::from(r)))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )?,
+                        Instruction::Call(proc, out, ref args) => writeln!(
+                            f,
+                            "{}cal {}, [ {} ]",
+                            out.map(|r| format!("R{} <- ", usize::from(r)))
+                                .unwrap_or("       ".into()),
+                            self[proc].debug_name,
+                            args.iter()
+                                .map(|&r| format!("R{}", usize::from(r)))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )?,
+                        Instruction::Resume(r) => match r {
+                            Some(r) => writeln!(f, "       res R{}", usize::from(r))?,
+                            None => writeln!(f, "       res")?,
+                        },
+                        Instruction::Discard(r) | Instruction::Return(r) => match r {
+                            Some(r) => writeln!(f, "       ret R{}", usize::from(r))?,
+                            None => writeln!(f, "       ret")?,
+                        },
+                        Instruction::PrintNum(r) => writeln!(f, "       put R{}", usize::from(r))?,
+
+                        Instruction::PrintStr(_) => todo!(),
+                    }
+                }
+
+                // write next
+                if let Some(b) = block.next {
+                    if usize::from(b) != i + 1 {
+                        writeln!(f, "         jmp L{}", usize::from(b))?;
+                    }
+                }
+            }
+
+            // end proc
+            writeln!(f, "}}")?;
+        }
+        Ok(())
+    }
+}
+
 pub fn generate_ir(
     ast: &AST,
     ctx: &ParseContext,
@@ -323,7 +467,7 @@ fn generate_func(
             debug_name += eff_name;
             debug_name += "#";
             debug_name += usize::from(handler).to_string().as_str();
-            debug_name += ",";
+            debug_name += "_";
         }
 
         debug_name.pop();
@@ -591,42 +735,31 @@ fn generate_expr(
             )
             .expect("condition has no value");
 
-            let endblock = blocks.push(BlockIdx, Block::default());
-
-            let yesblock = blocks.push(
-                BlockIdx,
-                Block {
-                    instructions: Vec::new(),
-                    next: Some(endblock),
-                },
-            );
-
-            blocks[*block]
-                .instructions
-                .push(Instruction::JmpNZ(cond, yesblock));
-
-            let yes_reg = generate_expr(
-                ir,
-                handlers,
-                yes,
-                blocks,
-                &mut BlockIdx(yesblock.0),
-                closure_scope,
-                is_handler,
-                regs,
-                parent_name,
-            );
-
             match no {
                 Some(no) => {
-                    let noblock = blocks.push(
-                        BlockIdx,
-                        Block {
-                            instructions: Vec::new(),
-                            next: Some(endblock),
-                        },
+                    let noblock = blocks.push(BlockIdx, Block::default());
+                    let yesblock = blocks.push(BlockIdx, Block::default());
+
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::JmpNZ(cond, yesblock));
+
+                    let yes_reg = generate_expr(
+                        ir,
+                        handlers,
+                        yes,
+                        blocks,
+                        &mut BlockIdx(yesblock.0),
+                        closure_scope,
+                        is_handler,
+                        regs,
+                        parent_name,
                     );
+
+                    let endblock = blocks.push(BlockIdx, Block::default());
                     blocks[*block].next = Some(noblock);
+                    blocks[yesblock].next = Some(endblock);
+                    blocks[noblock].next = Some(endblock);
 
                     let no_reg = generate_expr(
                         ir,
@@ -652,7 +785,28 @@ fn generate_expr(
                     }
                 }
                 None => {
+                    let yesblock = blocks.push(BlockIdx, Block::default());
+
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::JmpNZ(cond, yesblock));
+
+                    generate_expr(
+                        ir,
+                        handlers,
+                        yes,
+                        blocks,
+                        &mut BlockIdx(yesblock.0),
+                        closure_scope,
+                        is_handler,
+                        regs,
+                        parent_name,
+                    );
+
+                    let endblock = blocks.push(BlockIdx, Block::default());
                     blocks[*block].next = Some(endblock);
+                    blocks[yesblock].next = Some(endblock);
+
                     *block = endblock;
                     None
                 }

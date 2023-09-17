@@ -63,6 +63,9 @@ where
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.vec.iter()
     }
+    pub fn keys(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = K> {
+        (0..self.len()).map(f)
+    }
     pub fn len(&self) -> usize {
         self.vec.len()
     }

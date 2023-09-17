@@ -13,7 +13,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Procedure {
     pub inputs: Vec<Reg>,
-    pub captures: Vec<Reg>,
+    pub captures: Vec<(Reg, ProcIdx)>,
 
     // whether or not this is an effect handler that accepts a continuation parameter
     pub is_handler: bool,
@@ -24,6 +24,20 @@ pub struct Procedure {
     pub start: BlockIdx,
 
     pub debug_name: String,
+}
+
+impl Procedure {
+    fn instructions(&self) -> impl Iterator<Item = &Instruction> {
+        self.blocks.values().flat_map(|b| b.instructions.iter())
+    }
+    fn capture(&mut self, capture: (Reg, ProcIdx)) -> bool {
+        if self.captures.contains(&capture) {
+            false
+        } else {
+            self.captures.push(capture);
+            true
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -94,6 +108,17 @@ pub enum Instruction {
     PrintStr(Reg), // dereference register and print string
 }
 
+impl Instruction {
+    fn calls_proc(&self) -> Option<ProcIdx> {
+        match *self {
+            Instruction::Reset(proc, _, _, _)
+            | Instruction::Shift(proc, _, _, _)
+            | Instruction::Call(proc, _, _) => Some(proc),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ProcIdx(usize);
 
@@ -131,7 +156,7 @@ struct IR<'a> {
     proc_map: HashMap<ProcIdent, ProcIdx>,
     handlers: VecMap<HandlerIdx, Handler>,
 
-    vars: HashMap<Val, Reg>,
+    vars: HashMap<Val, (Reg, ProcIdx)>,
     regs: Regs,
 
     ast: &'a AST,
@@ -153,17 +178,13 @@ impl Display for VecMap<ProcIdx, Procedure> {
             // write proc signature
             write!(f, "{}", proc.debug_name)?;
 
-            if proc.is_handler {
-                write!(f, " < cont >")?;
-            }
-
             if proc.captures.len() > 0 {
                 write!(f, " [ ")?;
                 for &r in proc.captures.iter() {
                     if r != *proc.captures.first().unwrap() {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", r)?;
+                    write!(f, "{}", r.0)?;
                 }
                 write!(f, " ]")?;
             }
@@ -177,6 +198,10 @@ impl Display for VecMap<ProcIdx, Procedure> {
                     write!(f, "{}", r)?;
                 }
                 write!(f, " )")?;
+            }
+
+            if proc.is_handler {
+                write!(f, " < cont >")?;
             }
 
             write!(f, " {{\n")?;
@@ -225,7 +250,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                             match self[proc]
                                 .captures
                                 .iter()
-                                .map(|r| r.to_string())
+                                .map(|r| r.0.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ")
                                 .as_str()
@@ -246,17 +271,16 @@ impl Display for VecMap<ProcIdx, Procedure> {
                         )?,
                         Instruction::Shift(proc, out, ref args, frame) => writeln!(
                             f,
-                            "{}sft {} < {} >{}{}",
+                            "{}sft {}{}{} < {} >",
                             match out {
                                 Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
                             self[proc].debug_name,
-                            frame,
                             match self[proc]
                                 .captures
                                 .iter()
-                                .map(|r| r.to_string())
+                                .map(|r| r.0.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ")
                                 .as_str()
@@ -274,6 +298,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 "" => "".into(),
                                 a => format!(" ( {} )", a),
                             },
+                            frame,
                         )?,
                         Instruction::Call(proc, out, ref args) => writeln!(
                             f,
@@ -286,7 +311,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                             match self[proc]
                                 .captures
                                 .iter()
-                                .map(|r| r.to_string())
+                                .map(|r| r.0.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ")
                                 .as_str()
@@ -411,6 +436,35 @@ pub fn generate_ir(
         false,
         "main".into(),
     );
+
+    // bubble up captures
+    loop {
+        let mut captured = false;
+
+        for proc_idx in ir.procs.keys(ProcIdx) {
+            let mut captures = std::mem::take(&mut ir.procs[proc_idx].captures);
+
+            let calls = ir.procs[proc_idx]
+                .instructions()
+                .filter_map(|i| i.calls_proc());
+
+            for called in calls {
+                for &capture in ir.procs[called].captures.iter() {
+                    if capture.1 != proc_idx && !captures.contains(&capture) {
+                        captured = true;
+                        captures.push(capture);
+                    }
+                }
+            }
+
+            ir.procs[proc_idx].captures = captures;
+        }
+
+        if !captured {
+            break;
+        }
+    }
+
     (ir.procs, main)
 }
 
@@ -424,16 +478,6 @@ fn generate_func(
     is_handler: bool,
     debug_name: String,
 ) -> ProcIdx {
-    // add params to vars
-    // TODO: we assume all input types fit in a register
-    let mut inputs = Vec::new();
-
-    for &val in params {
-        let reg = ir.regs.next_reg();
-        ir.vars.insert(val, reg);
-        inputs.push(reg);
-    }
-
     // add new proc to list
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
@@ -441,13 +485,13 @@ fn generate_func(
     let proc_idx = ir.procs.push(
         ProcIdx,
         Procedure {
-            inputs,
+            inputs: Vec::new(),
             is_handler,
             outputs,
             start,
+            debug_name,
 
             // these will be defined at the end
-            debug_name: String::new(),
             captures: Vec::new(),
             blocks: VecMap::new(),
         },
@@ -461,6 +505,13 @@ fn generate_func(
         ir.proc_map.insert(ident, proc_idx);
     }
 
+    // add params to vars
+    for &val in params {
+        let reg = ir.regs.next_reg();
+        ir.vars.insert(val, (reg, proc_idx));
+        ir.procs[proc_idx].inputs.push(reg);
+    }
+
     // generate code
     let mut end = start;
     let ret = generate_expr(
@@ -470,7 +521,7 @@ fn generate_func(
         &mut blocks,
         &mut end,
         is_handler,
-        &debug_name,
+        proc_idx,
     )
     .filter(|_| outputs);
 
@@ -492,7 +543,6 @@ fn generate_func(
     }
 
     // return proc
-    ir.procs[proc_idx].debug_name = debug_name;
     ir.procs[proc_idx].blocks = blocks;
     proc_idx
 }
@@ -504,16 +554,16 @@ fn generate_expr(
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
     is_handler: bool,
-    parent_name: &str,
+    current_proc: ProcIdx,
 ) -> Option<Reg> {
     use Expression as E;
     match ir.ctx.exprs[expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
-                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name);
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, current_proc);
             }
             body.last.and_then(|expr| {
-                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name)
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, current_proc)
             })
         }
         E::Call(func, ref args) => {
@@ -532,7 +582,7 @@ fn generate_expr(
                             blocks,
                             block,
                             is_handler,
-                            parent_name,
+                            current_proc,
                         )
                         .expect("function call argument does not return a value");
                         reg_args.push(reg);
@@ -564,12 +614,14 @@ fn generate_expr(
                                     .get(&eff_val)
                                     .expect("frame parameter is not in scope");
 
+                                ir.procs[current_proc].capture(frame_param);
+
                                 // shift to handler
                                 blocks[*block].instructions.push(Instruction::Shift(
                                     proc_idx,
                                     output,
                                     reg_args,
-                                    frame_param,
+                                    frame_param.0,
                                 ));
                             } else {
                                 // call handler as function
@@ -679,7 +731,7 @@ fn generate_expr(
         }
         E::Member(_, _) => todo!(),
         E::IfElse(cond, yes, no) => {
-            let cond = generate_expr(ir, handlers, cond, blocks, block, is_handler, parent_name)
+            let cond = generate_expr(ir, handlers, cond, blocks, block, is_handler, current_proc)
                 .expect("condition has no value");
 
             match no {
@@ -699,7 +751,7 @@ fn generate_expr(
                         blocks,
                         &mut yes_end,
                         is_handler,
-                        parent_name,
+                        current_proc,
                     );
 
                     let end = blocks.push(BlockIdx, Block::default());
@@ -712,7 +764,7 @@ fn generate_expr(
                         blocks,
                         &mut no_end,
                         is_handler,
-                        parent_name,
+                        current_proc,
                     );
 
                     blocks[*block].next = Some(no_start);
@@ -745,7 +797,7 @@ fn generate_expr(
                         blocks,
                         &mut yes_end,
                         is_handler,
-                        parent_name,
+                        current_proc,
                     );
 
                     let end = blocks.push(BlockIdx, Block::default());
@@ -759,10 +811,10 @@ fn generate_expr(
             }
         }
         E::Op(left, op, right) => {
-            let left = generate_expr(ir, handlers, left, blocks, block, is_handler, parent_name)
+            let left = generate_expr(ir, handlers, left, blocks, block, is_handler, current_proc)
                 .expect("left operand has no value");
 
-            let right = generate_expr(ir, handlers, right, blocks, block, is_handler, parent_name)
+            let right = generate_expr(ir, handlers, right, blocks, block, is_handler, current_proc)
                 .expect("right operand has no value");
 
             let out = ir.regs.next_reg();
@@ -781,7 +833,7 @@ fn generate_expr(
         E::Break(value) => {
             // get break value
             let reg = value.and_then(|expr| {
-                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name)
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, current_proc)
             });
 
             // TODO: we assume this is top level inside a handler
@@ -808,7 +860,7 @@ fn generate_expr(
 
             // put frame register in scope
             let frame_reg = ir.regs.next_reg();
-            ir.vars.insert(eff_val, frame_reg);
+            ir.vars.insert(eff_val, (frame_reg, current_proc));
 
             // generate handler
             let handler_idx = ir.handlers.push(
@@ -863,6 +915,7 @@ fn generate_expr(
             subhandlers.push(handler_idx);
 
             // generate reset
+            let parent_name = ir.procs[current_proc].debug_name.as_str();
             let debug_name = format!("{}__reset#{}", parent_name, usize::from(frame_reg));
 
             let proc_idx = generate_func(
@@ -908,7 +961,11 @@ fn generate_expr(
         E::Ident(id) => {
             // TODO: globals
             let val = ir.asys.values[id];
-            Some(*ir.vars.get(&val).expect("value is not loaded in scope"))
+            let var = *ir.vars.get(&val).expect("value is not loaded in scope");
+            if var.1 != current_proc {
+                ir.procs[current_proc].capture(var);
+            }
+            Some(var.0)
         }
         E::Error => todo!(),
     }

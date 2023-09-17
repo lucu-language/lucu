@@ -28,6 +28,22 @@ impl From<Ident> for usize {
 pub enum Op {
     Equals,
     Divide,
+    Multiply,
+    Subtract,
+    Add,
+}
+
+impl Op {
+    fn from_token(value: &Token) -> Option<Op> {
+        match value {
+            Token::Slash => Some(Op::Divide),
+            Token::DoubleEquals => Some(Op::Equals),
+            Token::Dash => Some(Op::Subtract),
+            Token::Asterisk => Some(Op::Multiply),
+            Token::Plus => Some(Op::Add),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -603,31 +619,21 @@ impl Parse for Expression {
 
                 // binary ops
                 // TODO: operator precedence
-                Some(Ranged(Token::DoubleEquals, ..)) => {
-                    tk.expect(Token::DoubleEquals)?;
+                Some(Ranged(t, ..)) => match Op::from_token(t) {
+                    Some(op) => {
+                        tk.next();
 
-                    let right = Expression::parse_or_default(tk);
-                    let right = tk.push_expr(right);
+                        let right = Expression::parse_or_default(tk);
+                        let right = tk.push_expr(right);
 
-                    expr = Ranged(
-                        Expression::Op(tk.push_expr(expr), Op::Equals, right),
-                        start,
-                        tk.pos_end(),
-                    )
-                }
-
-                Some(Ranged(Token::Slash, ..)) => {
-                    tk.expect(Token::Slash)?;
-
-                    let right = Expression::parse_or_default(tk);
-                    let right = tk.push_expr(right);
-
-                    expr = Ranged(
-                        Expression::Op(tk.push_expr(expr), Op::Divide, right),
-                        start,
-                        tk.pos_end(),
-                    )
-                }
+                        expr = Ranged(
+                            Expression::Op(tk.push_expr(expr), op, right),
+                            start,
+                            tk.pos_end(),
+                        )
+                    }
+                    None => break Some(expr.0),
+                },
 
                 _ => break Some(expr.0),
             }

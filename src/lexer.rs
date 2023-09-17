@@ -19,6 +19,9 @@ pub enum Token {
     Equals,
     Bang,
     DoubleEquals,
+    Dash,
+    Asterisk,
+    Plus,
     Open(Group),
     Close(Group),
 
@@ -63,6 +66,9 @@ impl Token {
                 | Token::Slash
                 | Token::Equals
                 | Token::DoubleEquals
+                | Token::Dash
+                | Token::Asterisk
+                | Token::Plus
                 | Token::Comma
                 | Token::Open(_)
 
@@ -85,6 +91,9 @@ impl Token {
                 | Token::Slash
                 | Token::Equals
                 | Token::DoubleEquals
+                | Token::Dash
+                | Token::Asterisk
+                | Token::Plus
 
                 // prevents double semicolons
                 | Token::Semicolon
@@ -208,6 +217,9 @@ impl<'a> Iterator for Tokenizer<'a> {
             ']' => Token::Close(Group::Bracket),
             '}' => Token::Close(Group::Brace),
             '!' => Token::Bang,
+            '-' => Token::Dash,
+            '*' => Token::Asterisk,
+            '+' => Token::Plus,
             '=' => {
                 match self.next.peek() {
                     Some(&'=') => {
@@ -266,14 +278,11 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                 loop {
                     match self.next.peek() {
-                        Some(&c) => match c {
-                            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
-                                self.next_char();
-                                word.push(c);
-                            }
-                            _ => break,
-                        },
-                        None => break,
+                        Some(&c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) => {
+                            self.next_char();
+                            word.push(c);
+                        }
+                        _ => break,
                     }
                 }
 

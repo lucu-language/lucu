@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    analyzer::{Analysis, Definition, EffFunIdx, FunIdx, Val, DEBUG},
+    analyzer::{Analysis, Definition, EffFunIdx, Val, DEBUG},
     parser::{ExprIdx, Expression, Op, ParseContext, AST},
     vecmap::VecMap,
 };
@@ -68,6 +68,7 @@ pub enum Instruction {
     Div(Reg, Reg, Reg),
     Mul(Reg, Reg, Reg),
     Add(Reg, Reg, Reg),
+    Sub(Reg, Reg, Reg),
 
     // call procedure, put return into reg, call with arguments
     Reset(ProcIdx, Option<Reg>, Vec<Reg>, Reg), // puts frame parameter into reg and calls
@@ -75,8 +76,8 @@ pub enum Instruction {
     Call(ProcIdx, Option<Reg>, Vec<Reg>),       // regular call
 
     // return statements for effect handlers
-    Resume(Option<Reg>),  // resume the continuation with optional value
-    Discard(Option<Reg>), // discard the continuation and return with optional value
+    Resume(Option<Reg>, Option<Reg>), // resume the continuation with optional value
+    Discard(Option<Reg>),             // discard the continuation and return with optional value
 
     // return statement for regular procedures
     Return(Option<Reg>), // return with optional value
@@ -254,11 +255,20 @@ impl Display for VecMap<ProcIdx, Procedure> {
                             usize::from(left),
                             usize::from(right)
                         )?,
+                        Instruction::Sub(out, left, right) => writeln!(
+                            f,
+                            "R{} <- R{} - R{}",
+                            usize::from(out),
+                            usize::from(left),
+                            usize::from(right)
+                        )?,
                         Instruction::Reset(proc, out, ref args, frame) => writeln!(
                             f,
                             "{}rst {}, R{}, [ {} ]",
-                            out.map(|r| format!("R{} <- ", usize::from(r)))
-                                .unwrap_or("       ".into()),
+                            match out {
+                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                None => "       ".into(),
+                            },
                             self[proc].debug_name,
                             usize::from(frame),
                             args.iter()
@@ -269,8 +279,10 @@ impl Display for VecMap<ProcIdx, Procedure> {
                         Instruction::Shift(proc, out, ref args, frame) => writeln!(
                             f,
                             "{}sft {}, R{}, [ {} ]",
-                            out.map(|r| format!("R{} <- ", usize::from(r)))
-                                .unwrap_or("       ".into()),
+                            match out {
+                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                None => "       ".into(),
+                            },
                             self[proc].debug_name,
                             usize::from(frame),
                             args.iter()
@@ -281,18 +293,28 @@ impl Display for VecMap<ProcIdx, Procedure> {
                         Instruction::Call(proc, out, ref args) => writeln!(
                             f,
                             "{}cal {}, [ {} ]",
-                            out.map(|r| format!("R{} <- ", usize::from(r)))
-                                .unwrap_or("       ".into()),
+                            match out {
+                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                None => "       ".into(),
+                            },
                             self[proc].debug_name,
                             args.iter()
                                 .map(|&r| format!("R{}", usize::from(r)))
                                 .collect::<Vec<_>>()
                                 .join(", "),
                         )?,
-                        Instruction::Resume(r) => match r {
-                            Some(r) => writeln!(f, "       res R{}", usize::from(r))?,
-                            None => writeln!(f, "       res")?,
-                        },
+                        Instruction::Resume(out, r) => writeln!(
+                            f,
+                            "{}res{}",
+                            match out {
+                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                None => "       ".into(),
+                            },
+                            match r {
+                                Some(r) => format!(" R{}", usize::from(r)),
+                                None => "".into(),
+                            }
+                        )?,
                         Instruction::Discard(r) | Instruction::Return(r) => match r {
                             Some(r) => writeln!(f, "       ret R{}", usize::from(r))?,
                             None => writeln!(f, "       ret")?,
@@ -365,121 +387,54 @@ pub fn generate_ir(
     );
 
     // generate
+    let func = &ir.ast.functions[main];
+    let params: Box<[Val]> = func
+        .decl
+        .sign
+        .inputs
+        .values()
+        .map(|&(ident, _)| ir.asys.values[ident])
+        .collect();
+
     let main = generate_func(
         &mut ir,
         &[debug],
-        main,
+        &params,
+        func.body,
+        func.decl.sign.output.is_some(),
         &mut Box::new(ClosureScope::default()),
         false,
+        "main".into(),
     );
     (ir.procs, main)
-}
-
-fn generate_reset(
-    ir: &mut IR,
-    handlers: &[HandlerIdx],
-    body: ExprIdx,
-    closure_scope: &mut Box<ClosureScope>,
-    debug_name: String,
-) -> ProcIdx {
-    ClosureScope::child(closure_scope);
-
-    // generate code
-    let mut blocks = VecMap::new();
-    let start = blocks.push(BlockIdx, Block::default());
-
-    let mut end = start;
-    let ret = generate_expr(
-        ir,
-        handlers,
-        body,
-        &mut blocks,
-        &mut end,
-        closure_scope,
-        false,
-        &mut 0,
-        &debug_name,
-    );
-
-    if !matches!(
-        blocks[end].instructions.last(),
-        Some(Instruction::Return(_))
-    ) {
-        // add return if we haven't already
-        blocks[end].instructions.push(Instruction::Return(ret));
-    }
-
-    // return proc
-    let base_params = closure_scope.base_params;
-    let extra_inputs = ClosureScope::parent(closure_scope);
-
-    ir.procs.push(
-        ProcIdx,
-        Procedure {
-            inputs: base_params,
-            closure_inputs: extra_inputs,
-
-            is_handler: false,
-            outputs: ret.is_some(),
-            blocks,
-            start,
-            debug_name,
-        },
-    )
 }
 
 fn generate_func(
     ir: &mut IR,
     handlers: &[HandlerIdx],
-    func: FunIdx,
+    params: &[Val],
+    body: ExprIdx,
+    outputs: bool,
     closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
+    debug_name: String,
 ) -> ProcIdx {
-    let func = &ir.ast.functions[func];
-
     // create this closure scope
     ClosureScope::child(closure_scope);
 
     // add params to vars
     // TODO: we assume all input types fit in a register
-    for (i, &(ident, _)) in func.decl.sign.inputs.values().enumerate() {
-        let val = ir.asys.values[ident];
+    closure_scope.base_params = params.len();
+    for (i, &val) in params.iter().enumerate() {
         closure_scope.vars.insert(val, Reg(i));
-        closure_scope.base_params += 1;
-    }
-
-    // generate debug name
-    let mut debug_name = ir.ctx.idents[func.decl.name].0.clone();
-
-    if handlers.len() > 0 {
-        debug_name += "/";
-
-        for &handler in handlers {
-            let eff_val = ir.handlers[handler].effect;
-            let eff_name = ir
-                .ast
-                .effects
-                .values()
-                .find(|e| ir.asys.values[e.name] == eff_val)
-                .map(|e| ir.ctx.idents[e.name].0.as_str())
-                .unwrap_or("debug"); // TODO: support other builtin effects
-
-            debug_name += eff_name;
-            debug_name += "#";
-            debug_name += usize::from(handler).to_string().as_str();
-            debug_name += "_";
-        }
-
-        debug_name.pop();
     }
 
     // generate code
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
 
-    let body = func.body;
-
     let mut end = start;
+    let mut regs = 0;
     let ret = generate_expr(
         ir,
         handlers,
@@ -488,41 +443,39 @@ fn generate_func(
         &mut end,
         closure_scope,
         is_handler,
-        &mut 0,
+        &mut regs,
         &debug_name,
     )
-    .filter(|_| func.decl.sign.output.is_some());
+    .filter(|_| outputs);
 
-    if is_handler {
-        if !matches!(
-            blocks[end].instructions.last(),
-            Some(Instruction::Resume(_))
-        ) {
-            // add resume if we haven't already
-            blocks[end].instructions.push(Instruction::Resume(ret));
-        }
-    } else {
-        if !matches!(
-            blocks[end].instructions.last(),
-            Some(Instruction::Return(_))
-        ) {
-            // add return if we haven't already
-            blocks[end].instructions.push(Instruction::Return(ret));
-        }
+    if !matches!(
+        blocks[end].instructions.last(),
+        Some(Instruction::Return(_))
+    ) {
+        // add return if we haven't already
+        let ret = if is_handler {
+            // tail call resume for handlers
+            let res = ret;
+            let ret = res.map(|_| next_reg(&mut regs));
+            blocks[end].instructions.push(Instruction::Resume(ret, res));
+            ret
+        } else {
+            ret
+        };
+        blocks[end].instructions.push(Instruction::Return(ret));
     }
 
     // return proc
-    let base_params = closure_scope.base_params;
     let extra_inputs = ClosureScope::parent(closure_scope);
 
     ir.procs.push(
         ProcIdx,
         Procedure {
-            inputs: base_params,
+            inputs: params.len(),
             closure_inputs: extra_inputs,
 
             is_handler,
-            outputs: ret.is_some(),
+            outputs,
             blocks,
             start,
             debug_name,
@@ -678,12 +631,52 @@ fn generate_expr(
 
                             // get proc
                             let proc_idx = if !ir.proc_map.contains_key(&procident) {
+                                let handlers = &procident.handlers;
+
+                                // get params
+                                let params: Box<[Val]> = func
+                                    .decl
+                                    .sign
+                                    .inputs
+                                    .values()
+                                    .map(|&(ident, _)| ir.asys.values[ident])
+                                    .collect();
+
+                                // generate debug name
+                                let mut debug_name = ir.ctx.idents[func.decl.name].0.clone();
+
+                                if handlers.len() > 0 {
+                                    debug_name += "/";
+
+                                    for &handler in handlers.iter() {
+                                        let eff_val = ir.handlers[handler].effect;
+                                        let eff_name = ir
+                                            .ast
+                                            .effects
+                                            .values()
+                                            .find(|e| ir.asys.values[e.name] == eff_val)
+                                            .map(|e| ir.ctx.idents[e.name].0.as_str())
+                                            .unwrap_or("debug"); // TODO: support other builtin effects
+
+                                        debug_name += eff_name;
+                                        debug_name += "#";
+                                        debug_name += usize::from(handler).to_string().as_str();
+                                        debug_name += "_";
+                                    }
+
+                                    debug_name.pop();
+                                }
+
+                                // generate func
                                 let idx = generate_func(
                                     ir,
-                                    &procident.handlers,
-                                    func_idx,
+                                    handlers,
+                                    &params,
+                                    func.body,
+                                    func.decl.sign.output.is_some(),
                                     closure_scope,
                                     false,
+                                    debug_name,
                                 );
                                 ir.proc_map.insert(procident, idx);
                                 idx
@@ -841,14 +834,14 @@ fn generate_expr(
 
             let out = next_reg(regs);
 
-            match op {
-                Op::Equals => blocks[*block]
-                    .instructions
-                    .push(Instruction::Equals(out, left, right)),
-                Op::Divide => blocks[*block]
-                    .instructions
-                    .push(Instruction::Div(out, left, right)),
-            }
+            let instr = match op {
+                Op::Equals => Instruction::Equals(out, left, right),
+                Op::Divide => Instruction::Div(out, left, right),
+                Op::Multiply => Instruction::Mul(out, left, right),
+                Op::Subtract => Instruction::Sub(out, left, right),
+                Op::Add => Instruction::Add(out, left, right),
+            };
+            blocks[*block].instructions.push(instr);
 
             Some(out)
         }
@@ -910,71 +903,33 @@ fn generate_expr(
                     _ => panic!("handler has non-effect-function as a function value"),
                 };
 
+                // get params
+                let params: Box<[Val]> = func
+                    .decl
+                    .sign
+                    .inputs
+                    .values()
+                    .map(|&(ident, _)| ir.asys.values[ident])
+                    .collect();
+
+                // generate debug name
+                let eff_name = ir.ctx.idents[eff_ident].0.as_str();
+                let proc_name = ir.ctx.idents[func.decl.name].0.as_str();
+                let debug_name =
+                    format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+                // TODO: add handlers of proc
+
                 // generate handler proc
-                let proc_idx = {
-                    ClosureScope::child(closure_scope);
-
-                    // add params to vars
-                    // TODO: we assume all input types fit in a register
-                    for (i, &(ident, _)) in func.decl.sign.inputs.values().enumerate() {
-                        let val = ir.asys.values[ident];
-                        closure_scope.vars.insert(val, Reg(i));
-                        closure_scope.base_params += 1;
-                    }
-
-                    // generate debug name
-                    let eff_name = ir.ctx.idents[eff_ident].0.as_str();
-                    let proc_name = ir.ctx.idents[func.decl.name].0.as_str();
-                    let debug_name =
-                        format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
-                    // TODO: add handlers of proc
-
-                    // generate code
-                    let mut blocks = VecMap::new();
-                    let start = blocks.push(BlockIdx, Block::default());
-
-                    let body = func.body;
-
-                    let mut end = start;
-                    let ret = generate_expr(
-                        ir,
-                        handlers, // TODO: add handlers of proc
-                        body,
-                        &mut blocks,
-                        &mut end,
-                        closure_scope,
-                        true,
-                        &mut 0,
-                        debug_name.as_str(),
-                    )
-                    .filter(|_| func.decl.sign.output.is_some());
-
-                    if !matches!(
-                        blocks[end].instructions.last(),
-                        Some(Instruction::Resume(_))
-                    ) {
-                        // add resume if we haven't already
-                        blocks[end].instructions.push(Instruction::Resume(ret));
-                    }
-
-                    // return proc
-                    let base_params = closure_scope.base_params;
-                    let extra_inputs = ClosureScope::parent(closure_scope);
-
-                    ir.procs.push(
-                        ProcIdx,
-                        Procedure {
-                            inputs: base_params,
-                            closure_inputs: extra_inputs,
-
-                            is_handler: true,
-                            outputs: ret.is_some(),
-                            blocks,
-                            start,
-                            debug_name,
-                        },
-                    )
-                };
+                let proc_idx = generate_func(
+                    ir,
+                    handlers, // TODO: add handlers of proc
+                    &params,
+                    func.body,
+                    func.decl.sign.output.is_some(),
+                    closure_scope,
+                    true,
+                    debug_name,
+                );
 
                 // add to handler
                 ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
@@ -991,7 +946,16 @@ fn generate_expr(
                 usize::from(frame_reg) - MAX_PARAMS
             );
 
-            let proc_idx = generate_reset(ir, &subhandlers, body, closure_scope, debug_name);
+            let proc_idx = generate_func(
+                ir,
+                &subhandlers,
+                &[],
+                body,
+                true, // TODO: use type checker to see if this outputs a value
+                closure_scope,
+                is_handler,
+                debug_name,
+            );
             let proc = &ir.procs[proc_idx];
 
             // get closure registers

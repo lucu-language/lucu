@@ -33,6 +33,15 @@ where
     }
 }
 
+impl<K, V> From<VecMap<K, V>> for Vec<V>
+where
+    K: Into<usize>,
+{
+    fn from(value: VecMap<K, V>) -> Self {
+        value.vec
+    }
+}
+
 impl<K, V> VecMap<K, V>
 where
     K: Into<usize>,
@@ -56,9 +65,6 @@ where
     }
     pub fn len(&self) -> usize {
         self.vec.len()
-    }
-    pub fn as_vec(self) -> Vec<V> {
-        self.vec
     }
 }
 

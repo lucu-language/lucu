@@ -7,7 +7,6 @@ mod ir;
 mod lexer;
 mod parser;
 mod vecmap;
-mod vm;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -99,53 +98,6 @@ fn main() {
     let ir = ir::generate_ir(&ast, &ctx, &asys);
     println!("\n--- IR ---");
     println!("{}", ir.0);
-
-    // VM test
-    println!("\n--- VM TEST ---");
-    let main = vm::Chunk {
-        bytecode: Box::new([
-            vm::Opcode::ResetRel as u8,
-            0, // params
-            1, // jmp
-            vm::Opcode::Print as u8,
-            vm::Opcode::Halt as u8,
-        ]),
-        constants: Box::new([]),
-    };
-
-    let foo = vm::Chunk {
-        bytecode: Box::new([
-            vm::Opcode::PushParam as u8,
-            0, // param 0
-            vm::Opcode::ShiftRel as u8,
-            0, // params
-            1, // jmp
-            vm::Opcode::Push as u8,
-            0, // constant
-            vm::Opcode::Add as u8,
-            vm::Opcode::ReturnVal as u8,
-        ]),
-        constants: Box::new([vm::Value::Int(2)]),
-    };
-
-    let bar = vm::Chunk {
-        bytecode: Box::new([
-            vm::Opcode::Push as u8,
-            0, // constant
-            vm::Opcode::PushParam as u8,
-            0, // param 0
-            vm::Opcode::ContinueVal as u8,
-            vm::Opcode::ReturnVal as u8,
-        ]),
-        constants: Box::new([vm::Value::Int(3)]),
-    };
-
-    let mut vm = vm::VM::new(Box::new([main, foo, bar]));
-
-    while !vm.halted() {
-        vm.dump();
-        vm.next_instruction();
-    }
 
     // execute
     println!("\n--- OUTPUT ---");

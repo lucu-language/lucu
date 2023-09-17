@@ -168,10 +168,14 @@ impl<'a> Tokens<'a> {
         Some(Ranged(t, start, self.pos_end()))
     }
     fn check(&mut self, token: Token) -> Option<Ranged<()>> {
-        match self.peek() {
-            Some(t) if t.0 == token => Some(self.next().unwrap().map(|_| ())),
-            _ => None,
+        if self.peek_check(token) {
+            Some(self.next().unwrap().map(|_| ()))
+        } else {
+            None
         }
+    }
+    fn peek_check(&mut self, token: Token) -> bool {
+        matches!(self.peek(), Some(t) if t.0 == token)
     }
     fn expect(&mut self, token: Token) -> Option<Ranged<()>> {
         let err = match self.next() {
@@ -528,7 +532,12 @@ impl Parse for Expression {
                 let yes = tk.push_expr(yes);
 
                 let no = if tk.check(Token::Else).is_some() {
-                    let no = Body::parse_or_skip(tk)?.map(Expression::Body);
+                    // allow for else-if
+                    let no = if tk.peek_check(Token::If) {
+                        Expression::parse_or_default(tk)
+                    } else {
+                        Body::parse_or_skip(tk)?.map(Expression::Body)
+                    };
                     Some(tk.push_expr(no))
                 } else {
                     None

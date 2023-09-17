@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt::{self, Display},
-    mem::{self, MaybeUninit},
     write,
 };
 
@@ -13,11 +12,8 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Procedure {
-    pub inputs: usize,
-
-    // extra values from the parent function(s) to use as inputs
-    // TODO: is Val accurate enough or will this take the wrong value during recursion?
-    pub closure_inputs: Vec<Val>,
+    pub inputs: Vec<Reg>,
+    pub captures: Vec<Reg>,
 
     // whether or not this is an effect handler that accepts a continuation parameter
     pub is_handler: bool,
@@ -41,6 +37,18 @@ impl From<BlockIdx> for usize {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Reg(usize);
+
+impl Display for Reg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "R{:02}", self.0)
+    }
+}
+
+impl Display for BlockIdx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "L{}", self.0)
+    }
+}
 
 impl From<Reg> for usize {
     fn from(value: Reg) -> Self {
@@ -106,7 +114,7 @@ impl From<HandlerIdx> for usize {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct ProcIdent {
-    func: Val,
+    fun: Val,
     handlers: Box<[HandlerIdx]>,
 }
 
@@ -116,64 +124,26 @@ struct Handler {
     procs: VecMap<EffFunIdx, ProcIdx>,
 }
 
+struct Regs(usize);
+
 struct IR<'a> {
     procs: VecMap<ProcIdx, Procedure>,
     proc_map: HashMap<ProcIdent, ProcIdx>,
     handlers: VecMap<HandlerIdx, Handler>,
+
+    vars: HashMap<Val, Reg>,
+    regs: Regs,
 
     ast: &'a AST,
     ctx: &'a ParseContext,
     asys: &'a Analysis,
 }
 
-#[derive(Default)]
-struct ClosureScope {
-    parent: Option<Box<ClosureScope>>,
-    vars: HashMap<Val, Reg>,
-
-    base_params: usize,
-    extra_inputs: Vec<Val>, // extra values from the parent function(s) to use as inputs
-}
-
-impl ClosureScope {
-    fn find_reg(&mut self, val: Val) -> Option<Reg> {
-        self.vars.get(&val).cloned().or_else(|| {
-            self.parent
-                .as_mut()
-                .and_then(|parent| parent.find_reg(val))
-                .map(|_| {
-                    let reg = Reg(self.base_params + self.extra_inputs.len());
-                    self.extra_inputs.push(val);
-                    self.vars.insert(val, reg);
-                    reg
-                })
-        })
-    }
-    fn child(me: &mut Box<Self>) {
-        unsafe {
-            #[allow(invalid_value)]
-            let inner = mem::replace(me, MaybeUninit::uninit().assume_init());
-            let child = ClosureScope {
-                parent: Some(inner),
-                vars: HashMap::new(),
-                base_params: 0,
-                extra_inputs: Vec::new(),
-            };
-
-            let uninit = mem::replace(me, Box::new(child));
-            mem::forget(uninit);
-        }
-    }
-    fn parent(me: &mut Box<Self>) -> Vec<Val> {
-        unsafe {
-            #[allow(invalid_value)]
-            let inner = mem::replace(me, MaybeUninit::uninit().assume_init());
-
-            let uninit = mem::replace(me, inner.parent.unwrap());
-            mem::forget(uninit);
-
-            inner.extra_inputs
-        }
+impl Regs {
+    fn next_reg(&mut self) -> Reg {
+        let reg = Reg(self.0);
+        self.0 += 1;
+        reg
     }
 }
 
@@ -181,145 +151,177 @@ impl Display for VecMap<ProcIdx, Procedure> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for proc in self.values() {
             // write proc signature
-            write!(f, "{}(", proc.debug_name)?;
-            let params = proc.inputs + proc.closure_inputs.len();
-
-            for i in 0..params {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "R{}", i)?;
-            }
+            write!(f, "{}", proc.debug_name)?;
 
             if proc.is_handler {
-                if params > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "resume")?;
+                write!(f, " < cont >")?;
             }
 
-            write!(f, ") {{\n")?;
+            if proc.captures.len() > 0 {
+                write!(f, " [ ")?;
+                for &r in proc.captures.iter() {
+                    if r != *proc.captures.first().unwrap() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", r)?;
+                }
+                write!(f, " ]")?;
+            }
+
+            if proc.inputs.len() > 0 {
+                write!(f, " ( ")?;
+                for &r in proc.inputs.iter() {
+                    if r != *proc.inputs.first().unwrap() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", r)?;
+                }
+                write!(f, " )")?;
+            }
+
+            write!(f, " {{\n")?;
 
             // write blocks
             for (i, block) in proc.blocks.values().enumerate() {
                 // write label
                 if i > 0 {
-                    writeln!(f, "L{}:", i)?;
+                    writeln!(f, "{}:", BlockIdx(i))?;
                 }
 
                 // write instructions
                 for instr in block.instructions.iter() {
                     write!(f, "  ")?;
                     match *instr {
-                        Instruction::Init(r, v) => writeln!(f, "R{} <- {}", usize::from(r), v)?,
-                        Instruction::Copy(r, v) => {
-                            writeln!(f, "R{} <- R{}", usize::from(r), usize::from(v))?
+                        Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
+                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
+                        Instruction::JmpNZ(r, b) => writeln!(f, "       jnz {}, {}", r, b)?,
+                        Instruction::Phi(r, [(r1, b1), (r2, b2)]) => {
+                            writeln!(f, "{} <- phi [ {}, {} ], [ {}, {} ]", r, r1, b1, r2, b2,)?
                         }
-                        Instruction::JmpNZ(r, b) => {
-                            writeln!(f, "       jnz R{}, L{}", usize::from(r), usize::from(b))?
+                        Instruction::Equals(out, left, right) => {
+                            writeln!(f, "{} <- {} == {}", out, left, right)?
                         }
-                        Instruction::Phi(r, [(r1, b1), (r2, b2)]) => writeln!(
-                            f,
-                            "R{} <- phi [ R{}, L{} ], [ R{}, L{} ]",
-                            usize::from(r),
-                            usize::from(r1),
-                            usize::from(b1),
-                            usize::from(r2),
-                            usize::from(b2),
-                        )?,
-                        Instruction::Equals(out, left, right) => writeln!(
-                            f,
-                            "R{} <- R{} == R{}",
-                            usize::from(out),
-                            usize::from(left),
-                            usize::from(right)
-                        )?,
-                        Instruction::Div(out, left, right) => writeln!(
-                            f,
-                            "R{} <- R{} / R{}",
-                            usize::from(out),
-                            usize::from(left),
-                            usize::from(right)
-                        )?,
-                        Instruction::Mul(out, left, right) => writeln!(
-                            f,
-                            "R{} <- R{} * R{}",
-                            usize::from(out),
-                            usize::from(left),
-                            usize::from(right)
-                        )?,
-                        Instruction::Add(out, left, right) => writeln!(
-                            f,
-                            "R{} <- R{} + R{}",
-                            usize::from(out),
-                            usize::from(left),
-                            usize::from(right)
-                        )?,
-                        Instruction::Sub(out, left, right) => writeln!(
-                            f,
-                            "R{} <- R{} - R{}",
-                            usize::from(out),
-                            usize::from(left),
-                            usize::from(right)
-                        )?,
+                        Instruction::Div(out, left, right) => {
+                            writeln!(f, "{} <- {} / {}", out, left, right)?
+                        }
+                        Instruction::Mul(out, left, right) => {
+                            writeln!(f, "{} <- {} * {}", out, left, right)?
+                        }
+                        Instruction::Add(out, left, right) => {
+                            writeln!(f, "{} <- {} + {}", out, left, right)?
+                        }
+                        Instruction::Sub(out, left, right) => {
+                            writeln!(f, "{} <- {} - {}", out, left, right)?
+                        }
                         Instruction::Reset(proc, out, ref args, frame) => writeln!(
                             f,
-                            "{}rst {}, R{}, [ {} ]",
+                            "{}rst {}, {}{}{}",
                             match out {
-                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
+                            frame,
                             self[proc].debug_name,
-                            usize::from(frame),
-                            args.iter()
-                                .map(|&r| format!("R{}", usize::from(r)))
+                            match self[proc]
+                                .captures
+                                .iter()
+                                .map(|r| r.to_string())
                                 .collect::<Vec<_>>()
-                                .join(", "),
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" [ {} ]", a),
+                            },
+                            match args
+                                .iter()
+                                .map(|r| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" ( {} )", a),
+                            },
                         )?,
                         Instruction::Shift(proc, out, ref args, frame) => writeln!(
                             f,
-                            "{}sft {}, R{}, [ {} ]",
+                            "{}sft {} < {} >{}{}",
                             match out {
-                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
                             self[proc].debug_name,
-                            usize::from(frame),
-                            args.iter()
-                                .map(|&r| format!("R{}", usize::from(r)))
+                            frame,
+                            match self[proc]
+                                .captures
+                                .iter()
+                                .map(|r| r.to_string())
                                 .collect::<Vec<_>>()
-                                .join(", "),
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" [ {} ]", a),
+                            },
+                            match args
+                                .iter()
+                                .map(|r| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" ( {} )", a),
+                            },
                         )?,
                         Instruction::Call(proc, out, ref args) => writeln!(
                             f,
-                            "{}cal {}, [ {} ]",
+                            "{}cal {}{}{}",
                             match out {
-                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
                             self[proc].debug_name,
-                            args.iter()
-                                .map(|&r| format!("R{}", usize::from(r)))
+                            match self[proc]
+                                .captures
+                                .iter()
+                                .map(|r| r.to_string())
                                 .collect::<Vec<_>>()
-                                .join(", "),
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" [ {} ]", a),
+                            },
+                            match args
+                                .iter()
+                                .map(|r| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" ( {} )", a),
+                            },
                         )?,
                         Instruction::Resume(out, r) => writeln!(
                             f,
                             "{}res{}",
                             match out {
-                                Some(out) => format!("R{} <- ", usize::from(out)),
+                                Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
                             match r {
-                                Some(r) => format!(" R{}", usize::from(r)),
+                                Some(r) => format!(" {}", r),
                                 None => "".into(),
                             }
                         )?,
                         Instruction::Discard(r) | Instruction::Return(r) => match r {
-                            Some(r) => writeln!(f, "       ret R{}", usize::from(r))?,
+                            Some(r) => writeln!(f, "       ret {}", r)?,
                             None => writeln!(f, "       ret")?,
                         },
-                        Instruction::PrintNum(r) => writeln!(f, "       put R{}", usize::from(r))?,
+                        Instruction::PrintNum(r) => writeln!(f, "       put {}", r)?,
 
                         Instruction::PrintStr(_) => todo!(),
                     }
@@ -345,9 +347,6 @@ pub fn generate_ir(
     ctx: &ParseContext,
     asys: &Analysis,
 ) -> (VecMap<ProcIdx, Procedure>, ProcIdx) {
-    // TODO: main not found
-    let main = asys.main.unwrap();
-
     let mut ir = IR {
         procs: VecMap::new(),
         proc_map: HashMap::new(),
@@ -355,14 +354,16 @@ pub fn generate_ir(
         ast,
         ctx,
         asys,
+        vars: HashMap::new(),
+        regs: Regs(0),
     };
 
     // define putint
     let putint = ir.procs.push(
         ProcIdx,
         Procedure {
-            inputs: 1, // int
-            closure_inputs: Vec::new(),
+            inputs: vec![ir.regs.next_reg()], // int
+            captures: vec![],
 
             is_handler: false,
             outputs: false,
@@ -373,7 +374,7 @@ pub fn generate_ir(
             }]
             .into(),
             start: BlockIdx(0),
-            debug_name: "debug#0__putint".into(),
+            debug_name: "putint".into(),
         },
     );
 
@@ -387,8 +388,12 @@ pub fn generate_ir(
     );
 
     // generate
-    let func = &ir.ast.functions[main];
-    let params: Box<[Val]> = func
+    // TODO: main not found
+    let main = asys.main.expect("no main function");
+    let fun = &ir.ast.functions[main];
+    let val = ir.asys.values[fun.decl.name];
+
+    let params: Box<[Val]> = fun
         .decl
         .sign
         .inputs
@@ -398,11 +403,11 @@ pub fn generate_ir(
 
     let main = generate_func(
         &mut ir,
+        Some(val),
         &[debug],
         &params,
-        func.body,
-        func.decl.sign.output.is_some(),
-        &mut Box::new(ClosureScope::default()),
+        fun.body,
+        fun.decl.sign.output.is_some(),
         false,
         "main".into(),
     );
@@ -411,39 +416,60 @@ pub fn generate_ir(
 
 fn generate_func(
     ir: &mut IR,
+    fun: Option<Val>,
     handlers: &[HandlerIdx],
     params: &[Val],
     body: ExprIdx,
     outputs: bool,
-    closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
     debug_name: String,
 ) -> ProcIdx {
-    // create this closure scope
-    ClosureScope::child(closure_scope);
-
     // add params to vars
     // TODO: we assume all input types fit in a register
-    closure_scope.base_params = params.len();
-    for (i, &val) in params.iter().enumerate() {
-        closure_scope.vars.insert(val, Reg(i));
+    let mut inputs = Vec::new();
+
+    for &val in params {
+        let reg = ir.regs.next_reg();
+        ir.vars.insert(val, reg);
+        inputs.push(reg);
     }
 
-    // generate code
+    // add new proc to list
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
 
+    let proc_idx = ir.procs.push(
+        ProcIdx,
+        Procedure {
+            inputs,
+            is_handler,
+            outputs,
+            start,
+
+            // these will be defined at the end
+            debug_name: String::new(),
+            captures: Vec::new(),
+            blocks: VecMap::new(),
+        },
+    );
+
+    if let Some(fun) = fun {
+        let ident = ProcIdent {
+            fun,
+            handlers: handlers.into(),
+        };
+        ir.proc_map.insert(ident, proc_idx);
+    }
+
+    // generate code
     let mut end = start;
-    let mut regs = 0;
     let ret = generate_expr(
         ir,
         handlers,
         body,
         &mut blocks,
         &mut end,
-        closure_scope,
         is_handler,
-        &mut regs,
         &debug_name,
     )
     .filter(|_| outputs);
@@ -456,7 +482,7 @@ fn generate_func(
         let ret = if is_handler {
             // tail call resume for handlers
             let res = ret;
-            let ret = res.map(|_| next_reg(&mut regs));
+            let ret = res.map(|_| ir.regs.next_reg());
             blocks[end].instructions.push(Instruction::Resume(ret, res));
             ret
         } else {
@@ -466,29 +492,9 @@ fn generate_func(
     }
 
     // return proc
-    let extra_inputs = ClosureScope::parent(closure_scope);
-
-    ir.procs.push(
-        ProcIdx,
-        Procedure {
-            inputs: params.len(),
-            closure_inputs: extra_inputs,
-
-            is_handler,
-            outputs,
-            blocks,
-            start,
-            debug_name,
-        },
-    )
-}
-
-const MAX_PARAMS: usize = 64;
-
-fn next_reg(regs: &mut usize) -> Reg {
-    let reg = Reg(MAX_PARAMS + *regs);
-    *regs += 1;
-    reg
+    ir.procs[proc_idx].debug_name = debug_name;
+    ir.procs[proc_idx].blocks = blocks;
+    proc_idx
 }
 
 fn generate_expr(
@@ -497,39 +503,17 @@ fn generate_expr(
     expr: ExprIdx,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
-    closure_scope: &mut Box<ClosureScope>,
     is_handler: bool,
-    regs: &mut usize,
     parent_name: &str,
 ) -> Option<Reg> {
     use Expression as E;
     match ir.ctx.exprs[expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
-                generate_expr(
-                    ir,
-                    handlers,
-                    expr,
-                    blocks,
-                    block,
-                    closure_scope,
-                    is_handler,
-                    regs,
-                    parent_name,
-                );
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name);
             }
             body.last.and_then(|expr| {
-                generate_expr(
-                    ir,
-                    handlers,
-                    expr,
-                    blocks,
-                    block,
-                    closure_scope,
-                    is_handler,
-                    regs,
-                    parent_name,
-                )
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name)
             })
         }
         E::Call(func, ref args) => {
@@ -547,9 +531,7 @@ fn generate_expr(
                             expr,
                             blocks,
                             block,
-                            closure_scope,
                             is_handler,
-                            regs,
                             parent_name,
                         )
                         .expect("function call argument does not return a value");
@@ -569,25 +551,17 @@ fn generate_expr(
                             let proc_idx = handler.procs[eff_idx];
                             let proc = &ir.procs[proc_idx];
 
-                            // get closure registers
-                            for &val in proc.closure_inputs.iter() {
-                                let reg = closure_scope.find_reg(val).expect(
-                                    format!("value {} is not loaded in scope", usize::from(val))
-                                        .as_str(),
-                                );
-                                reg_args.push(reg);
-                            }
-
                             // execute handler
                             let output = if proc.outputs {
-                                Some(next_reg(regs))
+                                Some(ir.regs.next_reg())
                             } else {
                                 None
                             };
                             if proc.is_handler {
                                 // get frame parameter
-                                let frame_param = closure_scope
-                                    .find_reg(eff_val)
+                                let frame_param = *ir
+                                    .vars
+                                    .get(&eff_val)
                                     .expect("frame parameter is not in scope");
 
                                 // shift to handler
@@ -607,9 +581,9 @@ fn generate_expr(
                         }
                         Definition::Function(func_idx) => {
                             // create proc identity
-                            let func = &ir.ast.functions[func_idx];
+                            let fun = &ir.ast.functions[func_idx];
 
-                            let effects: Box<[HandlerIdx]> = func
+                            let effects: Box<[HandlerIdx]> = fun
                                 .decl
                                 .sign
                                 .effects
@@ -625,7 +599,7 @@ fn generate_expr(
                                 .collect();
 
                             let procident = ProcIdent {
-                                func: val,
+                                fun: val,
                                 handlers: effects,
                             };
 
@@ -634,7 +608,7 @@ fn generate_expr(
                                 let handlers = &procident.handlers;
 
                                 // get params
-                                let params: Box<[Val]> = func
+                                let params: Box<[Val]> = fun
                                     .decl
                                     .sign
                                     .inputs
@@ -643,7 +617,7 @@ fn generate_expr(
                                     .collect();
 
                                 // generate debug name
-                                let mut debug_name = ir.ctx.idents[func.decl.name].0.clone();
+                                let mut debug_name = ir.ctx.idents[fun.decl.name].0.clone();
 
                                 if handlers.len() > 0 {
                                     debug_name += "/";
@@ -668,34 +642,24 @@ fn generate_expr(
                                 }
 
                                 // generate func
-                                let idx = generate_func(
+                                generate_func(
                                     ir,
+                                    Some(val),
                                     handlers,
                                     &params,
-                                    func.body,
-                                    func.decl.sign.output.is_some(),
-                                    closure_scope,
+                                    fun.body,
+                                    fun.decl.sign.output.is_some(),
                                     false,
                                     debug_name,
-                                );
-                                ir.proc_map.insert(procident, idx);
-                                idx
+                                )
                             } else {
                                 ir.proc_map[&procident]
                             };
                             let proc = &ir.procs[proc_idx];
 
-                            // get closure registers
-                            for &val in proc.closure_inputs.iter() {
-                                let reg = closure_scope
-                                    .find_reg(val)
-                                    .expect("value is not loaded in scope");
-                                reg_args.push(reg);
-                            }
-
                             // execute proc
                             let output = if proc.outputs {
-                                Some(next_reg(regs))
+                                Some(ir.regs.next_reg())
                             } else {
                                 None
                             };
@@ -715,124 +679,93 @@ fn generate_expr(
         }
         E::Member(_, _) => todo!(),
         E::IfElse(cond, yes, no) => {
-            let cond = generate_expr(
-                ir,
-                handlers,
-                cond,
-                blocks,
-                block,
-                closure_scope,
-                is_handler,
-                regs,
-                parent_name,
-            )
-            .expect("condition has no value");
+            let cond = generate_expr(ir, handlers, cond, blocks, block, is_handler, parent_name)
+                .expect("condition has no value");
 
             match no {
                 Some(no) => {
-                    let noblock = blocks.push(BlockIdx, Block::default());
-                    let yesblock = blocks.push(BlockIdx, Block::default());
+                    let no_start = blocks.push(BlockIdx, Block::default());
+                    let yes_start = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block]
                         .instructions
-                        .push(Instruction::JmpNZ(cond, yesblock));
+                        .push(Instruction::JmpNZ(cond, yes_start));
 
+                    let mut yes_end = yes_start;
                     let yes_reg = generate_expr(
                         ir,
                         handlers,
                         yes,
                         blocks,
-                        &mut BlockIdx(yesblock.0),
-                        closure_scope,
+                        &mut yes_end,
                         is_handler,
-                        regs,
                         parent_name,
                     );
 
-                    let endblock = blocks.push(BlockIdx, Block::default());
-                    blocks[*block].next = Some(noblock);
-                    blocks[yesblock].next = Some(endblock);
-                    blocks[noblock].next = Some(endblock);
+                    let end = blocks.push(BlockIdx, Block::default());
 
+                    let mut no_end = no_start;
                     let no_reg = generate_expr(
                         ir,
                         handlers,
                         no,
                         blocks,
-                        &mut BlockIdx(noblock.0),
-                        closure_scope,
+                        &mut no_end,
                         is_handler,
-                        regs,
                         parent_name,
                     );
 
-                    *block = endblock;
+                    blocks[*block].next = Some(no_start);
+                    blocks[yes_end].next = Some(end);
+                    blocks[no_end].next = Some(end);
+                    *block = end;
+
                     if let (Some(yes), Some(no)) = (yes_reg, no_reg) {
-                        let out = next_reg(regs);
+                        let out = ir.regs.next_reg();
                         blocks[*block]
                             .instructions
-                            .push(Instruction::Phi(out, [(yes, yesblock), (no, noblock)]));
+                            .push(Instruction::Phi(out, [(yes, yes_end), (no, no_end)]));
                         Some(out)
                     } else {
                         None
                     }
                 }
                 None => {
-                    let yesblock = blocks.push(BlockIdx, Block::default());
+                    let yes_start = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block]
                         .instructions
-                        .push(Instruction::JmpNZ(cond, yesblock));
+                        .push(Instruction::JmpNZ(cond, yes_start));
 
+                    let mut yes_end = yes_start;
                     generate_expr(
                         ir,
                         handlers,
                         yes,
                         blocks,
-                        &mut BlockIdx(yesblock.0),
-                        closure_scope,
+                        &mut yes_end,
                         is_handler,
-                        regs,
                         parent_name,
                     );
 
-                    let endblock = blocks.push(BlockIdx, Block::default());
-                    blocks[*block].next = Some(endblock);
-                    blocks[yesblock].next = Some(endblock);
+                    let end = blocks.push(BlockIdx, Block::default());
 
-                    *block = endblock;
+                    blocks[*block].next = Some(end);
+                    blocks[yes_end].next = Some(end);
+                    *block = end;
+
                     None
                 }
             }
         }
         E::Op(left, op, right) => {
-            let left = generate_expr(
-                ir,
-                handlers,
-                left,
-                blocks,
-                block,
-                closure_scope,
-                is_handler,
-                regs,
-                parent_name,
-            )
-            .expect("left operand has no value");
+            let left = generate_expr(ir, handlers, left, blocks, block, is_handler, parent_name)
+                .expect("left operand has no value");
 
-            let right = generate_expr(
-                ir,
-                handlers,
-                right,
-                blocks,
-                block,
-                closure_scope,
-                is_handler,
-                regs,
-                parent_name,
-            )
-            .expect("right operand has no value");
+            let right = generate_expr(ir, handlers, right, blocks, block, is_handler, parent_name)
+                .expect("right operand has no value");
 
-            let out = next_reg(regs);
+            let out = ir.regs.next_reg();
 
             let instr = match op {
                 Op::Equals => Instruction::Equals(out, left, right),
@@ -848,24 +781,14 @@ fn generate_expr(
         E::Break(value) => {
             // get break value
             let reg = value.and_then(|expr| {
-                generate_expr(
-                    ir,
-                    handlers,
-                    expr,
-                    blocks,
-                    block,
-                    closure_scope,
-                    is_handler,
-                    regs,
-                    parent_name,
-                )
+                generate_expr(ir, handlers, expr, blocks, block, is_handler, parent_name)
             });
 
             // TODO: we assume this is top level inside a handler
             blocks[*block].instructions.push(Instruction::Discard(reg));
 
             // break returns any type
-            Some(next_reg(regs))
+            Some(ir.regs.next_reg())
         }
         E::TryWith(body, handler) => {
             // get handler
@@ -884,8 +807,8 @@ fn generate_expr(
             let effect = &ir.ast.effects[eff_idx];
 
             // put frame register in scope
-            let frame_reg = next_reg(regs);
-            closure_scope.vars.insert(eff_val, frame_reg);
+            let frame_reg = ir.regs.next_reg();
+            ir.vars.insert(eff_val, frame_reg);
 
             // generate handler
             let handler_idx = ir.handlers.push(
@@ -896,15 +819,15 @@ fn generate_expr(
                 },
             );
 
-            for func in ast_handler.functions.iter() {
-                let val = ir.asys.values[func.decl.name];
+            for fun in ast_handler.functions.iter() {
+                let val = ir.asys.values[fun.decl.name];
                 let eff_fun_idx = match ir.asys.defs[val] {
                     Definition::EffectFunction(_, eff_fun_idx) => eff_fun_idx,
                     _ => panic!("handler has non-effect-function as a function value"),
                 };
 
                 // get params
-                let params: Box<[Val]> = func
+                let params: Box<[Val]> = fun
                     .decl
                     .sign
                     .inputs
@@ -914,7 +837,7 @@ fn generate_expr(
 
                 // generate debug name
                 let eff_name = ir.ctx.idents[eff_ident].0.as_str();
-                let proc_name = ir.ctx.idents[func.decl.name].0.as_str();
+                let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
                 let debug_name =
                     format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
                 // TODO: add handlers of proc
@@ -922,11 +845,11 @@ fn generate_expr(
                 // generate handler proc
                 let proc_idx = generate_func(
                     ir,
+                    None,
                     handlers, // TODO: add handlers of proc
                     &params,
-                    func.body,
-                    func.decl.sign.output.is_some(),
-                    closure_scope,
+                    fun.body,
+                    fun.decl.sign.output.is_some(),
                     true,
                     debug_name,
                 );
@@ -940,50 +863,39 @@ fn generate_expr(
             subhandlers.push(handler_idx);
 
             // generate reset
-            let debug_name = format!(
-                "{}__reset#{}",
-                parent_name,
-                usize::from(frame_reg) - MAX_PARAMS
-            );
+            let debug_name = format!("{}__reset#{}", parent_name, usize::from(frame_reg));
 
             let proc_idx = generate_func(
                 ir,
+                None,
                 &subhandlers,
                 &[],
                 body,
                 true, // TODO: use type checker to see if this outputs a value
-                closure_scope,
                 is_handler,
                 debug_name,
             );
             let proc = &ir.procs[proc_idx];
 
-            // get closure registers
-            let mut reg_args = Vec::new();
-
-            for &val in proc.closure_inputs.iter() {
-                let reg = closure_scope
-                    .find_reg(val)
-                    .expect("value is not loaded in scope");
-                reg_args.push(reg);
-            }
-
             // execute proc
             let output = if proc.outputs {
-                Some(next_reg(regs))
+                Some(ir.regs.next_reg())
             } else {
                 None
             };
-            blocks[*block]
-                .instructions
-                .push(Instruction::Reset(proc_idx, output, reg_args, frame_reg));
+            blocks[*block].instructions.push(Instruction::Reset(
+                proc_idx,
+                output,
+                Vec::new(),
+                frame_reg,
+            ));
             output
         }
         E::Handler(_) => todo!(),
         E::String(_) => todo!(),
 
         E::Int(i) => {
-            let reg = next_reg(regs);
+            let reg = ir.regs.next_reg();
 
             // TODO: handle overflow
             blocks[*block]
@@ -996,11 +908,7 @@ fn generate_expr(
         E::Ident(id) => {
             // TODO: globals
             let val = ir.asys.values[id];
-            Some(
-                closure_scope
-                    .find_reg(val)
-                    .expect("value is not loaded in scope"),
-            )
+            Some(*ir.vars.get(&val).expect("value is not loaded in scope"))
         }
         E::Error => todo!(),
     }

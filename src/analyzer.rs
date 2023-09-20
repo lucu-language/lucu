@@ -71,7 +71,7 @@ pub struct Analysis {
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     values: HashMap<String, Val>,
-    effects: &'a HashMap<Val, HashMap<String, Val>>,
+    effects: &'a HashMap<String, (Val, HashMap<String, Val>)>,
 }
 
 impl<'a> Scope<'a> {
@@ -191,26 +191,15 @@ fn scope_effect<'a>(
     scope: &'a mut Scope,
 ) -> Option<&'a HashMap<String, Val>> {
     let name = &ctx.idents[ident].0;
-    match scope.get(name) {
-        Some(val) => {
-            actx.values[ident] = val;
-            match scope.effects.get(&val) {
-                Some(vec) => {
-                    scope
-                        .values
-                        .extend(vec.iter().map(|(s, &v)| (s.clone(), v)));
-                    Some(vec)
-                }
-                None => {
-                    println!("{} is not an effect", name);
-                    None
-                }
-            }
+    match scope.effects.get(name) {
+        Some((val, vec)) => {
+            actx.values[ident] = *val;
+            scope
+                .values
+                .extend(vec.iter().map(|(s, &v)| (s.clone(), v)));
+            Some(vec)
         }
-        None => {
-            println!("unknown value {}", name);
-            None
-        }
+        None => panic!("unknown effect {}", name),
     }
 }
 
@@ -226,7 +215,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
             let name = &ctx.idents[typ.ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[typ.ident] = val,
-                None => println!("unknown value {}", name),
+                None => panic!("unknown value {}", name),
             }
         }
         _ => {}
@@ -238,7 +227,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
         let name = &ctx.idents[typ.ident].0;
         match scope.get(name) {
             Some(val) => actx.values[typ.ident] = val,
-            None => println!("unknown value {}", name),
+            None => panic!("unknown value {}", name),
         }
 
         // add parameter to scope
@@ -248,6 +237,9 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
         );
     }
 }
+
+pub const STR: Val = Val(0);
+pub const INT: Val = Val(1);
 
 pub const DEBUG: Val = Val(2);
 pub const PUTINT: Val = Val(3);
@@ -264,13 +256,13 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     let mut values = HashMap::new();
 
     // built-in values
-    values.insert("str".to_owned(), Val(0));
-    values.insert("int".to_owned(), Val(1));
+    values.insert("str".to_owned(), STR);
+    values.insert("int".to_owned(), INT);
     values.insert("debug".to_owned(), DEBUG);
 
     let mut debug = HashMap::new();
     debug.insert("putint".to_owned(), PUTINT);
-    effects.insert(Val(2), debug);
+    effects.insert("debug".to_owned(), (DEBUG, debug));
 
     actx.defs = VecMap::filled(4, Definition::Builtin);
     actx.defs[PUTINT] = Definition::EffectFunction(DEBUG, EffFunIdx(0));
@@ -291,7 +283,7 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
             );
         }
 
-        effects.insert(val, funcs);
+        effects.insert(ctx.idents[effect.name].0.clone(), (val, funcs));
     }
     for (i, func) in ast.functions.values().enumerate() {
         // add function to scope

@@ -97,7 +97,7 @@ fn main() {
     // print ir
     let ir = ir::generate_ir(&ast, &ctx, &asys);
     println!("\n--- IR ---");
-    println!("{}", ir.0);
+    println!("{}", ir.procs);
 
     // execute
     println!("\n--- OUTPUT ---");

@@ -26,14 +26,22 @@ pub struct Procedure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Int,
-    Pointer,
     Aggregate(TypeIdx),
+
+    BytePointer,
+    ArraySize,
 
     Never,
     None,
 }
 
 impl Type {
+    pub fn is_never(&self) -> bool {
+        matches!(self, Type::Never)
+    }
+    pub fn outputs_value(&self) -> bool {
+        !matches!(self, Type::None | Type::Never)
+    }
     fn from_type(asys: &Analysis, typ: &parser::Type) -> Type {
         match asys.values[typ.ident] {
             STR => Type::Aggregate(SLICE),
@@ -47,9 +55,6 @@ impl Type {
             Some(ReturnType::Never) => Type::Never,
             None => Type::None,
         }
-    }
-    fn outputs_value(&self) -> bool {
-        !matches!(self, Type::None)
     }
 }
 
@@ -113,7 +118,6 @@ pub struct Block {
 pub enum Instruction {
     Init(Reg, u64),
     InitString(Reg, String),
-    Copy(Reg, Reg),
 
     // conditionals
     JmpNZ(Reg, BlockIdx),
@@ -133,6 +137,7 @@ pub enum Instruction {
     // return statements
     Break(Option<Reg>, HandlerIdx), // break with optional value to handler
     Return(Option<Reg>),            // return with optional value
+    Unreachable,
 
     // print
     PrintNum(Reg), // print number in register
@@ -289,7 +294,6 @@ impl Display for VecMap<ProcIdx, Procedure> {
                     match *instr {
                         Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
-                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::JmpNZ(r, b) => writeln!(f, "       jnz {}, {}", r, b)?,
                         Instruction::Phi(r, [(r1, b1), (r2, b2)]) => {
                             writeln!(f, "{} <- phi [ {}, {} ], [ {}, {} ]", r, r1, b1, r2, b2,)?
@@ -377,6 +381,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 .join(", "),
                         )?,
                         Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
+                        Instruction::Unreachable => writeln!(f, "       unreachable")?,
                     }
                 }
 
@@ -413,7 +418,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     };
 
     ir.ir.aggregates.push_value(AggregateType {
-        children: vec![Type::Pointer, Type::Int],
+        children: vec![Type::BytePointer, Type::ArraySize],
     });
 
     // define putint
@@ -514,7 +519,7 @@ fn generate_fun(
             output,
             start,
             debug_name: debug_name.clone(),
-            can_break: ir.can_break(handlers),
+            can_break: !output.is_never() && ir.can_break(handlers),
 
             // these will be defined at the end
             blocks: VecMap::new(),
@@ -552,7 +557,7 @@ fn generate_fun(
 
     if !matches!(
         blocks[end].instructions.last(),
-        Some(Instruction::Return(_) | Instruction::Break(_, _))
+        Some(Instruction::Return(_) | Instruction::Break(_, _) | Instruction::Unreachable)
     ) {
         // add return if we haven't already
         blocks[end].instructions.push(Instruction::Return(ret));
@@ -599,7 +604,7 @@ fn generate_reset(
 
     if !matches!(
         blocks[end].instructions.last(),
-        Some(Instruction::Return(_) | Instruction::Break(_, _))
+        Some(Instruction::Return(_) | Instruction::Break(_, _) | Instruction::Unreachable)
     ) {
         // add return if we haven't already
         blocks[end].instructions.push(Instruction::Return(ret));
@@ -616,7 +621,7 @@ fn generate_reset(
             start,
             debug_name,
             blocks,
-            can_break: ir.can_break(handlers),
+            can_break: !output.is_never() && ir.can_break(handlers),
         },
     )
 }
@@ -674,7 +679,11 @@ fn generate_expr(
                             let proc_idx = handler.procs[eff_fun_idx];
 
                             let typ = ir.ir.procs[proc_idx].output;
-                            let output = Some(ir.next_reg(typ));
+                            let output = if typ.outputs_value() {
+                                Some(ir.next_reg(typ))
+                            } else {
+                                None
+                            };
 
                             // get closure
                             let closure = scope
@@ -687,6 +696,9 @@ fn generate_expr(
                                 .instructions
                                 .push(Instruction::Call(proc_idx, output, reg_args));
 
+                            if typ.is_never() {
+                                blocks[*block].instructions.push(Instruction::Unreachable);
+                            }
                             output
                         }
                         Definition::Function(func_idx) => {
@@ -786,12 +798,22 @@ fn generate_expr(
                                 ir.proc_map[&procident]
                             };
                             let proc = &ir.ir.procs[proc_idx];
+                            let never = proc.output.is_never();
 
                             // execute proc
-                            let output = Some(ir.next_reg(proc.output));
+                            let output = if proc.output.outputs_value() {
+                                Some(ir.next_reg(proc.output))
+                            } else {
+                                None
+                            };
+
                             blocks[*block]
                                 .instructions
                                 .push(Instruction::Call(proc_idx, output, reg_args));
+
+                            if never {
+                                blocks[*block].instructions.push(Instruction::Unreachable);
+                            }
                             output
                         }
 
@@ -1066,9 +1088,14 @@ fn generate_expr(
                 .collect();
 
             let proc = &ir.ir.procs[proc_idx];
+            let never = proc.output.is_never();
 
             // execute proc
-            let output = Some(ir.next_reg(proc.output));
+            let output = if proc.output.outputs_value() {
+                Some(ir.next_reg(proc.output))
+            } else {
+                None
+            };
 
             if ir.handlers[handler_idx].break_self {
                 blocks[*block].instructions.push(Instruction::Reset(
@@ -1084,6 +1111,9 @@ fn generate_expr(
                     .push(Instruction::Call(proc_idx, output, input_regs));
             }
 
+            if never {
+                blocks[*block].instructions.push(Instruction::Unreachable);
+            }
             output
         }
         E::Handler(_) => todo!(),

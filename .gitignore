@@ -1,3 +1,7 @@
 /target
 .envrc
 .direnv
+
+out
+out.o
+lib.o

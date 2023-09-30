@@ -9,5 +9,6 @@ fun factorial(n int) int {
 }
 
 fun main() / debug {
-	putint(factorial(6))
+	putint(12)
+	putint(factorial(12))
 }

@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Download LLVM
-      run: sudo apt-get install llvm-16
+      run: sudo apt-get install llvm-15-dev
     - name: Build
       run: cargo build --verbose
     - name: Run tests

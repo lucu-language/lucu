@@ -15,7 +15,7 @@
         ncurses
       ];
 
-      LLVM_SYS_160_PREFIX = "${llvmPackages_16.libllvm.dev}";
+      LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
       
     };
     

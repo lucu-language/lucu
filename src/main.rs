@@ -10,7 +10,7 @@ mod parser;
 mod vecmap;
 
 fn main() {
-    let debug = true;
+    let debug = false;
     let args: Vec<String> = env::args().collect();
     let file = read_to_string(args[1].clone()).unwrap();
 

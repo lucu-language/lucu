@@ -14,10 +14,9 @@ use crate::{
 pub struct Procedure {
     pub inputs: Vec<Reg>,
 
-    // whether or not this is an effect handler that accepts a continuation parameter
-    pub is_handler: bool,
-
+    pub can_break: bool,
     pub output: Type,
+
     pub blocks: VecMap<BlockIdx, Block>,
     pub start: BlockIdx,
 
@@ -28,7 +27,6 @@ pub struct Procedure {
 pub enum Type {
     Int,
     Pointer,
-    Frame,
     Aggregate(TypeIdx),
 
     Never,
@@ -129,15 +127,12 @@ pub enum Instruction {
     Sub(Reg, Reg, Reg),
 
     // call procedure, put return into reg, call with arguments
-    Reset(ProcIdx, Option<Reg>, Vec<Reg>, Reg, Vec<Reg>), // puts handler closure into reg and calls
-    Shift(ProcIdx, Option<Reg>, Vec<Reg>, Reg), // shift into procedure with frame parameter
-    Call(ProcIdx, Option<Reg>, Vec<Reg>),       // regular call
+    Reset(ProcIdx, Option<Reg>, Vec<Reg>, HandlerIdx), // catch any breaks to handler
+    Call(ProcIdx, Option<Reg>, Vec<Reg>),              // regular call
 
-    // return statements for effect handlers
-    Resume(Option<Reg>, Option<Reg>), // resume the continuation with optional value
-
-    // return statement for regular procedures
-    Return(Option<Reg>), // return with optional value
+    // return statements
+    Break(Option<Reg>, HandlerIdx), // break with optional value to handler
+    Return(Option<Reg>),            // return with optional value
 
     // print
     PrintNum(Reg), // print number in register
@@ -146,17 +141,6 @@ pub enum Instruction {
     // create aggregate type
     Aggregate(Reg, Vec<Reg>),
     Member(Reg, Reg, usize),
-}
-
-impl Instruction {
-    fn calls_proc(&self) -> Option<ProcIdx> {
-        match *self {
-            Instruction::Reset(proc, _, _, _, _)
-            | Instruction::Shift(proc, _, _, _)
-            | Instruction::Call(proc, _, _) => Some(proc),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -169,7 +153,7 @@ impl From<ProcIdx> for usize {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-struct HandlerIdx(usize);
+pub struct HandlerIdx(usize);
 
 impl From<HandlerIdx> for usize {
     fn from(value: HandlerIdx) -> Self {
@@ -188,13 +172,14 @@ struct Handler {
     effect: Val,
     closure: TypeIdx,
     procs: VecMap<EffFunIdx, ProcIdx>,
+    break_self: bool,
 }
 
 #[derive(Default)]
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     regs: HashMap<Val, Reg>,
-    captures: HashMap<Val, Reg>,
+    captures: Vec<(Val, Reg)>,
 }
 
 impl<'a> Scope<'a> {
@@ -209,12 +194,13 @@ impl<'a> Scope<'a> {
             Some(&v) => Some(v),
             None => match self.parent.map(|p| p.get_parent(key)).flatten() {
                 Some(reg) => {
-                    if !self.captures.contains_key(&key) {
-                        let capture = ir.copy_reg(reg);
-                        self.captures.insert(key, capture);
-                        Some(capture)
+                    let pos = self.captures.iter().position(|&(k, _)| k == key);
+                    if let Some(pos) = pos {
+                        Some(self.captures[pos].1)
                     } else {
-                        Some(self.captures[&key])
+                        let capture = ir.copy_reg(reg);
+                        self.captures.push((key, capture));
+                        Some(capture)
                     }
                 }
                 None => None,
@@ -225,7 +211,7 @@ impl<'a> Scope<'a> {
         Scope {
             parent: Some(self),
             regs: HashMap::new(),
-            captures: HashMap::new(),
+            captures: Vec::new(),
         }
     }
 }
@@ -248,6 +234,14 @@ impl<'a> IRContext<'a> {
     }
     fn next_reg(&mut self, typ: Type) -> Reg {
         self.ir.types.push(Reg, typ)
+    }
+    fn can_break(&self, handlers: &[HandlerIdx]) -> bool {
+        handlers.into_iter().any(|&hidx| {
+            self.handlers[hidx]
+                .procs
+                .values()
+                .any(|&pidx| self.ir.procs[pidx].can_break)
+        })
     }
 }
 
@@ -276,8 +270,8 @@ impl Display for VecMap<ProcIdx, Procedure> {
                 write!(f, " )")?;
             }
 
-            if proc.is_handler {
-                write!(f, " < cont >")?;
+            if proc.can_break {
+                write!(f, " brk")?;
             }
 
             write!(f, " {{\n")?;
@@ -315,53 +309,6 @@ impl Display for VecMap<ProcIdx, Procedure> {
                         Instruction::Sub(out, left, right) => {
                             writeln!(f, "{} <- {} - {}", out, left, right)?
                         }
-                        Instruction::Reset(proc, out, ref args, closure, ref closure_args) => {
-                            writeln!(
-                                f,
-                                "{}rst {}, {{ {} }}, {}{}",
-                                match out {
-                                    Some(out) => format!("{} <- ", out),
-                                    None => "       ".into(),
-                                },
-                                closure,
-                                closure_args
-                                    .iter()
-                                    .map(|r| r.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                                self[proc].debug_name,
-                                match args
-                                    .iter()
-                                    .map(|r| r.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                                    .as_str()
-                                {
-                                    "" => "".into(),
-                                    a => format!(" ( {} )", a),
-                                },
-                            )?
-                        }
-                        Instruction::Shift(proc, out, ref args, frame) => writeln!(
-                            f,
-                            "{}sft {}{} < {} >",
-                            match out {
-                                Some(out) => format!("{} <- ", out),
-                                None => "       ".into(),
-                            },
-                            self[proc].debug_name,
-                            match args
-                                .iter()
-                                .map(|r| r.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .as_str()
-                            {
-                                "" => "".into(),
-                                a => format!(" ( {} )", a),
-                            },
-                            frame,
-                        )?,
                         Instruction::Call(proc, out, ref args) => writeln!(
                             f,
                             "{}cal {}{}",
@@ -381,17 +328,25 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 a => format!(" ( {} )", a),
                             },
                         )?,
-                        Instruction::Resume(out, r) => writeln!(
+                        Instruction::Reset(proc, out, ref args, handler) => writeln!(
                             f,
-                            "{}res{}",
+                            "{}rst {}, {}{}",
                             match out {
                                 Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
-                            match r {
-                                Some(r) => format!(" {}", r),
-                                None => "".into(),
-                            }
+                            usize::from(handler),
+                            self[proc].debug_name,
+                            match args
+                                .iter()
+                                .map(|r| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .as_str()
+                            {
+                                "" => "".into(),
+                                a => format!(" ( {} )", a),
+                            },
                         )?,
                         Instruction::Return(r) => writeln!(
                             f,
@@ -399,7 +354,16 @@ impl Display for VecMap<ProcIdx, Procedure> {
                             match r {
                                 Some(r) => format!(" {}", r),
                                 None => "".into(),
-                            }
+                            },
+                        )?,
+                        Instruction::Break(r, h) => writeln!(
+                            f,
+                            "       brk {}{}",
+                            usize::from(h),
+                            match r {
+                                Some(r) => format!(", {}", r),
+                                None => "".into(),
+                            },
                         )?,
                         Instruction::PrintNum(r) => writeln!(f, "       putint {}", r)?,
                         Instruction::PrintStr(r) => writeln!(f, "       putstr {}", r)?,
@@ -410,7 +374,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                             v.iter()
                                 .map(|r| r.to_string())
                                 .collect::<Vec<_>>()
-                                .join(", ")
+                                .join(", "),
                         )?,
                         Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
                     }
@@ -465,8 +429,8 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         Procedure {
             inputs,
 
-            is_handler: false,
             output: Type::None,
+            can_break: false,
 
             blocks: vec![Block {
                 instructions: vec![Instruction::PrintNum(Reg(0)), Instruction::Return(None)],
@@ -482,6 +446,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let debug = ir.handlers.push(
         HandlerIdx,
         Handler {
+            break_self: false,
             effect: DEBUG,
             procs: vec![putint].into(),
             closure: debug_closure,
@@ -508,14 +473,14 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let mut scope = Scope::default();
     scope.regs.insert(DEBUG, debug_reg);
 
-    ir.ir.main = generate_func(
+    ir.ir.main = generate_fun(
         &mut ir,
         Some(val),
         &[debug],
         &params,
         fun.body,
         output,
-        false,
+        None,
         "main".into(),
         &mut scope,
     );
@@ -527,14 +492,14 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     ir.ir
 }
 
-fn generate_func(
+fn generate_fun(
     ir: &mut IRContext,
     fun: Option<Val>,
     handlers: &[HandlerIdx],
     params: &[(Val, Type)],
     body: ExprIdx,
     output: Type,
-    is_handler: bool,
+    handler: Option<HandlerIdx>,
     debug_name: String,
     scope: &mut Scope,
 ) -> ProcIdx {
@@ -546,10 +511,10 @@ fn generate_func(
         ProcIdx,
         Procedure {
             inputs: Vec::new(),
-            is_handler,
             output,
             start,
             debug_name: debug_name.clone(),
+            can_break: ir.can_break(handlers),
 
             // these will be defined at the end
             blocks: VecMap::new(),
@@ -579,7 +544,7 @@ fn generate_func(
         body,
         &mut blocks,
         &mut end,
-        is_handler,
+        handler,
         &debug_name,
         scope,
     )
@@ -587,31 +552,19 @@ fn generate_func(
 
     if !matches!(
         blocks[end].instructions.last(),
-        Some(Instruction::Return(_))
+        Some(Instruction::Return(_) | Instruction::Break(_, _))
     ) {
         // add return if we haven't already
-        let ret = if is_handler {
-            // tail call resume for handlers
-            let res = ret;
-            let ret = res.map(|res| ir.copy_reg(res));
-            blocks[end].instructions.push(Instruction::Resume(ret, res));
-            ret
-        } else {
-            ret
-        };
         blocks[end].instructions.push(Instruction::Return(ret));
     }
 
     // get captures from last argument
     if scope.captures.len() > 0 {
-        let mut captures = scope.captures.values().copied().collect::<Vec<_>>();
-        captures.sort_unstable_by_key(|reg| reg.0);
-
         let closure = ir.ir.procs[proc_idx].inputs.last().unwrap().clone();
-        for (i, &capture) in captures.iter().enumerate() {
+        for (i, capture) in scope.captures.iter().map(|&(_, v)| v).enumerate().rev() {
             blocks[start]
                 .instructions
-                .insert(0, Instruction::Member(capture, closure, i + 1));
+                .insert(0, Instruction::Member(capture, closure, i));
         }
     }
 
@@ -639,14 +592,14 @@ fn generate_reset(
         body,
         &mut blocks,
         &mut end,
-        false,
+        None,
         &debug_name,
         scope,
     );
 
     if !matches!(
         blocks[end].instructions.last(),
-        Some(Instruction::Return(_))
+        Some(Instruction::Return(_) | Instruction::Break(_, _))
     ) {
         // add return if we haven't already
         blocks[end].instructions.push(Instruction::Return(ret));
@@ -658,12 +611,12 @@ fn generate_reset(
     ir.ir.procs.push(
         ProcIdx,
         Procedure {
-            inputs: scope.captures.values().copied().collect(),
-            is_handler: false,
+            inputs: scope.captures.iter().map(|&(_, v)| v).collect(),
             output,
             start,
             debug_name,
             blocks,
+            can_break: ir.can_break(handlers),
         },
     )
 }
@@ -674,7 +627,7 @@ fn generate_expr(
     expr: ExprIdx,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
-    is_handler: bool,
+    handler: Option<HandlerIdx>,
     debug_name: &str,
     scope: &mut Scope,
 ) -> Option<Reg> {
@@ -683,12 +636,12 @@ fn generate_expr(
         E::Body(ref body) => {
             for &expr in body.main.iter() {
                 generate_expr(
-                    ir, handlers, expr, blocks, block, is_handler, debug_name, scope,
+                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
                 );
             }
             body.last.and_then(|expr| {
                 generate_expr(
-                    ir, handlers, expr, blocks, block, is_handler, debug_name, scope,
+                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
                 )
             })
         }
@@ -702,7 +655,7 @@ fn generate_expr(
                     let mut reg_args = Vec::new();
                     for &expr in args {
                         let reg = generate_expr(
-                            ir, handlers, expr, blocks, block, is_handler, debug_name, scope,
+                            ir, handlers, expr, blocks, block, handler, debug_name, scope,
                         )
                         .expect("function call argument does not return a value");
                         reg_args.push(reg);
@@ -730,29 +683,9 @@ fn generate_expr(
                             reg_args.push(closure);
 
                             // execute handler
-                            let proc = &ir.ir.procs[proc_idx];
-                            if proc.is_handler {
-                                // get frame parameter
-                                let frame_param = ir.next_reg(Type::Frame);
-                                blocks[*block].instructions.push(Instruction::Member(
-                                    frame_param,
-                                    closure,
-                                    0,
-                                ));
-
-                                // shift to handler
-                                blocks[*block].instructions.push(Instruction::Shift(
-                                    proc_idx,
-                                    output,
-                                    reg_args,
-                                    frame_param,
-                                ));
-                            } else {
-                                // call handler as function
-                                blocks[*block]
-                                    .instructions
-                                    .push(Instruction::Call(proc_idx, output, reg_args));
-                            }
+                            blocks[*block]
+                                .instructions
+                                .push(Instruction::Call(proc_idx, output, reg_args));
 
                             output
                         }
@@ -837,16 +770,17 @@ fn generate_expr(
                                 }
 
                                 // generate func
-                                generate_func(
+                                let mut child = scope.child();
+                                generate_fun(
                                     ir,
                                     Some(val),
                                     handlers,
                                     &params,
                                     fun.body,
                                     output,
-                                    false,
+                                    None,
                                     debug_name,
-                                    scope,
+                                    &mut child,
                                 )
                             } else {
                                 ir.proc_map[&procident]
@@ -872,7 +806,7 @@ fn generate_expr(
         E::Member(_, _) => todo!(),
         E::IfElse(cond, yes, no) => {
             let cond = generate_expr(
-                ir, handlers, cond, blocks, block, is_handler, debug_name, scope,
+                ir, handlers, cond, blocks, block, handler, debug_name, scope,
             )
             .expect("condition has no value");
 
@@ -887,7 +821,7 @@ fn generate_expr(
                         no,
                         blocks,
                         &mut no_end,
-                        is_handler,
+                        handler,
                         debug_name,
                         scope,
                     );
@@ -905,7 +839,7 @@ fn generate_expr(
                         yes,
                         blocks,
                         &mut yes_end,
-                        is_handler,
+                        handler,
                         debug_name,
                         scope,
                     );
@@ -945,7 +879,7 @@ fn generate_expr(
                         yes,
                         blocks,
                         &mut yes_end,
-                        is_handler,
+                        handler,
                         debug_name,
                         scope,
                     );
@@ -962,12 +896,12 @@ fn generate_expr(
         }
         E::Op(left, op, right) => {
             let left = generate_expr(
-                ir, handlers, left, blocks, block, is_handler, debug_name, scope,
+                ir, handlers, left, blocks, block, handler, debug_name, scope,
             )
             .expect("left operand has no value");
 
             let right = generate_expr(
-                ir, handlers, right, blocks, block, is_handler, debug_name, scope,
+                ir, handlers, right, blocks, block, handler, debug_name, scope,
             )
             .expect("right operand has no value");
 
@@ -989,12 +923,14 @@ fn generate_expr(
             // get break value
             let reg = value.and_then(|expr| {
                 generate_expr(
-                    ir, handlers, expr, blocks, block, is_handler, debug_name, scope,
+                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
                 )
             });
 
             // TODO: we assume this is top level inside a handler
-            blocks[*block].instructions.push(Instruction::Return(reg));
+            blocks[*block]
+                .instructions
+                .push(Instruction::Break(reg, handler.unwrap()));
 
             // break returns any type
             Some(ir.next_reg(Type::Never))
@@ -1018,10 +954,6 @@ fn generate_expr(
             // generate handler
             let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
             let closure_reg = ir.next_reg(Type::Aggregate(closure));
-
-            // put frame register in scope
-            let frame_reg = ir.next_reg(Type::Frame);
-            ir.ir.aggregates[closure].children.push(Type::Frame);
             scope.regs.insert(eff_val, closure_reg);
 
             // generate handler
@@ -1031,6 +963,7 @@ fn generate_expr(
                     closure,
                     effect: eff_val,
                     procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
+                    break_self: false,
                 },
             );
 
@@ -1064,31 +997,43 @@ fn generate_expr(
                 // TODO: add handlers of proc
 
                 // generate handler proc
-                let proc_idx = generate_func(
-                    ir, None, handlers, // TODO: add handlers of proc
-                    &params, fun.body, output, true, debug_name, &mut child,
+                let proc_idx = generate_fun(
+                    ir,
+                    None,
+                    handlers, // TODO: add handlers of proc
+                    &params,
+                    fun.body,
+                    output,
+                    Some(handler_idx),
+                    debug_name,
+                    &mut child,
                 );
+
+                // check if handler can break
+                let can_break = ir.ir.procs[proc_idx]
+                    .instructions()
+                    .any(|instr| matches!(instr, Instruction::Break(_, _)));
+                ir.ir.procs[proc_idx].can_break |= can_break;
+                ir.handlers[handler_idx].break_self |= can_break;
 
                 // add to handler
                 ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
             }
 
             // create handler closure
-            let mut captures = child
-                .captures
-                .iter()
-                .map(|(&k, &v)| (k, v))
-                .collect::<Vec<_>>();
-
-            captures.sort_unstable_by_key(|&(_, reg)| reg.0);
             ir.ir.aggregates[closure]
                 .children
-                .extend(captures.iter().map(|&(_, reg)| ir.ir.types[reg]));
+                .extend(child.captures.iter().map(|&(_, reg)| ir.ir.types[reg]));
 
-            let aggregate = captures
+            let aggregate = child
+                .captures
                 .iter()
                 .map(|&(val, _)| scope.get_or_capture(ir, val).expect("value not in scope"))
                 .collect();
+
+            blocks[*block]
+                .instructions
+                .push(Instruction::Aggregate(closure_reg, aggregate));
 
             // add handler to handler list
             let mut subhandlers = Vec::new();
@@ -1109,15 +1054,15 @@ fn generate_expr(
             }
 
             // generate reset
-            let debug_name = format!("{}__reset#{}", debug_name, usize::from(frame_reg));
+            let debug_name = format!("{}__reset#{}", debug_name, usize::from(handler_idx));
 
             let mut child = scope.child();
             let proc_idx = generate_reset(ir, &subhandlers, body, debug_name, &mut child);
 
-            let input_regs = child
+            let input_regs: Vec<Reg> = child
                 .captures
-                .keys()
-                .map(|&val| scope.get_or_capture(ir, val).expect("value not in scope"))
+                .iter()
+                .map(|&(val, _)| scope.get_or_capture(ir, val).expect("value not in scope"))
                 .collect();
 
             let proc = &ir.ir.procs[proc_idx];
@@ -1125,13 +1070,19 @@ fn generate_expr(
             // execute proc
             let output = Some(ir.next_reg(proc.output));
 
-            blocks[*block].instructions.push(Instruction::Reset(
-                proc_idx,
-                output,
-                input_regs,
-                closure_reg,
-                aggregate,
-            ));
+            if ir.handlers[handler_idx].break_self {
+                blocks[*block].instructions.push(Instruction::Reset(
+                    proc_idx,
+                    output,
+                    input_regs,
+                    handler_idx,
+                ));
+            } else {
+                // TODO: inline call?
+                blocks[*block]
+                    .instructions
+                    .push(Instruction::Call(proc_idx, output, input_regs));
+            }
 
             output
         }

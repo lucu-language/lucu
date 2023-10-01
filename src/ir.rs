@@ -651,9 +651,9 @@ fn generate_expr(
             })
         }
         E::Call(func, ref args) => {
-            // TODO: currently we assume func is an Ident expr
+            // TODO: currently we assume func is an Ident expr or Effect Member expr
             match ir.ctx.exprs[func].0 {
-                E::Ident(id) => {
+                E::Ident(id) | E::Member(_, id) => {
                     let val = ir.asys.values[id];
 
                     // get base registers

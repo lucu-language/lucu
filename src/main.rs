@@ -119,7 +119,9 @@ fn main() {
     llvm::generate_ir(&ir, &Path::new("out.o"), debug);
 
     // output
-    println!("\n--- OUTPUT ---");
+    if debug {
+        println!("\n--- OUTPUT ---");
+    }
 
     Command::new("./link.sh").status().unwrap();
     Command::new("./out").status().unwrap();

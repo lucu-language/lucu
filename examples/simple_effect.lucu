@@ -5,7 +5,7 @@ effect get {
 fun puttwice(n int) / debug {
 	try {
 		putint(get())
-		putint(get())
+		putint(get.get())
 	} with get {
 		fun get() int {
 			n

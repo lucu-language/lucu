@@ -72,6 +72,7 @@ struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     values: HashMap<String, Val>,
     effects: &'a HashMap<String, (Val, HashMap<String, Val>)>,
+    scoped_effects: &'a Vec<Val>,
 }
 
 impl<'a> Scope<'a> {
@@ -86,6 +87,7 @@ impl<'a> Scope<'a> {
             parent: Some(self),
             values: HashMap::new(),
             effects: self.effects,
+            scoped_effects: self.scoped_effects,
         }
     }
 }
@@ -161,10 +163,46 @@ fn analyze_expr(
         Expression::TryWith(expr, handler) => {
             let mut child = scope.child();
             analyze_expr(actx, &mut child, ctx, handler, errors);
+
+            // TODO: first class handlers
+            let Expression::Handler(ref handler) = ctx.exprs[handler].0 else { panic!() };
+            let mut scoped = child.scoped_effects.clone();
+            let val = actx.values[handler.effect];
+            if !scoped.contains(&val) {
+                scoped.push(val);
+            }
+
+            child.scoped_effects = &scoped;
             analyze_expr(actx, &mut child, ctx, expr, errors);
         }
-        Expression::Member(expr, _) => {
-            analyze_expr(actx, scope, ctx, expr, errors);
+        Expression::Member(expr, field) => {
+            if let Expression::Ident(ident) = ctx.exprs[expr].0 {
+                // TODO: for now we assume the ident is of an effect
+                let name = &ctx.idents[ident].0;
+                match scope.effects.get(name) {
+                    Some(&(effect, ref funs)) => {
+                        actx.values[ident] = effect;
+
+                        if !scope.scoped_effects.contains(&effect) {
+                            errors.push(ctx.idents[ident].with(Error::UnhandledEffect));
+                        }
+
+                        let name = &ctx.idents[field].0;
+                        match funs.get(name).copied() {
+                            Some(fun) => {
+                                actx.values[field] = fun;
+                            }
+                            None => errors.push(
+                                ctx.idents[field]
+                                    .with(Error::UnknownEffectFun(ctx.idents[ident].empty())),
+                            ),
+                        }
+                    }
+                    None => errors.push(ctx.idents[ident].with(Error::UnknownEffect)),
+                }
+            } else {
+                todo!("member");
+            }
         }
         Expression::IfElse(cond, no, yes) => {
             analyze_expr(actx, scope, ctx, cond, errors);
@@ -319,6 +357,7 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
         parent: None,
         values,
         effects: &effects,
+        scoped_effects: &vec![],
     };
 
     for effect in ast.effects.values() {
@@ -330,6 +369,15 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     for func in ast.functions.values() {
         let mut scope = scope.child();
         scope_sign(&mut actx, &mut scope, ctx, &func.decl.sign, errors);
+
+        let scoped = func
+            .decl
+            .sign
+            .effects
+            .iter()
+            .map(|&i| actx.values[i])
+            .collect::<Vec<_>>();
+        scope.scoped_effects = &scoped;
         analyze_expr(&mut actx, &mut scope, ctx, func.body, errors);
     }
 

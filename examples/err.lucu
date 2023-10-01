@@ -7,7 +7,8 @@ fun main() / q {
 		
 	} with test {
 		fun undefined() {
-			w
+			debug.x()
+			q.w()
 		}
 	}
 }

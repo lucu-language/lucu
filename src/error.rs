@@ -30,6 +30,7 @@ pub enum Error {
     UnknownEffect,
     UnknownEffectFun(Ranged<()>),
     UnknownValue,
+    UnhandledEffect,
 }
 
 pub enum Expected {
@@ -60,6 +61,7 @@ impl Error {
             Error::UnknownEffect => Gravity::Start,
             Error::UnknownValue => Gravity::Start,
             Error::UnknownEffectFun(_) => Gravity::Start,
+            Error::UnhandledEffect => Gravity::Start,
         }
     }
 }
@@ -179,6 +181,10 @@ impl Errors {
                     ),
                     Error::UnknownValue =>
                         format!("value {} not found in scope", highlight(0, str, true)),
+                    Error::UnhandledEffect => format!(
+                        "effect {} is not handled in this scope",
+                        highlight(0, str, true)
+                    ),
                 }
             );
             if color {

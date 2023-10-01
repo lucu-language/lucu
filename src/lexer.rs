@@ -1,4 +1,6 @@
-use std::{iter::Peekable, str::Chars};
+use std::{fmt, iter::Peekable, str::Chars};
+
+use crate::error::{Error, Errors, Ranged};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
@@ -32,6 +34,44 @@ pub enum Token {
 
     // Error
     UnknownSymbol,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Token::Effect => "'effect'".into(),
+                Token::Fun => "'fun'".into(),
+                Token::Try => "'try'".into(),
+                Token::With => "'with'".into(),
+                Token::If => "'if'".into(),
+                Token::Else => "'else'".into(),
+                Token::Break => "'break'".into(),
+                Token::Semicolon => "';'".into(),
+                Token::Period => "'.'".into(),
+                Token::Slash => "'/'".into(),
+                Token::Comma => "','".into(),
+                Token::Equals => "'='".into(),
+                Token::Bang => "'!'".into(),
+                Token::DoubleEquals => "'=='".into(),
+                Token::Dash => "'-'".into(),
+                Token::Asterisk => "'*'".into(),
+                Token::Plus => "'+'".into(),
+                Token::Open(Group::Brace) => "'{'".into(),
+                Token::Open(Group::Paren) => "'('".into(),
+                Token::Open(Group::Bracket) => "'['".into(),
+                Token::Close(Group::Brace) => "'}'".into(),
+                Token::Close(Group::Paren) => "')'".into(),
+                Token::Close(Group::Bracket) => "']'".into(),
+                Token::String(s) => format!("\"{}\"", s),
+                Token::Ident(s) => format!("'{}'", s),
+                Token::Int(i) => format!("'{}'", i),
+                Token::UnknownSymbol => "'ERR'".into(),
+            }
+        )
+    }
 }
 
 impl Token {
@@ -112,36 +152,21 @@ pub struct Tokenizer<'a> {
     next: Peekable<Chars<'a>>,
     pos: usize,
 
-    pub errors: Vec<Ranged<TokenErr>>,
+    pub errors: &'a mut Errors,
     depth: usize,
     prev_unfinished: bool,
     peek: Option<Ranged<Token>>,
 }
 
-#[derive(Debug)]
-pub enum TokenErr {
-    UnknownSymbol,
-    UnclosedString,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Ranged<T>(pub T, pub usize, pub usize);
-
-impl<T> Ranged<T> {
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Ranged<U> {
-        Ranged(f(self.0), self.1, self.2)
-    }
-}
-
 impl<'a> Tokenizer<'a> {
-    pub fn new(s: &'a str) -> Self {
+    pub fn new(s: &'a str, errors: &'a mut Errors) -> Self {
         Self {
             next: s.chars().peekable(),
             pos: 0,
             depth: 0,
             prev_unfinished: true,
             peek: None,
-            errors: Vec::new(),
+            errors,
         }
     }
     fn next_char(&mut self) -> Option<char> {
@@ -240,12 +265,12 @@ impl<'a> Iterator for Tokenizer<'a> {
                         Some('"') => break Token::String(full),
                         Some('\n') => {
                             self.errors
-                                .push(Ranged(TokenErr::UnclosedString, pos, self.pos));
+                                .push(Ranged(Error::UnclosedString, pos, self.pos - 1));
                             break Token::String(full);
                         }
                         None => {
                             self.errors
-                                .push(Ranged(TokenErr::UnclosedString, pos, self.pos + 1));
+                                .push(Ranged(Error::UnclosedString, pos, self.pos));
                             break Token::String(full);
                         }
 
@@ -259,11 +284,8 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                             Some(c) => c, // TODO: give error
                             None => {
-                                self.errors.push(Ranged(
-                                    TokenErr::UnclosedString,
-                                    pos,
-                                    self.pos + 1,
-                                ));
+                                self.errors
+                                    .push(Ranged(Error::UnclosedString, pos, self.pos));
                                 break Token::String(full);
                             }
                         }),
@@ -320,7 +342,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 self.prev_unfinished = false;
 
                 self.errors
-                    .push(Ranged(TokenErr::UnknownSymbol, pos, self.pos));
+                    .push(Ranged(Error::UnknownSymbol, pos, self.pos));
                 Token::UnknownSymbol
             }
         };

@@ -40,7 +40,7 @@ extern void putint(unsigned long long d) {
 
 // Tell the compiler incoming stack alignment is not RSP%16==8 or ESP%16==12
 __attribute__((force_align_arg_pointer))
-extern void _start() {
+extern void _start(void) {
     main();
 
     /* exit system call */

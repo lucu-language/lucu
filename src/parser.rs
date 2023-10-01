@@ -2,7 +2,8 @@ use std::matches;
 
 use crate::{
     analyzer::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
-    lexer::{Group, Ranged, Token, TokenErr, Tokenizer},
+    error::{Error, Expected, Ranged},
+    lexer::{Group, Token, Tokenizer},
     vecmap::VecMap,
 };
 
@@ -51,7 +52,7 @@ pub enum Expression {
     Body(Body),
 
     Call(ExprIdx, Vec<ExprIdx>),
-    Member(ExprIdx, Ranged<String>),
+    Member(ExprIdx, Ident),
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
     Op(ExprIdx, Op, ExprIdx),
     Break(Option<ExprIdx>),
@@ -121,17 +122,8 @@ pub struct AST {
     pub functions: VecMap<FunIdx, Function>,
 }
 
-#[derive(Debug)]
-pub enum ParseErr {
-    Token(TokenErr),
-    Unexpected(Token),
-    UnexpectedEOF,
-    Unclosed(Group),
-}
-
 #[derive(Default)]
 pub struct ParseContext {
-    pub errors: Vec<Ranged<ParseErr>>,
     pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
     pub idents: VecMap<Ident, Ranged<String>>,
 }
@@ -169,7 +161,7 @@ impl<'a> Tokens<'a> {
     }
     fn check(&mut self, token: Token) -> Option<Ranged<()>> {
         if self.peek_check(token) {
-            Some(self.next().unwrap().map(|_| ()))
+            Some(self.next().unwrap().empty())
         } else {
             None
         }
@@ -179,39 +171,48 @@ impl<'a> Tokens<'a> {
     }
     fn expect(&mut self, token: Token) -> Option<Ranged<()>> {
         let err = match self.next() {
-            Some(t) if t.0 == token => return Some(t.map(|_| ())),
-            Some(t) => t.map(ParseErr::Unexpected),
-            None => Ranged(ParseErr::UnexpectedEOF, usize::MAX, usize::MAX),
+            Some(t) if t.0 == token => return Some(t.empty()),
+            Some(ref t @ Ranged(Token::Open(group), _, _)) => {
+                // skip entire unexpected group
+                self.skip_close(t.with(group));
+                t.with(Error::Unexpected(token.into()))
+            }
+            Some(t) => t.with(Error::Unexpected(token.into())),
+            None => Ranged(Error::Unexpected(token.into()), usize::MAX, usize::MAX),
         };
-        self.context.errors.push(err);
+        self.iter.errors.push(err);
         None
     }
-    fn skip_close(&mut self, group: Ranged<Group>) -> Option<Ranged<()>> {
+    fn skip_close(&mut self, group: Ranged<Group>) -> Ranged<()> {
         loop {
-            match self.next() {
+            match self.peek() {
                 // open new group, needs to be skipped first
-                Some(Ranged(Token::Open(g), start, end)) => {
-                    self.skip_close(Ranged(g, start, end))?;
+                Some(&Ranged(Token::Open(g), start, end)) => {
+                    self.next();
+                    self.skip_close(Ranged(g, start, end));
                 }
 
                 // error on close different group
-                Some(Ranged(Token::Close(g), ..)) if g != group.0 => {
-                    self.context.errors.push(group.map(ParseErr::Unclosed));
-                    break None;
+                Some(&Ranged(Token::Close(g), start, _)) if g != group.0 => {
+                    self.iter.errors.push(group.map(Error::UnclosedGroup));
+                    break Ranged((), group.1, start);
                 }
 
                 // we found it
-                Some(Ranged(Token::Close(_), _, end)) => {
-                    break Some(Ranged((), group.1, end));
+                Some(&Ranged(Token::Close(_), _, end)) => {
+                    self.next();
+                    break Ranged((), group.1, end);
                 }
 
                 // skip characters
-                Some(_) => {}
+                Some(_) => {
+                    self.next();
+                }
 
                 // error on unclosed group
                 None => {
-                    self.context.errors.push(group.map(ParseErr::Unclosed));
-                    break None;
+                    self.iter.errors.push(group.map(Error::UnclosedGroup));
+                    break Ranged((), group.1, usize::MAX);
                 }
             }
         }
@@ -225,10 +226,14 @@ impl<'a> Tokens<'a> {
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {
             Some(Ranged(Token::Ident(s), start, end)) => return Some(Ranged(s, start, end)),
-            Some(t) => t.map(ParseErr::Unexpected),
-            None => Ranged(ParseErr::UnexpectedEOF, usize::MAX, usize::MAX),
+            Some(t) => t.with(Error::Unexpected(Expected::Identifier)),
+            None => Ranged(
+                Error::Unexpected(Expected::Identifier),
+                usize::MAX,
+                usize::MAX,
+            ),
         };
-        self.context.errors.push(err);
+        self.iter.errors.push(err);
         None
     }
     fn group(
@@ -238,17 +243,17 @@ impl<'a> Tokens<'a> {
         mut f: impl FnMut(&mut Self) -> Option<()>,
     ) -> Option<Ranged<()>> {
         let open = self.expect(Token::Open(group))?;
-        loop {
+        Some(loop {
             match self.peek() {
                 Some(t) if t.0 == Token::Close(group) => {
                     let t = self.next().unwrap();
-                    break Some(Ranged((), open.1, t.2));
+                    break Ranged((), open.1, t.2);
                 }
                 None => {
-                    self.context
+                    self.iter
                         .errors
-                        .push(Ranged(ParseErr::Unclosed(group), open.1, open.2));
-                    break None;
+                        .push(Ranged(Error::UnclosedGroup(group), open.1, open.2));
+                    break Ranged((), open.1, usize::MAX);
                 }
                 _ => {
                     // parse inner
@@ -269,7 +274,7 @@ impl<'a> Tokens<'a> {
                     }
                 }
             }
-        }
+        })
     }
 }
 
@@ -324,11 +329,6 @@ pub fn parse_ast(tk: Tokenizer) -> (AST, ParseContext) {
     // parse ast
     let ast = AST::parse(&mut tk).unwrap();
 
-    // add token errors
-    tk.context
-        .errors
-        .extend(tk.iter.errors.into_iter().map(|r| r.map(ParseErr::Token)));
-
     // return
     (ast, tk.context)
 }
@@ -361,9 +361,10 @@ impl Parse for AST {
                 }
 
                 // unexpected
-                Some(_) => {
-                    let err = tk.next().unwrap().map(ParseErr::Unexpected);
-                    tk.context.errors.push(err);
+                Some(r) => {
+                    let err = r.with(Error::Unexpected(Expected::Definition));
+                    tk.next();
+                    tk.iter.errors.push(err);
                 }
 
                 // eof
@@ -589,10 +590,14 @@ impl Parse for Expression {
 
             _ => {
                 let err = match tk.next() {
-                    Some(t) => t.map(ParseErr::Unexpected),
-                    None => Ranged(ParseErr::UnexpectedEOF, tk.pos_end(), tk.pos_end()),
+                    Some(t) => t.with(Error::Unexpected(Expected::Expression)),
+                    None => Ranged(
+                        Error::Unexpected(Expected::Expression),
+                        tk.pos_end(),
+                        tk.pos_end(),
+                    ),
                 };
-                tk.context.errors.push(err);
+                tk.iter.errors.push(err);
                 None
             }
         })?;
@@ -605,7 +610,7 @@ impl Parse for Expression {
                     tk.expect(Token::Period)?;
                     let member = tk.ident()?;
                     expr = Ranged(
-                        Expression::Member(tk.push_expr(expr), member),
+                        Expression::Member(tk.push_expr(expr), tk.push_ident(member)),
                         start,
                         tk.pos_end(),
                     );

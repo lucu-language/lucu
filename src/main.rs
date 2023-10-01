@@ -1,8 +1,9 @@
 use std::{env, fs::read_to_string, path::Path, print, println, process::Command};
 
-use crate::lexer::{Ranged, Token};
+use crate::{error::Ranged, lexer::Token};
 
 mod analyzer;
+mod error;
 mod ir;
 mod lexer;
 mod llvm;
@@ -10,9 +11,11 @@ mod parser;
 mod vecmap;
 
 fn main() {
+    let mut errors = error::Errors::new();
+
     let debug = false;
     let args: Vec<String> = env::args().collect();
-    let file = read_to_string(args[1].clone()).unwrap();
+    let file = read_to_string(args[1].clone()).unwrap().replace('\t', "  ");
 
     if debug {
         // print extra semicolons
@@ -20,7 +23,7 @@ fn main() {
 
         let mut chars = file.chars().enumerate().peekable();
 
-        for tok in lexer::Tokenizer::new(file.as_str()) {
+        for tok in lexer::Tokenizer::new(file.as_str(), &mut errors) {
             let start = tok.1;
 
             // print until start
@@ -41,18 +44,15 @@ fn main() {
         for char in chars.map(|(_, c)| c) {
             print!("{}", char);
         }
+        println!();
     }
 
     // analyze
-    let tokenizer = lexer::Tokenizer::new(file.as_str());
+    let tokenizer = lexer::Tokenizer::new(file.as_str(), &mut errors);
     let (ast, ctx) = parser::parse_ast(tokenizer);
-    let asys = analyzer::analyze(&ast, &ctx);
+    let asys = analyzer::analyze(&ast, &ctx, &mut errors);
 
     if debug {
-        // print errors
-        println!("\n--- ERRORS ---");
-        println!("{:#?}", ctx.errors);
-
         // visualize idents
         println!("\n--- SCOPE ANALYSIS ---");
 
@@ -97,9 +97,14 @@ fn main() {
                 print!("{}", char);
             }
         }
-    } else {
-        // TODO: colors
-        println!("{}", file);
+        println!();
+    }
+
+    // print errors
+    if !errors.is_empty() {
+        println!();
+        errors.print(file.as_str(), &args[1], true);
+        return;
     }
 
     // generate ir

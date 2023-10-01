@@ -1,6 +1,7 @@
-use std::{collections::HashMap, println};
+use std::collections::HashMap;
 
 use crate::{
+    error::{Error, Errors},
     parser::{ExprIdx, Expression, FunSign, Ident, ParseContext, ReturnType, AST},
     vecmap::VecMap,
 };
@@ -64,7 +65,6 @@ pub struct Analysis {
     pub values: VecMap<Ident, Val>,
     pub defs: VecMap<Val, Definition>,
     pub main: Option<FunIdx>,
-
     pub closures: HashMap<ExprIdx, Vec<Val>>,
 }
 
@@ -98,23 +98,29 @@ impl Analysis {
     }
 }
 
-fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr: ExprIdx) {
+fn analyze_expr(
+    actx: &mut Analysis,
+    scope: &mut Scope,
+    ctx: &ParseContext,
+    expr: ExprIdx,
+    errors: &mut Errors,
+) {
     match ctx.exprs[expr].0 {
         // analyze
         Expression::Handler(ref handler) => {
             // put effect in scope
             let ident = handler.effect;
-            let funcs = scope_effect(actx, ctx, ident, scope);
+            let funcs = scope_effect(actx, ctx, ident, scope, errors);
 
             // match func names to effect
-            if let Some(funcs) = funcs {
-                for func in handler.functions.iter() {
-                    let name = &ctx.idents[func.decl.name].0;
-                    match funcs.get(name) {
-                        Some(&val) => actx.values[func.decl.name] = val,
-                        None => println!(
-                            "unknown func {} of effect {}",
-                            name, ctx.idents[handler.effect].0
+            if let Some(funs) = funcs {
+                for fun in handler.functions.iter() {
+                    let name = &ctx.idents[fun.decl.name].0;
+                    match funs.get(name) {
+                        Some(&val) => actx.values[fun.decl.name] = val,
+                        None => errors.push(
+                            ctx.idents[fun.decl.name]
+                                .with(Error::UnknownEffectFun(ctx.idents[handler.effect].empty())),
                         ),
                     }
                 }
@@ -123,15 +129,15 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
             // analyze functions
             for func in handler.functions.iter() {
                 let mut scope = scope.child();
-                scope_sign(actx, &mut scope, ctx, &func.decl.sign);
-                analyze_expr(actx, &mut scope, ctx, func.body);
+                scope_sign(actx, &mut scope, ctx, &func.decl.sign, errors);
+                analyze_expr(actx, &mut scope, ctx, func.body, errors);
             }
         }
         Expression::Ident(ident) => {
             let name = &ctx.idents[ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[ident] = val,
-                None => println!("unknown value {}", name),
+                None => errors.push(ctx.idents[ident].with(Error::UnknownValue)),
             }
         }
 
@@ -140,40 +146,40 @@ fn analyze_expr(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, expr
             let mut child = scope.child();
 
             for &expr in b.main.iter() {
-                analyze_expr(actx, &mut child, ctx, expr);
+                analyze_expr(actx, &mut child, ctx, expr, errors);
             }
             if let Some(expr) = b.last {
-                analyze_expr(actx, &mut child, ctx, expr);
+                analyze_expr(actx, &mut child, ctx, expr, errors);
             }
         }
         Expression::Call(expr, ref exprs) => {
-            analyze_expr(actx, scope, ctx, expr);
+            analyze_expr(actx, scope, ctx, expr, errors);
             for &expr in exprs {
-                analyze_expr(actx, scope, ctx, expr);
+                analyze_expr(actx, scope, ctx, expr, errors);
             }
         }
         Expression::TryWith(expr, handler) => {
             let mut child = scope.child();
-            analyze_expr(actx, &mut child, ctx, handler);
-            analyze_expr(actx, &mut child, ctx, expr);
+            analyze_expr(actx, &mut child, ctx, handler, errors);
+            analyze_expr(actx, &mut child, ctx, expr, errors);
         }
         Expression::Member(expr, _) => {
-            analyze_expr(actx, scope, ctx, expr);
+            analyze_expr(actx, scope, ctx, expr, errors);
         }
         Expression::IfElse(cond, no, yes) => {
-            analyze_expr(actx, scope, ctx, cond);
-            analyze_expr(actx, scope, ctx, no);
+            analyze_expr(actx, scope, ctx, cond, errors);
+            analyze_expr(actx, scope, ctx, no, errors);
             if let Some(expr) = yes {
-                analyze_expr(actx, scope, ctx, expr);
+                analyze_expr(actx, scope, ctx, expr, errors);
             }
         }
         Expression::Op(left, _, right) => {
-            analyze_expr(actx, scope, ctx, left);
-            analyze_expr(actx, scope, ctx, right);
+            analyze_expr(actx, scope, ctx, left, errors);
+            analyze_expr(actx, scope, ctx, right, errors);
         }
         Expression::Break(val) => {
             if let Some(expr) = val {
-                analyze_expr(actx, scope, ctx, expr);
+                analyze_expr(actx, scope, ctx, expr, errors);
             }
         }
 
@@ -189,6 +195,7 @@ fn scope_effect<'a>(
     ctx: &ParseContext,
     ident: Ident,
     scope: &'a mut Scope,
+    errors: &mut Errors,
 ) -> Option<&'a HashMap<String, Val>> {
     let name = &ctx.idents[ident].0;
     match scope.effects.get(name) {
@@ -199,14 +206,23 @@ fn scope_effect<'a>(
                 .extend(vec.iter().map(|(s, &v)| (s.clone(), v)));
             Some(vec)
         }
-        None => panic!("unknown effect {}", name),
+        None => {
+            errors.push(ctx.idents[ident].with(Error::UnknownEffect));
+            None
+        }
     }
 }
 
-fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: &FunSign) {
+fn scope_sign(
+    actx: &mut Analysis,
+    scope: &mut Scope,
+    ctx: &ParseContext,
+    func: &FunSign,
+    errors: &mut Errors,
+) {
     // put effects in scope
     for &effect in func.effects.iter() {
-        scope_effect(actx, ctx, effect, scope);
+        scope_effect(actx, ctx, effect, scope, errors);
     }
 
     // resolve return
@@ -215,7 +231,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
             let name = &ctx.idents[typ.ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[typ.ident] = val,
-                None => panic!("unknown value {}", name),
+                None => errors.push(ctx.idents[typ.ident].with(Error::UnknownValue)),
             }
         }
         _ => {}
@@ -227,7 +243,7 @@ fn scope_sign(actx: &mut Analysis, scope: &mut Scope, ctx: &ParseContext, func: 
         let name = &ctx.idents[typ.ident].0;
         match scope.get(name) {
             Some(val) => actx.values[typ.ident] = val,
-            None => panic!("unknown value {}", name),
+            None => errors.push(ctx.idents[typ.ident].with(Error::UnknownValue)),
         }
 
         // add parameter to scope
@@ -244,7 +260,7 @@ pub const INT: Val = Val(1);
 pub const DEBUG: Val = Val(2);
 pub const PUTINT: Val = Val(3);
 
-pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
+pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     let mut actx = Analysis {
         values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
         defs: VecMap::new(),
@@ -308,13 +324,13 @@ pub fn analyze(ast: &AST, ctx: &ParseContext) -> Analysis {
     for effect in ast.effects.values() {
         for func in effect.functions.values() {
             let mut scope = scope.child();
-            scope_sign(&mut actx, &mut scope, ctx, &func.sign);
+            scope_sign(&mut actx, &mut scope, ctx, &func.sign, errors);
         }
     }
     for func in ast.functions.values() {
         let mut scope = scope.child();
-        scope_sign(&mut actx, &mut scope, ctx, &func.decl.sign);
-        analyze_expr(&mut actx, &mut scope, ctx, func.body);
+        scope_sign(&mut actx, &mut scope, ctx, &func.decl.sign, errors);
+        analyze_expr(&mut actx, &mut scope, ctx, func.body, errors);
     }
 
     actx

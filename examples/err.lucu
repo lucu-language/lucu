@@ -1,0 +1,13 @@
+effect test {
+	
+}
+
+fun main() / q {
+	try {
+		
+	} with test {
+		fun undefined() {
+			w
+		}
+	}
+}

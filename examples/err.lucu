@@ -1,14 +1,20 @@
 effect test {
-	
+	fun defined()
 }
 
 fun main() / q {
 	try {
 		
 	} with test {
+
 		fun undefined() {
 			debug.x()
 			q.w()
 		}
+
+		fun defined() {
+			var@"unclosed
+		}
+
 	}
 }

@@ -837,7 +837,7 @@ fn generate_expr(
                             output
                         }
 
-                        Definition::Parameter(_) => todo!(),
+                        Definition::Parameter(_, _) => todo!(),
                         Definition::Effect(_) => todo!(),
                         Definition::Builtin => todo!(),
                     }

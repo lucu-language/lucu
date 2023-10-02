@@ -257,19 +257,28 @@ impl<'a> Tokens<'a> {
                 }
                 _ => {
                     // parse inner
-                    let _ = f(self);
+                    match f(self) {
+                        Some(_) => {
+                            // parse comma?
+                            if comma_separated {
+                                match self.peek() {
+                                    // we are closing next
+                                    Some(t) if t.0 == Token::Close(group) => {}
 
-                    // parse comma?
-                    if comma_separated {
-                        match self.peek() {
-                            // we are closing next
-                            Some(t) if t.0 == Token::Close(group) => {}
-
-                            // else expect comma
-                            _ => match self.expect(Token::Comma) {
-                                Some(_) => {}
-                                None => break self.skip_close(Ranged(group, open.1, open.2)),
-                            },
+                                    // else expect comma
+                                    _ => match self.expect(Token::Comma) {
+                                        Some(_) => {}
+                                        None => {
+                                            break self.skip_close(Ranged(group, open.1, open.2))
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        None => {
+                            // error occured, force end
+                            // TODO: skip to comma or semicolon?
+                            break self.skip_close(Ranged(group, open.1, open.2));
                         }
                     }
                 }
@@ -496,8 +505,16 @@ impl Parse for Handler {
         let mut funcs = Vec::new();
 
         tk.group(Group::Brace, false, |tk| {
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
+            // parse function
             let func = Function::parse_or_skip(tk)?.0;
             funcs.push(func);
+
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
             Some(())
         })?;
 
@@ -661,11 +678,6 @@ impl Parse for Body {
         let mut last = None;
 
         tk.group(Group::Brace, false, |tk| {
-            // if we already got the last expression, we should now close this body
-            if last.is_some() {
-                tk.expect(Token::Close(Group::Brace))?;
-            }
-
             // skip semicolons
             while tk.check(Token::Semicolon).is_some() {}
 
@@ -675,13 +687,17 @@ impl Parse for Body {
 
             if tk.check(Token::Semicolon).is_none() {
                 last = Some(n);
+                if !tk.peek_check(Token::Close(Group::Brace)) {
+                    None
+                } else {
+                    Some(())
+                }
             } else {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
                 main.push(n);
+                Some(())
             }
-
-            Some(())
         })?;
 
         Some(Body { main, last })

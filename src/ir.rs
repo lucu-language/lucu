@@ -56,6 +56,20 @@ impl Type {
             None => Type::None,
         }
     }
+    fn into_result(self, ir: &mut IRContext) -> ExprResult {
+        match self {
+            Type::Never => Err(Never),
+            Type::None => Ok(None),
+            _ => Ok(Some(ir.next_reg(self))),
+        }
+    }
+    fn from_result(result: ExprResult, ir: &IRContext) -> Self {
+        match result {
+            Ok(Some(reg)) => ir.ir.types[reg],
+            Ok(None) => Type::None,
+            Err(Never) => Type::Never,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -552,15 +566,16 @@ fn generate_fun(
         handler,
         &debug_name,
         scope,
-    )
-    .filter(|_| output.outputs_value());
+    );
 
-    if !matches!(
-        blocks[end].instructions.last(),
-        Some(Instruction::Return(_) | Instruction::Break(_, _) | Instruction::Unreachable)
-    ) {
-        // add return if we haven't already
-        blocks[end].instructions.push(Instruction::Return(ret));
+    if let Ok(ret) = ret {
+        if !matches!(
+            blocks[end].instructions.last(),
+            Some(Instruction::Return(_) | Instruction::Break(_, _))
+        ) {
+            // add return if we haven't already
+            blocks[end].instructions.push(Instruction::Return(ret));
+        }
     }
 
     // get captures from last argument
@@ -602,15 +617,17 @@ fn generate_reset(
         scope,
     );
 
-    if !matches!(
-        blocks[end].instructions.last(),
-        Some(Instruction::Return(_) | Instruction::Break(_, _) | Instruction::Unreachable)
-    ) {
-        // add return if we haven't already
-        blocks[end].instructions.push(Instruction::Return(ret));
+    if let Ok(ret) = ret {
+        if !matches!(
+            blocks[end].instructions.last(),
+            Some(Instruction::Return(_) | Instruction::Break(_, _))
+        ) {
+            // add return if we haven't already
+            blocks[end].instructions.push(Instruction::Return(ret));
+        }
     }
 
-    let output = ret.map(|ret| ir.ir.types[ret]).unwrap_or(Type::None);
+    let output = Type::from_result(ret, ir);
 
     // return proc
     ir.ir.procs.push(
@@ -626,6 +643,10 @@ fn generate_reset(
     )
 }
 
+#[derive(Clone, Copy)]
+struct Never;
+type ExprResult = Result<Option<Reg>, Never>;
+
 fn generate_expr(
     ir: &mut IRContext,
     handlers: &[HandlerIdx],
@@ -635,20 +656,22 @@ fn generate_expr(
     handler: Option<HandlerIdx>,
     debug_name: &str,
     scope: &mut Scope,
-) -> Option<Reg> {
+) -> ExprResult {
     use Expression as E;
     match ir.ctx.exprs[expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
                 generate_expr(
                     ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                );
+                )?;
             }
-            body.last.and_then(|expr| {
-                generate_expr(
-                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                )
-            })
+            body.last
+                .map(|expr| {
+                    generate_expr(
+                        ir, handlers, expr, blocks, block, handler, debug_name, scope,
+                    )
+                })
+                .unwrap_or(Ok(None))
         }
         E::Call(func, ref args) => {
             // TODO: currently we assume func is an Ident expr or Effect Member expr
@@ -657,14 +680,15 @@ fn generate_expr(
                     let val = ir.asys.values[id];
 
                     // get base registers
-                    let mut reg_args = Vec::new();
-                    for &expr in args {
-                        let reg = generate_expr(
-                            ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                        )
-                        .expect("function call argument does not return a value");
-                        reg_args.push(reg);
-                    }
+                    let mut reg_args = args
+                        .iter()
+                        .map(|&expr| {
+                            generate_expr(
+                                ir, handlers, expr, blocks, block, handler, debug_name, scope,
+                            )
+                            .map(|r| r.expect("call argument does not return a value"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
 
                     // check handlers
                     match ir.asys.defs[val] {
@@ -679,11 +703,7 @@ fn generate_expr(
                             let proc_idx = handler.procs[eff_fun_idx];
 
                             let typ = ir.ir.procs[proc_idx].output;
-                            let output = if typ.outputs_value() {
-                                Some(ir.next_reg(typ))
-                            } else {
-                                None
-                            };
+                            let output = typ.into_result(ir);
 
                             // get closure
                             let closure = scope
@@ -692,9 +712,11 @@ fn generate_expr(
                             reg_args.push(closure);
 
                             // execute handler
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::Call(proc_idx, output, reg_args));
+                            blocks[*block].instructions.push(Instruction::Call(
+                                proc_idx,
+                                output.unwrap_or(None),
+                                reg_args,
+                            ));
 
                             if typ.is_never() {
                                 blocks[*block].instructions.push(Instruction::Unreachable);
@@ -801,15 +823,13 @@ fn generate_expr(
                             let never = proc.output.is_never();
 
                             // execute proc
-                            let output = if proc.output.outputs_value() {
-                                Some(ir.next_reg(proc.output))
-                            } else {
-                                None
-                            };
+                            let output = proc.output.into_result(ir);
 
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::Call(proc_idx, output, reg_args));
+                            blocks[*block].instructions.push(Instruction::Call(
+                                proc_idx,
+                                output.unwrap_or(None),
+                                reg_args,
+                            ));
 
                             if never {
                                 blocks[*block].instructions.push(Instruction::Unreachable);
@@ -829,7 +849,7 @@ fn generate_expr(
         E::IfElse(cond, yes, no) => {
             let cond = generate_expr(
                 ir, handlers, cond, blocks, block, handler, debug_name, scope,
-            )
+            )?
             .expect("condition has no value");
 
             match no {
@@ -873,18 +893,20 @@ fn generate_expr(
                     blocks[no_end].next = Some(end);
                     *block = end;
 
-                    if let (Some(yes), Some(no)) = (yes_reg, no_reg) {
+                    if let (Ok(Some(yes)), Ok(Some(no))) = (yes_reg, no_reg) {
                         if ir.ir.types[yes] == ir.ir.types[no] {
                             let out = ir.copy_reg(yes);
                             blocks[*block]
                                 .instructions
                                 .push(Instruction::Phi(out, [(yes, yes_end), (no, no_end)]));
-                            Some(out)
+                            Ok(Some(out))
                         } else {
-                            None
+                            Ok(None)
                         }
+                    } else if let (Err(Never), Err(Never)) = (yes_reg, no_reg) {
+                        Err(Never)
                     } else {
-                        None
+                        Ok(None)
                     }
                 }
                 None => {
@@ -895,7 +917,7 @@ fn generate_expr(
                         .push(Instruction::JmpNZ(cond, yes_start));
 
                     let mut yes_end = yes_start;
-                    generate_expr(
+                    let _ = generate_expr(
                         ir,
                         handlers,
                         yes,
@@ -912,19 +934,19 @@ fn generate_expr(
                     blocks[yes_end].next = Some(end);
                     *block = end;
 
-                    None
+                    Ok(None)
                 }
             }
         }
         E::Op(left, op, right) => {
             let left = generate_expr(
                 ir, handlers, left, blocks, block, handler, debug_name, scope,
-            )
+            )?
             .expect("left operand has no value");
 
             let right = generate_expr(
                 ir, handlers, right, blocks, block, handler, debug_name, scope,
-            )
+            )?
             .expect("right operand has no value");
 
             // TODO: ops with different return types
@@ -939,15 +961,17 @@ fn generate_expr(
             };
             blocks[*block].instructions.push(instr);
 
-            Some(out)
+            Ok(Some(out))
         }
         E::Break(value) => {
             // get break value
-            let reg = value.and_then(|expr| {
-                generate_expr(
-                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                )
-            });
+            let reg = value
+                .map(|expr| {
+                    generate_expr(
+                        ir, handlers, expr, blocks, block, handler, debug_name, scope,
+                    )
+                })
+                .unwrap_or(Ok(None))?;
 
             // TODO: we assume this is top level inside a handler
             blocks[*block]
@@ -955,7 +979,7 @@ fn generate_expr(
                 .push(Instruction::Break(reg, handler.unwrap()));
 
             // break returns any type
-            Some(ir.next_reg(Type::Never))
+            Err(Never)
         }
         E::TryWith(body, handler) => {
             // get handler
@@ -1091,24 +1115,22 @@ fn generate_expr(
             let never = proc.output.is_never();
 
             // execute proc
-            let output = if proc.output.outputs_value() {
-                Some(ir.next_reg(proc.output))
-            } else {
-                None
-            };
+            let output = proc.output.into_result(ir);
 
             if ir.handlers[handler_idx].break_self {
                 blocks[*block].instructions.push(Instruction::Reset(
                     proc_idx,
-                    output,
+                    output.unwrap_or(None),
                     input_regs,
                     handler_idx,
                 ));
             } else {
                 // TODO: inline call?
-                blocks[*block]
-                    .instructions
-                    .push(Instruction::Call(proc_idx, output, input_regs));
+                blocks[*block].instructions.push(Instruction::Call(
+                    proc_idx,
+                    output.unwrap_or(None),
+                    input_regs,
+                ));
             }
 
             if never {
@@ -1124,7 +1146,7 @@ fn generate_expr(
                 .instructions
                 .push(Instruction::InitString(reg, s.clone()));
 
-            Some(reg)
+            Ok(Some(reg))
         }
 
         E::Int(i) => {
@@ -1135,7 +1157,7 @@ fn generate_expr(
                 .instructions
                 .push(Instruction::Init(reg, i as i64 as u64));
 
-            Some(reg)
+            Ok(Some(reg))
         }
 
         E::Ident(id) => {
@@ -1144,8 +1166,8 @@ fn generate_expr(
             let reg = scope
                 .get_or_capture(ir, val)
                 .expect("value is not loaded in scope");
-            Some(reg)
+            Ok(Some(reg))
         }
-        E::Error => todo!(),
+        E::Error => unreachable!(),
     }
 }

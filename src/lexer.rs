@@ -76,17 +76,7 @@ impl fmt::Display for Token {
 
 impl Token {
     pub fn is_anchor(&self) -> bool {
-        matches!(
-            self,
-            Token::Effect
-                | Token::Fun
-                | Token::Try
-                | Token::With
-                | Token::Else
-                | Token::Semicolon
-                | Token::Comma
-                | Token::Close(_)
-        )
+        matches!(self, Token::Semicolon | Token::Comma | Token::Close(_))
     }
 
     /// if a statement line ends with this token, it must continue on the next line

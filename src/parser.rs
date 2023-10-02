@@ -257,28 +257,36 @@ impl<'a> Tokens<'a> {
                 }
                 _ => {
                     // parse inner
-                    match f(self) {
-                        Some(_) => {
-                            // parse comma?
-                            if comma_separated {
-                                match self.peek() {
-                                    // we are closing next
-                                    Some(t) if t.0 == Token::Close(group) => {}
-
-                                    // else expect comma
-                                    _ => match self.expect(Token::Comma) {
-                                        Some(_) => {}
-                                        None => {
-                                            break self.skip_close(Ranged(group, open.1, open.2))
-                                        }
-                                    },
+                    if f(self).is_none() {
+                        // error parsing, skip to anchor
+                        loop {
+                            match self.peek() {
+                                Some(Ranged(Token::Open(g), start, end)) => {
+                                    let g = *g;
+                                    let start = *start;
+                                    let end = *end;
+                                    self.next();
+                                    self.skip_close(Ranged(g, start, end));
+                                }
+                                Some(Ranged(t, ..)) if t.is_anchor() => break,
+                                None => break,
+                                _ => {
+                                    self.next();
                                 }
                             }
                         }
-                        None => {
-                            // error occured, force end
-                            // TODO: skip to comma or semicolon?
-                            break self.skip_close(Ranged(group, open.1, open.2));
+                    }
+                    // parse comma?
+                    if comma_separated {
+                        match self.peek() {
+                            // we are closing next
+                            Some(t) if t.0 == Token::Close(group) => {}
+
+                            // else expect comma
+                            _ => match self.expect(Token::Comma) {
+                                Some(_) => {}
+                                None => break self.skip_close(Ranged(group, open.1, open.2)),
+                            },
                         }
                     }
                 }

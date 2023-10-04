@@ -72,7 +72,7 @@ struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     values: HashMap<String, Val>,
     effects: &'a HashMap<String, (Val, HashMap<String, Val>)>,
-    scoped_effects: &'a Vec<Val>,
+    scoped_effects: &'a Vec<(Ident, &'a (Val, HashMap<String, Val>))>,
 }
 
 impl<'a> Scope<'a> {
@@ -142,6 +142,18 @@ fn analyze_expr(
     match ctx.exprs[expr].0 {
         // analyze
         Expression::Handler(ref handler) => {
+            // resolve return
+            match handler.break_type {
+                Some(ReturnType::Type(ref typ)) => {
+                    let name = &ctx.idents[typ.ident].0;
+                    match scope.get(name) {
+                        Some(val) => actx.values[typ.ident] = val,
+                        None => errors.push(ctx.idents[typ.ident].with(Error::UnknownValue)),
+                    }
+                }
+                _ => {}
+            }
+
             // put effect in scope
             let ident = handler.effect;
             let funs = scope_effect(actx, ctx, ident, scope, errors);
@@ -174,7 +186,33 @@ fn analyze_expr(
             let name = &ctx.idents[ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[ident] = val,
-                None => errors.push(ctx.idents[ident].with(Error::UnknownValue)),
+                None => {
+                    // check among effects
+                    let effect_funs = scope
+                        .scoped_effects
+                        .iter()
+                        .flat_map(|&(i, &(_, ref h))| h.iter().map(move |(s, &v)| (i, s, v)))
+                        .filter_map(|(i, s, v)| match name == s {
+                            true => Some((i, v)),
+                            false => None,
+                        })
+                        .collect::<Vec<_>>();
+
+                    if effect_funs.len() > 1 {
+                        errors.push(
+                            ctx.idents[ident].with(Error::MultipleEffects(
+                                effect_funs
+                                    .into_iter()
+                                    .map(|(i, _)| ctx.idents[i].empty())
+                                    .collect(),
+                            )),
+                        )
+                    } else if let Some(&(_, fun)) = effect_funs.first() {
+                        actx.values[ident] = fun;
+                    } else {
+                        errors.push(ctx.idents[ident].with(Error::UnknownValue))
+                    }
+                }
             }
         }
 
@@ -203,8 +241,16 @@ fn analyze_expr(
             let Expression::Handler(ref handler) = ctx.exprs[handler].0 else { panic!() };
             let mut scoped = child.scoped_effects.clone();
             let val = actx.values[handler.effect];
-            if !scoped.contains(&val) {
-                scoped.push(val);
+
+            if val.0 != usize::MAX {
+                let pos = scoped.iter().position(|(_, &(v, _))| v == val);
+                match pos {
+                    Some(pos) => scoped[pos].0 = handler.effect,
+                    None => scoped.push((
+                        handler.effect,
+                        &scope.effects[&ctx.idents[handler.effect].0],
+                    )),
+                }
             }
 
             child.scoped_effects = &scoped;
@@ -218,7 +264,7 @@ fn analyze_expr(
                     Some(&(effect, ref funs)) => {
                         actx.values[ident] = effect;
 
-                        if !scope.scoped_effects.contains(&effect) {
+                        if !scope.scoped_effects.iter().any(|(_, &(v, _))| v == effect) {
                             errors.push(ctx.idents[ident].with(Error::UnhandledEffect));
                         }
 
@@ -274,9 +320,6 @@ fn scope_effect<'a>(
     match scope.effects.get(name) {
         Some(&(val, ref vec)) => {
             actx.values[ident] = val;
-            scope
-                .values
-                .extend(vec.iter().map(|(s, &v)| (s.clone(), v)));
             Some((val, vec))
         }
         None => {
@@ -344,11 +387,11 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
 
     let mut effects = HashMap::new();
     let mut values = HashMap::new();
+    let mut scoped_effects = Vec::new();
 
     // built-in values
     values.insert("str".to_owned(), STR);
     values.insert("int".to_owned(), INT);
-    values.insert("debug".to_owned(), DEBUG);
 
     let mut debug = HashMap::new();
     debug.insert("putint".to_owned(), PUTINT);
@@ -362,7 +405,6 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     for (i, effect) in ast.effects.values().enumerate() {
         // add effect to scope
         let val = actx.push_val(effect.name, Definition::Effect(EffIdx(i)));
-        values.insert(ctx.idents[effect.name].0.clone(), val);
 
         // remember effect functions
         let mut funcs = HashMap::new();
@@ -374,6 +416,14 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
         }
 
         effects.insert(ctx.idents[effect.name].0.clone(), (val, funcs));
+    }
+    for &implied in ast.implied.iter() {
+        // TODO: first class handlers
+        let Expression::Handler(handler) = &ctx.exprs[implied].0 else { panic!() };
+        let name = &ctx.idents[handler.effect].0;
+        if let Some(effect) = effects.get(name) {
+            scoped_effects.push((handler.effect, effect));
+        }
     }
     for (i, func) in ast.functions.values().enumerate() {
         // add function to scope
@@ -389,13 +439,16 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     }
 
     // analyze effects and functions
-    let scope = Scope {
+    let mut scope = Scope {
         parent: None,
         values,
         effects: &effects,
-        scoped_effects: &vec![],
+        scoped_effects: &scoped_effects,
     };
 
+    for &implied in ast.implied.iter() {
+        analyze_expr(&mut actx, &mut scope, &ast, &ctx, implied, errors);
+    }
     for effect in ast.effects.values() {
         for fun in effect.functions.values() {
             let mut scope = scope.child();
@@ -408,13 +461,13 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
         let val = actx.values[fun.decl.name];
         scope_sign(&mut actx, &mut scope, ctx, val, &fun.decl.sign, errors);
 
-        let scoped = fun
-            .decl
-            .sign
-            .effects
-            .iter()
-            .map(|&i| actx.values[i])
-            .collect::<Vec<_>>();
+        let mut scoped = scope.scoped_effects.clone();
+        scoped.extend(fun.decl.sign.effects.iter().filter_map(|&i| {
+            scope
+                .effects
+                .get(&ctx.idents[i].0)
+                .map(|effect| (i, effect))
+        }));
         scope.scoped_effects = &scoped;
         analyze_expr(&mut actx, &mut scope, ast, ctx, fun.body, errors);
     }

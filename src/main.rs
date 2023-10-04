@@ -13,7 +13,7 @@ mod vecmap;
 fn main() {
     let mut errors = error::Errors::new();
 
-    let debug = false;
+    let debug = true;
     let args: Vec<String> = env::args().collect();
     let file = read_to_string(args[1].clone()).unwrap().replace('\t', "  ");
 

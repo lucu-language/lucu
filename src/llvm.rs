@@ -10,12 +10,15 @@ use inkwell::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetTriple,
     },
     types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType},
-    values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, IntValue},
+    values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue},
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 
 use crate::{
-    ir::{AggregateType, HandlerIdx, Instruction, ProcIdx, Procedure, Type, TypeIdx, IR},
+    ir::{
+        AggregateType, Global, HandlerIdx, Instruction, ProcIdx, Procedure, ReturnType, Type,
+        TypeIdx, IR,
+    },
     vecmap::VecMap,
 };
 
@@ -26,7 +29,9 @@ struct CodeGen<'ctx> {
     target_data: TargetData,
 
     structs: VecMap<TypeIdx, Option<StructType<'ctx>>>,
+
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
+    globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
     putint: FunctionValue<'ctx>,
 }
@@ -65,6 +70,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         target_data,
         structs: VecMap::new(),
         procs: VecMap::new(),
+        globals: VecMap::new(),
         putint,
     };
 
@@ -78,8 +84,34 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         codegen.procs.push_value(func);
     }
 
-    for (proc, function) in ir.procs.values().zip(codegen.procs.values().copied()) {
-        codegen.generate_proc(ir, proc, function);
+    for glob in ir.globals.values() {
+        let typ = codegen.get_type(glob);
+        match BasicTypeEnum::try_from(typ) {
+            Ok(typ) => {
+                let global = codegen.module.add_global(typ, None, "");
+                global.set_linkage(Linkage::Internal);
+                global.set_constant(false);
+                match typ {
+                    BasicTypeEnum::ArrayType(t) => global.set_initializer(&t.get_poison()),
+                    BasicTypeEnum::FloatType(t) => global.set_initializer(&t.get_poison()),
+                    BasicTypeEnum::IntType(t) => global.set_initializer(&t.get_poison()),
+                    BasicTypeEnum::PointerType(t) => global.set_initializer(&t.get_poison()),
+                    BasicTypeEnum::StructType(t) => global.set_initializer(&t.get_poison()),
+                    BasicTypeEnum::VectorType(t) => global.set_initializer(&t.get_poison()),
+                }
+                codegen.globals.push_value(Some(global))
+            }
+            Err(_) => codegen.globals.push_value(None),
+        }
+    }
+
+    for ((proc, recursive), function) in ir
+        .procs
+        .values()
+        .zip(ir.recursive.values().copied())
+        .zip(codegen.procs.values().copied())
+    {
+        codegen.generate_proc(ir, proc, recursive, function);
     }
 
     // set main func
@@ -126,47 +158,57 @@ impl<'ctx> CodeGen<'ctx> {
     fn frame_type(&self) -> IntType<'ctx> {
         self.context.i64_type()
     }
-    fn generate_proc_sign(&self, ir: &IR, proc: &Procedure) -> FunctionValue<'ctx> {
-        let in_types: Vec<_> = proc
-            .inputs
-            .iter()
-            .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(&ir.types[r])).ok())
-            .collect();
-
-        let fn_type = if proc.can_break {
+    fn size(&self, t: BasicTypeEnum) -> u64 {
+        self.target_data.get_store_size(&t)
+    }
+    fn return_type(&self, t: &ReturnType) -> AnyTypeEnum<'ctx> {
+        if t.break_union.is_empty() {
+            self.get_type(&t.output)
+        } else {
             let frame_type = self.frame_type();
-            let out_type = self.get_type(&proc.output);
-            if let Ok(basic) = BasicTypeEnum::try_from(out_type) {
+
+            let max_type = std::iter::once(&t.output)
+                .chain(t.break_union.iter())
+                .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
+                .max_by_key(|&t| self.size(t));
+
+            if let Some(basic) = max_type {
                 self.context
                     .struct_type(&[frame_type.into(), basic], false)
-                    .fn_type(&in_types, false)
+                    .into()
             } else {
-                frame_type.fn_type(&in_types, false)
+                self.context.struct_type(&[frame_type.into()], false).into()
             }
-        } else {
-            match proc.output {
-                Type::Int => self.context.i64_type().fn_type(&in_types, false),
-                Type::BytePointer => self
-                    .context
-                    .i8_type()
-                    .ptr_type(AddressSpace::default())
-                    .fn_type(&in_types, false),
-                Type::ArraySize => self
-                    .context
-                    .ptr_sized_int_type(&self.target_data, None)
-                    .fn_type(&in_types, false),
-                Type::Aggregate(idx) => match self.structs[idx] {
-                    Some(t) => t.fn_type(&in_types, false),
-                    None => self.context.void_type().fn_type(&in_types, false),
-                },
-                Type::Never | Type::None => self.context.void_type().fn_type(&in_types, false),
-            }
+        }
+    }
+    fn generate_proc_sign(&self, ir: &IR, proc: &Procedure) -> FunctionValue<'ctx> {
+        let in_types = proc
+            .inputs
+            .iter()
+            .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(&ir.regs[r])).ok())
+            .collect::<Vec<_>>();
+
+        let fn_type = match self.return_type(&proc.output) {
+            AnyTypeEnum::ArrayType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::FloatType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::IntType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::PointerType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::StructType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::VectorType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::VoidType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::FunctionType(_) => unreachable!(),
         };
 
         self.module
             .add_function(&proc.debug_name, fn_type, Some(Linkage::Internal))
     }
-    fn generate_proc(&self, ir: &IR, proc: &Procedure, function: FunctionValue<'ctx>) {
+    fn generate_proc(
+        &self,
+        ir: &IR,
+        proc: &Procedure,
+        recursive: bool,
+        function: FunctionValue<'ctx>,
+    ) {
         let mut blocks: Vec<_> = (0..proc.blocks.len())
             .map(|idx| {
                 self.context
@@ -178,7 +220,7 @@ impl<'ctx> CodeGen<'ctx> {
         for (n, &reg) in proc
             .inputs
             .iter()
-            .filter(|&&r| !self.get_type(&ir.types[r]).is_void_type())
+            .filter(|&&r| !self.get_type(&ir.regs[r]).is_void_type())
             .enumerate()
         {
             valmap.insert(reg, function.get_nth_param(n as u32).unwrap());
@@ -195,7 +237,7 @@ impl<'ctx> CodeGen<'ctx> {
                         valmap.insert(r, self.context.i64_type().const_int(v, false).into());
                     }
                     I::InitString(r, ref v) => {
-                        let slice_type = self.get_type(&ir.types[r]).into_struct_type();
+                        let slice_type = self.get_type(&ir.regs[r]).into_struct_type();
                         let array_size_type =
                             self.context.ptr_sized_int_type(&self.target_data, None);
 
@@ -215,8 +257,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                         valmap.insert(r, const_str_slice.into());
                     }
-                    I::JmpNZ(r, yes) => {
-                        let no = block.next.unwrap();
+                    I::Branch(r, yes, no) => {
                         self.builder
                             .build_conditional_branch(
                                 valmap[&r].into_int_value(),
@@ -227,7 +268,7 @@ impl<'ctx> CodeGen<'ctx> {
                         continue 'outer;
                     }
                     I::Phi(r, [(r1, b1), (r2, b2)]) => {
-                        let typ = BasicTypeEnum::try_from(self.get_type(&ir.types[r])).ok();
+                        let typ = BasicTypeEnum::try_from(self.get_type(&ir.regs[r])).ok();
 
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
@@ -282,9 +323,13 @@ impl<'ctx> CodeGen<'ctx> {
                         let (frame, val) = self.get_return(&ir.procs[p], ret);
 
                         if let Some(frame) = frame {
-                            if proc.can_break {
-                                blocks[idx] = self.handle_break(function, frame, Some(h));
-                            }
+                            blocks[idx] = self.handle_break(
+                                function,
+                                frame,
+                                val,
+                                Some(h),
+                                !proc.output.break_union.is_empty(),
+                            );
                         }
 
                         if let Some(r) = r {
@@ -308,7 +353,13 @@ impl<'ctx> CodeGen<'ctx> {
                         let (frame, val) = self.get_return(&ir.procs[p], ret);
 
                         if let Some(frame) = frame {
-                            blocks[idx] = self.handle_break(function, frame, None);
+                            blocks[idx] = self.handle_break(
+                                function,
+                                frame,
+                                val,
+                                ir.procs[p].output.implicit_break,
+                                !proc.output.break_union.is_empty(),
+                            );
                         }
 
                         if let Some(r) = r {
@@ -322,69 +373,65 @@ impl<'ctx> CodeGen<'ctx> {
                         }
                     }
                     I::Break(r, h) => {
-                        if r.is_some() {
-                            todo!("break with value");
-                        }
-
                         let frame = self.frame_type().const_int(usize::from(h) as u64, false);
+                        let val = r.and_then(|r| valmap.get(&r)).copied();
 
-                        if let Some(BasicTypeEnum::StructType(ret)) =
-                            function.get_type().get_return_type()
-                        {
-                            self.builder
-                                .build_return(Some(&ret.const_named_struct(&[
-                                    match ret.get_field_type_at_index(1).unwrap() {
-                                        BasicTypeEnum::ArrayType(t) => t.get_poison().into(),
-                                        BasicTypeEnum::FloatType(t) => t.get_poison().into(),
-                                        BasicTypeEnum::IntType(t) => t.get_poison().into(),
-                                        BasicTypeEnum::PointerType(t) => t.get_poison().into(),
-                                        BasicTypeEnum::StructType(t) => t.get_poison().into(),
-                                        BasicTypeEnum::VectorType(t) => t.get_poison().into(),
-                                    },
-                                ])))
-                                .unwrap();
-                        } else {
-                            self.builder.build_return(Some(&frame)).unwrap();
+                        let ret_type = function
+                            .get_type()
+                            .get_return_type()
+                            .unwrap()
+                            .into_struct_type();
+
+                        let mut ret = ret_type.get_poison();
+                        ret = self
+                            .builder
+                            .build_insert_value(ret, frame, 0, "")
+                            .unwrap()
+                            .into_struct_value();
+                        if let Some(val) = val {
+                            ret = self
+                                .builder
+                                .build_insert_value(ret, val, 1, "")
+                                .unwrap()
+                                .into_struct_value();
                         }
+                        self.builder.build_return(Some(&ret)).unwrap();
                     }
                     I::Return(r) => {
-                        if proc.can_break {
-                            if let Some(&r) = r.and_then(|r| valmap.get(&r)) {
-                                let ret_typ = function
-                                    .get_type()
-                                    .get_return_type()
-                                    .unwrap()
-                                    .into_struct_type();
+                        let val = r.and_then(|r| valmap.get(&r)).copied();
+                        if !proc.output.break_union.is_empty() {
+                            let ret_typ = function
+                                .get_type()
+                                .get_return_type()
+                                .unwrap()
+                                .into_struct_type();
 
-                                let mut ret = ret_typ.get_poison();
+                            let mut ret = ret_typ.get_poison();
 
-                                ret = self
-                                    .builder
-                                    .build_insert_value(
-                                        ret,
-                                        self.frame_type().const_int(0, false),
-                                        0,
-                                        "",
-                                    )
-                                    .unwrap()
-                                    .into_struct_value();
+                            ret = self
+                                .builder
+                                .build_insert_value(
+                                    ret,
+                                    self.frame_type().const_int(0, false),
+                                    0,
+                                    "",
+                                )
+                                .unwrap()
+                                .into_struct_value();
+                            if let Some(r) = val {
                                 ret = self
                                     .builder
                                     .build_insert_value(ret, r, 1, "")
                                     .unwrap()
                                     .into_struct_value();
-
-                                self.builder.build_return(Some(&ret)).unwrap();
-                            } else {
-                                self.builder
-                                    .build_return(Some(&self.frame_type().const_int(0, false)))
-                                    .unwrap();
                             }
+                            self.builder.build_return(Some(&ret)).unwrap();
                         } else {
                             self.builder
-                                .build_return(r.map(|reg| -> &dyn BasicValue { &valmap[&reg] }))
+                                .build_return(val.as_ref().map(|val| -> &dyn BasicValue { val }))
                                 .unwrap();
                         }
+                        continue 'outer;
                     }
                     I::PrintNum(r) => {
                         self.builder
@@ -395,7 +442,7 @@ impl<'ctx> CodeGen<'ctx> {
                         todo!();
                     }
                     I::Aggregate(r, ref rs) => {
-                        let aggr_ty = self.get_type(&ir.types[r]);
+                        let aggr_ty = self.get_type(&ir.regs[r]);
 
                         // do not aggregate void
                         if !aggr_ty.is_void_type() {
@@ -416,7 +463,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Member(r, a, n) => {
                         // skip over empty children that are uncounted
-                        let Type::Aggregate(t) = ir.types[a] else { panic!() };
+                        let Type::Aggregate(t) = ir.regs[a] else { panic!() };
                         let n = ir.aggregates[t]
                             .children
                             .iter()
@@ -446,6 +493,41 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }
+                    I::SetScopedGlobal(g, r, next) => {
+                        if let Some(glob) = self.globals[g] {
+                            let val = valmap[&r];
+
+                            if recursive {
+                                // save previous value if this is a recursive proc
+                                // TODO: will require more tests once handler return types exist
+                                let tmp = self
+                                    .builder
+                                    .build_load(val.get_type(), glob.as_pointer_value(), ".tmp")
+                                    .unwrap();
+
+                                self.builder.position_at_end(blocks[usize::from(next)]);
+                                self.builder
+                                    .build_store(glob.as_pointer_value(), tmp)
+                                    .unwrap();
+
+                                self.builder.position_at_end(basic_block);
+                            }
+
+                            self.builder
+                                .build_store(glob.as_pointer_value(), val)
+                                .unwrap();
+                        }
+                    }
+                    I::GetGlobal(r, g) => {
+                        if let Some(glob) = self.globals[g] {
+                            let typ = BasicTypeEnum::try_from(self.get_type(&ir.regs[r])).unwrap();
+                            let val = self
+                                .builder
+                                .build_load(typ, glob.as_pointer_value(), "")
+                                .unwrap();
+                            valmap.insert(r, val);
+                        }
+                    }
                 }
             }
 
@@ -460,7 +542,9 @@ impl<'ctx> CodeGen<'ctx> {
         &self,
         function: FunctionValue<'ctx>,
         frame: IntValue,
+        val: Option<BasicValueEnum>,
         handler: Option<HandlerIdx>,
+        bubble_break: bool,
     ) -> BasicBlock<'ctx> {
         let cmp_zero = self
             .builder
@@ -495,17 +579,34 @@ impl<'ctx> CodeGen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(branch_return);
-        let ret_type = function.get_type().get_return_type();
-        if let Some(BasicTypeEnum::StructType(ret_type)) = ret_type {
+
+        if bubble_break {
+            let ret_type = function
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
+
             let mut ret = ret_type.get_poison();
             ret = self
                 .builder
                 .build_insert_value(ret, frame, 0, "")
                 .unwrap()
                 .into_struct_value();
+            if ret_type.count_fields() > 1 {
+                if let Some(val) = val {
+                    ret = self
+                        .builder
+                        .build_insert_value(ret, val, 1, "")
+                        .unwrap()
+                        .into_struct_value();
+                }
+            }
             self.builder.build_return(Some(&ret)).unwrap();
+        } else if let Some(val) = val {
+            self.builder.build_return(Some(&val)).unwrap();
         } else {
-            self.builder.build_return(Some(&frame)).unwrap();
+            self.builder.build_return(None).unwrap();
         }
 
         self.builder.position_at_end(branch_next);
@@ -516,22 +617,18 @@ impl<'ctx> CodeGen<'ctx> {
         proc: &Procedure,
         ret: CallSiteValue<'ctx>,
     ) -> (Option<IntValue<'ctx>>, Option<BasicValueEnum<'ctx>>) {
-        let (frame, val) = if proc.can_break {
-            let ret = ret.try_as_basic_value().unwrap_left();
-            if ret.is_struct_value() {
-                let ret = ret.into_struct_value();
-
-                let frame = self.builder.build_extract_value(ret, 0, "").unwrap();
+        if !proc.output.break_union.is_empty() {
+            let ret = ret.try_as_basic_value().unwrap_left().into_struct_value();
+            let frame = self.builder.build_extract_value(ret, 0, "").unwrap();
+            if ret.get_type().count_fields() > 1 {
                 let val = self.builder.build_extract_value(ret, 1, "").unwrap();
-
                 (Some(frame.into_int_value()), Some(val))
             } else {
-                (Some(ret.into_int_value()), None)
+                (Some(frame.into_int_value()), None)
             }
         } else {
             (None, ret.try_as_basic_value().left())
-        };
-        (frame, val)
+        }
     }
     fn get_type(&self, typ: &Type) -> AnyTypeEnum<'ctx> {
         match *typ {

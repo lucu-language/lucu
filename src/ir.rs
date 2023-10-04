@@ -4,18 +4,25 @@ use std::{
     write,
 };
 
+use either::Either;
+
 use crate::{
     analyzer::{Analysis, Definition, EffFunIdx, Val, DEBUG, INT, STR},
-    parser::{self, ExprIdx, Expression, Op, ParseContext, ReturnType, AST},
+    parser::{self, ExprIdx, Expression, Op, ParseContext, AST},
     vecmap::VecMap,
 };
 
 #[derive(Debug)]
+pub struct ReturnType {
+    pub output: Type,
+    pub implicit_break: Option<HandlerIdx>,
+    pub break_union: Vec<Type>,
+}
+
+#[derive(Debug)]
 pub struct Procedure {
     pub inputs: Vec<Reg>,
-
-    pub can_break: bool,
-    pub output: Type,
+    pub output: ReturnType,
 
     pub blocks: VecMap<BlockIdx, Block>,
     pub start: BlockIdx,
@@ -36,11 +43,8 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn is_never(&self) -> bool {
+    fn is_never(&self) -> bool {
         matches!(self, Type::Never)
-    }
-    pub fn outputs_value(&self) -> bool {
-        !matches!(self, Type::None | Type::Never)
     }
     fn from_type(asys: &Analysis, typ: &parser::Type) -> Type {
         match asys.values[typ.ident] {
@@ -51,8 +55,8 @@ impl Type {
     }
     fn from_return(asys: &Analysis, typ: Option<&parser::ReturnType>) -> Type {
         match typ {
-            Some(ReturnType::Type(t)) => Type::from_type(asys, t),
-            Some(ReturnType::Never) => Type::Never,
+            Some(parser::ReturnType::Type(t)) => Type::from_type(asys, t),
+            Some(parser::ReturnType::Never) => Type::Never,
             None => Type::None,
         }
     }
@@ -65,7 +69,7 @@ impl Type {
     }
     fn from_result(result: ExprResult, ir: &IRContext) -> Self {
         match result {
-            Ok(Some(reg)) => ir.ir.types[reg],
+            Ok(Some(reg)) => ir.ir.regs[reg],
             Ok(None) => Type::None,
             Err(Never) => Type::Never,
         }
@@ -80,6 +84,12 @@ pub struct AggregateType {
 impl Procedure {
     fn instructions(&self) -> impl Iterator<Item = &Instruction> {
         self.blocks.values().flat_map(|b| b.instructions.iter())
+    }
+    fn calls(&self) -> impl Iterator<Item = ProcIdx> + '_ {
+        self.instructions().filter_map(|i| match *i {
+            Instruction::Reset(p, _, _, _) | Instruction::Call(p, _, _) => Some(p),
+            _ => None,
+        })
     }
 }
 
@@ -104,9 +114,18 @@ impl From<TypeIdx> for usize {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Reg(usize);
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct Global(usize);
+
 impl Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "R{:02}", self.0)
+    }
+}
+
+impl Display for Global {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "G{:02}", self.0)
     }
 }
 
@@ -122,6 +141,12 @@ impl From<Reg> for usize {
     }
 }
 
+impl From<Global> for usize {
+    fn from(value: Global) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Block {
     pub instructions: Vec<Instruction>,
@@ -133,8 +158,12 @@ pub enum Instruction {
     Init(Reg, u64),
     InitString(Reg, String),
 
+    // globals
+    SetScopedGlobal(Global, Reg, BlockIdx),
+    GetGlobal(Reg, Global),
+
     // conditionals
-    JmpNZ(Reg, BlockIdx),
+    Branch(Reg, BlockIdx, BlockIdx),
     Phi(Reg, [(Reg, BlockIdx); 2]),
 
     // operations (r0 = r1 op r2)
@@ -191,39 +220,53 @@ struct Handler {
     effect: Val,
     closure: TypeIdx,
     procs: VecMap<EffFunIdx, ProcIdx>,
-    break_self: bool,
+    global: bool,
 }
 
 #[derive(Default)]
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
-    regs: HashMap<Val, Reg>,
+    regs: HashMap<Val, Either<Reg, Global>>,
     captures: Vec<(Val, Reg)>,
 }
 
 impl<'a> Scope<'a> {
-    fn get_parent(&self, key: Val) -> Option<Reg> {
+    fn get_parent(&self, key: Val) -> Option<Either<Reg, Global>> {
         match self.regs.get(&key) {
             Some(&v) => Some(v),
-            None => self.parent.map(|p| p.get_parent(key)).flatten(),
+            _ => self.parent.map(|p| p.get_parent(key)).flatten(),
         }
     }
-    fn get_or_capture(&mut self, ir: &mut IRContext, key: Val) -> Option<Reg> {
-        match self.regs.get(&key) {
+    fn get_or_capture(
+        &mut self,
+        ir: &mut IRContext,
+        instr: &mut Vec<Instruction>,
+        key: Val,
+    ) -> Option<Reg> {
+        let either = match self.regs.get(&key) {
             Some(&v) => Some(v),
             None => match self.parent.map(|p| p.get_parent(key)).flatten() {
-                Some(reg) => {
+                Some(Either::Right(glob)) => Some(Either::Right(glob)),
+                Some(Either::Left(reg)) => {
                     let pos = self.captures.iter().position(|&(k, _)| k == key);
                     if let Some(pos) = pos {
-                        Some(self.captures[pos].1)
+                        Some(Either::Left(self.captures[pos].1))
                     } else {
                         let capture = ir.copy_reg(reg);
                         self.captures.push((key, capture));
-                        Some(capture)
+                        Some(Either::Left(capture))
                     }
                 }
                 None => None,
             },
+        }?;
+        match either {
+            Either::Left(reg) => Some(reg),
+            Either::Right(glob) => {
+                let reg = ir.next_reg(ir.ir.globals[glob]);
+                instr.push(Instruction::GetGlobal(reg, glob));
+                Some(reg)
+            }
         }
     }
     fn child(&self) -> Scope {
@@ -240,6 +283,7 @@ struct IRContext<'a> {
 
     proc_map: HashMap<ProcIdent, ProcIdx>,
     handlers: VecMap<HandlerIdx, Handler>,
+    implied_handlers: Vec<HandlerIdx>,
 
     ast: &'a AST,
     ctx: &'a ParseContext,
@@ -248,27 +292,36 @@ struct IRContext<'a> {
 
 impl<'a> IRContext<'a> {
     fn copy_reg(&mut self, reg: Reg) -> Reg {
-        let typ = self.ir.types[reg];
+        let typ = self.ir.regs[reg];
         self.next_reg(typ)
     }
     fn next_reg(&mut self, typ: Type) -> Reg {
-        self.ir.types.push(Reg, typ)
+        self.ir.regs.push(Reg, typ)
     }
-    fn can_break(&self, handlers: &[HandlerIdx]) -> bool {
-        handlers.into_iter().any(|&hidx| {
-            self.handlers[hidx]
-                .procs
-                .values()
-                .any(|&pidx| self.ir.procs[pidx].can_break)
-        })
+    fn break_union(&self, handlers: &[HandlerIdx]) -> Vec<Type> {
+        let mut union = Vec::new();
+        for handler in handlers.into_iter().copied() {
+            for proc in self.handlers[handler].procs.values().copied() {
+                for t in self.ir.procs[proc].output.break_union.iter().copied() {
+                    if !union.contains(&t) {
+                        union.push(t);
+                    }
+                }
+            }
+        }
+        union
     }
 }
 
 pub struct IR {
     pub procs: VecMap<ProcIdx, Procedure>,
+    pub recursive: VecMap<ProcIdx, bool>,
+
     pub main: ProcIdx,
 
-    pub types: VecMap<Reg, Type>,
+    pub regs: VecMap<Reg, Type>,
+    pub globals: VecMap<Global, Type>,
+
     pub aggregates: VecMap<TypeIdx, AggregateType>,
 }
 
@@ -289,10 +342,6 @@ impl Display for VecMap<ProcIdx, Procedure> {
                 write!(f, " )")?;
             }
 
-            if proc.can_break {
-                write!(f, " brk")?;
-            }
-
             write!(f, " {{\n")?;
 
             // write blocks
@@ -308,7 +357,9 @@ impl Display for VecMap<ProcIdx, Procedure> {
                     match *instr {
                         Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
-                        Instruction::JmpNZ(r, b) => writeln!(f, "       jnz {}, {}", r, b)?,
+                        Instruction::Branch(r, y, n) => {
+                            writeln!(f, "       jnz {}, {}, {}", r, y, n)?
+                        }
                         Instruction::Phi(r, [(r1, b1), (r2, b2)]) => {
                             writeln!(f, "{} <- phi [ {}, {} ], [ {}, {} ]", r, r1, b1, r2, b2,)?
                         }
@@ -396,6 +447,10 @@ impl Display for VecMap<ProcIdx, Procedure> {
                         )?,
                         Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
                         Instruction::Unreachable => writeln!(f, "       unreachable")?,
+                        Instruction::SetScopedGlobal(g, r, e) => {
+                            writeln!(f, "{} <- ssg {}, {}", g, r, e)?
+                        }
+                        Instruction::GetGlobal(r, g) => writeln!(f, "{} <- ggl {}", r, g)?,
                     }
                 }
 
@@ -420,13 +475,18 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
+        implied_handlers: Vec::new(),
         ast,
         ctx,
         asys,
         ir: IR {
             procs: VecMap::new(),
+            recursive: VecMap::new(),
+
             main: ProcIdx(0),
-            types: VecMap::new(),
+
+            regs: VecMap::new(),
+            globals: VecMap::new(),
             aggregates: VecMap::new(),
         },
     };
@@ -438,18 +498,18 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     // define putint
     let debug_closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
 
-    let inputs = vec![
-        ir.next_reg(Type::Int),
-        ir.next_reg(Type::Aggregate(debug_closure)),
-    ];
+    let inputs = vec![ir.next_reg(Type::Int)];
 
     let putint = ir.ir.procs.push(
         ProcIdx,
         Procedure {
             inputs,
 
-            output: Type::None,
-            can_break: false,
+            output: ReturnType {
+                output: Type::None,
+                implicit_break: None,
+                break_union: Vec::new(),
+            },
 
             blocks: vec![Block {
                 instructions: vec![Instruction::PrintNum(Reg(0)), Instruction::Return(None)],
@@ -465,12 +525,108 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let debug = ir.handlers.push(
         HandlerIdx,
         Handler {
-            break_self: false,
             effect: DEBUG,
             procs: vec![putint].into(),
             closure: debug_closure,
+            global: true,
         },
     );
+
+    // generate implied handlers
+    for expr in ast.implied.iter().copied() {
+        // TODO: first class handlers
+        let Expression::Handler(ast_handler) = &ctx.exprs[expr].0 else { panic!() };
+
+        // get effect
+        let eff_ident = ast_handler.effect;
+        let eff_val = ir.asys.values[eff_ident];
+        let eff_idx = match ir.asys.defs[eff_val] {
+            Definition::Effect(eff_idx) => eff_idx,
+            _ => panic!("handler has non-effect as effect value"),
+        };
+        let effect = &ir.ast.effects[eff_idx];
+
+        // generate handler
+        let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+        let handler_idx = ir.handlers.push(
+            HandlerIdx,
+            Handler {
+                effect: eff_val,
+                closure,
+                procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
+                global: true,
+            },
+        );
+
+        for fun in ast_handler.functions.iter() {
+            let val = ir.asys.values[fun.decl.name];
+            let eff_fun_idx = match ir.asys.defs[val] {
+                Definition::EffectFunction(_, eff_fun_idx) => eff_fun_idx,
+                _ => panic!("handler has non-effect-function as a function value"),
+            };
+
+            // get params
+            let params: Vec<(Val, Type)> = fun
+                .decl
+                .sign
+                .inputs
+                .values()
+                .map(|&(ident, ref typ)| (ir.asys.values[ident], Type::from_type(&ir.asys, typ)))
+                .collect();
+
+            let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
+
+            // generate debug name
+            let eff_name = ir.ctx.idents[eff_ident].0.as_str();
+            let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
+            let debug_name = format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+            // TODO: add handlers of proc
+
+            // generate handler proc
+            let proc_idx = generate_fun(
+                &mut ir,
+                None,
+                &[], // TODO: add handlers of proc
+                &params,
+                fun.body,
+                output,
+                Some(handler_idx),
+                debug_name,
+                &mut Scope::default(),
+            );
+
+            // check if handler can break
+            let can_break = ir.ir.procs[proc_idx]
+                .instructions()
+                .any(|instr| matches!(instr, Instruction::Break(_, _)));
+
+            let proc = &mut ir.ir.procs[proc_idx];
+            proc.output.implicit_break = Some(handler_idx);
+
+            let break_type = match &ast_handler.break_type {
+                Some(parser::ReturnType::Type(t)) => Some(Type::from_type(asys, t)),
+                Some(parser::ReturnType::Never) => None,
+                None => {
+                    if can_break {
+                        Some(Type::None)
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(break_type) = break_type {
+                if !proc.output.break_union.contains(&break_type) {
+                    proc.output.break_union.push(break_type);
+                }
+            }
+
+            // add to handler
+            ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
+        }
+
+        // add handler to implied
+        ir.implied_handlers.push(handler_idx);
+    }
 
     // generate
     // TODO: main not found
@@ -488,9 +644,9 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
 
     let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
 
-    let debug_reg = ir.next_reg(Type::Aggregate(debug_closure));
+    let debug_glob = ir.ir.globals.push(Global, Type::Aggregate(debug_closure));
     let mut scope = Scope::default();
-    scope.regs.insert(DEBUG, debug_reg);
+    scope.regs.insert(DEBUG, Either::Right(debug_glob));
 
     ir.ir.main = generate_fun(
         &mut ir,
@@ -504,11 +660,34 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         &mut scope,
     );
 
-    ir.ir.procs[ir.ir.main].blocks[BlockIdx(0)]
-        .instructions
-        .insert(0, Instruction::Aggregate(debug_reg, Vec::new()));
+    // get recursive functions
+    ir.ir.recursive = VecMap::filled(ir.ir.procs.len(), false);
+    find_recursive_funs(&ir.ir.procs, &mut vec![ir.ir.main], &mut ir.ir.recursive);
 
+    // return ir
     ir.ir
+}
+
+fn find_recursive_funs(
+    procs: &VecMap<ProcIdx, Procedure>,
+    dfs: &mut Vec<ProcIdx>,
+    recursive: &mut VecMap<ProcIdx, bool>,
+) {
+    let last = dfs.last().copied().unwrap();
+
+    for call in procs[last].calls() {
+        if let Some(pos) = dfs.iter().position(|&p| p == call) {
+            // we found a cycle, set all in cycle to be recursive
+            for &p in dfs[pos..].iter() {
+                recursive[p] = true;
+            }
+        } else {
+            // no cycle yet, search further
+            dfs.push(call);
+            find_recursive_funs(procs, dfs, recursive);
+            dfs.pop();
+        }
+    }
 }
 
 fn generate_fun(
@@ -530,10 +709,13 @@ fn generate_fun(
         ProcIdx,
         Procedure {
             inputs: Vec::new(),
-            output,
+            output: ReturnType {
+                output,
+                implicit_break: None,
+                break_union: ir.break_union(handlers),
+            },
             start,
             debug_name: debug_name.clone(),
-            can_break: !output.is_never() && ir.can_break(handlers),
 
             // these will be defined at the end
             blocks: VecMap::new(),
@@ -551,7 +733,7 @@ fn generate_fun(
     // add params to vars
     for &(val, typ) in params {
         let reg = ir.next_reg(typ);
-        scope.regs.insert(val, reg);
+        scope.regs.insert(val, Either::Left(reg));
         ir.ir.procs[proc_idx].inputs.push(reg);
     }
 
@@ -575,16 +757,6 @@ fn generate_fun(
         ) {
             // add return if we haven't already
             blocks[end].instructions.push(Instruction::Return(ret));
-        }
-    }
-
-    // get captures from last argument
-    if scope.captures.len() > 0 {
-        let closure = ir.ir.procs[proc_idx].inputs.last().unwrap().clone();
-        for (i, capture) in scope.captures.iter().map(|&(_, v)| v).enumerate().rev() {
-            blocks[start]
-                .instructions
-                .insert(0, Instruction::Member(capture, closure, i));
         }
     }
 
@@ -634,11 +806,14 @@ fn generate_reset(
         ProcIdx,
         Procedure {
             inputs: scope.captures.iter().map(|&(_, v)| v).collect(),
-            output,
+            output: ReturnType {
+                output,
+                implicit_break: None,
+                break_union: ir.break_union(handlers),
+            },
             start,
             debug_name,
             blocks,
-            can_break: !output.is_never() && ir.can_break(handlers),
         },
     )
 }
@@ -696,20 +871,24 @@ fn generate_expr(
                             // get handler
                             let handler = handlers
                                 .iter()
+                                .chain(ir.implied_handlers.iter())
                                 .map(|&idx| &ir.handlers[idx])
                                 .find(|handler| handler.effect == eff_val)
                                 .expect("handler of effect function is not in scope");
+                            let global = handler.global;
 
                             let proc_idx = handler.procs[eff_fun_idx];
 
-                            let typ = ir.ir.procs[proc_idx].output;
+                            let typ = ir.ir.procs[proc_idx].output.output;
                             let output = typ.into_result(ir);
 
                             // get closure
-                            let closure = scope
-                                .get_or_capture(ir, eff_val)
-                                .expect("handler closure is not in scope");
-                            reg_args.push(closure);
+                            if !global {
+                                let closure = scope
+                                    .get_or_capture(ir, &mut blocks[*block].instructions, eff_val)
+                                    .expect("handler closure is not in scope");
+                                reg_args.push(closure);
+                            }
 
                             // execute handler
                             blocks[*block].instructions.push(Instruction::Call(
@@ -747,10 +926,19 @@ fn generate_expr(
                                 handlers: effects,
                             };
 
-                            reg_args.extend(procident.handlers.iter().map(|&idx| {
-                                scope
-                                    .get_or_capture(ir, ir.handlers[idx].effect)
-                                    .expect("handler closure not in scope")
+                            reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
+                                match ir.handlers[idx].global {
+                                    true => None,
+                                    false => Some(
+                                        scope
+                                            .get_or_capture(
+                                                ir,
+                                                &mut blocks[*block].instructions,
+                                                ir.handlers[idx].effect,
+                                            )
+                                            .expect("handler closure not in scope"),
+                                    ),
+                                }
                             }));
 
                             // get proc
@@ -768,11 +956,14 @@ fn generate_expr(
                                     })
                                     .collect();
 
-                                params.extend(procident.handlers.iter().map(|&idx| {
-                                    (
-                                        ir.handlers[idx].effect,
-                                        Type::Aggregate(ir.handlers[idx].closure),
-                                    )
+                                params.extend(procident.handlers.iter().filter_map(|&idx| {
+                                    match ir.handlers[idx].global {
+                                        true => None,
+                                        false => Some((
+                                            ir.handlers[idx].effect,
+                                            Type::Aggregate(ir.handlers[idx].closure),
+                                        )),
+                                    }
                                 }));
 
                                 let output =
@@ -820,10 +1011,10 @@ fn generate_expr(
                                 ir.proc_map[&procident]
                             };
                             let proc = &ir.ir.procs[proc_idx];
-                            let never = proc.output.is_never();
+                            let never = proc.output.output.is_never();
 
                             // execute proc
-                            let output = proc.output.into_result(ir);
+                            let output = proc.output.output.into_result(ir);
 
                             blocks[*block].instructions.push(Instruction::Call(
                                 proc_idx,
@@ -872,7 +1063,7 @@ fn generate_expr(
 
                     blocks[*block]
                         .instructions
-                        .push(Instruction::JmpNZ(cond, yes_start));
+                        .push(Instruction::Branch(cond, yes_start, no_start));
 
                     let mut yes_end = yes_start;
                     let yes_reg = generate_expr(
@@ -894,7 +1085,7 @@ fn generate_expr(
                     *block = end;
 
                     if let (Ok(Some(yes)), Ok(Some(no))) = (yes_reg, no_reg) {
-                        if ir.ir.types[yes] == ir.ir.types[no] {
+                        if ir.ir.regs[yes] == ir.ir.regs[no] {
                             let out = ir.copy_reg(yes);
                             blocks[*block]
                                 .instructions
@@ -912,9 +1103,11 @@ fn generate_expr(
                 None => {
                     let yes_start = blocks.push(BlockIdx, Block::default());
 
+                    let end = blocks.push(BlockIdx, Block::default());
+
                     blocks[*block]
                         .instructions
-                        .push(Instruction::JmpNZ(cond, yes_start));
+                        .push(Instruction::Branch(cond, yes_start, end));
 
                     let mut yes_end = yes_start;
                     let _ = generate_expr(
@@ -927,8 +1120,6 @@ fn generate_expr(
                         debug_name,
                         scope,
                     );
-
-                    let end = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block].next = Some(end);
                     blocks[yes_end].next = Some(end);
@@ -1000,7 +1191,15 @@ fn generate_expr(
             // generate handler
             let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
             let closure_reg = ir.next_reg(Type::Aggregate(closure));
-            scope.regs.insert(eff_val, closure_reg);
+
+            let global = true; // TODO: this is for testing, should be false by default
+
+            if global {
+                let glob = ir.ir.globals.push(Global, Type::Aggregate(closure));
+                scope.regs.insert(eff_val, Either::Right(glob));
+            } else {
+                scope.regs.insert(eff_val, Either::Left(closure_reg));
+            }
 
             // generate handler
             let handler_idx = ir.handlers.push(
@@ -1009,9 +1208,11 @@ fn generate_expr(
                     closure,
                     effect: eff_val,
                     procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
-                    break_self: false,
+                    global,
                 },
             );
+
+            let mut break_self = false;
 
             let mut child = scope.child();
             for fun in ast_handler.functions.iter() {
@@ -1031,7 +1232,10 @@ fn generate_expr(
                         (ir.asys.values[ident], Type::from_type(&ir.asys, typ))
                     })
                     .collect();
-                params.push((val, Type::Aggregate(closure)));
+
+                if !global {
+                    params.push((val, Type::Aggregate(closure)));
+                }
 
                 let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
 
@@ -1059,8 +1263,50 @@ fn generate_expr(
                 let can_break = ir.ir.procs[proc_idx]
                     .instructions()
                     .any(|instr| matches!(instr, Instruction::Break(_, _)));
-                ir.ir.procs[proc_idx].can_break |= can_break;
-                ir.handlers[handler_idx].break_self |= can_break;
+                if can_break {
+                    break_self = true;
+                }
+
+                let proc = &mut ir.ir.procs[proc_idx];
+
+                // TODO: infer break type
+                let break_type = match &ast_handler.break_type {
+                    Some(parser::ReturnType::Type(t)) => Some(Type::from_type(ir.asys, &t)),
+                    Some(parser::ReturnType::Never) => None,
+                    None => {
+                        if can_break {
+                            Some(Type::None)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(break_type) = break_type {
+                    if !proc.output.break_union.contains(&break_type) {
+                        proc.output.break_union.push(break_type);
+                    }
+                }
+
+                // get captures
+                let (param, offset) = match global {
+                    true => {
+                        let glob = scope.regs[&eff_val].unwrap_right();
+                        let reg = ir.ir.regs.push(Reg, ir.ir.globals[glob]);
+                        proc.blocks[proc.start]
+                            .instructions
+                            .insert(0, Instruction::GetGlobal(reg, glob));
+                        (reg, 1)
+                    }
+                    false => {
+                        let reg = proc.inputs.last().copied().unwrap();
+                        (reg, 0)
+                    }
+                };
+                for (i, capture) in child.captures.iter().map(|&(_, v)| v).enumerate() {
+                    proc.blocks[proc.start]
+                        .instructions
+                        .insert(i + offset, Instruction::Member(capture, param, i))
+                }
 
                 // add to handler
                 ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
@@ -1069,12 +1315,16 @@ fn generate_expr(
             // create handler closure
             ir.ir.aggregates[closure]
                 .children
-                .extend(child.captures.iter().map(|&(_, reg)| ir.ir.types[reg]));
+                .extend(child.captures.iter().map(|&(_, reg)| ir.ir.regs[reg]));
 
             let aggregate = child
                 .captures
                 .iter()
-                .map(|&(val, _)| scope.get_or_capture(ir, val).expect("value not in scope"))
+                .map(|&(val, _)| {
+                    scope
+                        .get_or_capture(ir, &mut blocks[*block].instructions, val)
+                        .expect("value not in scope")
+                })
                 .collect();
 
             blocks[*block]
@@ -1108,29 +1358,61 @@ fn generate_expr(
             let input_regs: Vec<Reg> = child
                 .captures
                 .iter()
-                .map(|&(val, _)| scope.get_or_capture(ir, val).expect("value not in scope"))
+                .map(|&(val, _)| {
+                    scope
+                        .get_or_capture(ir, &mut blocks[*block].instructions, val)
+                        .expect("value not in scope")
+                })
                 .collect();
 
             let proc = &ir.ir.procs[proc_idx];
-            let never = proc.output.is_never();
+            let never = proc.output.output.is_never();
 
             // execute proc
-            let output = proc.output.into_result(ir);
+            let output = proc.output.output.into_result(ir);
 
-            if ir.handlers[handler_idx].break_self {
-                blocks[*block].instructions.push(Instruction::Reset(
-                    proc_idx,
-                    output.unwrap_or(None),
-                    input_regs,
-                    handler_idx,
-                ));
+            if global {
+                let next = blocks.push(BlockIdx, Block::default());
+
+                let glob = scope.regs[&eff_val].unwrap_right();
+                blocks[*block]
+                    .instructions
+                    .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
+
+                if break_self {
+                    blocks[*block].instructions.push(Instruction::Reset(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                        handler_idx,
+                    ));
+                } else {
+                    // TODO: inline call?
+                    blocks[*block].instructions.push(Instruction::Call(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                    ));
+                }
+
+                blocks[*block].next = Some(next);
+                *block = next;
             } else {
-                // TODO: inline call?
-                blocks[*block].instructions.push(Instruction::Call(
-                    proc_idx,
-                    output.unwrap_or(None),
-                    input_regs,
-                ));
+                if break_self {
+                    blocks[*block].instructions.push(Instruction::Reset(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                        handler_idx,
+                    ));
+                } else {
+                    // TODO: inline call?
+                    blocks[*block].instructions.push(Instruction::Call(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                    ));
+                }
             }
 
             if never {
@@ -1161,10 +1443,9 @@ fn generate_expr(
         }
 
         E::Ident(id) => {
-            // TODO: globals
             let val = ir.asys.values[id];
             let reg = scope
-                .get_or_capture(ir, val)
+                .get_or_capture(ir, &mut blocks[*block].instructions, val)
                 .expect("value is not loaded in scope");
             Ok(Some(reg))
         }

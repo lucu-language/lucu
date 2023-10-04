@@ -77,6 +77,7 @@ pub struct Body {
 #[derive(Debug)]
 pub struct Handler {
     pub effect: Ident,
+    pub break_type: Option<ReturnType>,
     pub functions: Vec<Function>,
 }
 
@@ -119,6 +120,7 @@ pub struct Effect {
 #[derive(Debug)]
 pub struct AST {
     pub effects: VecMap<EffIdx, Effect>,
+    pub implied: Vec<ExprIdx>,
     pub functions: VecMap<FunIdx, Function>,
 }
 
@@ -355,6 +357,7 @@ impl Parse for AST {
         let mut ast = AST {
             effects: VecMap::new(),
             functions: VecMap::new(),
+            implied: Vec::new(),
         };
         loop {
             match tk.peek() {
@@ -362,6 +365,15 @@ impl Parse for AST {
                 Some(Ranged(Token::Effect, ..)) => {
                     if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(tk) {
                         ast.effects.push_value(effect);
+                    }
+                }
+
+                // implied
+                Some(Ranged(Token::Implicit, ..)) => {
+                    tk.next();
+                    if let Some(handler) = Handler::parse_or_skip(tk) {
+                        let expr = tk.push_expr(handler.map(Expression::Handler));
+                        ast.implied.push(expr);
                     }
                 }
 
@@ -400,6 +412,28 @@ impl Parse for Type {
     }
 }
 
+impl Parse for ReturnType {
+    fn parse(tk: &mut Tokens) -> Option<Self> {
+        match tk.peek() {
+            // never returns
+            Some(Ranged(Token::Bang, ..)) => {
+                tk.next();
+                Some(ReturnType::Never)
+            }
+
+            // no return type
+            Some(Ranged(t, ..)) if t.continues_statement() => None,
+            None => None,
+
+            // some return type
+            _ => {
+                let typ = Type::parse_or_skip(tk)?.0;
+                Some(ReturnType::Type(typ))
+            }
+        }
+    }
+}
+
 impl Parse for FunSign {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let mut decl = FunSign {
@@ -416,23 +450,7 @@ impl Parse for FunSign {
             Some(())
         })?;
 
-        match tk.peek() {
-            // never returns
-            Some(Ranged(Token::Bang, ..)) => {
-                tk.expect(Token::Bang)?;
-                decl.output = Some(ReturnType::Never);
-            }
-
-            // no return type
-            Some(Ranged(t, ..)) if t.continues_statement() => {}
-            None => {}
-
-            // some return type
-            _ => {
-                let typ = Type::parse_or_skip(tk)?.0;
-                decl.output = Some(ReturnType::Type(typ));
-            }
-        }
+        decl.output = ReturnType::parse(tk);
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
@@ -512,6 +530,8 @@ impl Parse for Handler {
         let ident = tk.push_ident(id);
         let mut funcs = Vec::new();
 
+        let break_type = ReturnType::parse(tk);
+
         tk.group(Group::Brace, false, |tk| {
             // skip semicolons
             while tk.check(Token::Semicolon).is_some() {}
@@ -529,6 +549,7 @@ impl Parse for Handler {
         Some(Handler {
             effect: ident,
             functions: funcs,
+            break_type,
         })
     }
 }

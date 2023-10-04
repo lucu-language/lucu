@@ -31,6 +31,8 @@ pub enum Error {
     UnknownEffectFun(Ranged<()>, Option<Ranged<()>>),
     UnknownValue,
     UnhandledEffect,
+
+    MultipleEffects(Vec<Ranged<()>>),
 }
 
 pub enum Expected {
@@ -54,14 +56,8 @@ enum Gravity {
 impl Error {
     fn gravity(&self) -> Gravity {
         match self {
-            Error::UnknownSymbol => Gravity::Whole,
             Error::UnclosedString => Gravity::EndPlus,
-            Error::Unexpected(_) => Gravity::Whole,
-            Error::UnclosedGroup(_) => Gravity::Whole,
-            Error::UnknownEffect => Gravity::Whole,
-            Error::UnknownValue => Gravity::Whole,
-            Error::UnknownEffectFun(_, _) => Gravity::Whole,
-            Error::UnhandledEffect => Gravity::Whole,
+            _ => Gravity::Whole,
         }
     }
 }
@@ -113,12 +109,12 @@ fn get_lines(file: &str, range: Ranged<()>) -> (LinePos, LinePos) {
 struct Highlight {
     start: LinePos,
     end: LinePos,
-    color: u8,
+    color: usize,
     gravity: Gravity,
 }
 
 impl Highlight {
-    fn from_file(file: &str, range: Ranged<()>, color: u8, gravity: Gravity) -> Self {
+    fn from_file(file: &str, range: Ranged<()>, color: usize, gravity: Gravity) -> Self {
         let (start, end) = get_lines(file, range);
         Self {
             start,
@@ -129,7 +125,7 @@ impl Highlight {
     }
 }
 
-fn highlight(i: u8, s: &str, color: bool, bold: bool) -> String {
+fn highlight(i: usize, s: &str, color: bool, bold: bool) -> String {
     if color {
         let mut bg = 31 + ((i + 4) % 14);
         if bg >= 38 {
@@ -380,6 +376,10 @@ impl Errors {
                         "effect {} is not handled in this scope",
                         highlight(0, str, color, true)
                     ),
+                    Error::MultipleEffects(_) => format!(
+                        "value {} is defined by multiple effects in scope",
+                        highlight(0, str, color, true)
+                    ),
                 }
             );
             if color {
@@ -399,6 +399,11 @@ impl Errors {
                         highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
                     }
                     highlights.push(Highlight::from_file(file, handler, 1, Gravity::Whole));
+                }
+                Error::MultipleEffects(effects) => {
+                    for effect in effects {
+                        highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
+                    }
                 }
                 _ => (),
             }

@@ -12,6 +12,7 @@ pub enum Token {
     If,
     Else,
     Break,
+    Implicit,
 
     // Symbols
     Semicolon,
@@ -49,6 +50,7 @@ impl fmt::Display for Token {
                 Token::If => "'if'".into(),
                 Token::Else => "'else'".into(),
                 Token::Break => "'break'".into(),
+                Token::Implicit => "'implicit'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
                 Token::Slash => "'/'".into(),
@@ -307,6 +309,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "break" => Token::Break,
+                    "implicit" => Token::Implicit,
                     _ => Token::Ident(word),
                 }
             }

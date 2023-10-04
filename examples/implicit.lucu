@@ -1,0 +1,37 @@
+effect get {
+	fun get() int
+}
+
+implicit get {
+	fun get() int {
+		69
+	}
+}
+
+effect return {
+	fun return(n int) !
+}
+
+implicit return int {
+	fun return(n int) ! {
+		break n
+	}
+}
+
+fun test() int / debug {
+	putint(get())
+	try {
+		putint(get())
+	} with get {
+		fun get() int {
+			420
+		}
+	}
+	return(90)
+	putint(get())
+	100
+}
+
+fun main() / debug {
+	putint(test())
+}

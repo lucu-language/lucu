@@ -55,7 +55,7 @@ pub enum Expression {
     Member(ExprIdx, Ident),
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
     Op(ExprIdx, Op, ExprIdx),
-    Break(Option<ExprIdx>),
+    Yeet(Option<ExprIdx>),
 
     TryWith(ExprIdx, Option<ExprIdx>),
     Handler(Handler),
@@ -600,18 +600,18 @@ impl Parse for Expression {
             }
 
             // break
-            Some(Ranged(Token::Break, ..)) => {
+            Some(Ranged(Token::Yeet, ..)) => {
                 tk.next();
 
                 if matches!(
                     tk.peek(),
                     Some(Ranged(t, ..), ..) if t.continues_statement()
                 ) {
-                    Some(Expression::Break(None))
+                    Some(Expression::Yeet(None))
                 } else {
                     let value = Expression::parse_or_default(tk);
                     let value = tk.push_expr(value);
-                    Some(Expression::Break(Some(value)))
+                    Some(Expression::Yeet(Some(value)))
                 }
             }
 

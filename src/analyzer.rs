@@ -300,7 +300,7 @@ fn analyze_expr(
             analyze_expr(actx, scope, ast, ctx, left, errors);
             analyze_expr(actx, scope, ast, ctx, right, errors);
         }
-        Expression::Break(val) => {
+        Expression::Yeet(val) => {
             if let Some(expr) = val {
                 analyze_expr(actx, scope, ast, ctx, expr, errors);
             }
@@ -380,6 +380,7 @@ pub const INT: Val = Val(1);
 
 pub const DEBUG: Val = Val(2);
 pub const PUTINT: Val = Val(3);
+pub const PUTSTR: Val = Val(4);
 
 pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     let mut actx = Analysis {
@@ -398,10 +399,12 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
 
     let mut debug = HashMap::new();
     debug.insert("putint".to_owned(), PUTINT);
+    debug.insert("putstr".to_owned(), PUTSTR);
     effects.insert("debug".to_owned(), (DEBUG, debug));
 
-    actx.defs = VecMap::filled(4, Definition::Builtin);
+    actx.defs = VecMap::filled(5, Definition::Builtin);
     actx.defs[PUTINT] = Definition::EffectFunction(DEBUG, EffFunIdx(0));
+    actx.defs[PUTSTR] = Definition::EffectFunction(DEBUG, EffFunIdx(1));
 
     // put names in scope
     // TODO: error on conflict

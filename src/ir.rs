@@ -16,13 +16,14 @@ use crate::{
 pub struct ReturnType {
     pub output: Type,
     pub implicit_break: Option<HandlerIdx>,
-    pub break_union: Vec<Type>,
+    pub break_union: Vec<(HandlerIdx, Type)>,
 }
 
 #[derive(Debug)]
 pub struct Procedure {
     pub inputs: Vec<Reg>,
     pub output: ReturnType,
+    pub handles: Vec<HandlerIdx>,
 
     pub blocks: VecMap<BlockIdx, Block>,
     pub start: BlockIdx,
@@ -84,12 +85,6 @@ pub struct AggregateType {
 impl Procedure {
     fn instructions(&self) -> impl Iterator<Item = &Instruction> {
         self.blocks.values().flat_map(|b| b.instructions.iter())
-    }
-    fn calls(&self) -> impl Iterator<Item = ProcIdx> + '_ {
-        self.instructions().filter_map(|i| match *i {
-            Instruction::Reset(p, _, _, _) | Instruction::Call(p, _, _) => Some(p),
-            _ => None,
-        })
     }
 }
 
@@ -174,12 +169,11 @@ pub enum Instruction {
     Sub(Reg, Reg, Reg),
 
     // call procedure, put return into reg, call with arguments
-    Reset(ProcIdx, Option<Reg>, Vec<Reg>, HandlerIdx), // catch any breaks to handler
-    Call(ProcIdx, Option<Reg>, Vec<Reg>),              // regular call
+    Call(ProcIdx, Option<Reg>, Vec<Reg>),
 
     // return statements
-    Break(Option<Reg>, HandlerIdx), // break with optional value to handler
-    Return(Option<Reg>),            // return with optional value
+    Yeet(Option<Reg>, HandlerIdx), // break with optional value to handler
+    Return(Option<Reg>),           // return with optional value
     Unreachable,
 
     // print
@@ -298,7 +292,7 @@ impl<'a> IRContext<'a> {
     fn next_reg(&mut self, typ: Type) -> Reg {
         self.ir.regs.push(Reg, typ)
     }
-    fn break_union(&self, handlers: &[HandlerIdx]) -> Vec<Type> {
+    fn break_union(&self, handlers: &[HandlerIdx]) -> Vec<(HandlerIdx, Type)> {
         let mut union = Vec::new();
         for handler in handlers.into_iter().copied() {
             for proc in self.handlers[handler].procs.values().copied() {
@@ -315,8 +309,6 @@ impl<'a> IRContext<'a> {
 
 pub struct IR {
     pub procs: VecMap<ProcIdx, Procedure>,
-    pub recursive: VecMap<ProcIdx, bool>,
-
     pub main: ProcIdx,
 
     pub regs: VecMap<Reg, Type>,
@@ -397,26 +389,6 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 a => format!(" ( {} )", a),
                             },
                         )?,
-                        Instruction::Reset(proc, out, ref args, handler) => writeln!(
-                            f,
-                            "{}rst {}, {}{}",
-                            match out {
-                                Some(out) => format!("{} <- ", out),
-                                None => "       ".into(),
-                            },
-                            usize::from(handler),
-                            self[proc].debug_name,
-                            match args
-                                .iter()
-                                .map(|r| r.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .as_str()
-                            {
-                                "" => "".into(),
-                                a => format!(" ( {} )", a),
-                            },
-                        )?,
                         Instruction::Return(r) => writeln!(
                             f,
                             "       ret{}",
@@ -425,7 +397,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 None => "".into(),
                             },
                         )?,
-                        Instruction::Break(r, h) => writeln!(
+                        Instruction::Yeet(r, h) => writeln!(
                             f,
                             "       brk {}{}",
                             usize::from(h),
@@ -481,8 +453,6 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         asys,
         ir: IR {
             procs: VecMap::new(),
-            recursive: VecMap::new(),
-
             main: ProcIdx(0),
 
             regs: VecMap::new(),
@@ -499,7 +469,6 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let debug_closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
 
     let inputs = vec![ir.next_reg(Type::Int)];
-
     let putint = ir.ir.procs.push(
         ProcIdx,
         Procedure {
@@ -516,8 +485,34 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
                 next: None,
             }]
             .into(),
+
             start: BlockIdx(0),
             debug_name: "putint".into(),
+            handles: Vec::new(),
+        },
+    );
+
+    let inputs = vec![ir.next_reg(Type::Aggregate(SLICE))];
+    let putstr = ir.ir.procs.push(
+        ProcIdx,
+        Procedure {
+            inputs,
+
+            output: ReturnType {
+                output: Type::None,
+                implicit_break: None,
+                break_union: Vec::new(),
+            },
+
+            blocks: vec![Block {
+                instructions: vec![Instruction::PrintStr(Reg(1)), Instruction::Return(None)],
+                next: None,
+            }]
+            .into(),
+
+            start: BlockIdx(0),
+            debug_name: "putstr".into(),
+            handles: Vec::new(),
         },
     );
 
@@ -526,7 +521,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         HandlerIdx,
         Handler {
             effect: DEBUG,
-            procs: vec![putint].into(),
+            procs: vec![putint, putstr].into(),
             closure: debug_closure,
             global: true,
         },
@@ -598,7 +593,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
             // check if handler can break
             let can_break = ir.ir.procs[proc_idx]
                 .instructions()
-                .any(|instr| matches!(instr, Instruction::Break(_, _)));
+                .any(|instr| matches!(instr, Instruction::Yeet(_, _)));
 
             let proc = &mut ir.ir.procs[proc_idx];
             proc.output.implicit_break = Some(handler_idx);
@@ -615,9 +610,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
                 }
             };
             if let Some(break_type) = break_type {
-                if !proc.output.break_union.contains(&break_type) {
-                    proc.output.break_union.push(break_type);
-                }
+                proc.output.break_union.push((handler_idx, break_type));
             }
 
             // add to handler
@@ -660,34 +653,8 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         &mut scope,
     );
 
-    // get recursive functions
-    ir.ir.recursive = VecMap::filled(ir.ir.procs.len(), false);
-    find_recursive_funs(&ir.ir.procs, &mut vec![ir.ir.main], &mut ir.ir.recursive);
-
     // return ir
     ir.ir
-}
-
-fn find_recursive_funs(
-    procs: &VecMap<ProcIdx, Procedure>,
-    dfs: &mut Vec<ProcIdx>,
-    recursive: &mut VecMap<ProcIdx, bool>,
-) {
-    let last = dfs.last().copied().unwrap();
-
-    for call in procs[last].calls() {
-        if let Some(pos) = dfs.iter().position(|&p| p == call) {
-            // we found a cycle, set all in cycle to be recursive
-            for &p in dfs[pos..].iter() {
-                recursive[p] = true;
-            }
-        } else {
-            // no cycle yet, search further
-            dfs.push(call);
-            find_recursive_funs(procs, dfs, recursive);
-            dfs.pop();
-        }
-    }
 }
 
 fn generate_fun(
@@ -719,6 +686,7 @@ fn generate_fun(
 
             // these will be defined at the end
             blocks: VecMap::new(),
+            handles: Vec::new(),
         },
     );
 
@@ -753,7 +721,7 @@ fn generate_fun(
     if let Ok(ret) = ret {
         if !matches!(
             blocks[end].instructions.last(),
-            Some(Instruction::Return(_) | Instruction::Break(_, _))
+            Some(Instruction::Return(_) | Instruction::Yeet(_, _))
         ) {
             // add return if we haven't already
             blocks[end].instructions.push(Instruction::Return(ret));
@@ -768,6 +736,7 @@ fn generate_fun(
 fn generate_reset(
     ir: &mut IRContext,
     handlers: &[HandlerIdx],
+    handled: &[HandlerIdx],
     body: ExprIdx,
     debug_name: String,
     scope: &mut Scope,
@@ -780,7 +749,11 @@ fn generate_reset(
     let mut end = start;
     let ret = generate_expr(
         ir,
-        handlers,
+        &handlers
+            .iter()
+            .copied()
+            .chain(handled.iter().copied())
+            .collect::<Vec<_>>(),
         body,
         &mut blocks,
         &mut end,
@@ -792,7 +765,7 @@ fn generate_reset(
     if let Ok(ret) = ret {
         if !matches!(
             blocks[end].instructions.last(),
-            Some(Instruction::Return(_) | Instruction::Break(_, _))
+            Some(Instruction::Return(_) | Instruction::Yeet(_, _))
         ) {
             // add return if we haven't already
             blocks[end].instructions.push(Instruction::Return(ret));
@@ -814,6 +787,7 @@ fn generate_reset(
             start,
             debug_name,
             blocks,
+            handles: Vec::new(),
         },
     )
 }
@@ -1154,7 +1128,7 @@ fn generate_expr(
 
             Ok(Some(out))
         }
-        E::Break(value) => {
+        E::Yeet(value) => {
             // get break value
             let reg = value
                 .map(|expr| {
@@ -1167,7 +1141,7 @@ fn generate_expr(
             // TODO: we assume this is top level inside a handler
             blocks[*block]
                 .instructions
-                .push(Instruction::Break(reg, handler.unwrap()));
+                .push(Instruction::Yeet(reg, handler.unwrap()));
 
             // break returns any type
             Err(Never)
@@ -1263,7 +1237,7 @@ fn generate_expr(
                     // check if handler can break
                     let can_break = ir.ir.procs[proc_idx]
                         .instructions()
-                        .any(|instr| matches!(instr, Instruction::Break(_, _)));
+                        .any(|instr| matches!(instr, Instruction::Yeet(_, _)));
                     if can_break {
                         break_self = true;
                     }
@@ -1283,9 +1257,7 @@ fn generate_expr(
                         }
                     };
                     if let Some(break_type) = break_type {
-                        if !proc.output.break_union.contains(&break_type) {
-                            proc.output.break_union.push(break_type);
-                        }
+                        proc.output.break_union.push((handler_idx, break_type));
                     }
 
                     // get captures
@@ -1334,27 +1306,24 @@ fn generate_expr(
 
                 // add handler to handler list
                 let mut subhandlers = Vec::new();
-                subhandlers.extend_from_slice(handlers);
-
-                match subhandlers
-                    .iter()
-                    .position(|&idx| ir.handlers[idx].effect == eff_val)
-                {
-                    Some(pos) => {
-                        // replace existing handler
-                        subhandlers[pos] = handler_idx;
-                    }
-                    None => {
-                        // push new handler
-                        subhandlers.push(handler_idx);
-                    }
-                }
+                subhandlers.extend(
+                    handlers
+                        .iter()
+                        .filter(|&&idx| ir.handlers[idx].effect != eff_val),
+                );
 
                 // generate reset
                 let debug_name = format!("{}__reset#{}", debug_name, usize::from(handler_idx));
 
                 let mut child = scope.child();
-                let proc_idx = generate_reset(ir, &subhandlers, body, debug_name, &mut child);
+                let proc_idx = generate_reset(
+                    ir,
+                    &subhandlers,
+                    &[handler_idx],
+                    body,
+                    debug_name,
+                    &mut child,
+                );
 
                 let input_regs: Vec<Reg> = child
                     .captures
@@ -1366,8 +1335,11 @@ fn generate_expr(
                     })
                     .collect();
 
-                let proc = &ir.ir.procs[proc_idx];
+                let proc = &mut ir.ir.procs[proc_idx];
                 let never = proc.output.output.is_never();
+                if break_self {
+                    proc.handles.push(handler_idx);
+                }
 
                 // execute proc
                 let output = proc.output.output.into_result(ir);
@@ -1380,40 +1352,20 @@ fn generate_expr(
                         .instructions
                         .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
 
-                    if break_self {
-                        blocks[*block].instructions.push(Instruction::Reset(
-                            proc_idx,
-                            output.unwrap_or(None),
-                            input_regs,
-                            handler_idx,
-                        ));
-                    } else {
-                        // TODO: inline call?
-                        blocks[*block].instructions.push(Instruction::Call(
-                            proc_idx,
-                            output.unwrap_or(None),
-                            input_regs,
-                        ));
-                    }
+                    blocks[*block].instructions.push(Instruction::Call(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                    ));
 
                     blocks[*block].next = Some(next);
                     *block = next;
                 } else {
-                    if break_self {
-                        blocks[*block].instructions.push(Instruction::Reset(
-                            proc_idx,
-                            output.unwrap_or(None),
-                            input_regs,
-                            handler_idx,
-                        ));
-                    } else {
-                        // TODO: inline call?
-                        blocks[*block].instructions.push(Instruction::Call(
-                            proc_idx,
-                            output.unwrap_or(None),
-                            input_regs,
-                        ));
-                    }
+                    blocks[*block].instructions.push(Instruction::Call(
+                        proc_idx,
+                        output.unwrap_or(None),
+                        input_regs,
+                    ));
                 }
 
                 if never {
@@ -1425,7 +1377,7 @@ fn generate_expr(
                 let debug_name = format!("{}__reset", debug_name);
 
                 let mut child = scope.child();
-                let proc_idx = generate_reset(ir, handlers, body, debug_name, &mut child);
+                let proc_idx = generate_reset(ir, handlers, &[], body, debug_name, &mut child);
 
                 let input_regs: Vec<Reg> = child
                     .captures
@@ -1443,7 +1395,6 @@ fn generate_expr(
                 // execute proc
                 let output = proc.output.output.into_result(ir);
 
-                // TODO: inline call?
                 blocks[*block].instructions.push(Instruction::Call(
                     proc_idx,
                     output.unwrap_or(None),

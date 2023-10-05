@@ -17,7 +17,7 @@ ssize_t write(int fd, const void *buf, size_t size) {
     return rax;
 }
 
-extern void putint(unsigned long long d) {
+extern void putint(uint64_t d) {
   char buf[21] = {};
   char* cur = &buf[20];
 
@@ -35,7 +35,16 @@ extern void putint(unsigned long long d) {
     len++;
   }
 
-  write(0, cur, len);
+  write(1, cur, len);
+}
+
+struct strslice {
+  char* str;
+  uintptr_t size;
+};
+
+extern void putstr(struct strslice str) {
+  write(1, str.str, str.size);
 }
 
 // Tell the compiler incoming stack alignment is not RSP%16==8 or ESP%16==12

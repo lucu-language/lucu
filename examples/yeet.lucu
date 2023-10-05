@@ -1,0 +1,85 @@
+effect throwint {
+	fun throw() !
+}
+
+effect throwstr {
+	fun throw() !
+}
+
+fun main() / debug {
+	putint(try {
+		try {
+			throwint.throw()
+			69
+		} with throwstr str {
+
+			fun throw() ! {
+				yeet "Hello, World!\n"
+			}
+
+		}
+	} with throwint int {
+
+		fun throw() ! {
+			yeet 42
+		}
+		
+	})
+
+	putstr(try {
+		try {
+			throwstr.throw()
+			"unexpected"
+		} with throwint int {
+
+			fun throw() ! {
+				yeet 42
+			}
+	
+		}
+	} with throwstr str {
+
+		fun throw() ! {
+			yeet "Hello, World!\n"
+		}
+
+	})
+
+	putstr(try {
+		try {
+			throwstr.throw()
+			"unexpected"
+		} with throwstr str {
+
+			fun throw() ! {
+				yeet "Hello, World!\n"
+			}
+
+		}
+	} with throwint int {
+
+		fun throw() ! {
+			yeet 42
+		}
+		
+	})
+
+	putint(try {
+		try {
+			throwint.throw()
+			69
+		} with throwint int {
+
+			fun throw() ! {
+				yeet 42
+			}
+	
+		}
+	} with throwstr str {
+
+		fun throw() ! {
+			yeet "Hello, World!\n"
+		}
+
+	})
+}

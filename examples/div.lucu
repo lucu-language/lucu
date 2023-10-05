@@ -90,7 +90,7 @@ fun main() / debug {
         fun throw() ! {
             # this may not return a value
             # we end the entire try block early
-            break
+            yeet
         }
 
     }

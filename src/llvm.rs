@@ -5,9 +5,10 @@ use inkwell::{
     builder::Builder,
     context::Context,
     module::{Linkage, Module},
-    passes::PassManager,
+    passes::{PassManager, PassManagerBuilder},
     targets::{
-        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetTriple,
+        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
+        TargetTriple,
     },
     types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType},
     values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue},
@@ -34,6 +35,7 @@ struct CodeGen<'ctx> {
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
     putint: FunctionValue<'ctx>,
+    putstr: FunctionValue<'ctx>,
 }
 
 pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
@@ -41,12 +43,12 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
 
     let context = Context::create();
     let module = context.create_module("main");
-    let target = Target::from_name("x86-64").unwrap();
+    let target = Target::from_triple(&TargetMachine::get_default_triple()).unwrap();
     let target_machine = target
         .create_target_machine(
-            &TargetTriple::create("x86_64-pc-linux-gnu"),
-            "x86-64",
-            "+avx2",
+            &TargetMachine::get_default_triple(),
+            &TargetMachine::get_host_cpu_name().to_string(),
+            &TargetMachine::get_host_cpu_features().to_string(),
             OptimizationLevel::Aggressive,
             RelocMode::Default,
             CodeModel::Default,
@@ -63,6 +65,24 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     );
     putint.set_call_conventions(0);
 
+    let putstr = module.add_function(
+        "putstr",
+        context.void_type().fn_type(
+            &[context
+                .struct_type(
+                    &[
+                        context.i8_type().ptr_type(AddressSpace::default()).into(),
+                        context.ptr_sized_int_type(&target_data, None).into(),
+                    ],
+                    false,
+                )
+                .into()],
+            false,
+        ),
+        Some(Linkage::External),
+    );
+    putstr.set_call_conventions(0);
+
     let mut codegen = CodeGen {
         context: &context,
         module,
@@ -72,6 +92,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         procs: VecMap::new(),
         globals: VecMap::new(),
         putint,
+        putstr,
     };
 
     for typ in ir.aggregates.values() {
@@ -105,34 +126,32 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         }
     }
 
-    for ((proc, recursive), function) in ir
-        .procs
-        .values()
-        .zip(ir.recursive.values().copied())
-        .zip(codegen.procs.values().copied())
-    {
-        codegen.generate_proc(ir, proc, recursive, function);
+    for (proc, function) in ir.procs.values().zip(codegen.procs.values().copied()) {
+        codegen.generate_proc(ir, proc, function);
     }
 
     // set main func
     codegen.procs[ir.main].set_linkage(Linkage::External);
 
     // assume valid
+    if debug {
+        codegen.module.print_to_stderr();
+        println!();
+    }
+
     codegen.module.verify().unwrap();
 
     // compile
+    let pb = PassManagerBuilder::create();
+    pb.set_inliner_with_threshold(1);
+    pb.set_optimization_level(OptimizationLevel::Aggressive);
+
     let pm = PassManager::create(());
-    pm.add_instruction_combining_pass();
-    pm.add_reassociate_pass();
-    pm.add_gvn_pass();
-    pm.add_cfg_simplification_pass();
-    pm.add_basic_alias_analysis_pass();
-    pm.add_promote_memory_to_register_pass();
-    pm.add_instruction_combining_pass();
-    pm.add_reassociate_pass();
+    pb.populate_module_pass_manager(&pm);
     pm.run_on(&codegen.module);
 
     if debug {
+        println!("--- OPTIMIZED LLVM ---");
         codegen.module.print_to_stderr();
     }
 
@@ -161,18 +180,42 @@ impl<'ctx> CodeGen<'ctx> {
     fn size(&self, t: BasicTypeEnum) -> u64 {
         self.target_data.get_store_size(&t)
     }
+    fn align(&self, t: BasicTypeEnum) -> u32 {
+        self.target_data.get_abi_alignment(&t)
+    }
     fn return_type(&self, t: &ReturnType) -> AnyTypeEnum<'ctx> {
         if t.break_union.is_empty() {
             self.get_type(&t.output)
         } else {
             let frame_type = self.frame_type();
 
-            let max_type = std::iter::once(&t.output)
-                .chain(t.break_union.iter())
+            let max_align = std::iter::once(&t.output)
+                .chain(t.break_union.iter().map(|(_, t)| t))
+                .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
+                .max_by_key(|&t| self.align(t));
+            let max_size = std::iter::once(&t.output)
+                .chain(t.break_union.iter().map(|(_, t)| t))
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
                 .max_by_key(|&t| self.size(t));
 
-            if let Some(basic) = max_type {
+            if let Some(mut basic) = max_align {
+                // add padding if required
+                let size = self.size(basic);
+                let padding = max_size.map(|t| self.size(t) - size).unwrap_or(0);
+                if padding > 0 {
+                    basic = self
+                        .context
+                        .struct_type(
+                            &[
+                                basic,
+                                self.context.i8_type().array_type(padding as u32).into(),
+                            ],
+                            false,
+                        )
+                        .into();
+                }
+
+                // create union with most aligned member
                 self.context
                     .struct_type(&[frame_type.into(), basic], false)
                     .into()
@@ -202,13 +245,7 @@ impl<'ctx> CodeGen<'ctx> {
         self.module
             .add_function(&proc.debug_name, fn_type, Some(Linkage::Internal))
     }
-    fn generate_proc(
-        &self,
-        ir: &IR,
-        proc: &Procedure,
-        recursive: bool,
-        function: FunctionValue<'ctx>,
-    ) {
+    fn generate_proc(&self, ir: &IR, proc: &Procedure, function: FunctionValue<'ctx>) {
         let mut blocks: Vec<_> = (0..proc.blocks.len())
             .map(|idx| {
                 self.context
@@ -312,36 +349,6 @@ impl<'ctx> CodeGen<'ctx> {
                         let res = self.builder.build_int_sub(lhs, rhs, "").unwrap();
                         valmap.insert(r, res.into());
                     }
-                    I::Reset(p, r, ref rs, h) => {
-                        let func = self.procs[p];
-                        let args: Vec<_> = rs
-                            .iter()
-                            .filter_map(|r| valmap.get(r).map(|&v| v.into()))
-                            .collect();
-
-                        let ret = self.builder.build_call(func, &args, "").unwrap();
-                        let (frame, val) = self.get_return(&ir.procs[p], ret);
-
-                        if let Some(frame) = frame {
-                            blocks[idx] = self.handle_break(
-                                function,
-                                frame,
-                                val,
-                                Some(h),
-                                !proc.output.break_union.is_empty(),
-                            );
-                        }
-
-                        if let Some(r) = r {
-                            valmap.insert(
-                                r,
-                                val.expect(&format!(
-                                    "call {} returns no value",
-                                    ir.procs[p].debug_name
-                                )),
-                            );
-                        }
-                    }
                     I::Call(p, r, ref rs) => {
                         let func = self.procs[p];
                         let args: Vec<_> = rs
@@ -357,22 +364,27 @@ impl<'ctx> CodeGen<'ctx> {
                                 function,
                                 frame,
                                 val,
-                                ir.procs[p].output.implicit_break,
+                                proc.handles
+                                    .iter()
+                                    .copied()
+                                    .chain(ir.procs[p].output.implicit_break.into_iter()),
                                 !proc.output.break_union.is_empty(),
                             );
                         }
 
                         if let Some(r) = r {
-                            valmap.insert(
-                                r,
-                                val.expect(&format!(
+                            let typ = self.get_type(&ir.regs[r]);
+                            if let Ok(typ) = BasicTypeEnum::try_from(typ) {
+                                let val = val.expect(&format!(
                                     "call {} returns no value",
                                     ir.procs[p].debug_name
-                                )),
-                            );
+                                ));
+                                let cast = self.build_union_cast(val, typ);
+                                valmap.insert(r, cast);
+                            }
                         }
                     }
-                    I::Break(r, h) => {
+                    I::Yeet(r, h) => {
                         let frame = self.frame_type().const_int(usize::from(h) as u64, false);
                         let val = r.and_then(|r| valmap.get(&r)).copied();
 
@@ -418,10 +430,13 @@ impl<'ctx> CodeGen<'ctx> {
                                 )
                                 .unwrap()
                                 .into_struct_value();
-                            if let Some(r) = val {
+                            if let (Some(val), Some(field)) =
+                                (val, ret_typ.get_field_type_at_index(1))
+                            {
+                                let cast = self.build_union_cast(val, field);
                                 ret = self
                                     .builder
-                                    .build_insert_value(ret, r, 1, "")
+                                    .build_insert_value(ret, cast, 1, "")
                                     .unwrap()
                                     .into_struct_value();
                             }
@@ -438,8 +453,10 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_call(self.putint, &[valmap[&r].into()], "")
                             .unwrap();
                     }
-                    I::PrintStr(_) => {
-                        todo!();
+                    I::PrintStr(r) => {
+                        self.builder
+                            .build_call(self.putstr, &[valmap[&r].into()], "")
+                            .unwrap();
                     }
                     I::Aggregate(r, ref rs) => {
                         let aggr_ty = self.get_type(&ir.regs[r]);
@@ -497,21 +514,17 @@ impl<'ctx> CodeGen<'ctx> {
                         if let Some(glob) = self.globals[g] {
                             let val = valmap[&r];
 
-                            if recursive {
-                                // save previous value if this is a recursive proc
-                                // TODO: will require more tests once handler return types exist
-                                let tmp = self
-                                    .builder
-                                    .build_load(val.get_type(), glob.as_pointer_value(), ".tmp")
-                                    .unwrap();
+                            let tmp = self
+                                .builder
+                                .build_load(val.get_type(), glob.as_pointer_value(), ".tmp")
+                                .unwrap();
 
-                                self.builder.position_at_end(blocks[usize::from(next)]);
-                                self.builder
-                                    .build_store(glob.as_pointer_value(), tmp)
-                                    .unwrap();
+                            self.builder.position_at_end(blocks[usize::from(next)]);
+                            self.builder
+                                .build_store(glob.as_pointer_value(), tmp)
+                                .unwrap();
 
-                                self.builder.position_at_end(basic_block);
-                            }
+                            self.builder.position_at_end(basic_block);
 
                             self.builder
                                 .build_store(glob.as_pointer_value(), val)
@@ -541,22 +554,16 @@ impl<'ctx> CodeGen<'ctx> {
     fn handle_break(
         &self,
         function: FunctionValue<'ctx>,
-        frame: IntValue,
-        val: Option<BasicValueEnum>,
-        handler: Option<HandlerIdx>,
+        frame: IntValue<'ctx>,
+        val: Option<BasicValueEnum<'ctx>>,
+        handlers: impl Iterator<Item = HandlerIdx>,
         bubble_break: bool,
     ) -> BasicBlock<'ctx> {
-        let cmp_zero = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                frame,
-                self.frame_type().const_int(0, false),
-                "",
-            )
-            .unwrap();
+        let mut next = self.builder.get_insert_block().unwrap();
 
-        let cmp = if let Some(handler) = handler {
+        // return handled breaks
+        let mut cmp_handled = self.context.bool_type().const_int(0, false);
+        for handler in handlers {
             let cmp_handler = self
                 .builder
                 .build_int_compare(
@@ -567,20 +574,68 @@ impl<'ctx> CodeGen<'ctx> {
                     "",
                 )
                 .unwrap();
-            self.builder.build_or(cmp_zero, cmp_handler, "").unwrap()
-        } else {
-            cmp_zero
-        };
+            cmp_handled = self.builder.build_or(cmp_handled, cmp_handler, "").unwrap();
+        }
+        if !cmp_handled.is_constant_int() {
+            let branch_next = self.context.append_basic_block(function, "");
+            let branch_return = self.context.append_basic_block(function, "");
+            self.builder
+                .build_conditional_branch(cmp_handled, branch_return, branch_next)
+                .unwrap();
 
-        let branch_next = self.context.append_basic_block(function, "");
-        let branch_return = self.context.append_basic_block(function, "");
-        self.builder
-            .build_conditional_branch(cmp, branch_next, branch_return)
-            .unwrap();
+            self.builder.position_at_end(branch_return);
+            if bubble_break {
+                let ret_type = function
+                    .get_type()
+                    .get_return_type()
+                    .unwrap()
+                    .into_struct_type();
 
-        self.builder.position_at_end(branch_return);
+                let mut ret = ret_type.get_poison();
+                ret = self
+                    .builder
+                    .build_insert_value(ret, self.frame_type().const_int(0, false), 0, "")
+                    .unwrap()
+                    .into_struct_value();
+                if let (Some(val), Some(field)) = (val, ret.get_type().get_field_type_at_index(1)) {
+                    let cast = self.build_union_cast(val, field);
+                    ret = self
+                        .builder
+                        .build_insert_value(ret, cast, 1, "")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                self.builder.build_return(Some(&ret)).unwrap();
+            } else if let (Some(val), Some(typ)) = (val, function.get_type().get_return_type()) {
+                let cast = self.build_union_cast(val, typ);
+                self.builder.build_return(Some(&cast)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
 
+            self.builder.position_at_end(branch_next);
+            next = branch_next;
+        }
+
+        // bubble up unhandled breaks
         if bubble_break {
+            let cmp_zero = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    frame,
+                    self.frame_type().const_int(0, false),
+                    "",
+                )
+                .unwrap();
+
+            let branch_next = self.context.append_basic_block(function, "");
+            let branch_return = self.context.append_basic_block(function, "");
+            self.builder
+                .build_conditional_branch(cmp_zero, branch_next, branch_return)
+                .unwrap();
+
+            self.builder.position_at_end(branch_return);
             let ret_type = function
                 .get_type()
                 .get_return_type()
@@ -593,24 +648,75 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_insert_value(ret, frame, 0, "")
                 .unwrap()
                 .into_struct_value();
-            if ret_type.count_fields() > 1 {
-                if let Some(val) = val {
-                    ret = self
-                        .builder
-                        .build_insert_value(ret, val, 1, "")
-                        .unwrap()
-                        .into_struct_value();
-                }
+            if let (Some(val), Some(field)) = (val, ret.get_type().get_field_type_at_index(1)) {
+                let cast = self.build_union_cast(val, field);
+                ret = self
+                    .builder
+                    .build_insert_value(ret, cast, 1, "")
+                    .unwrap()
+                    .into_struct_value();
             }
             self.builder.build_return(Some(&ret)).unwrap();
-        } else if let Some(val) = val {
-            self.builder.build_return(Some(&val)).unwrap();
-        } else {
-            self.builder.build_return(None).unwrap();
+
+            self.builder.position_at_end(branch_next);
+            next = branch_next;
         }
 
-        self.builder.position_at_end(branch_next);
-        branch_next
+        next
+    }
+    fn build_union_cast(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        typ: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if val.get_type() == typ {
+            val
+        } else {
+            if self.size(typ) <= self.size(val.get_type()) {
+                // type is smaller than value
+                let ptr = self
+                    .builder
+                    .build_alloca(val.get_type(), "valalloc")
+                    .unwrap();
+                self.builder.build_store(ptr, val).unwrap();
+
+                let reptr = match typ {
+                    BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
+                };
+                let bitcast = self
+                    .builder
+                    .build_pointer_cast(ptr, reptr, "resultcast")
+                    .unwrap();
+
+                println!("{:?} {:?}", bitcast, ptr);
+                self.builder.build_load(typ, bitcast, "result").unwrap()
+            } else {
+                // type is bigger than value
+                let ptr = self.builder.build_alloca(typ, "resultalloc").unwrap();
+
+                let reptr = match val.get_type() {
+                    BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
+                    BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
+                };
+                let bitcast = self
+                    .builder
+                    .build_pointer_cast(ptr, reptr, "valcast")
+                    .unwrap();
+
+                println!("{:?} {:?}", bitcast, ptr);
+                self.builder.build_store(bitcast, val).unwrap();
+                self.builder.build_load(typ, ptr, "val").unwrap()
+            }
+        }
     }
     fn get_return(
         &self,

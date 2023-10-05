@@ -11,7 +11,7 @@ pub enum Token {
     With,
     If,
     Else,
-    Break,
+    Yeet,
     Implicit,
 
     // Symbols
@@ -49,7 +49,7 @@ impl fmt::Display for Token {
                 Token::With => "'with'".into(),
                 Token::If => "'if'".into(),
                 Token::Else => "'else'".into(),
-                Token::Break => "'break'".into(),
+                Token::Yeet => "'yeet'".into(),
                 Token::Implicit => "'implicit'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
@@ -90,7 +90,7 @@ impl Token {
                 | Token::Else
                 | Token::Period
                 | Token::Bang
-                | Token::Break
+                | Token::Yeet
                 | Token::Try
                 | Token::If
                 | Token::Effect
@@ -308,7 +308,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "with" => Token::With,
                     "if" => Token::If,
                     "else" => Token::Else,
-                    "break" => Token::Break,
+                    "yeet" => Token::Yeet,
                     "implicit" => Token::Implicit,
                     _ => Token::Ident(word),
                 }

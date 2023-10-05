@@ -14,7 +14,7 @@ effect return {
 
 implicit return int {
 	fun return(n int) ! {
-		break n
+		yeet n
 	}
 }
 

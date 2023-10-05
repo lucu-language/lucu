@@ -18,20 +18,18 @@ implicit return int {
 	}
 }
 
-fun test() int / debug {
-	putint(get())
-	try {
-		putint(get())
-	} with get {
-		fun get() int {
-			420
-		}
-	}
-	return(90)
-	putint(get())
-	100
-}
-
 fun main() / debug {
-	putint(test())
+	putint(try {
+		putint(get())
+		try {
+			putint(get())
+		} with get {
+			fun get() int {
+				420
+			}
+		}
+		return(90)
+		putint(get())
+		100
+	})
 }

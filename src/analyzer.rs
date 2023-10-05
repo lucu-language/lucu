@@ -65,7 +65,6 @@ pub struct Analysis {
     pub values: VecMap<Ident, Val>,
     pub defs: VecMap<Val, Definition>,
     pub main: Option<FunIdx>,
-    pub closures: HashMap<ExprIdx, Vec<Val>>,
 }
 
 struct Scope<'a> {
@@ -235,26 +234,31 @@ fn analyze_expr(
         }
         Expression::TryWith(expr, handler) => {
             let mut child = scope.child();
-            analyze_expr(actx, &mut child, ast, ctx, handler, errors);
 
-            // TODO: first class handlers
-            let Expression::Handler(ref handler) = ctx.exprs[handler].0 else { panic!() };
-            let mut scoped = child.scoped_effects.clone();
-            let val = actx.values[handler.effect];
+            if let Some(handler) = handler {
+                analyze_expr(actx, &mut child, ast, ctx, handler, errors);
 
-            if val.0 != usize::MAX {
-                let pos = scoped.iter().position(|(_, &(v, _))| v == val);
-                match pos {
-                    Some(pos) => scoped[pos].0 = handler.effect,
-                    None => scoped.push((
-                        handler.effect,
-                        &scope.effects[&ctx.idents[handler.effect].0],
-                    )),
+                // TODO: first class handlers
+                let Expression::Handler(ref handler) = ctx.exprs[handler].0 else { panic!() };
+                let mut scoped = child.scoped_effects.clone();
+                let val = actx.values[handler.effect];
+
+                if val.0 != usize::MAX {
+                    let pos = scoped.iter().position(|(_, &(v, _))| v == val);
+                    match pos {
+                        Some(pos) => scoped[pos].0 = handler.effect,
+                        None => scoped.push((
+                            handler.effect,
+                            &scope.effects[&ctx.idents[handler.effect].0],
+                        )),
+                    }
                 }
-            }
 
-            child.scoped_effects = &scoped;
-            analyze_expr(actx, &mut child, ast, ctx, expr, errors);
+                child.scoped_effects = &scoped;
+                analyze_expr(actx, &mut child, ast, ctx, expr, errors);
+            } else {
+                analyze_expr(actx, &mut child, ast, ctx, expr, errors);
+            }
         }
         Expression::Member(expr, field) => {
             if let Expression::Ident(ident) = ctx.exprs[expr].0 {
@@ -382,7 +386,6 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
         values: VecMap::filled(ctx.idents.len(), Val(usize::MAX)),
         defs: VecMap::new(),
         main: None,
-        closures: HashMap::new(),
     };
 
     let mut effects = HashMap::new();

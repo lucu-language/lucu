@@ -836,9 +836,9 @@ fn generate_expr(
     match ir.ctx.exprs[expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
-                generate_expr(
+                let _ = generate_expr(
                     ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                )?;
+                );
             }
             body.last
                 .map(|expr| {
@@ -1173,252 +1173,288 @@ fn generate_expr(
             Err(Never)
         }
         E::TryWith(body, handler) => {
-            // get handler
-            let ast_handler = match ir.ctx.exprs[handler].0 {
-                E::Handler(ref handler) => handler,
-                _ => todo!(),
-            };
-
-            // get effect
-            let eff_ident = ast_handler.effect;
-            let eff_val = ir.asys.values[eff_ident];
-            let eff_idx = match ir.asys.defs[eff_val] {
-                Definition::Effect(eff_idx) => eff_idx,
-                _ => panic!("handler has non-effect as effect value"),
-            };
-            let effect = &ir.ast.effects[eff_idx];
-
-            // generate handler
-            let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
-            let closure_reg = ir.next_reg(Type::Aggregate(closure));
-
-            let global = true; // TODO: this is for testing, should be false by default
-
-            if global {
-                let glob = ir.ir.globals.push(Global, Type::Aggregate(closure));
-                scope.regs.insert(eff_val, Either::Right(glob));
-            } else {
-                scope.regs.insert(eff_val, Either::Left(closure_reg));
-            }
-
-            // generate handler
-            let handler_idx = ir.handlers.push(
-                HandlerIdx,
-                Handler {
-                    closure,
-                    effect: eff_val,
-                    procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
-                    global,
-                },
-            );
-
-            let mut break_self = false;
-
-            let mut child = scope.child();
-            for fun in ast_handler.functions.iter() {
-                let val = ir.asys.values[fun.decl.name];
-                let eff_fun_idx = match ir.asys.defs[val] {
-                    Definition::EffectFunction(_, eff_fun_idx) => eff_fun_idx,
-                    _ => panic!("handler has non-effect-function as a function value"),
+            if let Some(handler) = handler {
+                // get handler
+                let ast_handler = match ir.ctx.exprs[handler].0 {
+                    E::Handler(ref handler) => handler,
+                    _ => todo!(),
                 };
 
-                // get params
-                let mut params: Vec<(Val, Type)> = fun
-                    .decl
-                    .sign
-                    .inputs
-                    .values()
-                    .map(|&(ident, ref typ)| {
-                        (ir.asys.values[ident], Type::from_type(&ir.asys, typ))
+                // get effect
+                let eff_ident = ast_handler.effect;
+                let eff_val = ir.asys.values[eff_ident];
+                let eff_idx = match ir.asys.defs[eff_val] {
+                    Definition::Effect(eff_idx) => eff_idx,
+                    _ => panic!("handler has non-effect as effect value"),
+                };
+                let effect = &ir.ast.effects[eff_idx];
+
+                // generate handler
+                let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+                let closure_reg = ir.next_reg(Type::Aggregate(closure));
+
+                let global = true; // TODO: this is for testing, should be false by default
+
+                if global {
+                    let glob = ir.ir.globals.push(Global, Type::Aggregate(closure));
+                    scope.regs.insert(eff_val, Either::Right(glob));
+                } else {
+                    scope.regs.insert(eff_val, Either::Left(closure_reg));
+                }
+
+                // generate handler
+                let handler_idx = ir.handlers.push(
+                    HandlerIdx,
+                    Handler {
+                        closure,
+                        effect: eff_val,
+                        procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
+                        global,
+                    },
+                );
+
+                let mut break_self = false;
+
+                let mut child = scope.child();
+                for fun in ast_handler.functions.iter() {
+                    let val = ir.asys.values[fun.decl.name];
+                    let eff_fun_idx = match ir.asys.defs[val] {
+                        Definition::EffectFunction(_, eff_fun_idx) => eff_fun_idx,
+                        _ => panic!("handler has non-effect-function as a function value"),
+                    };
+
+                    // get params
+                    let mut params: Vec<(Val, Type)> = fun
+                        .decl
+                        .sign
+                        .inputs
+                        .values()
+                        .map(|&(ident, ref typ)| {
+                            (ir.asys.values[ident], Type::from_type(&ir.asys, typ))
+                        })
+                        .collect();
+
+                    if !global {
+                        params.push((val, Type::Aggregate(closure)));
+                    }
+
+                    let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
+
+                    // generate debug name
+                    let eff_name = ir.ctx.idents[eff_ident].0.as_str();
+                    let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
+                    let debug_name =
+                        format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+                    // TODO: add handlers of proc
+
+                    // generate handler proc
+                    let proc_idx = generate_fun(
+                        ir,
+                        None,
+                        handlers, // TODO: add handlers of proc
+                        &params,
+                        fun.body,
+                        output,
+                        Some(handler_idx),
+                        debug_name,
+                        &mut child,
+                    );
+
+                    // check if handler can break
+                    let can_break = ir.ir.procs[proc_idx]
+                        .instructions()
+                        .any(|instr| matches!(instr, Instruction::Break(_, _)));
+                    if can_break {
+                        break_self = true;
+                    }
+
+                    let proc = &mut ir.ir.procs[proc_idx];
+
+                    // TODO: infer break type
+                    let break_type = match &ast_handler.break_type {
+                        Some(parser::ReturnType::Type(t)) => Some(Type::from_type(ir.asys, &t)),
+                        Some(parser::ReturnType::Never) => None,
+                        None => {
+                            if can_break {
+                                Some(Type::None)
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    if let Some(break_type) = break_type {
+                        if !proc.output.break_union.contains(&break_type) {
+                            proc.output.break_union.push(break_type);
+                        }
+                    }
+
+                    // get captures
+                    let (param, offset) = match global {
+                        true => {
+                            let glob = scope.regs[&eff_val].unwrap_right();
+                            let reg = ir.ir.regs.push(Reg, ir.ir.globals[glob]);
+                            proc.blocks[proc.start]
+                                .instructions
+                                .insert(0, Instruction::GetGlobal(reg, glob));
+                            (reg, 1)
+                        }
+                        false => {
+                            let reg = proc.inputs.last().copied().unwrap();
+                            (reg, 0)
+                        }
+                    };
+                    for (i, capture) in child.captures.iter().map(|&(_, v)| v).enumerate() {
+                        proc.blocks[proc.start]
+                            .instructions
+                            .insert(i + offset, Instruction::Member(capture, param, i))
+                    }
+
+                    // add to handler
+                    ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
+                }
+
+                // create handler closure
+                ir.ir.aggregates[closure]
+                    .children
+                    .extend(child.captures.iter().map(|&(_, reg)| ir.ir.regs[reg]));
+
+                let aggregate = child
+                    .captures
+                    .iter()
+                    .map(|&(val, _)| {
+                        scope
+                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
+                            .expect("value not in scope")
                     })
                     .collect();
 
-                if !global {
-                    params.push((val, Type::Aggregate(closure)));
-                }
-
-                let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
-
-                // generate debug name
-                let eff_name = ir.ctx.idents[eff_ident].0.as_str();
-                let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
-                let debug_name =
-                    format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
-                // TODO: add handlers of proc
-
-                // generate handler proc
-                let proc_idx = generate_fun(
-                    ir,
-                    None,
-                    handlers, // TODO: add handlers of proc
-                    &params,
-                    fun.body,
-                    output,
-                    Some(handler_idx),
-                    debug_name,
-                    &mut child,
-                );
-
-                // check if handler can break
-                let can_break = ir.ir.procs[proc_idx]
-                    .instructions()
-                    .any(|instr| matches!(instr, Instruction::Break(_, _)));
-                if can_break {
-                    break_self = true;
-                }
-
-                let proc = &mut ir.ir.procs[proc_idx];
-
-                // TODO: infer break type
-                let break_type = match &ast_handler.break_type {
-                    Some(parser::ReturnType::Type(t)) => Some(Type::from_type(ir.asys, &t)),
-                    Some(parser::ReturnType::Never) => None,
-                    None => {
-                        if can_break {
-                            Some(Type::None)
-                        } else {
-                            None
-                        }
-                    }
-                };
-                if let Some(break_type) = break_type {
-                    if !proc.output.break_union.contains(&break_type) {
-                        proc.output.break_union.push(break_type);
-                    }
-                }
-
-                // get captures
-                let (param, offset) = match global {
-                    true => {
-                        let glob = scope.regs[&eff_val].unwrap_right();
-                        let reg = ir.ir.regs.push(Reg, ir.ir.globals[glob]);
-                        proc.blocks[proc.start]
-                            .instructions
-                            .insert(0, Instruction::GetGlobal(reg, glob));
-                        (reg, 1)
-                    }
-                    false => {
-                        let reg = proc.inputs.last().copied().unwrap();
-                        (reg, 0)
-                    }
-                };
-                for (i, capture) in child.captures.iter().map(|&(_, v)| v).enumerate() {
-                    proc.blocks[proc.start]
-                        .instructions
-                        .insert(i + offset, Instruction::Member(capture, param, i))
-                }
-
-                // add to handler
-                ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
-            }
-
-            // create handler closure
-            ir.ir.aggregates[closure]
-                .children
-                .extend(child.captures.iter().map(|&(_, reg)| ir.ir.regs[reg]));
-
-            let aggregate = child
-                .captures
-                .iter()
-                .map(|&(val, _)| {
-                    scope
-                        .get_or_capture(ir, &mut blocks[*block].instructions, val)
-                        .expect("value not in scope")
-                })
-                .collect();
-
-            blocks[*block]
-                .instructions
-                .push(Instruction::Aggregate(closure_reg, aggregate));
-
-            // add handler to handler list
-            let mut subhandlers = Vec::new();
-            subhandlers.extend_from_slice(handlers);
-
-            match subhandlers
-                .iter()
-                .position(|&idx| ir.handlers[idx].effect == eff_val)
-            {
-                Some(pos) => {
-                    // replace existing handler
-                    subhandlers[pos] = handler_idx;
-                }
-                None => {
-                    // push new handler
-                    subhandlers.push(handler_idx);
-                }
-            }
-
-            // generate reset
-            let debug_name = format!("{}__reset#{}", debug_name, usize::from(handler_idx));
-
-            let mut child = scope.child();
-            let proc_idx = generate_reset(ir, &subhandlers, body, debug_name, &mut child);
-
-            let input_regs: Vec<Reg> = child
-                .captures
-                .iter()
-                .map(|&(val, _)| {
-                    scope
-                        .get_or_capture(ir, &mut blocks[*block].instructions, val)
-                        .expect("value not in scope")
-                })
-                .collect();
-
-            let proc = &ir.ir.procs[proc_idx];
-            let never = proc.output.output.is_never();
-
-            // execute proc
-            let output = proc.output.output.into_result(ir);
-
-            if global {
-                let next = blocks.push(BlockIdx, Block::default());
-
-                let glob = scope.regs[&eff_val].unwrap_right();
                 blocks[*block]
                     .instructions
-                    .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
+                    .push(Instruction::Aggregate(closure_reg, aggregate));
 
-                if break_self {
-                    blocks[*block].instructions.push(Instruction::Reset(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                        handler_idx,
-                    ));
-                } else {
-                    // TODO: inline call?
-                    blocks[*block].instructions.push(Instruction::Call(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                    ));
+                // add handler to handler list
+                let mut subhandlers = Vec::new();
+                subhandlers.extend_from_slice(handlers);
+
+                match subhandlers
+                    .iter()
+                    .position(|&idx| ir.handlers[idx].effect == eff_val)
+                {
+                    Some(pos) => {
+                        // replace existing handler
+                        subhandlers[pos] = handler_idx;
+                    }
+                    None => {
+                        // push new handler
+                        subhandlers.push(handler_idx);
+                    }
                 }
 
-                blocks[*block].next = Some(next);
-                *block = next;
+                // generate reset
+                let debug_name = format!("{}__reset#{}", debug_name, usize::from(handler_idx));
+
+                let mut child = scope.child();
+                let proc_idx = generate_reset(ir, &subhandlers, body, debug_name, &mut child);
+
+                let input_regs: Vec<Reg> = child
+                    .captures
+                    .iter()
+                    .map(|&(val, _)| {
+                        scope
+                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
+                            .expect("value not in scope")
+                    })
+                    .collect();
+
+                let proc = &ir.ir.procs[proc_idx];
+                let never = proc.output.output.is_never();
+
+                // execute proc
+                let output = proc.output.output.into_result(ir);
+
+                if global {
+                    let next = blocks.push(BlockIdx, Block::default());
+
+                    let glob = scope.regs[&eff_val].unwrap_right();
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
+
+                    if break_self {
+                        blocks[*block].instructions.push(Instruction::Reset(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                            handler_idx,
+                        ));
+                    } else {
+                        // TODO: inline call?
+                        blocks[*block].instructions.push(Instruction::Call(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                        ));
+                    }
+
+                    blocks[*block].next = Some(next);
+                    *block = next;
+                } else {
+                    if break_self {
+                        blocks[*block].instructions.push(Instruction::Reset(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                            handler_idx,
+                        ));
+                    } else {
+                        // TODO: inline call?
+                        blocks[*block].instructions.push(Instruction::Call(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                        ));
+                    }
+                }
+
+                if never {
+                    blocks[*block].instructions.push(Instruction::Unreachable);
+                }
+                output
             } else {
-                if break_self {
-                    blocks[*block].instructions.push(Instruction::Reset(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                        handler_idx,
-                    ));
-                } else {
-                    // TODO: inline call?
-                    blocks[*block].instructions.push(Instruction::Call(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                    ));
-                }
-            }
+                // generate reset
+                let debug_name = format!("{}__reset", debug_name);
 
-            if never {
-                blocks[*block].instructions.push(Instruction::Unreachable);
+                let mut child = scope.child();
+                let proc_idx = generate_reset(ir, handlers, body, debug_name, &mut child);
+
+                let input_regs: Vec<Reg> = child
+                    .captures
+                    .iter()
+                    .map(|&(val, _)| {
+                        scope
+                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
+                            .expect("value not in scope")
+                    })
+                    .collect();
+
+                let proc = &ir.ir.procs[proc_idx];
+                let never = proc.output.output.is_never();
+
+                // execute proc
+                let output = proc.output.output.into_result(ir);
+
+                // TODO: inline call?
+                blocks[*block].instructions.push(Instruction::Call(
+                    proc_idx,
+                    output.unwrap_or(None),
+                    input_regs,
+                ));
+
+                if never {
+                    blocks[*block].instructions.push(Instruction::Unreachable);
+                }
+                output
             }
-            output
         }
         E::Handler(_) => todo!(),
         E::String(ref s) => {

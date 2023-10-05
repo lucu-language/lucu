@@ -145,7 +145,7 @@ pub struct Tokenizer<'a> {
     pos: usize,
 
     pub errors: &'a mut Errors,
-    depth: usize,
+    brace: Vec<bool>,
     prev_unfinished: bool,
     peek: Option<Ranged<Token>>,
 }
@@ -155,7 +155,7 @@ impl<'a> Tokenizer<'a> {
         Self {
             next: s.chars().peekable(),
             pos: 0,
-            depth: 0,
+            brace: vec![],
             prev_unfinished: true,
             peek: None,
             errors,
@@ -208,9 +208,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                 },
                 Some(c) => break c,
                 None => {
-                    if let Some(newline) =
-                        prev_newline.filter(|_| self.depth == 0 && !self.prev_unfinished)
-                    {
+                    if let Some(newline) = prev_newline.filter(|_| {
+                        self.brace.last().copied().unwrap_or(true) && !self.prev_unfinished
+                    }) {
                         return Some(Ranged(Token::Semicolon, newline, newline + 1));
                     } else {
                         return None;
@@ -341,18 +341,20 @@ impl<'a> Iterator for Tokenizer<'a> {
         };
 
         match token {
-            Token::Open(g) if g != Group::Brace => {
-                self.depth += 1;
+            Token::Open(g) => {
+                self.brace.push(g == Group::Brace);
             }
-            Token::Close(g) if g != Group::Brace => {
-                self.depth = self.depth.saturating_sub(1);
+            Token::Close(_) => {
+                self.brace.pop();
             }
             _ => {}
         }
 
-        if let Some(newline) = prev_newline
-            .filter(|_| self.depth == 0 && !self.prev_unfinished && !token.continues_statement())
-        {
+        if let Some(newline) = prev_newline.filter(|_| {
+            self.brace.last().copied().unwrap_or(true)
+                && !self.prev_unfinished
+                && !token.continues_statement()
+        }) {
             self.peek = Some(Ranged(token, pos, self.pos));
             Some(Ranged(Token::Semicolon, newline, newline + 1))
         } else {

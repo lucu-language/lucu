@@ -57,7 +57,7 @@ pub enum Expression {
     Op(ExprIdx, Op, ExprIdx),
     Break(Option<ExprIdx>),
 
-    TryWith(ExprIdx, ExprIdx),
+    TryWith(ExprIdx, Option<ExprIdx>),
     Handler(Handler),
 
     String(String),
@@ -560,17 +560,23 @@ impl Parse for Expression {
         let mut expr = tk.ranged(|tk| match tk.peek() {
             // try-with
             Some(Ranged(Token::Try, ..)) => {
-                tk.expect(Token::Try)?;
+                tk.next();
                 let body = Expression::parse_or_default(tk);
-                tk.expect(Token::With)?;
-                let handler = Handler::parse_or_skip(tk)?;
-                let handler = tk.push_expr(handler.map(Expression::Handler));
+
+                let handler = if tk.check(Token::With).is_some() {
+                    let handler = Handler::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler.map(Expression::Handler));
+                    Some(handler)
+                } else {
+                    None
+                };
+
                 Some(Expression::TryWith(tk.push_expr(body), handler))
             }
 
             // if-(else)
             Some(Ranged(Token::If, ..)) => {
-                tk.expect(Token::If)?;
+                tk.next();
 
                 let condition = Expression::parse_or_default(tk);
                 let condition = tk.push_expr(condition);
@@ -595,7 +601,7 @@ impl Parse for Expression {
 
             // break
             Some(Ranged(Token::Break, ..)) => {
-                tk.expect(Token::Break)?;
+                tk.next();
 
                 if matches!(
                     tk.peek(),
@@ -653,7 +659,7 @@ impl Parse for Expression {
             match tk.peek() {
                 // member
                 Some(Ranged(Token::Period, ..)) => {
-                    tk.expect(Token::Period)?;
+                    tk.next();
                     let member = tk.ident()?;
                     expr = Ranged(
                         Expression::Member(tk.push_expr(expr), tk.push_ident(member)),

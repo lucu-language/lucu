@@ -1058,20 +1058,22 @@ fn generate_expr(
                     blocks[no_end].next = Some(end);
                     *block = end;
 
-                    if let (Ok(Some(yes)), Ok(Some(no))) = (yes_reg, no_reg) {
-                        if ir.ir.regs[yes] == ir.ir.regs[no] {
-                            let out = ir.copy_reg(yes);
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::Phi(out, [(yes, yes_end), (no, no_end)]));
-                            Ok(Some(out))
-                        } else {
-                            Ok(None)
+                    match (yes_reg, no_reg) {
+                        (Ok(Some(yes)), Ok(Some(no))) => {
+                            if ir.ir.regs[yes] == ir.ir.regs[no] {
+                                let out = ir.copy_reg(yes);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::Phi(out, [(yes, yes_end), (no, no_end)]));
+                                Ok(Some(out))
+                            } else {
+                                Ok(None)
+                            }
                         }
-                    } else if let (Err(Never), Err(Never)) = (yes_reg, no_reg) {
-                        Err(Never)
-                    } else {
-                        Ok(None)
+                        (Err(Never), Err(Never)) => Err(Never),
+                        (Err(Never), Ok(Some(no))) => Ok(Some(no)),
+                        (Ok(Some(yes)), Err(Never)) => Ok(Some(yes)),
+                        _ => Ok(None),
                     }
                 }
                 None => {

@@ -1,0 +1,20 @@
+effect nonzero {
+	fun nz(n int) int
+}
+
+implicit nonzero {
+	fun nz(n int) int {
+		if n == 0 {
+			yeet
+		} else {
+			n
+		}
+	}
+}
+
+fun main() / debug {
+	putint(nz(7))
+	putint(nz(2))
+	putint(nz(0))
+	putint(nz(8))
+}

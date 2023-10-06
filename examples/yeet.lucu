@@ -7,8 +7,8 @@ effect throwstr {
 }
 
 fun main() / debug {
-	putint(try {
-		try {
+	putint(try int {
+		try int {
 			throwint.throw()
 			69
 		} with throwstr str {
@@ -26,8 +26,8 @@ fun main() / debug {
 		
 	})
 
-	putstr(try {
-		try {
+	putstr(try str {
+		try str {
 			throwstr.throw()
 			"unexpected"
 		} with throwint int {
@@ -45,8 +45,8 @@ fun main() / debug {
 
 	})
 
-	putstr(try {
-		try {
+	putstr(try str {
+		try str {
 			throwstr.throw()
 			"unexpected"
 		} with throwstr str {
@@ -64,8 +64,8 @@ fun main() / debug {
 		
 	})
 
-	putint(try {
-		try {
+	putint(try int {
+		try int {
 			throwint.throw()
 			69
 		} with throwint int {

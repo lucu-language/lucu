@@ -19,7 +19,7 @@ implicit return int {
 }
 
 fun main() / debug {
-	putint(try {
+	putint(try int {
 		putint(get())
 		try {
 			putint(get())

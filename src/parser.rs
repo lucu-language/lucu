@@ -57,7 +57,7 @@ pub enum Expression {
     Op(ExprIdx, Op, ExprIdx),
     Yeet(Option<ExprIdx>),
 
-    TryWith(ExprIdx, Option<ExprIdx>),
+    TryWith(ExprIdx, Option<ReturnType>, Option<ExprIdx>),
     Handler(Handler),
 
     String(String),
@@ -128,6 +128,68 @@ pub struct AST {
 pub struct ParseContext {
     pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
     pub idents: VecMap<Ident, Ranged<String>>,
+}
+
+impl ParseContext {
+    pub fn fold<A>(&self, expr: ExprIdx, acc: A, f: &mut impl FnMut(A, &Expression) -> A) -> A {
+        let mut acc = f(acc, &self.exprs[expr].0);
+        match self.exprs[expr].0 {
+            Expression::Body(ref b) => {
+                for expr in b.main.iter().copied() {
+                    acc = self.fold(expr, acc, f);
+                }
+                if let Some(expr) = b.last {
+                    acc = self.fold(expr, acc, f);
+                }
+            }
+            Expression::Call(expr, ref args) => {
+                acc = self.fold(expr, acc, f);
+                for expr in args.iter().copied() {
+                    acc = self.fold(expr, acc, f);
+                }
+            }
+            Expression::Member(expr, _) => {
+                acc = self.fold(expr, acc, f);
+            }
+            Expression::IfElse(cond, yes, no) => {
+                acc = self.fold(cond, acc, f);
+                acc = self.fold(yes, acc, f);
+                if let Some(no) = no {
+                    acc = self.fold(no, acc, f);
+                }
+            }
+            Expression::Op(left, _, right) => {
+                acc = self.fold(left, acc, f);
+                acc = self.fold(right, acc, f);
+            }
+            Expression::Yeet(expr) => {
+                if let Some(expr) = expr {
+                    acc = self.fold(expr, acc, f);
+                }
+            }
+            Expression::TryWith(expr, _, handler) => {
+                acc = self.fold(expr, acc, f);
+                if let Some(handler) = handler {
+                    acc = self.fold(handler, acc, f);
+                }
+            }
+            Expression::Handler(_) => {}
+            Expression::String(_) => {}
+            Expression::Int(_) => {}
+            Expression::Ident(_) => {}
+            Expression::Error => {}
+        }
+        acc
+    }
+    pub fn for_each(&self, expr: ExprIdx, mut f: impl FnMut(&Expression)) {
+        self.fold(expr, (), &mut |(), e| f(e))
+    }
+    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(&Expression) -> bool) -> bool {
+        self.fold(expr, false, &mut |n, e| n || f(e))
+    }
+    pub fn yeets(&self, expr: ExprIdx) -> bool {
+        self.any(expr, |e| matches!(e, Expression::Yeet(_)))
+    }
 }
 
 struct Tokens<'a> {
@@ -561,6 +623,9 @@ impl Parse for Expression {
             // try-with
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
+
+                let break_type = ReturnType::parse(tk);
+
                 let body = Expression::parse_or_default(tk);
 
                 let handler = if tk.check(Token::With).is_some() {
@@ -571,7 +636,7 @@ impl Parse for Expression {
                     None
                 };
 
-                Some(Expression::TryWith(tk.push_expr(body), handler))
+                Some(Expression::TryWith(tk.push_expr(body), break_type, handler))
             }
 
             // if-(else)

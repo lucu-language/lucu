@@ -232,9 +232,20 @@ fn analyze_expr(
                 analyze_expr(actx, scope, ast, ctx, expr, errors);
             }
         }
-        Expression::TryWith(expr, handler) => {
-            let mut child = scope.child();
+        Expression::TryWith(expr, ref break_type, handler) => {
+            // resolve return
+            match break_type {
+                Some(ReturnType::Type(ref typ)) => {
+                    let name = &ctx.idents[typ.ident].0;
+                    match scope.get(name) {
+                        Some(val) => actx.values[typ.ident] = val,
+                        None => errors.push(ctx.idents[typ.ident].with(Error::UnknownValue)),
+                    }
+                }
+                _ => {}
+            }
 
+            let mut child = scope.child();
             if let Some(handler) = handler {
                 analyze_expr(actx, &mut child, ast, ctx, handler, errors);
 

@@ -111,7 +111,7 @@ fn main() {
     let ir = ir::generate_ir(&ast, &ctx, &asys);
     if debug {
         println!("\n--- IR ---");
-        println!("{}", ir.procs);
+        println!("{}", ir);
         println!("\n--- LLVM ---");
     }
 

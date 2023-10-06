@@ -15,7 +15,10 @@ use inkwell::{
 };
 
 use crate::{
-    ir::{AggregateType, Global, HandlerIdx, Instruction, ProcIdx, Procedure, Type, TypeIdx, IR},
+    ir::{
+        AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type, TypeIdx,
+        IR,
+    },
     vecmap::VecMap,
 };
 
@@ -96,7 +99,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         codegen.structs.push_value(struc);
     }
 
-    for proc in ir.procs.values() {
+    for proc in ir.procsign.values() {
         let func = codegen.generate_proc_sign(ir, proc);
         codegen.procs.push_value(func);
     }
@@ -122,8 +125,13 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         }
     }
 
-    for (proc, function) in ir.procs.values().zip(codegen.procs.values().copied()) {
-        codegen.generate_proc(ir, proc, function);
+    for ((sign, imp), function) in ir
+        .procsign
+        .values()
+        .zip(ir.procimpl.values())
+        .zip(codegen.procs.values().copied())
+    {
+        codegen.generate_proc(ir, sign, imp, function);
     }
 
     // set main func
@@ -197,7 +205,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    fn return_type(&self, proc: &Procedure) -> AnyTypeEnum<'ctx> {
+    fn return_type(&self, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
         let out = self.get_type(&proc.output.output);
         let out_name = BasicTypeEnum::try_from(out)
             .ok()
@@ -248,7 +256,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    fn generate_proc_sign(&self, ir: &IR, proc: &Procedure) -> FunctionValue<'ctx> {
+    fn generate_proc_sign(&self, ir: &IR, proc: &ProcSign) -> FunctionValue<'ctx> {
         let in_types = proc
             .inputs
             .iter()
@@ -270,8 +278,14 @@ impl<'ctx> CodeGen<'ctx> {
         self.module
             .add_function(&proc.debug_name, fn_type, Some(Linkage::Internal))
     }
-    fn generate_proc(&self, ir: &IR, proc: &Procedure, function: FunctionValue<'ctx>) {
-        let mut blocks: Vec<_> = (0..proc.blocks.len())
+    fn generate_proc(
+        &self,
+        ir: &IR,
+        proc: &ProcSign,
+        imp: &ProcImpl,
+        function: FunctionValue<'ctx>,
+    ) {
+        let mut blocks: Vec<_> = (0..imp.blocks.len())
             .map(|idx| {
                 self.context
                     .append_basic_block(function, &format!("L{}", idx))
@@ -288,7 +302,39 @@ impl<'ctx> CodeGen<'ctx> {
             valmap.insert(reg, function.get_nth_param(n as u32).unwrap());
         }
 
-        'outer: for (idx, block) in proc.blocks.values().enumerate() {
+        if let Some(captures) = &proc.captures {
+            self.builder.position_at_end(blocks[0]);
+
+            let struc = match captures.input {
+                either::Either::Left(reg) => valmap.get(&reg).map(|val| val.into_struct_value()),
+                either::Either::Right(glob) => {
+                    BasicTypeEnum::try_from(self.get_type(&ir.globals[glob]))
+                        .ok()
+                        .map(|typ| {
+                            self.builder
+                                .build_load(typ, self.globals[glob].unwrap().as_pointer_value(), "")
+                                .unwrap()
+                                .into_struct_value()
+                        })
+                }
+            };
+
+            if let Some(struc) = struc {
+                let mut member = 0;
+                for reg in captures.members.iter().copied() {
+                    if !self.get_type(&ir.regs[reg]).is_void_type() {
+                        let val = self
+                            .builder
+                            .build_extract_value(struc, member, "capture")
+                            .unwrap();
+                        valmap.insert(reg, val);
+                        member += 1;
+                    }
+                }
+            }
+        }
+
+        'outer: for (idx, block) in imp.blocks.values().enumerate() {
             let basic_block = blocks[idx];
             self.builder.position_at_end(basic_block);
 
@@ -382,7 +428,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .collect();
 
                         let ret = self.builder.build_call(func, &args, "").unwrap();
-                        let (frame, val) = self.get_return(&ir.procs[p], ret);
+                        let (frame, val) = self.get_return(&ir.procsign[p], ret);
 
                         if let Some(frame) = frame {
                             blocks[idx] = self.handle_break(
@@ -392,7 +438,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 proc.handles
                                     .iter()
                                     .copied()
-                                    .chain(ir.procs[p].output.implicit_break.into_iter()),
+                                    .chain(ir.procsign[p].output.implicit_break.into_iter()),
                                 !proc.output.break_union.is_empty(),
                             );
                         }
@@ -402,7 +448,7 @@ impl<'ctx> CodeGen<'ctx> {
                             if let Ok(typ) = BasicTypeEnum::try_from(typ) {
                                 let val = val.expect(&format!(
                                     "call {} returns no value",
-                                    ir.procs[p].debug_name
+                                    ir.procsign[p].debug_name
                                 ));
                                 let cast = self.build_union_cast(val, typ);
                                 valmap.insert(r, cast);
@@ -737,7 +783,7 @@ impl<'ctx> CodeGen<'ctx> {
     }
     fn get_return(
         &self,
-        proc: &Procedure,
+        proc: &ProcSign,
         ret: CallSiteValue<'ctx>,
     ) -> (Option<IntValue<'ctx>>, Option<BasicValueEnum<'ctx>>) {
         if !proc.output.break_union.is_empty() {

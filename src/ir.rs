@@ -20,15 +20,28 @@ pub struct ReturnType {
 }
 
 #[derive(Debug)]
-pub struct Procedure {
+pub struct Captures {
+    pub input: Either<Reg, Global>,
+    pub members: Vec<Reg>,
+}
+
+#[derive(Debug)]
+pub struct ProcSign {
     pub inputs: Vec<Reg>,
+    pub captures: Option<Captures>,
+
     pub output: ReturnType,
+    pub debug_name: String,
+
     pub handles: Vec<HandlerIdx>,
 
-    pub blocks: VecMap<BlockIdx, Block>,
-    pub start: BlockIdx,
+    handlers: Vec<HandlerIdx>,
+    scope: HashMap<Val, Either<Reg, Global>>,
+}
 
-    pub debug_name: String,
+#[derive(Debug)]
+pub struct ProcImpl {
+    pub blocks: VecMap<BlockIdx, Block>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,12 +93,6 @@ impl Type {
 #[derive(Default)]
 pub struct AggregateType {
     pub children: Vec<Type>,
-}
-
-impl Procedure {
-    fn instructions(&self) -> impl Iterator<Item = &Instruction> {
-        self.blocks.values().flat_map(|b| b.instructions.iter())
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -212,65 +219,11 @@ struct ProcIdent {
 #[derive(Debug)]
 struct Handler {
     effect: Val,
-    closure: TypeIdx,
+    closure: Either<TypeIdx, Global>,
     procs: VecMap<EffFunIdx, ProcIdx>,
-    global: bool,
 }
 
-#[derive(Default)]
-struct Scope<'a> {
-    parent: Option<&'a Scope<'a>>,
-    regs: HashMap<Val, Either<Reg, Global>>,
-    captures: Vec<(Val, Reg)>,
-}
-
-impl<'a> Scope<'a> {
-    fn get_parent(&self, key: Val) -> Option<Either<Reg, Global>> {
-        match self.regs.get(&key) {
-            Some(&v) => Some(v),
-            _ => self.parent.map(|p| p.get_parent(key)).flatten(),
-        }
-    }
-    fn get_or_capture(
-        &mut self,
-        ir: &mut IRContext,
-        instr: &mut Vec<Instruction>,
-        key: Val,
-    ) -> Option<Reg> {
-        let either = match self.regs.get(&key) {
-            Some(&v) => Some(v),
-            None => match self.parent.map(|p| p.get_parent(key)).flatten() {
-                Some(Either::Right(glob)) => Some(Either::Right(glob)),
-                Some(Either::Left(reg)) => {
-                    let pos = self.captures.iter().position(|&(k, _)| k == key);
-                    if let Some(pos) = pos {
-                        Some(Either::Left(self.captures[pos].1))
-                    } else {
-                        let capture = ir.copy_reg(reg);
-                        self.captures.push((key, capture));
-                        Some(Either::Left(capture))
-                    }
-                }
-                None => None,
-            },
-        }?;
-        match either {
-            Either::Left(reg) => Some(reg),
-            Either::Right(glob) => {
-                let reg = ir.next_reg(ir.ir.globals[glob]);
-                instr.push(Instruction::GetGlobal(reg, glob));
-                Some(reg)
-            }
-        }
-    }
-    fn child(&self) -> Scope {
-        Scope {
-            parent: Some(self),
-            regs: HashMap::new(),
-            captures: Vec::new(),
-        }
-    }
-}
+type Scope = HashMap<Val, Either<Reg, Global>>;
 
 struct IRContext<'a> {
     ir: IR,
@@ -296,7 +249,7 @@ impl<'a> IRContext<'a> {
         let mut union = Vec::new();
         for handler in handlers.into_iter().copied() {
             for proc in self.handlers[handler].procs.values().copied() {
-                for t in self.ir.procs[proc].output.break_union.iter().copied() {
+                for t in self.ir.procsign[proc].output.break_union.iter().copied() {
                     if !union.contains(&t) {
                         union.push(t);
                     }
@@ -308,7 +261,8 @@ impl<'a> IRContext<'a> {
 }
 
 pub struct IR {
-    pub procs: VecMap<ProcIdx, Procedure>,
+    pub procsign: VecMap<ProcIdx, ProcSign>,
+    pub procimpl: VecMap<ProcIdx, ProcImpl>,
     pub main: ProcIdx,
 
     pub regs: VecMap<Reg, Type>,
@@ -317,16 +271,16 @@ pub struct IR {
     pub aggregates: VecMap<TypeIdx, AggregateType>,
 }
 
-impl Display for VecMap<ProcIdx, Procedure> {
+impl Display for IR {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for proc in self.values() {
+        for (sign, imp) in self.procsign.values().zip(self.procimpl.values()) {
             // write proc signature
-            write!(f, "{}", proc.debug_name)?;
+            write!(f, "{}", sign.debug_name)?;
 
-            if proc.inputs.len() > 0 {
+            if sign.inputs.len() > 0 {
                 write!(f, " ( ")?;
-                for &r in proc.inputs.iter() {
-                    if r != *proc.inputs.first().unwrap() {
+                for &r in sign.inputs.iter() {
+                    if r != *sign.inputs.first().unwrap() {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", r)?;
@@ -337,7 +291,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
             write!(f, " {{\n")?;
 
             // write blocks
-            for (i, block) in proc.blocks.values().enumerate() {
+            for (i, block) in imp.blocks.values().enumerate() {
                 // write label
                 if i > 0 {
                     writeln!(f, "{}:", BlockIdx(i))?;
@@ -377,7 +331,7 @@ impl Display for VecMap<ProcIdx, Procedure> {
                                 Some(out) => format!("{} <- ", out),
                                 None => "       ".into(),
                             },
-                            self[proc].debug_name,
+                            self.procsign[proc].debug_name,
                             match args
                                 .iter()
                                 .map(|r| r.to_string())
@@ -443,6 +397,8 @@ impl Display for VecMap<ProcIdx, Procedure> {
 
 const SLICE: TypeIdx = TypeIdx(0);
 
+type ProcTodo = Vec<(ProcIdx, ExprIdx, Option<HandlerIdx>)>;
+
 pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
@@ -452,7 +408,8 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         ctx,
         asys,
         ir: IR {
-            procs: VecMap::new(),
+            procsign: VecMap::new(),
+            procimpl: VecMap::new(),
             main: ProcIdx(0),
 
             regs: VecMap::new(),
@@ -466,66 +423,95 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     });
 
     // define putint
-    let debug_closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
-
     let inputs = vec![ir.next_reg(Type::Int)];
-    let putint = ir.ir.procs.push(
+    let putint = ir.ir.procsign.push(
         ProcIdx,
-        Procedure {
+        ProcSign {
             inputs,
-
+            scope: HashMap::new(),
             output: ReturnType {
                 output: Type::None,
                 implicit_break: None,
                 break_union: Vec::new(),
             },
-
-            blocks: vec![Block {
-                instructions: vec![Instruction::PrintNum(Reg(0)), Instruction::Return(None)],
-                next: None,
-            }]
-            .into(),
-
-            start: BlockIdx(0),
             debug_name: "putint".into(),
+            handlers: Vec::new(),
             handles: Vec::new(),
+            captures: None,
         },
     );
+    ir.ir.procimpl.push_value(ProcImpl {
+        blocks: vec![Block {
+            instructions: vec![Instruction::PrintNum(Reg(0)), Instruction::Return(None)],
+            next: None,
+        }]
+        .into(),
+    });
 
     let inputs = vec![ir.next_reg(Type::Aggregate(SLICE))];
-    let putstr = ir.ir.procs.push(
+    let putstr = ir.ir.procsign.push(
         ProcIdx,
-        Procedure {
+        ProcSign {
             inputs,
-
+            scope: HashMap::new(),
             output: ReturnType {
                 output: Type::None,
                 implicit_break: None,
                 break_union: Vec::new(),
             },
-
-            blocks: vec![Block {
-                instructions: vec![Instruction::PrintStr(Reg(1)), Instruction::Return(None)],
-                next: None,
-            }]
-            .into(),
-
-            start: BlockIdx(0),
             debug_name: "putstr".into(),
+            handlers: Vec::new(),
             handles: Vec::new(),
+            captures: None,
         },
     );
+    ir.ir.procimpl.push_value(ProcImpl {
+        blocks: vec![Block {
+            instructions: vec![Instruction::PrintStr(Reg(1)), Instruction::Return(None)],
+            next: None,
+        }]
+        .into(),
+    });
 
     // define debug
+    let debug_closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+    let debug_glob = ir.ir.globals.push(Global, Type::Aggregate(debug_closure));
     let debug = ir.handlers.push(
         HandlerIdx,
         Handler {
             effect: DEBUG,
             procs: vec![putint, putstr].into(),
-            closure: debug_closure,
-            global: true,
+            closure: Either::Right(debug_glob),
         },
     );
+
+    // generate main signature
+    let main = asys.main.expect("no main function");
+    let fun = &ir.ast.functions[main];
+    let val = ir.asys.values[fun.decl.name];
+
+    let params = fun
+        .decl
+        .sign
+        .inputs
+        .values()
+        .map(|&(ident, ref typ)| (ir.asys.values[ident], Type::from_type(&ir.asys, typ)))
+        .collect::<Vec<_>>();
+
+    let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
+
+    ir.ir.main = generate_proc_sign(
+        &mut ir,
+        Some(val),
+        &[debug],
+        &[],
+        &params,
+        output,
+        "main".into(),
+    );
+
+    // proc todo
+    let mut proc_todo = vec![(ir.ir.main, fun.body, None)];
 
     // generate implied handlers
     for expr in ast.implied.iter().copied() {
@@ -543,13 +529,13 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
 
         // generate handler
         let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+        let glob = ir.ir.globals.push(Global, Type::Aggregate(closure));
         let handler_idx = ir.handlers.push(
             HandlerIdx,
             Handler {
                 effect: eff_val,
-                closure,
+                closure: Either::Right(glob),
                 procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
-                global: true,
             },
         );
 
@@ -575,34 +561,29 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
             let eff_name = ir.ctx.idents[eff_ident].0.as_str();
             let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
             let debug_name = format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
-            // TODO: add handlers of proc
 
             // generate handler proc
-            let proc_idx = generate_fun(
+            // TODO: add handlers of proc
+            let proc_idx = generate_proc_sign(
                 &mut ir,
                 None,
-                &[], // TODO: add handlers of proc
+                &[],
+                &[handler_idx],
                 &params,
-                fun.body,
                 output,
-                Some(handler_idx),
                 debug_name,
-                &mut Scope::default(),
             );
+            proc_todo.push((proc_idx, fun.body, Some(handler_idx)));
 
             // check if handler can break
-            let can_break = ir.ir.procs[proc_idx]
-                .instructions()
-                .any(|instr| matches!(instr, Instruction::Yeet(_, _)));
-
-            let proc = &mut ir.ir.procs[proc_idx];
+            let proc = &mut ir.ir.procsign[proc_idx];
             proc.output.implicit_break = Some(handler_idx);
 
             let break_type = match &ast_handler.break_type {
                 Some(parser::ReturnType::Type(t)) => Some(Type::from_type(asys, t)),
                 Some(parser::ReturnType::Never) => None,
                 None => {
-                    if can_break {
+                    if ir.ctx.yeets(fun.body) {
                         Some(Type::None)
                     } else {
                         None
@@ -622,74 +603,66 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     }
 
     // generate
-    // TODO: main not found
-    let main = asys.main.expect("no main function");
-    let fun = &ir.ast.functions[main];
-    let val = ir.asys.values[fun.decl.name];
-
-    let params: Box<[(Val, Type)]> = fun
-        .decl
-        .sign
-        .inputs
-        .values()
-        .map(|&(ident, ref typ)| (ir.asys.values[ident], Type::from_type(&ir.asys, typ)))
-        .collect();
-
-    let output = Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
-
-    let debug_glob = ir.ir.globals.push(Global, Type::Aggregate(debug_closure));
-    let mut scope = Scope::default();
-    scope.regs.insert(DEBUG, Either::Right(debug_glob));
-
-    ir.ir.main = generate_fun(
-        &mut ir,
-        Some(val),
-        &[debug],
-        &params,
-        fun.body,
-        output,
-        None,
-        "main".into(),
-        &mut scope,
-    );
+    while !proc_todo.is_empty() {
+        let first = proc_todo.remove(0);
+        generate_proc_impl(&mut ir, first.0, first.1, first.2, &mut proc_todo);
+    }
 
     // return ir
     ir.ir
 }
 
-fn generate_fun(
+fn generate_proc_sign(
     ir: &mut IRContext,
     fun: Option<Val>,
     handlers: &[HandlerIdx],
+    handled: &[HandlerIdx],
     params: &[(Val, Type)],
-    body: ExprIdx,
     output: Type,
-    handler: Option<HandlerIdx>,
     debug_name: String,
-    scope: &mut Scope,
 ) -> ProcIdx {
-    // add new proc to list
-    let mut blocks = VecMap::new();
-    let start = blocks.push(BlockIdx, Block::default());
+    // get inputs
+    let mut inputs = Vec::new();
+    let mut scope = HashMap::new();
+    for &(val, typ) in params {
+        let reg = ir.next_reg(typ);
+        scope.insert(val, Either::Left(reg));
+        inputs.push(reg);
+    }
+    for handler in handlers.iter().chain(handled.iter()).copied() {
+        let handler = &ir.handlers[handler];
+        let effect = handler.effect;
+        match handler.closure {
+            Either::Left(typ) => {
+                let reg = ir.next_reg(Type::Aggregate(typ));
+                scope.insert(effect, Either::Left(reg));
+                inputs.push(reg);
+            }
+            Either::Right(glob) => {
+                scope.insert(effect, Either::Right(glob));
+            }
+        }
+    }
 
-    let proc_idx = ir.ir.procs.push(
+    // create signature
+    let proc_idx = ir.ir.procsign.push(
         ProcIdx,
-        Procedure {
-            inputs: Vec::new(),
+        ProcSign {
+            inputs,
+            scope,
             output: ReturnType {
                 output,
                 implicit_break: None,
                 break_union: ir.break_union(handlers),
             },
-            start,
-            debug_name: debug_name.clone(),
-
-            // these will be defined at the end
-            blocks: VecMap::new(),
+            debug_name,
+            handlers: handlers.iter().chain(handled.iter()).copied().collect(),
             handles: Vec::new(),
+            captures: None,
         },
     );
 
+    // add procint if this is a function
     if let Some(fun) = fun {
         let ident = ProcIdent {
             fun,
@@ -698,69 +671,21 @@ fn generate_fun(
         ir.proc_map.insert(ident, proc_idx);
     }
 
-    // add params to vars
-    for &(val, typ) in params {
-        let reg = ir.next_reg(typ);
-        scope.regs.insert(val, Either::Left(reg));
-        ir.ir.procs[proc_idx].inputs.push(reg);
-    }
-
-    // generate code
-    let mut end = start;
-    let ret = generate_expr(
-        ir,
-        handlers,
-        body,
-        &mut blocks,
-        &mut end,
-        handler,
-        &debug_name,
-        scope,
-    );
-
-    if let Ok(ret) = ret {
-        if !matches!(
-            blocks[end].instructions.last(),
-            Some(Instruction::Return(_) | Instruction::Yeet(_, _))
-        ) {
-            // add return if we haven't already
-            blocks[end].instructions.push(Instruction::Return(ret));
-        }
-    }
-
-    // return proc
-    ir.ir.procs[proc_idx].blocks = blocks;
     proc_idx
 }
 
-fn generate_reset(
+fn generate_proc_impl(
     ir: &mut IRContext,
-    handlers: &[HandlerIdx],
-    handled: &[HandlerIdx],
+    proc: ProcIdx,
     body: ExprIdx,
-    debug_name: String,
-    scope: &mut Scope,
-) -> ProcIdx {
-    // create blocks
+    handler: Option<HandlerIdx>,
+    proc_todo: &mut ProcTodo,
+) {
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
 
-    // generate code
     let mut end = start;
-    let ret = generate_expr(
-        ir,
-        &handlers
-            .iter()
-            .copied()
-            .chain(handled.iter().copied())
-            .collect::<Vec<_>>(),
-        body,
-        &mut blocks,
-        &mut end,
-        None,
-        &debug_name,
-        scope,
-    );
+    let ret = generate_expr(ir, proc, body, handler, &mut blocks, &mut end, proc_todo);
 
     if let Ok(ret) = ret {
         if !matches!(
@@ -772,54 +697,46 @@ fn generate_reset(
         }
     }
 
-    let output = Type::from_result(ret, ir);
+    // TODO: type inference
+    ir.ir.procsign[proc].output.output = Type::from_result(ret, ir);
 
-    // return proc
-    ir.ir.procs.push(
-        ProcIdx,
-        Procedure {
-            inputs: scope.captures.iter().map(|&(_, v)| v).collect(),
-            output: ReturnType {
-                output,
-                implicit_break: None,
-                break_union: ir.break_union(handlers),
-            },
-            start,
-            debug_name,
-            blocks,
-            handles: Vec::new(),
-        },
-    )
+    ir.ir.procimpl.push_value(ProcImpl { blocks });
 }
 
 #[derive(Clone, Copy)]
 struct Never;
 type ExprResult = Result<Option<Reg>, Never>;
 
+fn get_captures(ir: &IRContext, scope: &Scope, expr: ExprIdx, captures: &mut Vec<(Val, Reg)>) {
+    ir.ctx.for_each(expr, |e| {
+        if let Expression::Ident(i) = *e {
+            let val = ir.asys.values[i];
+            if let Some(&Either::Left(reg)) = scope.get(&val) {
+                if !captures.iter().any(|&(v, _)| v == val) {
+                    captures.push((val, reg));
+                }
+            }
+        }
+    })
+}
+
 fn generate_expr(
     ir: &mut IRContext,
-    handlers: &[HandlerIdx],
+    proc_idx: ProcIdx,
     expr: ExprIdx,
+    handler: Option<HandlerIdx>,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
-    handler: Option<HandlerIdx>,
-    debug_name: &str,
-    scope: &mut Scope,
+    proc_todo: &mut ProcTodo,
 ) -> ExprResult {
     use Expression as E;
     match ir.ctx.exprs[expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
-                let _ = generate_expr(
-                    ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                );
+                let _ = generate_expr(ir, proc_idx, expr, handler, blocks, block, proc_todo);
             }
             body.last
-                .map(|expr| {
-                    generate_expr(
-                        ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                    )
-                })
+                .map(|expr| generate_expr(ir, proc_idx, expr, handler, blocks, block, proc_todo))
                 .unwrap_or(Ok(None))
         }
         E::Call(func, ref args) => {
@@ -832,10 +749,8 @@ fn generate_expr(
                     let mut reg_args = args
                         .iter()
                         .map(|&expr| {
-                            generate_expr(
-                                ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                            )
-                            .map(|r| r.expect("call argument does not return a value"))
+                            generate_expr(ir, proc_idx, expr, handler, blocks, block, proc_todo)
+                                .map(|r| r.expect("call argument does not return a value"))
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
@@ -843,26 +758,25 @@ fn generate_expr(
                     match ir.asys.defs[val] {
                         Definition::EffectFunction(eff_val, eff_fun_idx) => {
                             // get handler
-                            let handler = handlers
+                            let proc_sign = &ir.ir.procsign[proc_idx];
+                            let handler = proc_sign
+                                .handlers
                                 .iter()
                                 .chain(ir.implied_handlers.iter())
                                 .map(|&idx| &ir.handlers[idx])
                                 .find(|handler| handler.effect == eff_val)
                                 .expect("handler of effect function is not in scope");
-                            let global = handler.global;
-
-                            let proc_idx = handler.procs[eff_fun_idx];
-
-                            let typ = ir.ir.procs[proc_idx].output.output;
-                            let output = typ.into_result(ir);
 
                             // get closure
-                            if !global {
-                                let closure = scope
-                                    .get_or_capture(ir, &mut blocks[*block].instructions, eff_val)
-                                    .expect("handler closure is not in scope");
-                                reg_args.push(closure);
+                            if let Some(Either::Left(reg)) = proc_sign.scope.get(&eff_val).copied()
+                            {
+                                reg_args.push(reg);
                             }
+
+                            // get output
+                            let proc_idx = handler.procs[eff_fun_idx];
+                            let typ = ir.ir.procsign[proc_idx].output.output;
+                            let output = typ.into_result(ir);
 
                             // execute handler
                             blocks[*block].instructions.push(Instruction::Call(
@@ -878,6 +792,7 @@ fn generate_expr(
                         }
                         Definition::Function(func_idx) => {
                             // create proc identity
+                            let proc_sign = &ir.ir.procsign[proc_idx];
                             let fun = &ir.ast.functions[func_idx];
 
                             let effects: Box<[HandlerIdx]> = fun
@@ -887,7 +802,8 @@ fn generate_expr(
                                 .iter()
                                 .map(|&e| {
                                     let effect = ir.asys.values[e];
-                                    handlers
+                                    proc_sign
+                                        .handlers
                                         .iter()
                                         .find(|&&h| ir.handlers[h].effect == effect)
                                         .unwrap()
@@ -901,18 +817,7 @@ fn generate_expr(
                             };
 
                             reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
-                                match ir.handlers[idx].global {
-                                    true => None,
-                                    false => Some(
-                                        scope
-                                            .get_or_capture(
-                                                ir,
-                                                &mut blocks[*block].instructions,
-                                                ir.handlers[idx].effect,
-                                            )
-                                            .expect("handler closure not in scope"),
-                                    ),
-                                }
+                                proc_sign.scope[&ir.handlers[idx].effect].left()
                             }));
 
                             // get proc
@@ -920,7 +825,7 @@ fn generate_expr(
                                 let handlers = &procident.handlers;
 
                                 // get params
-                                let mut params: Vec<(Val, Type)> = fun
+                                let params: Vec<(Val, Type)> = fun
                                     .decl
                                     .sign
                                     .inputs
@@ -929,16 +834,6 @@ fn generate_expr(
                                         (ir.asys.values[ident], Type::from_type(&ir.asys, typ))
                                     })
                                     .collect();
-
-                                params.extend(procident.handlers.iter().filter_map(|&idx| {
-                                    match ir.handlers[idx].global {
-                                        true => None,
-                                        false => Some((
-                                            ir.handlers[idx].effect,
-                                            Type::Aggregate(ir.handlers[idx].closure),
-                                        )),
-                                    }
-                                }));
 
                                 let output =
                                     Type::from_return(&ir.asys, fun.decl.sign.output.as_ref());
@@ -969,22 +864,21 @@ fn generate_expr(
                                 }
 
                                 // generate func
-                                let mut child = scope.child();
-                                generate_fun(
+                                let proc_idx = generate_proc_sign(
                                     ir,
                                     Some(val),
                                     handlers,
+                                    &[],
                                     &params,
-                                    fun.body,
                                     output,
-                                    None,
                                     debug_name,
-                                    &mut child,
-                                )
+                                );
+                                proc_todo.push((proc_idx, fun.body, None));
+                                proc_idx
                             } else {
                                 ir.proc_map[&procident]
                             };
-                            let proc = &ir.ir.procs[proc_idx];
+                            let proc = &ir.ir.procsign[proc_idx];
                             let never = proc.output.output.is_never();
 
                             // execute proc
@@ -1012,26 +906,16 @@ fn generate_expr(
         }
         E::Member(_, _) => todo!(),
         E::IfElse(cond, yes, no) => {
-            let cond = generate_expr(
-                ir, handlers, cond, blocks, block, handler, debug_name, scope,
-            )?
-            .expect("condition has no value");
+            let cond = generate_expr(ir, proc_idx, cond, handler, blocks, block, proc_todo)?
+                .expect("condition has no value");
 
             match no {
                 Some(no) => {
                     let no_start = blocks.push(BlockIdx, Block::default());
 
                     let mut no_end = no_start;
-                    let no_reg = generate_expr(
-                        ir,
-                        handlers,
-                        no,
-                        blocks,
-                        &mut no_end,
-                        handler,
-                        debug_name,
-                        scope,
-                    );
+                    let no_reg =
+                        generate_expr(ir, proc_idx, no, handler, blocks, &mut no_end, proc_todo);
 
                     let yes_start = blocks.push(BlockIdx, Block::default());
 
@@ -1040,16 +924,8 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, no_start));
 
                     let mut yes_end = yes_start;
-                    let yes_reg = generate_expr(
-                        ir,
-                        handlers,
-                        yes,
-                        blocks,
-                        &mut yes_end,
-                        handler,
-                        debug_name,
-                        scope,
-                    );
+                    let yes_reg =
+                        generate_expr(ir, proc_idx, yes, handler, blocks, &mut yes_end, proc_todo);
 
                     let end = blocks.push(BlockIdx, Block::default());
 
@@ -1086,16 +962,8 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, end));
 
                     let mut yes_end = yes_start;
-                    let _ = generate_expr(
-                        ir,
-                        handlers,
-                        yes,
-                        blocks,
-                        &mut yes_end,
-                        handler,
-                        debug_name,
-                        scope,
-                    );
+                    let _ =
+                        generate_expr(ir, proc_idx, yes, handler, blocks, &mut yes_end, proc_todo);
 
                     blocks[*block].next = Some(end);
                     blocks[yes_end].next = Some(end);
@@ -1106,15 +974,11 @@ fn generate_expr(
             }
         }
         E::Op(left, op, right) => {
-            let left = generate_expr(
-                ir, handlers, left, blocks, block, handler, debug_name, scope,
-            )?
-            .expect("left operand has no value");
+            let left = generate_expr(ir, proc_idx, left, handler, blocks, block, proc_todo)?
+                .expect("left operand has no value");
 
-            let right = generate_expr(
-                ir, handlers, right, blocks, block, handler, debug_name, scope,
-            )?
-            .expect("right operand has no value");
+            let right = generate_expr(ir, proc_idx, right, handler, blocks, block, proc_todo)?
+                .expect("right operand has no value");
 
             // TODO: ops with different return types
             let out = ir.next_reg(Type::Int);
@@ -1133,11 +997,7 @@ fn generate_expr(
         E::Yeet(value) => {
             // get break value
             let reg = value
-                .map(|expr| {
-                    generate_expr(
-                        ir, handlers, expr, blocks, block, handler, debug_name, scope,
-                    )
-                })
+                .map(|expr| generate_expr(ir, proc_idx, expr, handler, blocks, block, proc_todo))
                 .unwrap_or(Ok(None))?;
 
             // TODO: we assume this is top level inside a handler
@@ -1148,7 +1008,7 @@ fn generate_expr(
             // break returns any type
             Err(Never)
         }
-        E::TryWith(body, handler) => {
+        E::TryWith(body, ref break_type, handler) => {
             if let Some(handler) = handler {
                 // get handler
                 let ast_handler = match ir.ctx.exprs[handler].0 {
@@ -1166,17 +1026,18 @@ fn generate_expr(
                 let effect = &ir.ast.effects[eff_idx];
 
                 // generate handler
-                let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
-                let closure_reg = ir.next_reg(Type::Aggregate(closure));
+                let closure_typ = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+                let closure_reg = ir.next_reg(Type::Aggregate(closure_typ));
 
                 let global = true; // TODO: this is for testing, should be false by default
-
-                if global {
-                    let glob = ir.ir.globals.push(Global, Type::Aggregate(closure));
-                    scope.regs.insert(eff_val, Either::Right(glob));
+                let closure = if global {
+                    let glob = ir.ir.globals.push(Global, Type::Aggregate(closure_typ));
+                    Either::Right(glob)
                 } else {
-                    scope.regs.insert(eff_val, Either::Left(closure_reg));
-                }
+                    Either::Left(closure_typ)
+                };
+
+                let mut captures = Vec::new();
 
                 // generate handler
                 let handler_idx = ir.handlers.push(
@@ -1185,13 +1046,11 @@ fn generate_expr(
                         closure,
                         effect: eff_val,
                         procs: VecMap::filled(effect.functions.len(), ProcIdx(usize::MAX)),
-                        global,
                     },
                 );
 
                 let mut break_self = false;
 
-                let mut child = scope.child();
                 for fun in ast_handler.functions.iter() {
                     let val = ir.asys.values[fun.decl.name];
                     let eff_fun_idx = match ir.asys.defs[val] {
@@ -1210,7 +1069,7 @@ fn generate_expr(
                         })
                         .collect();
 
-                    if !global {
+                    if let Either::Left(closure) = closure {
                         params.push((val, Type::Aggregate(closure)));
                     }
 
@@ -1221,30 +1080,43 @@ fn generate_expr(
                     let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
                     let debug_name =
                         format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
-                    // TODO: add handlers of proc
+
+                    // get captures
+                    get_captures(ir, &ir.ir.procsign[proc_idx].scope, fun.body, &mut captures);
 
                     // generate handler proc
-                    let proc_idx = generate_fun(
+                    // TODO: add handlers of proc
+                    let subhandlers = ir.ir.procsign[proc_idx].handlers.clone();
+                    let proc_idx = generate_proc_sign(
                         ir,
                         None,
-                        handlers, // TODO: add handlers of proc
+                        &subhandlers, // TODO: filter out unused handlers
+                        &[handler_idx],
                         &params,
-                        fun.body,
                         output,
-                        Some(handler_idx),
                         debug_name,
-                        &mut child,
                     );
+                    proc_todo.push((proc_idx, fun.body, Some(handler_idx)));
 
                     // check if handler can break
-                    let can_break = ir.ir.procs[proc_idx]
-                        .instructions()
-                        .any(|instr| matches!(instr, Instruction::Yeet(_, _)));
+                    let can_break = ir.ctx.yeets(fun.body);
                     if can_break {
                         break_self = true;
                     }
 
-                    let proc = &mut ir.ir.procs[proc_idx];
+                    // get captures
+                    let proc = &mut ir.ir.procsign[proc_idx];
+                    let mut members = Vec::new();
+                    for &(val, reg) in captures.iter() {
+                        let typ = ir.ir.regs[reg];
+                        let reg = ir.ir.regs.push(Reg, typ);
+                        members.push(reg);
+                        proc.scope.insert(val, Either::Left(reg));
+                    }
+                    proc.captures = Some(Captures {
+                        input: closure.map_left(|_| proc.inputs.last().copied().unwrap()),
+                        members,
+                    });
 
                     // TODO: infer break type
                     let break_type = match &ast_handler.break_type {
@@ -1262,82 +1134,60 @@ fn generate_expr(
                         proc.output.break_union.push((handler_idx, break_type));
                     }
 
-                    // get captures
-                    let (param, offset) = match global {
-                        true => {
-                            let glob = scope.regs[&eff_val].unwrap_right();
-                            let reg = ir.ir.regs.push(Reg, ir.ir.globals[glob]);
-                            proc.blocks[proc.start]
-                                .instructions
-                                .insert(0, Instruction::GetGlobal(reg, glob));
-                            (reg, 1)
-                        }
-                        false => {
-                            let reg = proc.inputs.last().copied().unwrap();
-                            (reg, 0)
-                        }
-                    };
-                    for (i, capture) in child.captures.iter().map(|&(_, v)| v).enumerate() {
-                        proc.blocks[proc.start]
-                            .instructions
-                            .insert(i + offset, Instruction::Member(capture, param, i))
-                    }
-
                     // add to handler
                     ir.handlers[handler_idx].procs[eff_fun_idx] = proc_idx;
                 }
 
                 // create handler closure
-                ir.ir.aggregates[closure]
-                    .children
-                    .extend(child.captures.iter().map(|&(_, reg)| ir.ir.regs[reg]));
+                let aggregate = captures.iter().map(|&(_, reg)| reg).collect::<Vec<_>>();
 
-                let aggregate = child
-                    .captures
-                    .iter()
-                    .map(|&(val, _)| {
-                        scope
-                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
-                            .expect("value not in scope")
-                    })
-                    .collect();
+                ir.ir.aggregates[closure_typ]
+                    .children
+                    .extend(aggregate.iter().map(|&reg| ir.ir.regs[reg]));
 
                 blocks[*block]
                     .instructions
                     .push(Instruction::Aggregate(closure_reg, aggregate));
 
                 // add handler to handler list
+                let proc_sign = &ir.ir.procsign[proc_idx];
                 let mut subhandlers = Vec::new();
                 subhandlers.extend(
-                    handlers
+                    proc_sign
+                        .handlers
                         .iter()
                         .filter(|&&idx| ir.handlers[idx].effect != eff_val),
                 );
 
                 // generate reset
-                let debug_name = format!("{}__reset#{}", debug_name, usize::from(handler_idx));
+                let mut reset_captures = Vec::new();
+                get_captures(ir, &proc_sign.scope, body, &mut reset_captures);
+                let reset_params = reset_captures
+                    .iter()
+                    .copied()
+                    .map(|(v, r)| (v, ir.ir.regs[r]))
+                    .collect::<Vec<_>>();
 
-                let mut child = scope.child();
-                let proc_idx = generate_reset(
-                    ir,
-                    &subhandlers,
-                    &[handler_idx],
-                    body,
-                    debug_name,
-                    &mut child,
+                let debug_name = format!(
+                    "{}__reset#{}",
+                    proc_sign.debug_name,
+                    usize::from(handler_idx)
                 );
 
-                let input_regs: Vec<Reg> = child
-                    .captures
-                    .iter()
-                    .map(|&(val, _)| {
-                        scope
-                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
-                            .expect("value not in scope")
-                    })
-                    .collect();
+                let proc_idx = generate_proc_sign(
+                    ir,
+                    None,
+                    &subhandlers,
+                    &[handler_idx],
+                    &reset_params,
+                    Type::from_return(&ir.asys, break_type.as_ref()), // TODO: type inference
+                    debug_name,
+                );
+                proc_todo.push((proc_idx, body, None));
 
-                let proc = &mut ir.ir.procs[proc_idx];
+                let input_regs: Vec<Reg> = reset_captures.into_iter().map(|(_, r)| r).collect();
+
+                let proc = &mut ir.ir.procsign[proc_idx];
                 let never = proc.output.output.is_never();
                 if break_self {
                     proc.handles.push(handler_idx);
@@ -1346,28 +1196,30 @@ fn generate_expr(
                 // execute proc
                 let output = proc.output.output.into_result(ir);
 
-                if global {
-                    let next = blocks.push(BlockIdx, Block::default());
+                match closure {
+                    Either::Left(_) => {
+                        blocks[*block].instructions.push(Instruction::Call(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                        ));
+                    }
+                    Either::Right(glob) => {
+                        let next = blocks.push(BlockIdx, Block::default());
 
-                    let glob = scope.regs[&eff_val].unwrap_right();
-                    blocks[*block]
-                        .instructions
-                        .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
+                        blocks[*block]
+                            .instructions
+                            .push(Instruction::SetScopedGlobal(glob, closure_reg, next));
 
-                    blocks[*block].instructions.push(Instruction::Call(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                    ));
+                        blocks[*block].instructions.push(Instruction::Call(
+                            proc_idx,
+                            output.unwrap_or(None),
+                            input_regs,
+                        ));
 
-                    blocks[*block].next = Some(next);
-                    *block = next;
-                } else {
-                    blocks[*block].instructions.push(Instruction::Call(
-                        proc_idx,
-                        output.unwrap_or(None),
-                        input_regs,
-                    ));
+                        blocks[*block].next = Some(next);
+                        *block = next;
+                    }
                 }
 
                 if never {
@@ -1375,23 +1227,35 @@ fn generate_expr(
                 }
                 output
             } else {
+                // add handler to handler list
+                let proc_sign = &ir.ir.procsign[proc_idx];
+                let subhandlers = proc_sign.handlers.clone();
+
                 // generate reset
-                let debug_name = format!("{}__reset", debug_name);
-
-                let mut child = scope.child();
-                let proc_idx = generate_reset(ir, handlers, &[], body, debug_name, &mut child);
-
-                let input_regs: Vec<Reg> = child
-                    .captures
+                let mut reset_captures = Vec::new();
+                get_captures(ir, &proc_sign.scope, body, &mut reset_captures);
+                let reset_params = reset_captures
                     .iter()
-                    .map(|&(val, _)| {
-                        scope
-                            .get_or_capture(ir, &mut blocks[*block].instructions, val)
-                            .expect("value not in scope")
-                    })
-                    .collect();
+                    .copied()
+                    .map(|(v, r)| (v, ir.ir.regs[r]))
+                    .collect::<Vec<_>>();
 
-                let proc = &ir.ir.procs[proc_idx];
+                let debug_name = format!("{}__reset", proc_sign.debug_name);
+
+                let proc_idx = generate_proc_sign(
+                    ir,
+                    None,
+                    &subhandlers,
+                    &[],
+                    &reset_params,
+                    Type::from_return(&ir.asys, break_type.as_ref()), // TODO: type inference
+                    debug_name,
+                );
+                proc_todo.push((proc_idx, body, None));
+
+                let input_regs: Vec<Reg> = reset_captures.into_iter().map(|(_, r)| r).collect();
+
+                let proc = &ir.ir.procsign[proc_idx];
                 let never = proc.output.output.is_never();
 
                 // execute proc
@@ -1433,9 +1297,21 @@ fn generate_expr(
 
         E::Ident(id) => {
             let val = ir.asys.values[id];
-            let reg = scope
-                .get_or_capture(ir, &mut blocks[*block].instructions, val)
+            let reg = ir.ir.procsign[proc_idx]
+                .scope
+                .get(&val)
+                .copied()
                 .expect("value is not loaded in scope");
+            let reg = match reg {
+                Either::Left(reg) => reg,
+                Either::Right(glob) => {
+                    let reg = ir.next_reg(ir.ir.globals[glob]);
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::GetGlobal(reg, glob));
+                    reg
+                }
+            };
             Ok(Some(reg))
         }
         E::Error => unreachable!(),

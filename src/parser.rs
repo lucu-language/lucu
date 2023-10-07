@@ -56,6 +56,7 @@ pub enum Expression {
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
     Op(ExprIdx, Op, ExprIdx),
     Yeet(Option<ExprIdx>),
+    Let(Ident, Option<Type>, ExprIdx),
 
     TryWith(ExprIdx, Option<ReturnType>, Option<ExprIdx>),
     Handler(Handler),
@@ -172,6 +173,9 @@ impl ParseContext {
                 if let Some(handler) = handler {
                     acc = self.fold(handler, acc, f);
                 }
+            }
+            Expression::Let(_, _, expr) => {
+                acc = self.fold(expr, acc, f);
             }
             Expression::Handler(_) => {}
             Expression::String(_) => {}
@@ -662,6 +666,27 @@ impl Parse for Expression {
                 };
 
                 Some(Expression::IfElse(condition, yes, no))
+            }
+
+            // let x type = ...
+            Some(Ranged(Token::Let, ..)) => {
+                tk.next();
+
+                let name = tk.ident()?;
+                let name = tk.push_ident(name);
+
+                let typ = if !tk.peek_check(Token::Equals) {
+                    Type::parse(tk)
+                } else {
+                    None
+                };
+
+                tk.expect(Token::Equals)?;
+
+                let value = Expression::parse_or_default(tk);
+                let value = tk.push_expr(value);
+
+                Some(Expression::Let(name, typ, value))
             }
 
             // break

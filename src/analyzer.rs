@@ -54,6 +54,7 @@ impl From<EffFunIdx> for usize {
 #[derive(Debug, Clone)]
 pub enum Definition {
     Parameter(Val, ParamIdx),       // parameter index in function
+    Variable(ExprIdx),              // variable defined at expr
     Effect(EffIdx),                 // effect index in ast
     EffectFunction(Val, EffFunIdx), // effect value, function index in effect
     Function(FunIdx),               // function index in ast
@@ -118,6 +119,10 @@ impl Val {
             },
             Definition::Function(f) => Some(ctx.idents[ast.functions[f].decl.name].empty()),
             Definition::Builtin => None,
+            Definition::Variable(e) => match ctx.exprs[e].0 {
+                Expression::Let(name, _, _) => Some(ctx.idents[name].empty()),
+                _ => None,
+            },
         }
     }
 }
@@ -327,8 +332,13 @@ fn analyze_expr(
                 analyze_expr(actx, scope, ast, ctx, expr, errors);
             }
         }
+        Expression::Let(name, _, expr) => {
+            analyze_expr(actx, scope, ast, ctx, expr, errors);
+            let val = actx.push_val(name, Definition::Variable(expr));
+            scope.values.insert(ctx.idents[name].0.clone(), val);
+        }
 
-        // these have no identifiers'
+        // these have no identifiers
         Expression::String(_) => {}
         Expression::Error => {}
         Expression::Int(_) => {}

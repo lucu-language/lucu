@@ -419,19 +419,16 @@ impl Display for IR {
 
 pub const STR_SLICE: TypeIdx = TypeIdx(0);
 
-#[derive(Clone)]
 struct ProcCtx<'a> {
     proc_idx: ProcIdx,
     expr: ExprIdx,
     handler: Option<HandlerIdx>,
-    scope: &'a Scope,
+    scope: &'a mut Scope,
 }
 impl ProcCtx<'_> {
-    fn with_expr(&self, expr: ExprIdx) -> Self {
-        Self {
-            expr,
-            ..self.clone()
-        }
+    fn with_expr(&mut self, expr: ExprIdx) -> &mut Self {
+        self.expr = expr;
+        self
     }
 }
 type ProcTodo = Vec<(ProcIdx, ExprIdx, Option<HandlerIdx>, Scope)>;
@@ -670,14 +667,14 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
 
     // generate
     while !proc_todo.is_empty() {
-        let first = proc_todo.remove(0);
+        let mut first = proc_todo.remove(0);
         let proc = generate_proc_impl(
             &mut ir,
             ProcCtx {
                 proc_idx: first.0,
                 expr: first.1,
                 handler: first.2,
-                scope: &first.3,
+                scope: &mut first.3,
             },
             &mut proc_todo,
         );
@@ -787,12 +784,12 @@ fn generate_proc_sign(
     proc_idx
 }
 
-fn generate_proc_impl(ir: &mut IRContext, ctx: ProcCtx, proc_todo: &mut ProcTodo) -> ProcImpl {
+fn generate_proc_impl(ir: &mut IRContext, mut ctx: ProcCtx, proc_todo: &mut ProcTodo) -> ProcImpl {
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
 
     let mut end = start;
-    let ret = generate_expr(ir, ctx, &mut blocks, &mut end, proc_todo);
+    let ret = generate_expr(ir, &mut ctx, &mut blocks, &mut end, proc_todo);
 
     if let Ok(ret) = ret {
         if !matches!(
@@ -879,7 +876,7 @@ fn get_captures(
 
 fn generate_expr(
     ir: &mut IRContext,
-    ctx: ProcCtx,
+    ctx: &mut ProcCtx,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
     proc_todo: &mut ProcTodo,
@@ -893,6 +890,13 @@ fn generate_expr(
             body.last
                 .map(|expr| generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo))
                 .unwrap_or(Ok(None))
+        }
+        E::Let(name, _, expr) => {
+            let val = ir.asys.values[name];
+            let reg = generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)?
+                .expect("let value does not return a value");
+            ctx.scope.insert(val, Either::Left(reg));
+            Ok(None)
         }
         E::Call(func, ref args) => {
             // get base registers
@@ -1116,6 +1120,7 @@ fn generate_expr(
 
                         Definition::Parameter(_, _) => todo!(),
                         Definition::Effect(_) => todo!(),
+                        Definition::Variable(_) => todo!(),
                         Definition::Builtin => todo!(),
                     }
                 }

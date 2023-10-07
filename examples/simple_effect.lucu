@@ -4,8 +4,9 @@ effect get {
 
 fun puttwice(n int) / debug {
 	try {
-		putint(get())
-		putint(get.get())
+		let value = get.get()
+		putint(value)
+		putint(value)
 	} with get {
 		fun get() int {
 			n

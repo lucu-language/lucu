@@ -13,6 +13,7 @@ pub enum Token {
     Else,
     Yeet,
     Implicit,
+    Let,
 
     // Symbols
     Semicolon,
@@ -51,6 +52,7 @@ impl fmt::Display for Token {
                 Token::Else => "'else'".into(),
                 Token::Yeet => "'yeet'".into(),
                 Token::Implicit => "'implicit'".into(),
+                Token::Let => "'let'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
                 Token::Slash => "'/'".into(),
@@ -87,6 +89,7 @@ impl Token {
         matches!(
             self,
             Token::With
+                | Token::Let
                 | Token::Else
                 | Token::Period
                 | Token::Bang
@@ -310,6 +313,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "else" => Token::Else,
                     "yeet" => Token::Yeet,
                     "implicit" => Token::Implicit,
+                    "let" => Token::Let,
                     _ => Token::Ident(word),
                 }
             }

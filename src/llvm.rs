@@ -17,7 +17,7 @@ use inkwell::{
 use crate::{
     ir::{
         AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type, TypeIdx,
-        IR,
+        IR, STR_SLICE,
     },
     vecmap::VecMap,
 };
@@ -64,24 +64,6 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     );
     putint.set_call_conventions(0);
 
-    let putstr = module.add_function(
-        "putstr",
-        context.void_type().fn_type(
-            &[context
-                .struct_type(
-                    &[
-                        context.i8_type().ptr_type(AddressSpace::default()).into(),
-                        context.ptr_sized_int_type(&target_data, None).into(),
-                    ],
-                    false,
-                )
-                .into()],
-            false,
-        ),
-        Some(Linkage::External),
-    );
-    putstr.set_call_conventions(0);
-
     let mut codegen = CodeGen {
         context: &context,
         module,
@@ -91,13 +73,23 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         procs: VecMap::new(),
         globals: VecMap::new(),
         putint,
-        putstr,
+        putstr: putint,
     };
 
     for typ in ir.aggregates.values() {
         let struc = codegen.generate_struct(typ);
         codegen.structs.push_value(struc);
     }
+
+    let putstr = codegen.module.add_function(
+        "putstr",
+        context
+            .void_type()
+            .fn_type(&[codegen.structs[STR_SLICE].unwrap().into()], false),
+        Some(Linkage::External),
+    );
+    putstr.set_call_conventions(0);
+    codegen.putstr = putstr;
 
     for proc in ir.procsign.values() {
         let func = codegen.generate_proc_sign(ir, proc);
@@ -176,7 +168,9 @@ impl<'ctx> CodeGen<'ctx> {
         if fields.is_empty() {
             None
         } else {
-            Some(self.context.struct_type(&fields, false))
+            let struc = self.context.opaque_struct_type(&typ.debug_name);
+            struc.set_body(&fields, false);
+            Some(struc)
         }
     }
     fn frame_type(&self) -> IntType<'ctx> {
@@ -759,7 +753,6 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
 
-                println!("{:?} {:?}", bitcast, ptr);
                 self.builder.build_load(typ, bitcast, "").unwrap()
             } else {
                 // type is bigger than value
@@ -775,7 +768,6 @@ impl<'ctx> CodeGen<'ctx> {
                 };
                 let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
 
-                println!("{:?} {:?}", bitcast, ptr);
                 self.builder.build_store(bitcast, val).unwrap();
                 self.builder.build_load(typ, ptr, "").unwrap()
             }

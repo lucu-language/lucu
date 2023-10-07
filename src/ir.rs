@@ -60,7 +60,7 @@ impl Type {
     }
     fn from_type(asys: &Analysis, typ: &parser::Type) -> Type {
         match asys.values[typ.ident] {
-            STR => Type::Aggregate(SLICE),
+            STR => Type::Aggregate(STR_SLICE),
             INT => Type::Int,
             _ => panic!("unknown type"),
         }
@@ -81,9 +81,17 @@ impl Type {
     }
 }
 
-#[derive(Default)]
 pub struct AggregateType {
     pub children: Vec<Type>,
+    pub debug_name: String,
+}
+impl AggregateType {
+    fn new(debug_name: String) -> Self {
+        Self {
+            children: Vec::new(),
+            debug_name,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -409,7 +417,7 @@ impl Display for IR {
     }
 }
 
-const SLICE: TypeIdx = TypeIdx(0);
+pub const STR_SLICE: TypeIdx = TypeIdx(0);
 
 #[derive(Clone)]
 struct ProcCtx<'a> {
@@ -449,6 +457,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
 
     ir.ir.aggregates.push_value(AggregateType {
         children: vec![Type::BytePointer, Type::ArraySize],
+        debug_name: "str".into(),
     });
 
     // define putint
@@ -475,7 +484,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         .into(),
     });
 
-    let inputs = vec![ir.next_reg(Type::Aggregate(SLICE))];
+    let inputs = vec![ir.next_reg(Type::Aggregate(STR_SLICE))];
     let putstr = ir.ir.procsign.push(
         ProcIdx,
         ProcSign {
@@ -499,7 +508,10 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     });
 
     // define debug
-    let debug_closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+    let debug_closure = ir
+        .ir
+        .aggregates
+        .push(TypeIdx, AggregateType::new("debug".into()));
     let debug_glob = ir
         .ir
         .globals
@@ -563,7 +575,14 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
         let effect = &ir.ast.effects[eff_idx];
 
         // generate handler
-        let closure = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+        let closure = ir.ir.aggregates.push(
+            TypeIdx,
+            AggregateType::new(format!(
+                "{}.{}",
+                ir.ctx.idents[eff_ident].0,
+                ir.handlers.len()
+            )),
+        );
         let glob = ir.ir.globals.push(
             Global,
             Type::Handler(HandlerIdx(ir.handlers.len()), closure),
@@ -603,7 +622,7 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
             // generate debug name
             let eff_name = ir.ctx.idents[eff_ident].0.as_str();
             let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
-            let debug_name = format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+            let debug_name = format!("{}.{}.{}", proc_name, eff_name, usize::from(handler_idx));
 
             // check if handler can break
             let break_type = match &ast_handler.break_type {
@@ -876,19 +895,79 @@ fn generate_expr(
                 .unwrap_or(Ok(None))
         }
         E::Call(func, ref args) => {
+            // get base registers
+            let mut reg_args = args
+                .iter()
+                .map(|&expr| {
+                    generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)
+                        .map(|r| r.expect("call argument does not return a value"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
             // TODO: currently we assume func is an Ident expr or Effect Member expr
             match ir.ctx.exprs[func].0 {
-                E::Ident(id) | E::Member(_, id) => {
+                E::Member(handler, id) => {
                     let val = ir.asys.values[id];
 
-                    // get base registers
-                    let mut reg_args = args
-                        .iter()
-                        .map(|&expr| {
-                            generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)
-                                .map(|r| r.expect("call argument does not return a value"))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
+                    // get handler
+                    let handler_reg =
+                        generate_expr(ir, ctx.with_expr(handler), blocks, block, proc_todo)?
+                            .expect("member parent does not return a value");
+
+                    match ir.ir.regs[handler_reg] {
+                        Type::Handler(handler_idx, _) => {
+                            let handler = &ir.handlers[handler_idx];
+                            let global = handler.global;
+
+                            // get output
+                            let Definition::EffectFunction(_, eff_fun_idx) = ir.asys.defs[val] else { panic!() };
+                            let proc_idx = handler.procs[eff_fun_idx];
+                            let typ = ir.ir.procsign[proc_idx].output.output;
+                            let output = typ.into_result(ir);
+
+                            // execute handler
+                            match global {
+                                Some(glob) => {
+                                    let next = blocks.push(BlockIdx, Block::default());
+
+                                    blocks[*block]
+                                        .instructions
+                                        .push(Instruction::SetScopedGlobal(
+                                            glob,
+                                            handler_reg,
+                                            next,
+                                        ));
+
+                                    blocks[*block].instructions.push(Instruction::Call(
+                                        proc_idx,
+                                        output.unwrap_or(None),
+                                        reg_args,
+                                    ));
+
+                                    blocks[*block].next = Some(next);
+                                    *block = next;
+                                }
+                                None => {
+                                    reg_args.push(handler_reg);
+
+                                    blocks[*block].instructions.push(Instruction::Call(
+                                        proc_idx,
+                                        output.unwrap_or(None),
+                                        reg_args,
+                                    ));
+                                }
+                            }
+
+                            if typ.is_never() {
+                                blocks[*block].instructions.push(Instruction::Unreachable);
+                            }
+                            output
+                        }
+                        _ => todo!(),
+                    }
+                }
+                E::Ident(id) => {
+                    let val = ir.asys.values[id];
 
                     // check handlers
                     match ir.asys.defs[val] {
@@ -977,7 +1056,7 @@ fn generate_expr(
                                 let mut debug_name = ir.ctx.idents[fun.decl.name].0.clone();
 
                                 if handlers.len() > 0 {
-                                    debug_name += "/";
+                                    debug_name += ".";
 
                                     for &handler in handlers.iter() {
                                         let eff_val = ir.handlers[handler].effect;
@@ -990,9 +1069,9 @@ fn generate_expr(
                                             .unwrap_or("debug"); // TODO: support other builtin effects
 
                                         debug_name += eff_name;
-                                        debug_name += "#";
+                                        debug_name += ".";
                                         debug_name += usize::from(handler).to_string().as_str();
-                                        debug_name += "_";
+                                        debug_name += ".";
                                     }
 
                                     debug_name.pop();
@@ -1164,7 +1243,14 @@ fn generate_expr(
                 let effect = &ir.ast.effects[eff_idx];
 
                 // generate handler
-                let closure_typ = ir.ir.aggregates.push(TypeIdx, AggregateType::default());
+                let closure_typ = ir.ir.aggregates.push(
+                    TypeIdx,
+                    AggregateType::new(format!(
+                        "{}.{}",
+                        ir.ctx.idents[eff_ident].0,
+                        ir.handlers.len()
+                    )),
+                );
                 let closure_reg = ir.next_reg(Type::Aggregate(closure_typ));
 
                 let global = false; // TODO: this is for testing, should be false by default
@@ -1217,7 +1303,7 @@ fn generate_expr(
                     let eff_name = ir.ctx.idents[eff_ident].0.as_str();
                     let proc_name = ir.ctx.idents[fun.decl.name].0.as_str();
                     let debug_name =
-                        format!("{}#{}__{}", eff_name, usize::from(handler_idx), proc_name);
+                        format!("{}.{}.{}", proc_name, eff_name, usize::from(handler_idx));
 
                     // get captures
                     let captures = get_captures(ir, ctx.scope, &mut blocks[*block], fun.body, None);
@@ -1289,20 +1375,20 @@ fn generate_expr(
                 // add handler to handler list
                 let proc_sign = &ir.ir.procsign[ctx.proc_idx];
                 let debug_name = format!(
-                    "{}__reset#{}",
+                    "{}__reset.{}",
                     proc_sign.debug_name,
                     usize::from(handler_idx)
                 );
 
                 let break_union = ir.break_union_from_captures(&reset_captures, &[handler_idx]);
-                let output = Type::from_return(&ir.asys, break_type.as_ref());
+                let typ = Type::from_return(&ir.asys, break_type.as_ref());
                 let proc_idx = generate_proc_sign(
                     ir,
                     None,
                     break_union,
                     &[handler_idx],
                     &reset_params,
-                    output, // TODO: type inference
+                    typ, // TODO: type inference
                     debug_name,
                     body,
                     None,
@@ -1312,7 +1398,7 @@ fn generate_expr(
                 let input_regs: Vec<Reg> = reset_captures.into_iter().map(|(_, r)| r).collect();
 
                 // execute proc
-                let output = output.into_result(ir);
+                let output = typ.into_result(ir);
 
                 match global {
                     Some(glob) => {
@@ -1343,6 +1429,9 @@ fn generate_expr(
                     }
                 }
 
+                if typ.is_never() {
+                    blocks[*block].instructions.push(Instruction::Unreachable);
+                }
                 output
             } else {
                 // generate reset
@@ -1388,7 +1477,7 @@ fn generate_expr(
         }
         E::Handler(_) => todo!(),
         E::String(ref s) => {
-            let reg = ir.next_reg(Type::Aggregate(SLICE));
+            let reg = ir.next_reg(Type::Aggregate(STR_SLICE));
 
             blocks[*block]
                 .instructions

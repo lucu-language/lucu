@@ -185,33 +185,7 @@ fn analyze_expr(
             let name = &ctx.idents[ident].0;
             match scope.get(name) {
                 Some(val) => actx.values[ident] = val,
-                None => {
-                    // check among effects
-                    let effect_funs = scope
-                        .scoped_effects
-                        .iter()
-                        .flat_map(|&(i, &(_, ref h))| h.iter().map(move |(s, &v)| (i, s, v)))
-                        .filter_map(|(i, s, v)| match name == s {
-                            true => Some((i, v)),
-                            false => None,
-                        })
-                        .collect::<Vec<_>>();
-
-                    if effect_funs.len() > 1 {
-                        errors.push(
-                            ctx.idents[ident].with(Error::MultipleEffects(
-                                effect_funs
-                                    .into_iter()
-                                    .map(|(i, _)| ctx.idents[i].empty())
-                                    .collect(),
-                            )),
-                        )
-                    } else if let Some(&(_, fun)) = effect_funs.first() {
-                        actx.values[ident] = fun;
-                    } else {
-                        errors.push(ctx.idents[ident].with(Error::UnknownValue))
-                    }
-                }
+                None => errors.push(ctx.idents[ident].with(Error::UnknownValue)),
             }
         }
 
@@ -227,7 +201,43 @@ fn analyze_expr(
             }
         }
         Expression::Call(expr, ref exprs) => {
-            analyze_expr(actx, scope, ast, ctx, expr, errors);
+            if let Expression::Ident(ident) = ctx.exprs[expr].0 {
+                // calling directly with an identifier
+                // when a value is not found in scope we also check within effect functions
+                let name = &ctx.idents[ident].0;
+                match scope.get(name) {
+                    Some(val) => actx.values[ident] = val,
+                    None => {
+                        // check among effects
+                        let effect_funs = scope
+                            .scoped_effects
+                            .iter()
+                            .flat_map(|&(i, &(_, ref h))| h.iter().map(move |(s, &v)| (i, s, v)))
+                            .filter_map(|(i, s, v)| match name == s {
+                                true => Some((i, v)),
+                                false => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        if effect_funs.len() > 1 {
+                            errors.push(
+                                ctx.idents[ident].with(Error::MultipleEffects(
+                                    effect_funs
+                                        .into_iter()
+                                        .map(|(i, _)| ctx.idents[i].empty())
+                                        .collect(),
+                                )),
+                            )
+                        } else if let Some(&(_, fun)) = effect_funs.first() {
+                            actx.values[ident] = fun;
+                        } else {
+                            errors.push(ctx.idents[ident].with(Error::UnknownValue))
+                        }
+                    }
+                }
+            } else {
+                analyze_expr(actx, scope, ast, ctx, expr, errors);
+            }
             for &expr in exprs {
                 analyze_expr(actx, scope, ast, ctx, expr, errors);
             }
@@ -273,7 +283,8 @@ fn analyze_expr(
         }
         Expression::Member(expr, field) => {
             if let Expression::Ident(ident) = ctx.exprs[expr].0 {
-                // TODO: for now we assume the ident is of an effect
+                // getting a member directly with an identifier
+                // when a value is not found in scope we also check within effects
                 let name = &ctx.idents[ident].0;
                 match scope.effects.get(name) {
                     Some(&(effect, ref funs)) => {

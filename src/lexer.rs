@@ -26,6 +26,8 @@ pub enum Token {
     Dash,
     Asterisk,
     Plus,
+    Less,
+    Greater,
     Open(Group),
     Close(Group),
 
@@ -63,6 +65,8 @@ impl fmt::Display for Token {
                 Token::Dash => "'-'".into(),
                 Token::Asterisk => "'*'".into(),
                 Token::Plus => "'+'".into(),
+                Token::Less => "'<'".into(),
+                Token::Greater => "'>'".into(),
                 Token::Open(Group::Brace) => "'{'".into(),
                 Token::Open(Group::Paren) => "'('".into(),
                 Token::Open(Group::Bracket) => "'['".into(),
@@ -100,6 +104,8 @@ impl Token {
                 | Token::Fun
                 | Token::Slash
                 | Token::Equals
+                | Token::Greater
+                | Token::Less
                 | Token::DoubleEquals
                 | Token::Dash
                 | Token::Asterisk
@@ -125,6 +131,8 @@ impl Token {
                 | Token::Period
                 | Token::Slash
                 | Token::Equals
+                | Token::Greater
+                | Token::Less
                 | Token::DoubleEquals
                 | Token::Dash
                 | Token::Asterisk
@@ -240,6 +248,8 @@ impl<'a> Iterator for Tokenizer<'a> {
             '-' => Token::Dash,
             '*' => Token::Asterisk,
             '+' => Token::Plus,
+            '<' => Token::Less,
+            '>' => Token::Greater,
             '=' => {
                 match self.next.peek() {
                     Some(&'=') => {

@@ -414,6 +414,24 @@ impl<'ctx> CodeGen<'ctx> {
                         let res = self.builder.build_int_sub(lhs, rhs, "sub").unwrap();
                         valmap.insert(r, res.into());
                     }
+                    I::Greater(r, a, b) => {
+                        let lhs = valmap[&a].into_int_value();
+                        let rhs = valmap[&b].into_int_value();
+                        let res = self
+                            .builder
+                            .build_int_compare(IntPredicate::UGT, lhs, rhs, "gt")
+                            .unwrap();
+                        valmap.insert(r, res.into());
+                    }
+                    I::Less(r, a, b) => {
+                        let lhs = valmap[&a].into_int_value();
+                        let rhs = valmap[&b].into_int_value();
+                        let res = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, lhs, rhs, "lt")
+                            .unwrap();
+                        valmap.insert(r, res.into());
+                    }
                     I::Call(p, r, ref rs) => {
                         let func = self.procs[p];
                         let args: Vec<_> = rs

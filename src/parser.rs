@@ -27,7 +27,10 @@ impl From<Ident> for usize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
+    Assign,
     Equals,
+    Less,
+    Greater,
     Divide,
     Multiply,
     Subtract,
@@ -37,11 +40,14 @@ pub enum Op {
 impl Op {
     fn from_token(value: &Token) -> Option<Op> {
         match value {
+            Token::Equals => Some(Op::Assign),
             Token::Slash => Some(Op::Divide),
             Token::DoubleEquals => Some(Op::Equals),
             Token::Dash => Some(Op::Subtract),
             Token::Asterisk => Some(Op::Multiply),
             Token::Plus => Some(Op::Add),
+            Token::Less => Some(Op::Less),
+            Token::Greater => Some(Op::Greater),
             _ => None,
         }
     }

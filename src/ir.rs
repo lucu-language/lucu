@@ -169,6 +169,8 @@ pub enum Instruction {
 
     // operations (r0 = r1 op r2)
     Equals(Reg, Reg, Reg),
+    Greater(Reg, Reg, Reg),
+    Less(Reg, Reg, Reg),
     Div(Reg, Reg, Reg),
     Mul(Reg, Reg, Reg),
     Add(Reg, Reg, Reg),
@@ -334,6 +336,12 @@ impl Display for IR {
                         Instruction::Equals(out, left, right) => {
                             writeln!(f, "{} <- {} == {}", out, left, right)?
                         }
+                        Instruction::Greater(out, left, right) => {
+                            writeln!(f, "{} <- {} > {}", out, left, right)?
+                        }
+                        Instruction::Less(out, left, right) => {
+                            writeln!(f, "{} <- {} < {}", out, left, right)?
+                        }
                         Instruction::Div(out, left, right) => {
                             writeln!(f, "{} <- {} / {}", out, left, right)?
                         }
@@ -425,10 +433,19 @@ struct ProcCtx<'a> {
     handler: Option<HandlerIdx>,
     scope: &'a mut Scope,
 }
-impl ProcCtx<'_> {
+impl<'a> ProcCtx<'a> {
     fn with_expr(&mut self, expr: ExprIdx) -> &mut Self {
         self.expr = expr;
         self
+    }
+    fn child<'b>(&self, expr: ExprIdx, scope: &'b mut Scope) -> ProcCtx<'b> {
+        scope.extend(self.scope.iter());
+        ProcCtx {
+            proc_idx: self.proc_idx,
+            expr,
+            handler: self.handler,
+            scope,
+        }
     }
 }
 type ProcTodo = Vec<(ProcIdx, ExprIdx, Option<HandlerIdx>, Scope)>;
@@ -1137,8 +1154,14 @@ fn generate_expr(
                     let no_start = blocks.push(BlockIdx, Block::default());
 
                     let mut no_end = no_start;
-                    let no_reg =
-                        generate_expr(ir, ctx.with_expr(no), blocks, &mut no_end, proc_todo);
+                    let mut no_scope = ctx.scope.clone();
+                    let no_reg = generate_expr(
+                        ir,
+                        &mut ctx.child(no, &mut no_scope),
+                        blocks,
+                        &mut no_end,
+                        proc_todo,
+                    );
 
                     let yes_start = blocks.push(BlockIdx, Block::default());
 
@@ -1147,8 +1170,14 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, no_start));
 
                     let mut yes_end = yes_start;
-                    let yes_reg =
-                        generate_expr(ir, ctx.with_expr(yes), blocks, &mut yes_end, proc_todo);
+                    let mut yes_scope = ctx.scope.clone();
+                    let yes_reg = generate_expr(
+                        ir,
+                        &mut ctx.child(yes, &mut yes_scope),
+                        blocks,
+                        &mut yes_end,
+                        proc_todo,
+                    );
 
                     let end = blocks.push(BlockIdx, Block::default());
 
@@ -1156,6 +1185,19 @@ fn generate_expr(
                     blocks[yes_end].next = Some(end);
                     blocks[no_end].next = Some(end);
                     *block = end;
+
+                    // add phi instructions for changed values
+                    for val in yes_scope.keys().copied() {
+                        let Some(Either::Left(no)) = no_scope.get(&val).copied() else { continue };
+                        let Some(Either::Left(yes)) = yes_scope.get(&val).copied() else { continue };
+                        if no != yes {
+                            let reg = ir.copy_reg(no);
+                            blocks[*block]
+                                .instructions
+                                .push(Instruction::Phi(reg, [(yes, yes_end), (no, no_end)]));
+                            ctx.scope.insert(val, Either::Left(reg));
+                        }
+                    }
 
                     match (yes_reg, no_reg) {
                         (Ok(Some(yes)), Ok(Some(no))) => {
@@ -1178,6 +1220,7 @@ fn generate_expr(
                 None => {
                     let yes_start = blocks.push(BlockIdx, Block::default());
 
+                    let no_end = *block;
                     let end = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block]
@@ -1185,36 +1228,80 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, end));
 
                     let mut yes_end = yes_start;
-                    let _ = generate_expr(ir, ctx.with_expr(yes), blocks, &mut yes_end, proc_todo);
+                    let mut yes_scope = ctx.scope.clone();
+                    let _ = generate_expr(
+                        ir,
+                        &mut ctx.child(yes, &mut yes_scope),
+                        blocks,
+                        &mut yes_end,
+                        proc_todo,
+                    );
 
                     blocks[*block].next = Some(end);
                     blocks[yes_end].next = Some(end);
                     *block = end;
+
+                    // add phi instructions for changed values
+                    for val in yes_scope.keys().copied() {
+                        let Some(Either::Left(no)) = ctx.scope.get(&val).copied() else { continue };
+                        let Some(Either::Left(yes)) = yes_scope.get(&val).copied() else { continue };
+                        if no != yes {
+                            let reg = ir.copy_reg(no);
+                            blocks[*block]
+                                .instructions
+                                .push(Instruction::Phi(reg, [(yes, yes_end), (no, no_end)]));
+                            ctx.scope.insert(val, Either::Left(reg));
+                        }
+                    }
 
                     Ok(None)
                 }
             }
         }
         E::Op(left, op, right) => {
-            let left = generate_expr(ir, ctx.with_expr(left), blocks, block, proc_todo)?
-                .expect("left operand has no value");
+            if op == Op::Assign {
+                let left = match ir.ctx.exprs[left].0 {
+                    E::Ident(var) => ir.asys.values[var],
+                    _ => todo!(),
+                };
+                match ir.asys.defs[left] {
+                    Definition::Parameter(_, _) => (),
+                    Definition::Variable(_) => (),
+                    Definition::Effect(_) => panic!("cannot assign to effect"),
+                    Definition::EffectFunction(_, _) => panic!("cannot assign to effect fun"),
+                    Definition::Function(_) => panic!("cannot assign to fun"),
+                    Definition::Builtin => panic!("cannot assign to builtin"),
+                }
 
-            let right = generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
-                .expect("right operand has no value");
+                let right = generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
+                    .expect("right operand has no value");
 
-            // TODO: ops with different return types
-            let out = ir.next_reg(Type::Int);
+                ctx.scope.insert(left, Either::Left(right));
+                Ok(None)
+            } else {
+                let left = generate_expr(ir, ctx.with_expr(left), blocks, block, proc_todo)?
+                    .expect("left operand has no value");
 
-            let instr = match op {
-                Op::Equals => Instruction::Equals(out, left, right),
-                Op::Divide => Instruction::Div(out, left, right),
-                Op::Multiply => Instruction::Mul(out, left, right),
-                Op::Subtract => Instruction::Sub(out, left, right),
-                Op::Add => Instruction::Add(out, left, right),
-            };
-            blocks[*block].instructions.push(instr);
+                let right = generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
+                    .expect("right operand has no value");
 
-            Ok(Some(out))
+                // TODO: ops with different return types
+                let out = ir.next_reg(Type::Int);
+
+                let instr = match op {
+                    Op::Equals => Instruction::Equals(out, left, right),
+                    Op::Divide => Instruction::Div(out, left, right),
+                    Op::Multiply => Instruction::Mul(out, left, right),
+                    Op::Subtract => Instruction::Sub(out, left, right),
+                    Op::Add => Instruction::Add(out, left, right),
+                    Op::Less => Instruction::Less(out, left, right),
+                    Op::Greater => Instruction::Greater(out, left, right),
+                    Op::Assign => unreachable!(),
+                };
+                blocks[*block].instructions.push(instr);
+
+                Ok(Some(out))
+            }
         }
         E::Yeet(value) => {
             // get break value

@@ -218,11 +218,11 @@ impl<'ctx> CodeGen<'ctx> {
             let frame_type = self.frame_type();
 
             let max_align = std::iter::once(&proc.output.output)
-                .chain((&proc.output).break_union.iter().map(|(_, t)| t))
+                .chain((&proc.output).break_union.iter())
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
                 .max_by_key(|&t| self.align(t));
             let max_size = std::iter::once(&proc.output.output)
-                .chain((&proc.output).break_union.iter().map(|(_, t)| t))
+                .chain((&proc.output).break_union.iter())
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
                 .max_by_key(|&t| self.size(t));
 
@@ -811,7 +811,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .context
                 .ptr_sized_int_type(&self.target_data, None)
                 .into(),
-            Type::Aggregate(idx) => match self.structs[idx] {
+            Type::Aggregate(idx) | Type::Handler(_, idx) => match self.structs[idx] {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),
             },

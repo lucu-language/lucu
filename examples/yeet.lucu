@@ -8,17 +8,18 @@ effect throwstr {
 
 fun main() / debug {
 	putint(try int {
-		try int {
+		try str {
 			throwint.throw()
-			69
-		} with throwstr str {
+			"unexpected"
+		} with throwstr {
 
 			fun throw() ! {
 				yeet "Hello, World!\n"
 			}
 
 		}
-	} with throwint int {
+		69
+	} with throwint {
 
 		fun throw() ! {
 			yeet 42
@@ -27,55 +28,18 @@ fun main() / debug {
 	})
 
 	putstr(try str {
-		try str {
-			throwstr.throw()
-			"unexpected"
-		} with throwint int {
-
-			fun throw() ! {
-				yeet 42
-			}
-	
-		}
-	} with throwstr str {
-
-		fun throw() ! {
-			yeet "Hello, World!\n"
-		}
-
-	})
-
-	putstr(try str {
-		try str {
-			throwstr.throw()
-			"unexpected"
-		} with throwstr str {
-
-			fun throw() ! {
-				yeet "Hello, World!\n"
-			}
-
-		}
-	} with throwint int {
-
-		fun throw() ! {
-			yeet 42
-		}
-		
-	})
-
-	putint(try int {
 		try int {
-			throwint.throw()
+			throwstr.throw()
 			69
-		} with throwint int {
+		} with throwint {
 
 			fun throw() ! {
 				yeet 42
 			}
 	
 		}
-	} with throwstr str {
+		"unexpected"
+	} with throwstr {
 
 		fun throw() ! {
 			yeet "Hello, World!\n"

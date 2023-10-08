@@ -2,7 +2,7 @@ effect nonzero {
 	fun nz(n int) int
 }
 
-implicit nonzero {
+handle nonzero yeets {
 	fun nz(n int) int {
 		if n == 0 {
 			yeet

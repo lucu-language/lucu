@@ -12,7 +12,8 @@ pub enum Token {
     If,
     Else,
     Yeet,
-    Implicit,
+    Yeets,
+    Handle,
     Let,
 
     // Symbols
@@ -52,8 +53,9 @@ impl fmt::Display for Token {
                 Token::With => "'with'".into(),
                 Token::If => "'if'".into(),
                 Token::Else => "'else'".into(),
-                Token::Yeet => "'yeet'".into(),
-                Token::Implicit => "'implicit'".into(),
+                Token::Yeet => "'fail'".into(),
+                Token::Yeets => "'fails'".into(),
+                Token::Handle => "'handle'".into(),
                 Token::Let => "'let'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
@@ -123,7 +125,7 @@ impl Token {
     pub fn continues_statement(&self) -> bool {
         matches!(
             self,
-            Token::With
+            Token::Yeets
                 | Token::Else
                 | Token::Comma
                 | Token::Close(_)
@@ -220,7 +222,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 Some(c) => break c,
                 None => {
                     if let Some(newline) = prev_newline.filter(|_| {
-                        self.brace.last().copied().unwrap_or(true) && !self.prev_unfinished
+                        self.brace.last().copied().unwrap_or(false) && !self.prev_unfinished
                     }) {
                         return Some(Ranged(Token::Semicolon, newline, newline + 1));
                     } else {
@@ -321,8 +323,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "with" => Token::With,
                     "if" => Token::If,
                     "else" => Token::Else,
-                    "yeet" => Token::Yeet,
-                    "implicit" => Token::Implicit,
+                    "yeet" | "fail" => Token::Yeet,
+                    "yeets" | "fails" => Token::Yeets,
+                    "handle" => Token::Handle,
                     "let" => Token::Let,
                     _ => Token::Ident(word),
                 }
@@ -365,7 +368,7 @@ impl<'a> Iterator for Tokenizer<'a> {
         }
 
         if let Some(newline) = prev_newline.filter(|_| {
-            self.brace.last().copied().unwrap_or(true)
+            self.brace.last().copied().unwrap_or(false)
                 && !self.prev_unfinished
                 && !token.continues_statement()
         }) {

@@ -2,15 +2,19 @@ effect get {
     fun get() int
 }
 
-fun puttwice(n int) / debug {
-	try {
-		let value = get.get()
-		putint(value)
-		putint(value)
-	} with get {
+fun getter(n int) get {
+	get {
 		fun get() int {
 			n
 		}
+	}
+}
+
+fun puttwice(n int) / debug {
+	with getter(n) {
+		let value = get.get()
+		putint(value)
+		putint(value)
 	}
 }
 

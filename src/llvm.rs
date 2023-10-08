@@ -199,24 +199,24 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    fn return_type(&self, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
-        let out = self.get_type(&proc.output.output);
+    fn return_type(&self, types: &VecMap<HandlerIdx, Type>, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
+        let out = self.get_type(&proc.output);
         let out_name = BasicTypeEnum::try_from(out)
             .ok()
             .map(|t| self.name(t))
             .unwrap_or_else(|| "void".into());
 
-        if proc.output.break_union.is_empty() {
+        if proc.unhandled.is_empty() {
             out
         } else {
             let frame_type = self.frame_type();
 
-            let max_align = std::iter::once(&proc.output.output)
-                .chain((&proc.output).break_union.iter())
+            let max_align = std::iter::once(&proc.output)
+                .chain(proc.unhandled.iter().copied().map(|h| &types[h]))
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
                 .max_by_key(|&t| self.align(t));
-            let max_size = std::iter::once(&proc.output.output)
-                .chain((&proc.output).break_union.iter())
+            let max_size = std::iter::once(&proc.output)
+                .chain(proc.unhandled.iter().copied().map(|h| &types[h]))
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(t)).ok())
                 .max_by_key(|&t| self.size(t));
 
@@ -257,7 +257,7 @@ impl<'ctx> CodeGen<'ctx> {
             .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(&ir.regs[r])).ok())
             .collect::<Vec<_>>();
 
-        let fn_type = match self.return_type(&proc) {
+        let fn_type = match self.return_type(&ir.break_types, &proc) {
             AnyTypeEnum::ArrayType(t) => t.fn_type(&in_types, false),
             AnyTypeEnum::FloatType(t) => t.fn_type(&in_types, false),
             AnyTypeEnum::IntType(t) => t.fn_type(&in_types, false),
@@ -443,15 +443,16 @@ impl<'ctx> CodeGen<'ctx> {
                         let (frame, val) = self.get_return(&ir.procsign[p], ret);
 
                         if let Some(frame) = frame {
+                            let unhandled = &ir.procsign[p].unhandled;
                             blocks[idx] = self.handle_break(
                                 function,
                                 frame,
                                 val,
-                                proc.handles
+                                proc.handled
                                     .iter()
                                     .copied()
-                                    .chain(ir.procsign[p].output.implicit_break.into_iter()),
-                                !proc.output.break_union.is_empty(),
+                                    .filter(|h| unhandled.contains(h)),
+                                !proc.unhandled.is_empty(),
                             );
                         }
 
@@ -495,7 +496,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Return(r) => {
                         let val = r.and_then(|r| valmap.get(&r)).copied();
-                        if !proc.output.break_union.is_empty() {
+                        if !proc.unhandled.is_empty() {
                             let ret_typ = function
                                 .get_type()
                                 .get_return_type()
@@ -564,7 +565,10 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Member(r, a, n) => {
                         // skip over empty children that are uncounted
-                        let Type::Aggregate(t) = ir.regs[a] else { panic!() };
+                        let t = match ir.regs[a] {
+                            Type::Aggregate(t) => t,
+                            _ => panic!(),
+                        };
                         let n = ir.aggregates[t]
                             .children
                             .iter()
@@ -796,7 +800,7 @@ impl<'ctx> CodeGen<'ctx> {
         proc: &ProcSign,
         ret: CallSiteValue<'ctx>,
     ) -> (Option<IntValue<'ctx>>, Option<BasicValueEnum<'ctx>>) {
-        if !proc.output.break_union.is_empty() {
+        if !proc.unhandled.is_empty() {
             let ret = ret.try_as_basic_value().unwrap_left().into_struct_value();
             let frame = self.builder.build_extract_value(ret, 0, "tag").unwrap();
             if ret.get_type().count_fields() > 1 {

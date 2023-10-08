@@ -23,7 +23,7 @@ fn main() {
 
         let mut chars = file.chars().enumerate().peekable();
 
-        for tok in lexer::Tokenizer::new(file.as_str(), &mut errors) {
+        for tok in lexer::Tokenizer::new(file.as_str(), &mut error::Errors::new()) {
             let start = tok.1;
 
             // print until start

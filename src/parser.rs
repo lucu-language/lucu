@@ -441,7 +441,7 @@ impl Parse for AST {
                 }
 
                 // implied
-                Some(Ranged(Token::Implicit, ..)) => {
+                Some(Ranged(Token::Handle, ..)) => {
                     tk.next();
                     if let Some(handler) = Handler::parse_or_skip(tk) {
                         let expr = tk.push_expr(handler.map(Expression::Handler));
@@ -596,33 +596,45 @@ impl Parse for Function {
     }
 }
 
+fn parse_handler_body(tk: &mut Tokens, ident: Ident) -> Option<Handler> {
+    let mut funcs = Vec::new();
+
+    let break_type = if tk.check(Token::Yeets).is_some() {
+        if tk.peek_check(Token::Open(Group::Brace)) {
+            None
+        } else {
+            Some(ReturnType::Type(Type::parse_or_skip(tk).map(|r| r.0)?))
+        }
+    } else {
+        Some(ReturnType::Never)
+    };
+
+    tk.group(Group::Brace, false, |tk| {
+        // skip semicolons
+        while tk.check(Token::Semicolon).is_some() {}
+
+        // parse function
+        let func = Function::parse_or_skip(tk)?.0;
+        funcs.push(func);
+
+        // skip semicolons
+        while tk.check(Token::Semicolon).is_some() {}
+
+        Some(())
+    })?;
+
+    Some(Handler {
+        effect: ident,
+        functions: funcs,
+        break_type,
+    })
+}
+
 impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
         let ident = tk.push_ident(id);
-        let mut funcs = Vec::new();
-
-        let break_type = ReturnType::parse(tk);
-
-        tk.group(Group::Brace, false, |tk| {
-            // skip semicolons
-            while tk.check(Token::Semicolon).is_some() {}
-
-            // parse function
-            let func = Function::parse_or_skip(tk)?.0;
-            funcs.push(func);
-
-            // skip semicolons
-            while tk.check(Token::Semicolon).is_some() {}
-
-            Some(())
-        })?;
-
-        Some(Handler {
-            effect: ident,
-            functions: funcs,
-            break_type,
-        })
+        parse_handler_body(tk, ident)
     }
 }
 
@@ -636,17 +648,29 @@ impl Parse for Expression {
 
                 let break_type = ReturnType::parse(tk);
 
-                let body = Expression::parse_or_default(tk);
+                let body = Body::parse_or_skip(tk)?.map(Expression::Body);
 
                 let handler = if tk.check(Token::With).is_some() {
-                    let handler = Handler::parse_or_skip(tk)?;
-                    let handler = tk.push_expr(handler.map(Expression::Handler));
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
                     Some(handler)
                 } else {
                     None
                 };
 
                 Some(Expression::TryWith(tk.push_expr(body), break_type, handler))
+            }
+
+            // short try-with
+            Some(Ranged(Token::With, ..)) => {
+                tk.next();
+
+                let handler = Expression::parse_or_skip(tk)?;
+                let handler = tk.push_expr(handler);
+
+                let body = Body::parse_or_skip(tk)?.map(Expression::Body);
+
+                Some(Expression::TryWith(tk.push_expr(body), None, Some(handler)))
             }
 
             // if-(else)
@@ -711,11 +735,22 @@ impl Parse for Expression {
                 }
             }
 
-            // ident
+            // ident / handler
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
-                let path = tk.push_ident(id);
-                Some(Expression::Ident(path))
+                let ident = tk.push_ident(id);
+
+                match tk.peek() {
+                    Some(Ranged(Token::Yeets | Token::Open(Group::Brace), ..)) => {
+                        // handler
+                        let handler = parse_handler_body(tk, ident)?;
+                        Some(Expression::Handler(handler))
+                    }
+                    _ => {
+                        // ident
+                        Some(Expression::Ident(ident))
+                    }
+                }
             }
 
             // string

@@ -32,6 +32,13 @@ pub enum Error {
     UnknownValue,
     UnhandledEffect,
 
+    UnknownType,
+    ExpectedType(Option<Ranged<()>>),
+    TypeMismatch(String, String),
+    ExpectedHandler(String),
+    ExpectedFunction(String),
+    ParameterMismatch(usize, usize),
+
     MultipleEffects(Vec<Ranged<()>>),
 }
 
@@ -373,13 +380,28 @@ impl Errors {
                         highlight(0, str, color, true)
                     ),
                     Error::UnhandledEffect => format!(
-                        "effect {} is not handled in this scope",
+                        "effect {} not handled in this scope",
                         highlight(0, str, color, true)
                     ),
                     Error::MultipleEffects(_) => format!(
-                        "value {} is defined by multiple effects in scope",
+                        "value {} defined by multiple effects in scope",
                         highlight(0, str, color, true)
                     ),
+
+                    Error::UnknownType =>
+                        format!("type {} not found in scope", highlight(0, str, color, true)),
+                    Error::ExpectedType(_) => format!(
+                        "expected a type, found value {}",
+                        highlight(0, str, color, true)
+                    ),
+                    Error::ExpectedHandler(ref found) =>
+                        format!("type mismatch: expected an effect handler, found {}", found),
+                    Error::ExpectedFunction(ref found) =>
+                        format!("type mismatch: expected a function, found {}", found),
+                    Error::TypeMismatch(ref expected, ref found) =>
+                        format!("type mismatch: expected {}, found {}", expected, found),
+                    Error::ParameterMismatch(expected, ref found) =>
+                        format!("expected {} argument(s), found {}", expected, found),
                 }
             );
             if color {
@@ -394,6 +416,11 @@ impl Errors {
                 gravity: err.0.gravity(),
             }];
             match err.0 {
+                Error::ExpectedType(value) => {
+                    if let Some(value) = value {
+                        highlights.push(Highlight::from_file(file, value, 1, Gravity::Whole));
+                    }
+                }
                 Error::UnknownEffectFun(handler, effect) => {
                     if let Some(effect) = effect {
                         highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));

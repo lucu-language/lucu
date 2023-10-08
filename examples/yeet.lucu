@@ -11,7 +11,7 @@ fun main() / debug {
 		try str {
 			throwint.throw()
 			"unexpected"
-		} with throwstr {
+		} with throwstr yeets str {
 
 			fun throw() ! {
 				yeet "Hello, World!\n"
@@ -19,7 +19,7 @@ fun main() / debug {
 
 		}
 		69
-	} with throwint {
+	} with throwint yeets int {
 
 		fun throw() ! {
 			yeet 42
@@ -31,7 +31,7 @@ fun main() / debug {
 		try int {
 			throwstr.throw()
 			69
-		} with throwint {
+		} with throwint yeets int {
 
 			fun throw() ! {
 				yeet 42
@@ -39,7 +39,7 @@ fun main() / debug {
 	
 		}
 		"unexpected"
-	} with throwstr {
+	} with throwstr yeets str {
 
 		fun throw() ! {
 			yeet "Hello, World!\n"

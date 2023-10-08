@@ -2,7 +2,7 @@ effect get {
 	fun get() int
 }
 
-implicit get {
+handle get {
 	fun get() int {
 		69
 	}
@@ -12,7 +12,7 @@ effect return {
 	fun return(n int) !
 }
 
-implicit return int {
+handle return yeets int {
 	fun return(n int) ! {
 		yeet n
 	}

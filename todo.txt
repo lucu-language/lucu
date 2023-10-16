@@ -1,0 +1,10 @@
+typechecking todo:
+- fail type in handlers
+- fail type of implicit handlers/naked handler calls
+
+variables todo:
+- let vs mut
+- mutable captures
+
+would be nice:
+- try blocks no longer their own function

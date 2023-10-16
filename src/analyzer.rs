@@ -68,6 +68,7 @@ pub enum HandlerDef {
     Handler(ExprIdx, Vec<Val>),
     Call(Val, Vec<ExprIdx>),
     Param(ParamIdx),
+    Signature,
     Unknown,
 }
 
@@ -409,8 +410,21 @@ fn analyze_expr<'a>(
                     Type::from_val(actx, val).clone()
                 }
                 None => {
-                    errors.push(ctx.idents[ident].with(Error::UnknownValue));
-                    Type::Unknown
+                    match scope
+                        .scoped_effects
+                        .iter()
+                        .find(|&&(ident, _)| ctx.idents[ident].0.eq(name))
+                    {
+                        Some((_, &(val, _))) => {
+                            // handled effects may be implicitly converted to handlers that never fail
+                            actx.values[ident] = val;
+                            Type::Handler(val, Box::new(Type::Never), HandlerDef::Signature)
+                        }
+                        None => {
+                            errors.push(ctx.idents[ident].with(Error::UnknownValue));
+                            Type::Unknown
+                        }
+                    }
                 }
             }
         }

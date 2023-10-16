@@ -1056,7 +1056,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),
             },
-            Type::Handler(h) => match ir.capture_types[h] {
+            Type::Handler(h) | Type::NakedHandler(h) => match ir.capture_types[h] {
                 Some(idx) => match self.structs[idx] {
                     Some(t) => t.into(),
                     None => self.context.void_type().into(),

@@ -201,6 +201,59 @@ impl ParseContext {
             Expression::Error => {}
         }
     }
+    pub fn for_each_ignore_try(&self, expr: ExprIdx, f: &mut impl FnMut(ExprIdx)) {
+        f(expr);
+        match self.exprs[expr].0 {
+            Expression::Body(ref b) => {
+                for expr in b.main.iter().copied() {
+                    self.for_each(expr, f);
+                }
+                if let Some(expr) = b.last {
+                    self.for_each(expr, f);
+                }
+            }
+            Expression::Call(expr, ref args) => {
+                self.for_each(expr, f);
+                for expr in args.iter().copied() {
+                    self.for_each(expr, f);
+                }
+            }
+            Expression::Member(expr, _) => {
+                self.for_each(expr, f);
+            }
+            Expression::IfElse(cond, yes, no) => {
+                self.for_each(cond, f);
+                self.for_each(yes, f);
+                if let Some(no) = no {
+                    self.for_each(no, f);
+                }
+            }
+            Expression::Op(left, _, right) => {
+                self.for_each(left, f);
+                self.for_each(right, f);
+            }
+            Expression::Yeet(expr) => {
+                if let Some(expr) = expr {
+                    self.for_each(expr, f);
+                }
+            }
+            Expression::TryWith(_, _, handler) => {
+                // The only difference:
+                // self.for_each(expr, f);
+                if let Some(handler) = handler {
+                    self.for_each(handler, f);
+                }
+            }
+            Expression::Let(_, _, expr) => {
+                self.for_each(expr, f);
+            }
+            Expression::Handler(_) => {}
+            Expression::String(_) => {}
+            Expression::Int(_) => {}
+            Expression::Ident(_) => {}
+            Expression::Error => {}
+        }
+    }
     pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
         let mut acc = Some(acc);
         self.for_each(expr, &mut |e| acc = Some(f(acc.take().unwrap(), e)));

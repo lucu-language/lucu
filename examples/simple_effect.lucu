@@ -14,11 +14,15 @@ fun getter_indirect(n int) get {
 	getter(n)
 }
 
+fun ident(h get) get {
+	h
+}
+
 fun puttwice(n int) / debug {
-	with getter_indirect(n) {
-		putint(get())
-		putint(get())
-	}
+	let handler = getter_indirect(n)
+	putint(handler.get())
+	let handler = ident(handler)
+	putint(handler.get())
 }
 
 fun main() / debug {

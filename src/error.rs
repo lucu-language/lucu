@@ -31,10 +31,11 @@ pub enum Error {
 
     // name resolution
     UnknownEffect,
-    UnknownEffectFun(Ranged<()>, Option<Ranged<()>>),
+    UnknownEffectFun(Option<Ranged<()>>),
     UnknownValue,
     UnhandledEffect,
     MultipleEffects(Vec<Ranged<()>>),
+    NoField,
 
     // type analysis
     UnknownType,
@@ -373,12 +374,8 @@ impl Errors {
                         "effect {} not found in scope",
                         highlight(0, str, color, true)
                     ),
-                    Error::UnknownEffectFun(h, _) => {
-                        format!(
-                            "effect {} has no function {}",
-                            highlight(1, &file[h.1..h.2], color, true),
-                            highlight(0, str, color, true)
-                        )
+                    Error::UnknownEffectFun(_) => {
+                        format!("effect has no function {}", highlight(0, str, color, true))
                     }
                     Error::UnknownValue => format!(
                         "value {} not found in scope",
@@ -392,6 +389,8 @@ impl Errors {
                         "value {} defined by multiple effects in scope",
                         highlight(0, str, color, true)
                     ),
+                    Error::NoField =>
+                        format!("value has no field {}", highlight(0, str, color, true)),
 
                     Error::UnknownType =>
                         format!("type {} not found in scope", highlight(0, str, color, true)),
@@ -435,11 +434,10 @@ impl Errors {
                         highlights.push(Highlight::from_file(file, value, 1, Gravity::Whole));
                     }
                 }
-                Error::UnknownEffectFun(handler, effect) => {
+                Error::UnknownEffectFun(effect) => {
                     if let Some(effect) = effect {
                         highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
                     }
-                    highlights.push(Highlight::from_file(file, handler, 1, Gravity::Whole));
                 }
                 Error::MultipleEffects(effects) => {
                     for effect in effects {

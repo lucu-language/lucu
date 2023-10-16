@@ -63,10 +63,11 @@ pub enum Definition {
     BuiltinType(Type), // builtin type
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum HandlerDef {
-    Handler(ExprIdx),
-    Call(Val),
+    Handler(ExprIdx, Vec<Val>),
+    Call(Val, Vec<ExprIdx>),
+    Param(ParamIdx),
     Unknown,
 }
 
@@ -138,6 +139,14 @@ impl Type {
                 v1 == v2 && Type::matches(b1, b2) && HandlerDef::matches(e1, e2)
             }
             _ => false,
+        }
+    }
+    fn to_param(&self) -> Type {
+        match self {
+            Type::Handler(effect, yeet, _) => {
+                Type::Handler(effect.clone(), yeet.clone(), HandlerDef::Unknown)
+            }
+            _ => self.clone(),
         }
     }
     fn from_val(actx: &Analysis, val: Val) -> Type {
@@ -304,12 +313,7 @@ fn analyze_expr<'a>(
             // put effect in scope
             let ident = handler.effect;
             let funs = scope_effect(actx, ctx, ident, scope, errors);
-            let handler_type = match funs {
-                Some((val, _)) => {
-                    Type::Handler(val, Box::new(yeet_type), HandlerDef::Handler(expr))
-                }
-                None => Type::Unknown,
-            };
+            let effect = funs.as_ref().copied().map(|(e, _)| e);
 
             // match fun names to effect
             if let Some((effect, funs)) = funs {
@@ -317,26 +321,24 @@ fn analyze_expr<'a>(
                     let name = &ctx.idents[fun.decl.name].0;
                     match funs.get(name) {
                         Some(&val) => actx.values[fun.decl.name] = val,
-                        None => {
-                            errors.push(ctx.idents[fun.decl.name].with(Error::UnknownEffectFun(
-                                ctx.idents[handler.effect].empty(),
-                                effect.definition_range(actx, ast, ctx),
-                            )))
-                        }
+                        None => errors.push(ctx.idents[fun.decl.name].with(
+                            Error::UnknownEffectFun(effect.definition_range(actx, ast, ctx)),
+                        )),
                     }
                 }
             }
 
             // analyze functions
+            let mut captures = Vec::new();
             for fun in handler.functions.iter() {
                 let expected =
                     analyze_return(actx, ast, ctx, scope, fun.decl.sign.output.as_ref(), errors);
 
-                let mut scope = scope.child();
+                let mut child = scope.child();
                 let val = actx.values[fun.decl.name];
-                scope_sign(actx, &mut scope, ast, ctx, val, &fun.decl.sign, errors);
+                scope_sign(actx, &mut child, ast, ctx, val, &fun.decl.sign, errors);
 
-                let found = analyze_expr(actx, &mut scope, ast, ctx, fun.body, &expected, errors);
+                let found = analyze_expr(actx, &mut child, ast, ctx, fun.body, &expected, errors);
 
                 // set concrete handler type
                 if matches!(expected, Type::Handler(_, _, _)) {
@@ -346,7 +348,56 @@ fn analyze_expr<'a>(
                         _ => unreachable!(),
                     }
                 }
+
+                // add captures
+                ctx.for_each(fun.body, &mut |expr| {
+                    if let Expression::Ident(i) = ctx.exprs[expr].0 {
+                        let val = actx.values[i];
+
+                        // capture effects from (effect) functions
+                        match actx.defs[val] {
+                            Definition::EffectFunction(e, _, _) => {
+                                // TODO: do not capture effect function effects
+                                if Some(e) != effect && !captures.contains(&e) {
+                                    captures.push(e);
+                                }
+                            }
+                            Definition::Function(fun, _) => {
+                                let effects = ast.functions[fun]
+                                    .decl
+                                    .sign
+                                    .effects
+                                    .iter()
+                                    .copied()
+                                    .map(|i| actx.values[i]);
+                                // TODO: do not capture effect function effects
+                                for e in effects {
+                                    if Some(e) != effect && !captures.contains(&e) {
+                                        captures.push(e);
+                                    }
+                                }
+                            }
+                            _ => {
+                                if scope.get(&ctx.idents[i].0) == Some(val)
+                                    && !captures.contains(&val)
+                                {
+                                    captures.push(val);
+                                }
+                            }
+                        };
+                    }
+                });
             }
+
+            // get handler type
+            let handler_type = match effect {
+                Some(val) => Type::Handler(
+                    val,
+                    Box::new(yeet_type),
+                    HandlerDef::Handler(expr, captures),
+                ),
+                None => Type::Unknown,
+            };
 
             handler_type
         }
@@ -451,7 +502,7 @@ fn analyze_expr<'a>(
                                     .inputs
                                     .values()
                                     .map(|&(ident, _)| {
-                                        Type::from_val(actx, actx.values[ident]).clone()
+                                        Type::from_val(actx, actx.values[ident]).to_param()
                                     })
                                     .collect(),
                             ),
@@ -468,7 +519,7 @@ fn analyze_expr<'a>(
                                         .inputs
                                         .values()
                                         .map(|&(ident, _)| {
-                                            Type::from_val(actx, actx.values[ident]).clone()
+                                            Type::from_val(actx, actx.values[ident]).to_param()
                                         })
                                         .collect(),
                                 ),
@@ -498,7 +549,8 @@ fn analyze_expr<'a>(
                 Type::Handler(val, yeet, _) => Type::Handler(
                     val,
                     yeet,
-                    fun.map(HandlerDef::Call).unwrap_or(HandlerDef::Unknown),
+                    fun.map(|fun| HandlerDef::Call(fun, exprs.clone()))
+                        .unwrap_or(HandlerDef::Unknown),
                 ),
                 _ => return_type,
             };
@@ -558,40 +610,76 @@ fn analyze_expr<'a>(
             }
         }
         Expression::Member(expr, field) => {
-            if let Expression::Ident(ident) = ctx.exprs[expr].0 {
+            let handler = if let Expression::Ident(ident) = ctx.exprs[expr].0 {
                 // getting a member directly with an identifier
                 // when a value is not found in scope we also check within effects
                 let name = &ctx.idents[ident].0;
-                match scope.effects.get(name) {
-                    Some(&(effect, ref funs)) => {
-                        actx.values[ident] = effect;
-
-                        if !scope.scoped_effects.iter().any(|(_, &(v, _))| v == effect) {
-                            errors.push(ctx.idents[ident].with(Error::UnhandledEffect));
-                        }
-
-                        let name = &ctx.idents[field].0;
-                        match funs.get(name).copied() {
-                            Some(fun) => {
-                                actx.values[field] = fun;
-                                Type::FunctionLiteral(fun)
-                            }
-                            None => {
-                                errors.push(ctx.idents[field].with(Error::UnknownEffectFun(
-                                    ctx.idents[ident].empty(),
-                                    effect.definition_range(actx, ast, ctx),
-                                )));
-                                Type::Unknown
-                            }
-                        }
+                match scope.get(name) {
+                    Some(val) => {
+                        actx.values[ident] = val;
+                        Some(val)
                     }
-                    None => {
-                        errors.push(ctx.idents[ident].with(Error::UnknownEffect));
-                        Type::Unknown
-                    }
+                    None => match scope.effects.get(name) {
+                        Some(&(effect, _)) => {
+                            actx.values[ident] = effect;
+
+                            if !scope.scoped_effects.iter().any(|(_, &(v, _))| v == effect) {
+                                errors.push(ctx.idents[ident].with(Error::UnhandledEffect));
+                            }
+
+                            Some(effect)
+                        }
+                        None => {
+                            errors.push(ctx.idents[ident].with(Error::UnknownValue));
+                            None
+                        }
+                    },
                 }
             } else {
+                let _out = analyze_expr(actx, scope, ast, ctx, expr, &Type::Unknown, errors);
                 todo!("member");
+            };
+
+            let effect = handler.and_then(|h| match actx.defs[h] {
+                Definition::Parameter(_, _, ref t) | Definition::Variable(_, ref t) => match *t {
+                    Type::Handler(effect, _, _) => Some(effect),
+                    Type::Unknown => None,
+                    _ => {
+                        errors.push(ctx.idents[field].with(Error::NoField));
+                        None
+                    }
+                },
+                Definition::Effect(_) => Some(h),
+                _ => {
+                    errors.push(ctx.idents[field].with(Error::NoField));
+                    None
+                }
+            });
+
+            match effect {
+                Some(effect) => {
+                    let funs = &scope
+                        .effects
+                        .values()
+                        .find(|&&(e, _)| e == effect)
+                        .expect("unknown effect value")
+                        .1;
+
+                    let name = &ctx.idents[field].0;
+                    match funs.get(name).copied() {
+                        Some(fun) => {
+                            actx.values[field] = fun;
+                            Type::FunctionLiteral(fun)
+                        }
+                        None => {
+                            errors.push(ctx.idents[field].with(Error::UnknownEffectFun(
+                                effect.definition_range(actx, ast, ctx),
+                            )));
+                            Type::Unknown
+                        }
+                    }
+                }
+                None => Type::Unknown,
             }
         }
         Expression::IfElse(cond, no, yes) => {
@@ -760,6 +848,12 @@ fn scope_sign(
     for (i, &(param, typ)) in func.inputs.values().enumerate() {
         // resolve type
         let typ = analyze_type(actx, ast, ctx, scope, &ctx.types[typ].0, errors);
+        let typ = match typ {
+            Type::Handler(effect, yeet, _) => {
+                Type::Handler(effect, yeet, HandlerDef::Param(ParamIdx(i)))
+            }
+            typ => typ,
+        };
 
         // add parameter to scope
         scope.values.insert(
@@ -775,6 +869,9 @@ pub const INT: Val = Val(1);
 pub const DEBUG: Val = Val(2);
 pub const PUTINT: Val = Val(3);
 pub const PUTSTR: Val = Val(4);
+
+pub const PUTINT_IDX: EffFunIdx = EffFunIdx(0);
+pub const PUTSTR_IDX: EffFunIdx = EffFunIdx(1);
 
 pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
     let mut actx = Analysis {

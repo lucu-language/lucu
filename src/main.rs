@@ -131,35 +131,35 @@ fn main() {
     Command::new("./out").status().unwrap();
 }
 
-fn execute(filename: &str, exec: &str) -> String {
-    let file = read_to_string(filename).unwrap().replace('\t', "  ");
-
-    let mut errors = error::Errors::new();
-
-    let tokenizer = lexer::Tokenizer::new(&file, &mut errors);
-    let (ast, ctx) = parser::parse_ast(tokenizer);
-    let asys = analyzer::analyze(&ast, &ctx, &mut errors);
-
-    if !errors.is_empty() {
-        println!();
-        errors.print(&file, filename, true);
-        return "[ERROR]".into();
-    }
-
-    let ir = ir::generate_ir(&ast, &ctx, &asys);
-    llvm::generate_ir(&ir, &Path::new(&format!("{}.o", exec)), false);
-
-    Command::new("./link.sh").arg(exec).status().unwrap();
-
-    let vec = Command::new(exec).output().unwrap().stdout;
-    String::from_utf8(vec).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use std::assert_eq;
 
     use super::*;
+
+    fn execute(filename: &str, output: &str) -> String {
+        let file = read_to_string(filename).unwrap().replace('\t', "  ");
+
+        let mut errors = error::Errors::new();
+
+        let tokenizer = lexer::Tokenizer::new(&file, &mut errors);
+        let (ast, ctx) = parser::parse_ast(tokenizer);
+        let asys = analyzer::analyze(&ast, &ctx, &mut errors);
+
+        if !errors.is_empty() {
+            println!();
+            errors.print(&file, filename, true);
+            return "[ERROR]".into();
+        }
+
+        let ir = ir::generate_ir(&ast, &ctx, &asys);
+        llvm::generate_ir(&ir, &Path::new(&format!("{}.o", output)), false);
+
+        Command::new("./link.sh").arg(output).status().unwrap();
+
+        let vec = Command::new(output).output().unwrap().stdout;
+        String::from_utf8(vec).unwrap()
+    }
 
     fn test_file(filename: &str, expected: &str) {
         assert_eq!(

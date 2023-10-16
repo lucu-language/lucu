@@ -21,25 +21,30 @@ impl<T> Ranged<T> {
 }
 
 pub enum Error {
+    // lexer
     UnknownSymbol,
     UnclosedString,
 
+    // parser
     Unexpected(Expected),
     UnclosedGroup(Group),
 
+    // name resolution
     UnknownEffect,
     UnknownEffectFun(Ranged<()>, Option<Ranged<()>>),
     UnknownValue,
     UnhandledEffect,
+    MultipleEffects(Vec<Ranged<()>>),
 
+    // type analysis
     UnknownType,
     ExpectedType(Option<Ranged<()>>),
     TypeMismatch(String, String),
     ExpectedHandler(String),
     ExpectedFunction(String),
     ParameterMismatch(usize, usize),
-
-    MultipleEffects(Vec<Ranged<()>>),
+    ExpectedEffect(String, Option<Ranged<()>>),
+    NestedHandlers,
 }
 
 pub enum Expected {
@@ -402,6 +407,10 @@ impl Errors {
                         format!("type mismatch: expected {}, found {}", expected, found),
                     Error::ParameterMismatch(expected, ref found) =>
                         format!("expected {} argument(s), found {}", expected, found),
+                    Error::ExpectedEffect(ref found, _) =>
+                        format!("expected an effect type, found {}", found),
+                    Error::NestedHandlers =>
+                        "effect handlers may not have another handler as its fail type".into(),
                 }
             );
             if color {
@@ -417,6 +426,11 @@ impl Errors {
             }];
             match err.0 {
                 Error::ExpectedType(value) => {
+                    if let Some(value) = value {
+                        highlights.push(Highlight::from_file(file, value, 1, Gravity::Whole));
+                    }
+                }
+                Error::ExpectedEffect(_, value) => {
                     if let Some(value) = value {
                         highlights.push(Highlight::from_file(file, value, 1, Gravity::Whole));
                     }

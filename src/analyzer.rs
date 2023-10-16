@@ -63,32 +63,45 @@ pub enum Definition {
     BuiltinType(Type), // builtin type
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+pub enum HandlerDef {
+    Handler(ExprIdx),
+    Call(Val),
+    Unknown,
+}
+
+impl HandlerDef {
+    fn matches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unknown, _) => true,
+            (_, Self::Unknown) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
-    IntLiteral,
-    StrLiteral,
     FunctionLiteral(Val),
+    Handler(Val, Box<Type>, HandlerDef),
 
     Int,
     Str,
     Bool,
-    Handler(Val, Box<Type>),
     None,
     Never,
     Unknown,
 }
 
 impl Type {
-    pub fn display(&self, actx: &Analysis, ast: &AST, ctx: &ParseContext) -> String {
+    fn display(&self, actx: &Analysis, ast: &AST, ctx: &ParseContext) -> String {
         match *self {
-            Type::IntLiteral => "integer literal".into(),
-            Type::StrLiteral => "string literal".into(),
             Type::FunctionLiteral(_) => "function literal".into(),
 
             Type::Int => "'int'".into(),
             Type::Str => "'str'".into(),
             Type::Bool => "'bool'".into(),
-            Type::Handler(val, ref yeets) => {
+            Type::Handler(val, ref yeets, _) => {
                 let yeets = match **yeets {
                     Type::Never => "".into(),
                     _ => format!(" fails {}", yeets.display(actx, ast, ctx)),
@@ -112,6 +125,21 @@ impl Type {
             Type::Unknown => "<unknown>".into(),
         }
     }
+    fn matches(&self, other: &Type) -> bool {
+        match (self, other) {
+            (Type::Unknown, _) | (_, Type::Unknown) => true,
+            (Type::FunctionLiteral(v1), Type::FunctionLiteral(v2)) => v1 == v2,
+            (Type::Int, Type::Int) => true,
+            (Type::Str, Type::Str) => true,
+            (Type::Bool, Type::Bool) => true,
+            (Type::None, Type::None) => true,
+            (Type::Never, Type::Never) => true,
+            (Type::Handler(v1, b1, e1), Type::Handler(v2, b2, e2)) => {
+                v1 == v2 && Type::matches(b1, b2) && HandlerDef::matches(e1, e2)
+            }
+            _ => false,
+        }
+    }
     fn from_val(actx: &Analysis, val: Val) -> Type {
         match val.0 == usize::MAX {
             true => Type::Unknown,
@@ -120,7 +148,8 @@ impl Type {
                 Definition::Variable(_, t) => t.clone(),
                 Definition::EffectFunction(_, _, _) => Type::FunctionLiteral(val),
                 Definition::Function(_, _) => Type::FunctionLiteral(val),
-                Definition::BuiltinType(t) => t.clone(),
+
+                Definition::BuiltinType(_) => Type::Unknown,
                 Definition::BuiltinEffect => Type::Unknown,
                 Definition::Effect(_) => Type::Unknown,
             },
@@ -134,11 +163,35 @@ impl Type {
         errors: &mut Errors,
     ) -> Self {
         let val = actx.values[typ.ident];
+        let yeet_type = match typ.yeets {
+            Some(parser::ReturnType::Type(typ)) => {
+                Type::from_type(actx, ast, ctx, &ctx.types[typ].0, errors)
+            }
+            Some(parser::ReturnType::Never) => Type::Never,
+            None => Type::None,
+        };
         match val.0 == usize::MAX {
             true => Type::Unknown,
             false => match &actx.defs[val] {
-                Definition::BuiltinType(t) => t.clone(),
-                Definition::Effect(_) => Type::Handler(val, Box::new(Type::Never)),
+                Definition::BuiltinType(t) => {
+                    if matches!(yeet_type, Type::Never) {
+                        t.clone()
+                    } else {
+                        errors.push(ctx.idents[typ.ident].with(Error::ExpectedEffect(
+                            t.display(actx, ast, ctx),
+                            val.definition_range(actx, ast, ctx),
+                        )));
+                        Type::Unknown
+                    }
+                }
+                Definition::Effect(_) => {
+                    if let Some(parser::ReturnType::Type(t)) = typ.yeets {
+                        if !matches!(ctx.types[t].0.yeets, Some(parser::ReturnType::Never)) {
+                            errors.push(ctx.types[t].with(Error::NestedHandlers));
+                        }
+                    }
+                    Type::Handler(val, Box::new(yeet_type), HandlerDef::Unknown)
+                }
                 _ => {
                     errors.push(
                         ctx.idents[typ.ident]
@@ -242,11 +295,19 @@ fn analyze_expr<'a>(
             let yeet_type =
                 analyze_return(actx, ast, ctx, scope, handler.break_type.as_ref(), errors);
 
+            if let Some(parser::ReturnType::Type(t)) = handler.break_type {
+                if !matches!(ctx.types[t].0.yeets, Some(parser::ReturnType::Never)) {
+                    errors.push(ctx.types[t].with(Error::NestedHandlers));
+                }
+            }
+
             // put effect in scope
             let ident = handler.effect;
             let funs = scope_effect(actx, ctx, ident, scope, errors);
             let handler_type = match funs {
-                Some((val, _)) => Type::Handler(val, Box::new(yeet_type)),
+                Some((val, _)) => {
+                    Type::Handler(val, Box::new(yeet_type), HandlerDef::Handler(expr))
+                }
                 None => Type::Unknown,
             };
 
@@ -274,7 +335,17 @@ fn analyze_expr<'a>(
                 let mut scope = scope.child();
                 let val = actx.values[fun.decl.name];
                 scope_sign(actx, &mut scope, ast, ctx, val, &fun.decl.sign, errors);
-                analyze_expr(actx, &mut scope, ast, ctx, fun.body, &expected, errors);
+
+                let found = analyze_expr(actx, &mut scope, ast, ctx, fun.body, &expected, errors);
+
+                // set concrete handler type
+                if matches!(expected, Type::Handler(_, _, _)) {
+                    let found = found.clone();
+                    match &mut actx.defs[val] {
+                        Definition::EffectFunction(_, _, typ) => *typ = found,
+                        _ => unreachable!(),
+                    }
+                }
             }
 
             handler_type
@@ -420,6 +491,17 @@ fn analyze_expr<'a>(
                 },
                 None => (None, Type::Unknown),
             };
+            // handle return type as handler
+            // this way different calls always return different handlers according to the type checker
+            // leading to a type mismatch
+            let return_type = match return_type {
+                Type::Handler(val, yeet, _) => Type::Handler(
+                    val,
+                    yeet,
+                    fun.map(HandlerDef::Call).unwrap_or(HandlerDef::Unknown),
+                ),
+                _ => return_type,
+            };
             // analyze arguments
             if let Some(params) = params {
                 if params.len() != exprs.len() {
@@ -442,7 +524,7 @@ fn analyze_expr<'a>(
                     analyze_expr(actx, &mut child, ast, ctx, handler, &Type::Unknown, errors);
 
                 let val = match handler_type {
-                    Type::Handler(handler, _) => Some(*handler),
+                    Type::Handler(handler, _, _) => Some(*handler),
                     Type::Unknown => None,
                     _ => {
                         errors.push(ctx.exprs[handler].with(Error::ExpectedHandler(
@@ -522,14 +604,9 @@ fn analyze_expr<'a>(
                 None => Type::None,
             };
             match (&yes_type, &no_type) {
-                (Type::IntLiteral, Type::Int) => Type::Int,
-                (Type::Int, Type::IntLiteral) => Type::Int,
-                (Type::StrLiteral, Type::Str) => Type::Str,
-                (Type::Str, Type::StrLiteral) => Type::Str,
-
-                (_, _) if yes_type == no_type => yes_type.clone(),
-                (Type::Never | Type::Unknown, _) => no_type.clone(),
-                (_, Type::Never | Type::Unknown) => yes_type.clone(),
+                (_, _) if Type::matches(&yes_type, &no_type) => yes_type.clone(),
+                (Type::Never, _) => no_type.clone(),
+                (_, Type::Never) => yes_type.clone(),
 
                 (_, _) => Type::None,
             }
@@ -566,31 +643,30 @@ fn analyze_expr<'a>(
             };
             let val_type = analyze_expr(actx, scope, ast, ctx, expr, &val_type, errors).clone();
 
-            // default types for int and string literals
-            let val_type = match val_type {
-                Type::IntLiteral => Type::Int,
-                Type::StrLiteral => Type::Str,
-                t => t,
-            };
-
             let val = actx.push_val(name, Definition::Variable(expr, val_type));
             scope.values.insert(ctx.idents[name].0.clone(), val);
             Type::None
         }
 
         // these have no identifiers
-        Expression::String(_) => Type::StrLiteral,
+        Expression::String(_) => match &expected_type {
+            Type::Str => Type::Str,
+
+            // default type for literal
+            _ => Type::Str,
+        },
+        Expression::Int(_) => match &expected_type {
+            Type::Int => Type::Int,
+
+            // default type for literal
+            _ => Type::Int,
+        },
         Expression::Error => Type::Unknown,
-        Expression::Int(_) => Type::IntLiteral,
     };
 
     let typ = match (expected_type, &found_type) {
-        (Type::Int, Type::IntLiteral) => Type::Int,
-        (Type::Str, Type::StrLiteral) => Type::Str,
-
-        (_, _) if found_type == *expected_type => found_type,
-        (Type::Unknown, _) => found_type,
-        (_, Type::Never | Type::Unknown) => expected_type.clone(),
+        (_, _) if Type::matches(expected_type, &found_type) => found_type,
+        (_, Type::Never) => expected_type.clone(),
 
         (_, _) => {
             errors.push(ctx.exprs[expr].with(Error::TypeMismatch(
@@ -634,7 +710,9 @@ fn analyze_return(
     errors: &mut Errors,
 ) -> Type {
     match output {
-        Some(parser::ReturnType::Type(typ)) => analyze_type(actx, ast, ctx, scope, typ, errors),
+        Some(&parser::ReturnType::Type(typ)) => {
+            analyze_type(actx, ast, ctx, scope, &ctx.types[typ].0, errors)
+        }
         Some(parser::ReturnType::Never) => Type::Never,
         None => Type::None,
     }
@@ -679,9 +757,9 @@ fn scope_sign(
     }
 
     // put args in scope
-    for (i, &(param, ref typ)) in func.inputs.values().enumerate() {
+    for (i, &(param, typ)) in func.inputs.values().enumerate() {
         // resolve type
-        let typ = analyze_type(actx, ast, ctx, scope, typ, errors);
+        let typ = analyze_type(actx, ast, ctx, scope, &ctx.types[typ].0, errors);
 
         // add parameter to scope
         scope.values.insert(
@@ -808,11 +886,6 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
 
     // analyze effects and functions
     for &implied in ast.implied.iter() {
-        let handler = match &ctx.exprs[implied].0 {
-            Expression::Handler(handler) => handler,
-            _ => panic!(),
-        };
-
         let mut scope = Scope {
             parent: Some(&global_scope),
             values: HashMap::new(),
@@ -864,7 +937,16 @@ pub fn analyze(ast: &AST, ctx: &ParseContext, errors: &mut Errors) -> Analysis {
             Definition::Function(_, ref return_type) => return_type.clone(),
             _ => unreachable!(),
         };
-        analyze_expr(&mut actx, &mut scope, ast, ctx, fun.body, &expected, errors);
+        let found = analyze_expr(&mut actx, &mut scope, ast, ctx, fun.body, &expected, errors);
+
+        // set concrete handler type
+        if matches!(expected, Type::Handler(_, _, _)) {
+            let found = found.clone();
+            match &mut actx.defs[val] {
+                Definition::Function(_, typ) => *typ = found,
+                _ => unreachable!(),
+            }
+        }
     }
 
     actx

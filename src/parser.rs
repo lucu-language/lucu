@@ -11,10 +11,19 @@ use crate::{
 pub struct ExprIdx(usize);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct TypeIdx(usize);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Ident(usize);
 
 impl From<ExprIdx> for usize {
     fn from(value: ExprIdx) -> Self {
+        value.0
+    }
+}
+
+impl From<TypeIdx> for usize {
+    fn from(value: TypeIdx) -> Self {
         value.0
     }
 }
@@ -91,17 +100,18 @@ pub struct Handler {
 #[derive(Debug)]
 pub struct Type {
     pub ident: Ident,
+    pub yeets: Option<ReturnType>,
 }
 
 #[derive(Debug)]
 pub enum ReturnType {
     Never,
-    Type(Type),
+    Type(TypeIdx),
 }
 
 #[derive(Debug)]
 pub struct FunSign {
-    pub inputs: VecMap<ParamIdx, (Ident, Type)>,
+    pub inputs: VecMap<ParamIdx, (Ident, TypeIdx)>,
     pub output: Option<ReturnType>,
     pub effects: Vec<Ident>,
 }
@@ -134,54 +144,55 @@ pub struct AST {
 #[derive(Default)]
 pub struct ParseContext {
     pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
+    pub types: VecMap<TypeIdx, Ranged<Type>>,
     pub idents: VecMap<Ident, Ranged<String>>,
 }
 
 impl ParseContext {
-    pub fn fold<A>(&self, expr: ExprIdx, acc: A, f: &mut impl FnMut(A, &Expression) -> A) -> A {
-        let mut acc = f(acc, &self.exprs[expr].0);
+    pub fn for_each(&self, expr: ExprIdx, f: &mut impl FnMut(ExprIdx)) {
+        f(expr);
         match self.exprs[expr].0 {
             Expression::Body(ref b) => {
                 for expr in b.main.iter().copied() {
-                    acc = self.fold(expr, acc, f);
+                    self.for_each(expr, f);
                 }
                 if let Some(expr) = b.last {
-                    acc = self.fold(expr, acc, f);
+                    self.for_each(expr, f);
                 }
             }
             Expression::Call(expr, ref args) => {
-                acc = self.fold(expr, acc, f);
+                self.for_each(expr, f);
                 for expr in args.iter().copied() {
-                    acc = self.fold(expr, acc, f);
+                    self.for_each(expr, f);
                 }
             }
             Expression::Member(expr, _) => {
-                acc = self.fold(expr, acc, f);
+                self.for_each(expr, f);
             }
             Expression::IfElse(cond, yes, no) => {
-                acc = self.fold(cond, acc, f);
-                acc = self.fold(yes, acc, f);
+                self.for_each(cond, f);
+                self.for_each(yes, f);
                 if let Some(no) = no {
-                    acc = self.fold(no, acc, f);
+                    self.for_each(no, f);
                 }
             }
             Expression::Op(left, _, right) => {
-                acc = self.fold(left, acc, f);
-                acc = self.fold(right, acc, f);
+                self.for_each(left, f);
+                self.for_each(right, f);
             }
             Expression::Yeet(expr) => {
                 if let Some(expr) = expr {
-                    acc = self.fold(expr, acc, f);
+                    self.for_each(expr, f);
                 }
             }
             Expression::TryWith(expr, _, handler) => {
-                acc = self.fold(expr, acc, f);
+                self.for_each(expr, f);
                 if let Some(handler) = handler {
-                    acc = self.fold(handler, acc, f);
+                    self.for_each(handler, f);
                 }
             }
             Expression::Let(_, _, expr) => {
-                acc = self.fold(expr, acc, f);
+                self.for_each(expr, f);
             }
             Expression::Handler(_) => {}
             Expression::String(_) => {}
@@ -189,16 +200,17 @@ impl ParseContext {
             Expression::Ident(_) => {}
             Expression::Error => {}
         }
-        acc
     }
-    pub fn for_each(&self, expr: ExprIdx, mut f: impl FnMut(&Expression)) {
-        self.fold(expr, (), &mut |(), e| f(e))
+    pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
+        let mut acc = Some(acc);
+        self.for_each(expr, &mut |e| acc = Some(f(acc.take().unwrap(), e)));
+        acc.unwrap()
     }
-    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(&Expression) -> bool) -> bool {
-        self.fold(expr, false, &mut |n, e| n || f(e))
+    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(ExprIdx) -> bool) -> bool {
+        self.fold(expr, false, |n, e| n || f(e))
     }
     pub fn yeets(&self, expr: ExprIdx) -> bool {
-        self.any(expr, |e| matches!(e, Expression::Yeet(_)))
+        self.any(expr, |e| matches!(self.exprs[e].0, Expression::Yeet(_)))
     }
 }
 
@@ -296,6 +308,9 @@ impl<'a> Tokens<'a> {
     }
     fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
         self.context.idents.push(Ident, ident)
+    }
+    fn push_type(&mut self, typ: Ranged<Type>) -> TypeIdx {
+        self.context.types.push(TypeIdx, typ)
     }
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {
@@ -478,8 +493,22 @@ impl Parse for AST {
 impl Parse for Type {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
+
+        let break_type = if tk.check(Token::Yeets).is_some() {
+            if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
+                None
+            } else {
+                let t = Type::parse_or_skip(tk)?;
+                let t = tk.push_type(t);
+                Some(ReturnType::Type(t))
+            }
+        } else {
+            Some(ReturnType::Never)
+        };
+
         Some(Type {
             ident: tk.push_ident(id),
+            yeets: break_type,
         })
     }
 }
@@ -499,7 +528,8 @@ impl Parse for ReturnType {
 
             // some return type
             _ => {
-                let typ = Type::parse_or_skip(tk)?.0;
+                let typ = Type::parse_or_skip(tk)?;
+                let typ = tk.push_type(typ);
                 Some(ReturnType::Type(typ))
             }
         }
@@ -517,7 +547,8 @@ impl Parse for FunSign {
         tk.group(Group::Paren, true, |tk| {
             let id = tk.ident()?;
             let name = tk.push_ident(id);
-            let typ = Type::parse_or_skip(tk)?.0;
+            let typ = Type::parse_or_skip(tk)?;
+            let typ = tk.push_type(typ);
             decl.inputs.push_value((name, typ));
             Some(())
         })?;
@@ -603,7 +634,9 @@ fn parse_handler_body(tk: &mut Tokens, ident: Ident) -> Option<Handler> {
         if tk.peek_check(Token::Open(Group::Brace)) {
             None
         } else {
-            Some(ReturnType::Type(Type::parse_or_skip(tk).map(|r| r.0)?))
+            let t = Type::parse_or_skip(tk)?;
+            let t = tk.push_type(t);
+            Some(ReturnType::Type(t))
         }
     } else {
         Some(ReturnType::Never)

@@ -10,11 +10,14 @@ fun getter(n int) get {
 	}
 }
 
+fun getter_indirect(n int) get {
+	getter(n)
+}
+
 fun puttwice(n int) / debug {
-	with getter(n) {
-		let value = get.get()
-		putint(value)
-		putint(value)
+	with getter_indirect(n) {
+		putint(get())
+		putint(get())
 	}
 }
 

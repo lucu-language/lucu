@@ -1,3 +1,7 @@
+#![feature(test)]
+
+extern crate test;
+
 use std::{env, fs::read_to_string, path::Path, print, println, process::Command};
 
 use crate::{error::Ranged, lexer::Token};
@@ -123,6 +127,82 @@ fn main() {
         println!("\n--- OUTPUT ---");
     }
 
-    Command::new("./link.sh").status().unwrap();
+    Command::new("./link.sh").arg("out").status().unwrap();
     Command::new("./out").status().unwrap();
+}
+
+fn execute(filename: &str, exec: &str) -> String {
+    let file = read_to_string(filename).unwrap().replace('\t', "  ");
+
+    let mut errors = error::Errors::new();
+
+    let tokenizer = lexer::Tokenizer::new(&file, &mut errors);
+    let (ast, ctx) = parser::parse_ast(tokenizer);
+    let asys = analyzer::analyze(&ast, &ctx, &mut errors);
+
+    if !errors.is_empty() {
+        println!();
+        errors.print(&file, filename, true);
+        return "[ERROR]".into();
+    }
+
+    let ir = ir::generate_ir(&ast, &ctx, &asys);
+    llvm::generate_ir(&ir, &Path::new(&format!("{}.o", exec)), false);
+
+    Command::new("./link.sh").arg(exec).status().unwrap();
+
+    let vec = Command::new(exec).output().unwrap().stdout;
+    String::from_utf8(vec).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::assert_eq;
+
+    use super::*;
+
+    fn test_file(filename: &str, expected: &str) {
+        assert_eq!(
+            execute(
+                &format!("./examples/{}.lucu", filename),
+                &format!("./examples/{}", filename)
+            ),
+            expected
+        )
+    }
+
+    #[test]
+    fn test_div() {
+        test_file("div", "3\n1\n420\n")
+    }
+
+    #[test]
+    fn test_factorial() {
+        test_file("factorial", "12\n479001600\n")
+    }
+
+    #[test]
+    fn test_hello() {
+        test_file("hello", "Hello, World!\n")
+    }
+
+    #[test]
+    fn test_implicit() {
+        test_file("implicit", "69\n420\n90\n")
+    }
+
+    #[test]
+    fn test_nonzero() {
+        test_file("nonzero", "7\n2\n")
+    }
+
+    #[test]
+    fn test_simple_effect() {
+        test_file("simple_effect", "420\n69\n69\n")
+    }
+
+    #[test]
+    fn test_yeet() {
+        test_file("yeet", "42\nHello, World!\n")
+    }
 }

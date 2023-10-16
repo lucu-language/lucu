@@ -1,6 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
     builder::Builder,
     context::Context,
@@ -9,15 +10,21 @@ use inkwell::{
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
     },
-    types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType},
-    values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue},
+    types::{
+        AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, IntType, StringRadix,
+        StructType,
+    },
+    values::{
+        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue,
+        PointerValue,
+    },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 
 use crate::{
     ir::{
         AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type, TypeIdx,
-        IR, STR_SLICE,
+        IR,
     },
     vecmap::VecMap,
 };
@@ -33,8 +40,10 @@ struct CodeGen<'ctx> {
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
-    putint: FunctionValue<'ctx>,
-    putstr: FunctionValue<'ctx>,
+    syscall2_fn: FunctionType<'ctx>,
+    syscall4_fn: FunctionType<'ctx>,
+    syscall2: PointerValue<'ctx>,
+    syscall4: PointerValue<'ctx>,
 }
 
 pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
@@ -55,14 +64,37 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         .unwrap();
     let target_data = target_machine.get_target_data();
 
-    let putint = module.add_function(
-        "putint",
-        context
-            .void_type()
-            .fn_type(&[context.i64_type().into()], false),
-        Some(Linkage::External),
+    let syscall2_fn = context.i64_type().fn_type(
+        &[context.i64_type().into(), context.i64_type().into()],
+        false,
     );
-    putint.set_call_conventions(0);
+    let syscall4_fn = context.i64_type().fn_type(
+        &[
+            context.i64_type().into(),
+            context.i64_type().into(),
+            context.i64_type().into(),
+            context.i64_type().into(),
+        ],
+        false,
+    );
+    let syscall2 = context.create_inline_asm(
+        syscall2_fn,
+        "syscall".to_string(),
+        "=r,{rax},{rdi}".into(),
+        true,
+        false,
+        None,
+        false,
+    );
+    let syscall4 = context.create_inline_asm(
+        syscall4_fn,
+        "syscall".to_string(),
+        "=r,{rax},{rdi},{rsi},{rdx}".into(),
+        true,
+        false,
+        None,
+        false,
+    );
 
     let mut codegen = CodeGen {
         context: &context,
@@ -72,24 +104,17 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         structs: VecMap::new(),
         procs: VecMap::new(),
         globals: VecMap::new(),
-        putint,
-        putstr: putint,
+
+        syscall2_fn,
+        syscall4_fn,
+        syscall2,
+        syscall4,
     };
 
     for typ in ir.aggregates.values() {
         let struc = codegen.generate_struct(ir, typ);
         codegen.structs.push_value(struc);
     }
-
-    let putstr = codegen.module.add_function(
-        "putstr",
-        context
-            .void_type()
-            .fn_type(&[codegen.structs[STR_SLICE].unwrap().into()], false),
-        Some(Linkage::External),
-    );
-    putstr.set_call_conventions(0);
-    codegen.putstr = putstr;
 
     for proc in ir.procsign.values() {
         let func = codegen.generate_proc_sign(ir, proc);
@@ -127,7 +152,43 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     }
 
     // set main func
-    codegen.procs[ir.main].set_linkage(Linkage::External);
+    let start = codegen.module.add_function(
+        "_start",
+        codegen.context.void_type().fn_type(&[], false),
+        Some(Linkage::External),
+    );
+    start.add_attribute(
+        AttributeLoc::Function,
+        context.create_enum_attribute(Attribute::get_named_enum_kind_id("sspstrong"), 0),
+    );
+    start.add_attribute(
+        AttributeLoc::Function,
+        context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),
+    );
+    start.add_attribute(
+        AttributeLoc::Function,
+        context.create_string_attribute("stackrealign", ""),
+    );
+
+    let block = codegen.context.append_basic_block(start, "");
+    codegen.builder.position_at_end(block);
+    codegen
+        .builder
+        .build_call(codegen.procs[ir.main], &[], "")
+        .unwrap();
+    codegen
+        .builder
+        .build_indirect_call(
+            codegen.syscall2_fn,
+            codegen.syscall2,
+            &[
+                codegen.context.i64_type().const_int(60, true).into(),
+                codegen.context.i64_type().const_int(0, true).into(),
+            ],
+            "",
+        )
+        .unwrap();
+    codegen.builder.build_unreachable().unwrap();
 
     // assume valid
     if debug {
@@ -534,13 +595,178 @@ impl<'ctx> CodeGen<'ctx> {
                         continue 'outer;
                     }
                     I::PrintNum(r) => {
+                        // setup
+                        let val = valmap[&r];
+                        let bufty = self.context.i8_type().array_type(21);
+                        let buf = self.builder.build_alloca(bufty, "buf").unwrap();
+                        let buf_last = unsafe {
+                            self.builder
+                                .build_gep(
+                                    bufty,
+                                    buf,
+                                    &[
+                                        self.context.i64_type().const_int(0, false),
+                                        self.context.i64_type().const_int(20, false),
+                                    ],
+                                    "last",
+                                )
+                                .unwrap()
+                        };
                         self.builder
-                            .build_call(self.putint, &[valmap[&r].into()], "")
+                            .build_store(
+                                buf_last,
+                                self.context.i8_type().const_int('\n'.into(), false),
+                            )
                             .unwrap();
+
+                        // loop
+                        let block_loop = self.context.append_basic_block(function, "loop");
+                        self.builder.build_unconditional_branch(block_loop).unwrap();
+                        self.builder.position_at_end(block_loop);
+
+                        let number = self
+                            .builder
+                            .build_phi(self.context.i64_type(), "d")
+                            .unwrap();
+                        let last = self
+                            .builder
+                            .build_phi(
+                                self.context.i8_type().ptr_type(AddressSpace::default()),
+                                "prev",
+                            )
+                            .unwrap();
+
+                        let rem = self
+                            .builder
+                            .build_int_unsigned_rem(
+                                number.as_basic_value().into_int_value(),
+                                self.context.i64_type().const_int(10, false),
+                                "rem",
+                            )
+                            .unwrap();
+                        let rem = self
+                            .builder
+                            .build_int_truncate(rem, self.context.i8_type(), "rem")
+                            .unwrap();
+                        let digit = self
+                            .builder
+                            .build_or(
+                                rem,
+                                self.context.i8_type().const_int('0'.into(), false),
+                                "digit",
+                            )
+                            .unwrap();
+
+                        let cur = unsafe {
+                            self.builder
+                                .build_gep(
+                                    self.context.i8_type(),
+                                    last.as_basic_value().into_pointer_value(),
+                                    &[self
+                                        .context
+                                        .i64_type()
+                                        .const_int_from_string("-1", StringRadix::Decimal)
+                                        .unwrap()],
+                                    "cur",
+                                )
+                                .unwrap()
+                        };
+                        self.builder.build_store(cur, digit).unwrap();
+
+                        let div = self
+                            .builder
+                            .build_int_unsigned_div(
+                                number.as_basic_value().into_int_value(),
+                                self.context.i64_type().const_int(10, false),
+                                "div",
+                            )
+                            .unwrap();
+
+                        number.add_incoming(&[(&val, blocks[idx]), (&div, block_loop)]);
+                        last.add_incoming(&[(&buf_last, blocks[idx]), (&cur, block_loop)]);
+
+                        // write
+                        let block_write = self.context.append_basic_block(function, "write");
+                        let cmp = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::ULT,
+                                number.as_basic_value().into_int_value(),
+                                self.context.i64_type().const_int(10, false),
+                                "cmp",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(cmp, block_write, block_loop)
+                            .unwrap();
+                        self.builder.position_at_end(block_write);
+
+                        let buf_end = unsafe {
+                            self.builder
+                                .build_gep(
+                                    bufty,
+                                    buf,
+                                    &[
+                                        self.context.i64_type().const_int(0, false),
+                                        self.context.i64_type().const_int(21, false),
+                                    ],
+                                    "ptr",
+                                )
+                                .unwrap()
+                        };
+                        let buf_end = self
+                            .builder
+                            .build_ptr_to_int(buf_end, self.context.i64_type(), "end")
+                            .unwrap();
+                        let buf_start = self
+                            .builder
+                            .build_ptr_to_int(cur, self.context.i64_type(), "start")
+                            .unwrap();
+                        let buf_len = self
+                            .builder
+                            .build_int_sub(buf_end, buf_start, "len")
+                            .unwrap();
+
+                        self.builder
+                            .build_indirect_call(
+                                self.syscall4_fn,
+                                self.syscall4,
+                                &[
+                                    self.context.i64_type().const_int(1, false).into(),
+                                    self.context.i64_type().const_int(1, false).into(),
+                                    buf_start.into(),
+                                    buf_len.into(),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+
+                        blocks[idx] = block_write;
                     }
                     I::PrintStr(r) => {
+                        let val = valmap[&r].into_struct_value();
+                        let ptr = self
+                            .builder
+                            .build_extract_value(val, 0, "ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let buf = self
+                            .builder
+                            .build_ptr_to_int(ptr, self.context.i64_type(), "buf")
+                            .unwrap();
+                        let len = self.builder.build_extract_value(val, 1, "len").unwrap();
                         self.builder
-                            .build_call(self.putstr, &[valmap[&r].into()], "")
+                            .build_indirect_call(
+                                self.syscall4_fn,
+                                self.syscall4,
+                                &[
+                                    self.context.i64_type().const_int(1, false).into(),
+                                    self.context.i64_type().const_int(1, false).into(),
+                                    buf.into(),
+                                    len.into(),
+                                ],
+                                "",
+                            )
                             .unwrap();
                     }
                     I::Aggregate(r, ref rs) => {
@@ -612,7 +838,7 @@ impl<'ctx> CodeGen<'ctx> {
                                 .build_store(glob.as_pointer_value(), tmp)
                                 .unwrap();
 
-                            self.builder.position_at_end(basic_block);
+                            self.builder.position_at_end(blocks[idx]);
 
                             self.builder
                                 .build_store(glob.as_pointer_value(), val)

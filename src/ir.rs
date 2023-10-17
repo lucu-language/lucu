@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::{self, Display},
     write,
@@ -253,7 +254,7 @@ impl From<HandlerIdx> for usize {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct ProcIdent {
     fun: Either<Val, (HandlerIdx, EffFunIdx)>,
-    handlers: Box<[HandlerIdx]>,
+    handlers: Vec<HandlerIdx>,
 }
 
 #[derive(Debug)]
@@ -625,14 +626,14 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
     ir.proc_map.insert(
         ProcIdent {
             fun: Either::Right((debug, PUTINT_IDX)),
-            handlers: Box::new([]),
+            handlers: Vec::new(),
         },
         putint,
     );
     ir.proc_map.insert(
         ProcIdent {
             fun: Either::Right((debug, PUTSTR_IDX)),
-            handlers: Box::new([]),
+            handlers: Vec::new(),
         },
         putstr,
     );
@@ -645,10 +646,8 @@ pub fn generate_ir(ast: &AST, ctx: &ParseContext, asys: &Analysis) -> IR {
 
     ir.ir.main = generate_proc_sign(
         &mut ir,
-        Some(ProcIdent {
-            fun: Either::Left(val),
-            handlers: Box::new([debug]),
-        }),
+        Some(Either::Left(val)),
+        Cow::Borrowed(&[debug]),
         &[],
         &Vec::new(),
         &analyzer::Type::None,
@@ -770,7 +769,7 @@ fn get_proc(
             // create proc identity
             let fun = &ir.ast.functions[func_idx];
 
-            let effects: Box<[HandlerIdx]> = fun
+            let effects = fun
                 .decl
                 .sign
                 .effects
@@ -855,7 +854,8 @@ fn get_proc(
                 // generate func
                 generate_proc_sign(
                     ir,
-                    Some(procident),
+                    Some(procident.fun),
+                    Cow::Owned(procident.handlers),
                     &[],
                     &params,
                     output,
@@ -886,7 +886,7 @@ fn get_handler_proc(
 
     let procident = ProcIdent {
         fun: Either::Right((handler_idx, eff_fun_idx)),
-        handlers: Box::new([]), // TODO: handler effects
+        handlers: Vec::new(), // TODO: handler effects
     };
 
     // get proc
@@ -951,7 +951,8 @@ fn get_handler_proc(
         // generate handler proc
         generate_proc_sign(
             ir,
-            Some(procident),
+            Some(procident.fun),
+            Cow::Owned(procident.handlers),
             &[],
             &params,
             output,
@@ -967,13 +968,14 @@ fn get_handler_proc(
 
 fn generate_proc_sign(
     ir: &mut IRContext,
-    ident: Option<ProcIdent>,
-    handles: &[HandlerIdx],
+    ident: Option<Either<Val, (HandlerIdx, EffFunIdx)>>,
+    unhandled: Cow<[HandlerIdx]>,
+    handled: &[HandlerIdx],
     params: &[(Val, Type)],
     output: &analyzer::Type,
     debug_name: String,
     body: ExprIdx,
-    captures: Option<HandlerIdx>,
+    inside_handler: Option<HandlerIdx>,
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     // get inputs
@@ -985,11 +987,7 @@ fn generate_proc_sign(
         inputs.push(reg);
     }
 
-    for idx in ident
-        .iter()
-        .flat_map(|ident| ident.handlers.iter().copied())
-        .chain(handles.iter().copied())
-    {
+    for idx in unhandled.iter().copied().chain(handled.iter().copied()) {
         let handler = &ir.handlers[idx];
 
         match handler.global {
@@ -1004,8 +1002,7 @@ fn generate_proc_sign(
         }
     }
 
-    let handler = captures;
-    let captures = if let Some(idx) = captures {
+    let captures = if let Some(idx) = inside_handler {
         let handler = &ir.handlers[idx];
 
         let mut members = Vec::new();
@@ -1059,12 +1056,12 @@ fn generate_proc_sign(
             output: Type::from_return_type(output),
             debug_name,
             captures,
-            unhandled: handler
+            unhandled: inside_handler
                 .iter()
                 .copied()
                 .filter(|_| ir.ctx.yeets(body))
                 .collect(),
-            handled: handles
+            handled: handled
                 .iter()
                 .copied()
                 .filter(|&h| !ir.ir.break_types[h].is_never())
@@ -1074,11 +1071,17 @@ fn generate_proc_sign(
     );
 
     // add procident if this is a function
-    if let Some(ident) = ident {
-        ir.proc_map.insert(ident, proc_idx);
+    if let Some(fun) = ident {
+        ir.proc_map.insert(
+            ProcIdent {
+                fun,
+                handlers: unhandled.into_owned(),
+            },
+            proc_idx,
+        );
     }
 
-    proc_todo.push((proc_idx, body, handler, scope.clone()));
+    proc_todo.push((proc_idx, body, inside_handler, scope.clone()));
 
     // get output
     if let analyzer::Type::Handler(effect, _, def) = output {
@@ -1592,9 +1595,10 @@ fn generate_expr(
                     generate_expr(ir, ctx.with_expr(handler), blocks, block, proc_todo)?
                         .expect("try handler does not return a value");
                 let handler_idx = match ir.ir.regs[closure_reg] {
-                    Type::NakedHandler(handler_idx) => handler_idx,
+                    Type::NakedHandler(handler_idx) | Type::Handler(handler_idx) => handler_idx,
                     _ => panic!(),
                 };
+                let naked = matches!(ir.ir.regs[closure_reg], Type::NakedHandler(_));
                 let eff_val = ir.handlers[handler_idx].effect;
                 let global = ir.handlers[handler_idx].global;
 
@@ -1615,11 +1619,19 @@ fn generate_expr(
                     usize::from(handler_idx)
                 );
 
+                let handlers = &[handler_idx];
+                let (handled, unhandled): (Cow<[HandlerIdx]>, &[HandlerIdx]) = if naked {
+                    (Cow::Borrowed(&[]), handlers)
+                } else {
+                    (Cow::Borrowed(handlers), &[])
+                };
+
                 let output = Type::from_expr(ir, body);
                 let proc_idx = generate_proc_sign(
                     ir,
                     None,
-                    &[handler_idx],
+                    handled,
+                    unhandled,
                     &reset_params,
                     output,
                     debug_name,
@@ -1684,6 +1696,7 @@ fn generate_expr(
                 let proc_idx = generate_proc_sign(
                     ir,
                     None,
+                    Cow::Borrowed(&[]),
                     &[],
                     &reset_params,
                     output,

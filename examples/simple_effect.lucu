@@ -3,7 +3,7 @@ effect get {
 }
 
 fun getter(n int) get {
-	get {
+	handle get {
 		fun get() int {
 			n
 		}
@@ -14,7 +14,7 @@ fun getter_indirect(n int) get {
 	getter(n)
 }
 
-fun gimme_get() get / get{
+fun gimme_get() get / get {
 	get
 }
 

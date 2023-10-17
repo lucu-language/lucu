@@ -1,0 +1,29 @@
+effect ident {
+	fun ident(n int) int
+}
+
+fun main() / debug {
+	let throw = handle ident fails int {
+		fun ident(n int) {
+			fail n
+		}
+	}
+	putint(with throw {
+		let nonnaked = ident
+		with nonnaked {
+			putint(ident(5))
+			420
+		}
+		putstr("unreachable\n")
+		69
+	})
+	putint(with throw {
+		let naked = throw
+		with naked {
+			putint(ident(5))
+			420
+		}
+		putstr("reachable\n")
+		69
+	})
+}

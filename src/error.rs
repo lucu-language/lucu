@@ -31,11 +31,11 @@ pub enum Error {
 
     // name resolution
     UnknownEffect,
-    UnknownEffectFun(Option<Ranged<()>>),
+    UnknownEffectFun(Option<Ranged<()>>, Option<Ranged<()>>),
+    UnknownField(Option<Ranged<()>>, Option<Ranged<()>>),
     UnknownValue,
     UnhandledEffect,
     MultipleEffects(Vec<Ranged<()>>),
-    NoField,
 
     // type analysis
     UnknownType,
@@ -46,6 +46,7 @@ pub enum Error {
     ParameterMismatch(usize, usize),
     ExpectedEffect(String, Option<Ranged<()>>),
     NestedHandlers,
+    TryReturnsHandler,
 }
 
 pub enum Expected {
@@ -374,8 +375,17 @@ impl Errors {
                         "effect {} not found in scope",
                         highlight(0, str, color, true)
                     ),
-                    Error::UnknownEffectFun(_) => {
-                        format!("effect has no function {}", highlight(0, str, color, true))
+                    Error::UnknownEffectFun(effect, _) => {
+                        format!(
+                            "effect {}has no function {}",
+                            effect
+                                .map(
+                                    |effect| highlight(1, &file[effect.1..effect.2], color, true)
+                                        + " "
+                                )
+                                .unwrap_or(String::new()),
+                            highlight(0, str, color, true)
+                        )
                     }
                     Error::UnknownValue => format!(
                         "value {} not found in scope",
@@ -389,8 +399,14 @@ impl Errors {
                         "value {} defined by multiple effects in scope",
                         highlight(0, str, color, true)
                     ),
-                    Error::NoField =>
-                        format!("value has no field {}", highlight(0, str, color, true)),
+                    Error::UnknownField(typ, _) => format!(
+                        "type {}has no field {}",
+                        typ.map(
+                            |effect| highlight(1, &file[effect.1..effect.2], color, true) + " "
+                        )
+                        .unwrap_or(String::new()),
+                        highlight(0, str, color, true)
+                    ),
 
                     Error::UnknownType =>
                         format!("type {} not found in scope", highlight(0, str, color, true)),
@@ -409,7 +425,9 @@ impl Errors {
                     Error::ExpectedEffect(ref found, _) =>
                         format!("expected an effect type, found {}", found),
                     Error::NestedHandlers =>
-                        "effect handlers may not have another handler as its fail type".into(),
+                        "effect handlers may not have another handler as their fail type".into(),
+                    Error::TryReturnsHandler =>
+                        "effect handlers may not escape try-with blocks".into(),
                 }
             );
             if color {
@@ -434,9 +452,20 @@ impl Errors {
                         highlights.push(Highlight::from_file(file, value, 1, Gravity::Whole));
                     }
                 }
-                Error::UnknownEffectFun(effect) => {
+                Error::UnknownEffectFun(effect, handler) => {
                     if let Some(effect) = effect {
                         highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
+                    }
+                    if let Some(handler) = handler {
+                        highlights.push(Highlight::from_file(file, handler, 1, Gravity::Whole));
+                    }
+                }
+                Error::UnknownField(ty, field) => {
+                    if let Some(effect) = ty {
+                        highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
+                    }
+                    if let Some(handler) = field {
+                        highlights.push(Highlight::from_file(file, handler, 1, Gravity::Whole));
                     }
                 }
                 Error::MultipleEffects(effects) => {

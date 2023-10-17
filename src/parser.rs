@@ -680,47 +680,44 @@ impl Parse for Function {
     }
 }
 
-fn parse_handler_body(tk: &mut Tokens, ident: Ident) -> Option<Handler> {
-    let mut funcs = Vec::new();
-
-    let break_type = if tk.check(Token::Yeets).is_some() {
-        if tk.peek_check(Token::Open(Group::Brace)) {
-            None
-        } else {
-            let t = Type::parse_or_skip(tk)?;
-            let t = tk.push_type(t);
-            Some(ReturnType::Type(t))
-        }
-    } else {
-        Some(ReturnType::Never)
-    };
-
-    tk.group(Group::Brace, false, |tk| {
-        // skip semicolons
-        while tk.check(Token::Semicolon).is_some() {}
-
-        // parse function
-        let func = Function::parse_or_skip(tk)?.0;
-        funcs.push(func);
-
-        // skip semicolons
-        while tk.check(Token::Semicolon).is_some() {}
-
-        Some(())
-    })?;
-
-    Some(Handler {
-        effect: ident,
-        functions: funcs,
-        break_type,
-    })
-}
-
 impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let id = tk.ident()?;
         let ident = tk.push_ident(id);
-        parse_handler_body(tk, ident)
+
+        let mut funcs = Vec::new();
+
+        let break_type = if tk.check(Token::Yeets).is_some() {
+            if tk.peek_check(Token::Open(Group::Brace)) {
+                None
+            } else {
+                let t = Type::parse_or_skip(tk)?;
+                let t = tk.push_type(t);
+                Some(ReturnType::Type(t))
+            }
+        } else {
+            Some(ReturnType::Never)
+        };
+
+        tk.group(Group::Brace, false, |tk| {
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
+            // parse function
+            let func = Function::parse_or_skip(tk)?.0;
+            funcs.push(func);
+
+            // skip semicolons
+            while tk.check(Token::Semicolon).is_some() {}
+
+            Some(())
+        })?;
+
+        Some(Handler {
+            effect: ident,
+            functions: funcs,
+            break_type,
+        })
     }
 }
 
@@ -737,8 +734,8 @@ impl Parse for Expression {
                 let body = Body::parse_or_skip(tk)?.map(Expression::Body);
 
                 let handler = if tk.check(Token::With).is_some() {
-                    let handler = Expression::parse_or_skip(tk)?;
-                    let handler = tk.push_expr(handler);
+                    let handler = Handler::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler.map(Expression::Handler));
                     Some(handler)
                 } else {
                     None
@@ -821,22 +818,18 @@ impl Parse for Expression {
                 }
             }
 
-            // ident / handler
+            // ident
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
                 let ident = tk.push_ident(id);
+                Some(Expression::Ident(ident))
+            }
 
-                match tk.peek() {
-                    Some(Ranged(Token::Yeets | Token::Open(Group::Brace), ..)) => {
-                        // handler
-                        let handler = parse_handler_body(tk, ident)?;
-                        Some(Expression::Handler(handler))
-                    }
-                    _ => {
-                        // ident
-                        Some(Expression::Ident(ident))
-                    }
-                }
+            // handler
+            Some(Ranged(Token::Handle, ..)) => {
+                tk.next();
+                let handler = Handler::parse_or_skip(tk)?;
+                Some(Expression::Handler(handler.0))
             }
 
             // string

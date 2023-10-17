@@ -172,37 +172,42 @@ mod tests {
     }
 
     #[test]
-    fn test_div() {
+    fn safe_div() {
         test_file("div", "3\n1\n420\n")
     }
 
     #[test]
-    fn test_factorial() {
+    fn factorial() {
         test_file("factorial", "12\n479001600\n")
     }
 
     #[test]
-    fn test_hello() {
+    fn hello() {
         test_file("hello", "Hello, World!\n")
     }
 
     #[test]
-    fn test_implicit() {
+    fn implicit_explicit() {
         test_file("implicit", "69\n420\n90\n")
     }
 
     #[test]
-    fn test_nonzero() {
+    fn implicit_nonzero() {
         test_file("nonzero", "7\n2\n")
     }
 
     #[test]
-    fn test_simple_effect() {
+    fn handler_type() {
         test_file("simple_effect", "420\n69\n69\n")
     }
 
     #[test]
-    fn test_yeet() {
+    fn fail_union() {
         test_file("yeet", "42\nHello, World!\n")
+    }
+
+    #[test]
+    fn naked_vs_nonnaked() {
+        test_file("naked", "5\nreachable\n69\n")
     }
 }

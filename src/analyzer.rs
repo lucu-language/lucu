@@ -104,28 +104,42 @@ impl Type {
             Type::Str => "'str'".into(),
             Type::Bool => "'bool'".into(),
             Type::Handler(val, ref yeets, _) => {
-                let yeets = match **yeets {
-                    Type::Never => "".into(),
-                    _ => format!(" fails {}", yeets.display(actx, ast, ctx)),
-                };
-                match val.0 {
-                    usize::MAX => "<unknown>".into(),
-                    _ => {
-                        let name = match actx.defs[val] {
-                            Definition::Effect(e) => Some(&ctx.idents[ast.effects[e].name].0),
-                            _ => None,
-                        };
-                        match name {
-                            Some(name) => format!("'{}{}'", name, yeets),
-                            None => "<unknown>".into(),
-                        }
-                    }
-                }
+                format!("'{}'", yeets.display_handler(val, actx, ast, ctx))
             }
             Type::None => "none".into(),
             Type::Never => "!".into(),
             Type::Unknown => "<unknown>".into(),
         }
+    }
+    fn display_fails(&self, actx: &Analysis, ast: &AST, ctx: &ParseContext) -> String {
+        match *self {
+            Type::FunctionLiteral(_) => " fails <unknown>".into(),
+            Type::Int => " fails int".into(),
+            Type::Str => " fails str".into(),
+            Type::Bool => " fails bool".into(),
+            Type::Handler(val, ref yeets, _) => {
+                format!(" fails {}", yeets.display_handler(val, actx, ast, ctx))
+            }
+            Type::None => " fails".into(),
+            Type::Never => "".into(),
+            Type::Unknown => " fails <unknown>".into(),
+        }
+    }
+    fn display_handler(
+        &self,
+        handler: Val,
+        actx: &Analysis,
+        ast: &AST,
+        ctx: &ParseContext,
+    ) -> String {
+        let effect_name = match handler.0 {
+            usize::MAX => "<unknown>".into(),
+            _ => match actx.defs[handler] {
+                Definition::Effect(e) => ctx.idents[ast.effects[e].name].0.clone(),
+                _ => "<unknown>".into(),
+            },
+        };
+        format!("{}{}", effect_name, self.display_fails(actx, ast, ctx))
     }
     fn matches(&self, other: &Type) -> bool {
         match (self, other) {
@@ -322,9 +336,12 @@ fn analyze_expr<'a>(
                     let name = &ctx.idents[fun.decl.name].0;
                     match funs.get(name) {
                         Some(&val) => actx.values[fun.decl.name] = val,
-                        None => errors.push(ctx.idents[fun.decl.name].with(
-                            Error::UnknownEffectFun(effect.definition_range(actx, ast, ctx)),
-                        )),
+                        None => {
+                            errors.push(ctx.idents[fun.decl.name].with(Error::UnknownEffectFun(
+                                effect.definition_range(actx, ast, ctx),
+                                Some(ctx.idents[ident].empty()),
+                            )))
+                        }
                     }
                 }
             }
@@ -356,36 +373,38 @@ fn analyze_expr<'a>(
                         let val = actx.values[i];
 
                         // capture effects from (effect) functions
-                        match actx.defs[val] {
-                            Definition::EffectFunction(e, _, _) => {
-                                // TODO: do not capture effect function effects
-                                if Some(e) != effect && !captures.contains(&e) {
-                                    captures.push(e);
-                                }
-                            }
-                            Definition::Function(fun, _) => {
-                                let effects = ast.functions[fun]
-                                    .decl
-                                    .sign
-                                    .effects
-                                    .iter()
-                                    .copied()
-                                    .map(|i| actx.values[i]);
-                                // TODO: do not capture effect function effects
-                                for e in effects {
+                        if val.0 != usize::MAX {
+                            match actx.defs[val] {
+                                Definition::EffectFunction(e, _, _) => {
+                                    // TODO: do not capture effect function effects
                                     if Some(e) != effect && !captures.contains(&e) {
                                         captures.push(e);
                                     }
                                 }
-                            }
-                            _ => {
-                                if scope.get(&ctx.idents[i].0) == Some(val)
-                                    && !captures.contains(&val)
-                                {
-                                    captures.push(val);
+                                Definition::Function(fun, _) => {
+                                    let effects = ast.functions[fun]
+                                        .decl
+                                        .sign
+                                        .effects
+                                        .iter()
+                                        .copied()
+                                        .map(|i| actx.values[i]);
+                                    // TODO: do not capture effect function effects
+                                    for e in effects {
+                                        if Some(e) != effect && !captures.contains(&e) {
+                                            captures.push(e);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    if scope.get(&ctx.idents[i].0) == Some(val)
+                                        && !captures.contains(&val)
+                                    {
+                                        captures.push(val);
+                                    }
                                 }
                             }
-                        };
+                        }
                     }
                 });
             }
@@ -584,13 +603,20 @@ fn analyze_expr<'a>(
         Expression::TryWith(expr, ref break_type, handler) => {
             let return_type = analyze_return(actx, ast, ctx, scope, break_type.as_ref(), errors);
 
+            let expected_return = match return_type {
+                Type::None => Type::Unknown,
+                _ => return_type,
+            };
+
             let mut child = scope.child();
-            if let Some(handler) = handler {
+            let typ = if let Some(handler) = handler {
                 let handler_type =
                     analyze_expr(actx, &mut child, ast, ctx, handler, &Type::Unknown, errors);
 
-                let val = match handler_type {
-                    Type::Handler(handler, _, _) => Some(*handler),
+                let handler_type = match handler_type {
+                    Type::Handler(handler, break_type, _) => {
+                        Some((*handler, break_type.as_ref().clone()))
+                    }
                     Type::Unknown => None,
                     _ => {
                         errors.push(ctx.exprs[handler].with(Error::ExpectedHandler(
@@ -600,28 +626,61 @@ fn analyze_expr<'a>(
                     }
                 };
 
-                if let Some(val) = val {
-                    let effect = match actx.defs[val] {
+                if let Some((eff_val, handler_break)) = handler_type {
+                    let effect = match actx.defs[eff_val] {
                         Definition::Effect(idx) => ast.effects[idx].name,
                         _ => panic!(),
                     };
 
+                    let expected_break = match handler_break {
+                        Type::Never => expected_return.clone(),
+                        _ => handler_break,
+                    };
+
                     let mut scoped = child.scoped_effects.clone();
 
-                    let pos = scoped.iter().position(|(_, &(v, _))| v == val);
+                    let pos = scoped.iter().position(|(_, &(v, _))| v == eff_val);
                     match pos {
                         Some(pos) => scoped[pos].0 = effect,
                         None => scoped.push((effect, &scope.effects[&ctx.idents[effect].0])),
                     }
 
                     child.scoped_effects = &scoped;
-                    analyze_expr(actx, &mut child, ast, ctx, expr, &return_type, errors).clone()
+                    if !Type::matches(&expected_break, &expected_return) {
+                        errors.push(ctx.exprs[handler].with(Error::TypeMismatch(
+                            format!(
+                                "'{}'",
+                                expected_return.display_handler(eff_val, actx, ast, ctx)
+                            ),
+                            format!(
+                                "'{}'",
+                                expected_break.display_handler(eff_val, actx, ast, ctx)
+                            ),
+                        )));
+
+                        analyze_expr(actx, &mut child, ast, ctx, expr, &expected_return, errors)
+                            .clone()
+                    } else {
+                        analyze_expr(actx, &mut child, ast, ctx, expr, &expected_break, errors)
+                            .clone()
+                    }
                 } else {
                     Type::Unknown
                 }
             } else {
-                analyze_expr(actx, &mut child, ast, ctx, expr, &return_type, errors).clone()
+                analyze_expr(actx, &mut child, ast, ctx, expr, &expected_return, errors).clone()
+            };
+
+            if matches!(typ, Type::Handler(_, _, _)) {
+                let expr = match &ctx.exprs[expr].0 {
+                    Expression::Body(body) => body.last.unwrap(),
+                    _ => expr,
+                };
+
+                errors.push(ctx.exprs[expr].with(Error::TryReturnsHandler));
             }
+
+            typ
         }
         Expression::Member(expr, field) => {
             let handler = if let Expression::Ident(ident) = ctx.exprs[expr].0 {
@@ -659,13 +718,21 @@ fn analyze_expr<'a>(
                     Type::Handler(effect, _, _) => Some(effect),
                     Type::Unknown => None,
                     _ => {
-                        errors.push(ctx.idents[field].with(Error::NoField));
+                        // TODO: type definition
+                        errors.push(
+                            ctx.idents[field]
+                                .with(Error::UnknownField(None, Some(ctx.exprs[expr].empty()))),
+                        );
                         None
                     }
                 },
                 Definition::Effect(_) => Some(h),
                 _ => {
-                    errors.push(ctx.idents[field].with(Error::NoField));
+                    // TODO: type definition
+                    errors.push(
+                        ctx.idents[field]
+                            .with(Error::UnknownField(None, Some(ctx.exprs[expr].empty()))),
+                    );
                     None
                 }
             });
@@ -688,6 +755,7 @@ fn analyze_expr<'a>(
                         None => {
                             errors.push(ctx.idents[field].with(Error::UnknownEffectFun(
                                 effect.definition_range(actx, ast, ctx),
+                                Some(ctx.exprs[expr].empty()),
                             )));
                             Type::Unknown
                         }

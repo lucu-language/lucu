@@ -54,7 +54,7 @@ impl From<EffFunIdx> for usize {
 #[derive(Debug, Clone)]
 pub enum Definition {
     Parameter(Val, ParamIdx, Type),       // parameter index in function
-    Variable(ExprIdx, Type),              // variable defined at expr
+    Variable(bool, ExprIdx, Type),        // variable defined at expr
     Effect(EffIdx),                       // effect index in ast
     EffectFunction(Val, EffFunIdx, Type), // effect value, function index in effect
     Function(FunIdx, Type),               // function index in ast
@@ -169,7 +169,7 @@ impl Type {
             true => Type::Unknown,
             false => match &actx.defs[val] {
                 Definition::Parameter(_, _, t) => t.clone(),
-                Definition::Variable(_, t) => t.clone(),
+                Definition::Variable(_, _, t) => t.clone(),
                 Definition::EffectFunction(_, _, _) => Type::FunctionLiteral(val),
                 Definition::Function(_, _) => Type::FunctionLiteral(val),
 
@@ -286,8 +286,8 @@ impl Val {
             },
             Definition::Function(f, _) => Some(ctx.idents[ast.functions[f].decl.name].empty()),
             Definition::BuiltinEffect => None,
-            Definition::Variable(e, _) => match ctx.exprs[e].0 {
-                Expression::Let(name, _, _) => Some(ctx.idents[name].empty()),
+            Definition::Variable(_, e, _) => match ctx.exprs[e].0 {
+                Expression::Let(_, name, _, _) => Some(ctx.idents[name].empty()),
                 _ => None,
             },
             Definition::BuiltinType(_) => None,
@@ -300,6 +300,42 @@ impl Analysis {
         let val = self.defs.push(Val, def);
         self.values[id] = val;
         val
+    }
+}
+
+fn analyze_assignable<'a>(
+    actx: &'a mut Analysis,
+    scope: &mut Scope,
+    ast: &AST,
+    ctx: &ParseContext,
+    expr: ExprIdx,
+    parent: ExprIdx,
+    errors: &mut Errors,
+) -> Type {
+    let ty = analyze_expr(actx, scope, ast, ctx, expr, &Type::Unknown, errors).clone();
+    match ctx.exprs[expr].0 {
+        Expression::Ident(id) => {
+            let val = actx.values[id];
+            if val.0 != usize::MAX {
+                match actx.defs[val] {
+                    Definition::Variable(true, _, _) => ty,
+                    _ => {
+                        errors
+                            .push(ctx.exprs[parent].with(Error::AssignImmutable(
+                                val.definition_range(actx, ast, ctx),
+                            )));
+                        Type::Unknown
+                    }
+                }
+            } else {
+                Type::Unknown
+            }
+        }
+        Expression::Error => Type::Unknown,
+        _ => {
+            errors.push(ctx.exprs[parent].with(Error::AssignExpression));
+            Type::Unknown
+        }
     }
 }
 
@@ -714,19 +750,22 @@ fn analyze_expr<'a>(
             };
 
             let effect = handler.and_then(|h| match actx.defs[h] {
-                Definition::Parameter(_, _, ref t) | Definition::Variable(_, ref t) => match *t {
-                    Type::Handler(effect, _, _) => Some(effect),
-                    Type::Unknown => None,
-                    _ => {
-                        // TODO: type definition
-                        errors.push(
-                            ctx.idents[field]
-                                .with(Error::UnknownField(None, Some(ctx.exprs[expr].empty()))),
-                        );
-                        None
+                Definition::Parameter(_, _, ref t) | Definition::Variable(_, _, ref t) => {
+                    match *t {
+                        Type::Handler(effect, _, _) => Some(effect),
+                        Type::Unknown => None,
+                        _ => {
+                            // TODO: type definition
+                            errors.push(
+                                ctx.idents[field]
+                                    .with(Error::UnknownField(None, Some(ctx.exprs[expr].empty()))),
+                            );
+                            None
+                        }
                     }
-                },
+                }
                 Definition::Effect(_) => Some(h),
+                Definition::BuiltinEffect => None,
                 _ => {
                     // TODO: type definition
                     errors.push(
@@ -783,8 +822,7 @@ fn analyze_expr<'a>(
         }
         Expression::Op(left, op, right) => match op {
             Op::Assign => {
-                let left_type =
-                    analyze_expr(actx, scope, ast, ctx, left, &Type::Unknown, errors).clone();
+                let left_type = analyze_assignable(actx, scope, ast, ctx, left, expr, errors);
                 analyze_expr(actx, scope, ast, ctx, right, &left_type, errors);
                 Type::None
             }
@@ -806,14 +844,14 @@ fn analyze_expr<'a>(
             }
             Type::Never
         }
-        Expression::Let(name, ref typ, expr) => {
+        Expression::Let(mutable, name, ref typ, rexpr) => {
             let val_type = match typ {
                 Some(typ) => Type::from_type(actx, ast, ctx, typ, errors),
                 None => Type::Unknown,
             };
-            let val_type = analyze_expr(actx, scope, ast, ctx, expr, &val_type, errors).clone();
+            let val_type = analyze_expr(actx, scope, ast, ctx, rexpr, &val_type, errors).clone();
 
-            let val = actx.push_val(name, Definition::Variable(expr, val_type));
+            let val = actx.push_val(name, Definition::Variable(mutable, expr, val_type));
             scope.values.insert(ctx.idents[name].0.clone(), val);
             Type::None
         }

@@ -23,7 +23,7 @@ use inkwell::{
 
 use crate::{
     ir::{
-        AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type, TypeIdx,
+        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type,
         IR,
     },
     vecmap::VecMap,
@@ -35,7 +35,7 @@ struct CodeGen<'ctx> {
     builder: Builder<'ctx>,
     target_data: TargetData,
 
-    structs: VecMap<TypeIdx, Option<StructType<'ctx>>>,
+    structs: VecMap<AggrIdx, Option<StructType<'ctx>>>,
 
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
@@ -116,7 +116,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         codegen.structs.push_value(struc);
     }
 
-    for proc in ir.procsign.values() {
+    for proc in ir.proc_sign.values() {
         let func = codegen.generate_proc_sign(ir, proc);
         codegen.procs.push_value(func);
     }
@@ -143,9 +143,9 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     }
 
     for ((sign, imp), function) in ir
-        .procsign
+        .proc_sign
         .values()
-        .zip(ir.procimpl.values())
+        .zip(ir.proc_impl.values())
         .zip(codegen.procs.values().copied())
     {
         codegen.generate_proc(ir, sign, imp, function);
@@ -273,11 +273,21 @@ impl<'ctx> CodeGen<'ctx> {
             let frame_type = self.frame_type();
 
             let max_align = std::iter::once(&proc.output)
-                .chain(proc.unhandled.iter().copied().map(|h| &ir.break_types[h]))
+                .chain(
+                    proc.unhandled
+                        .iter()
+                        .copied()
+                        .map(|h| &ir.handler_type[h].break_ty),
+                )
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
                 .max_by_key(|&t| self.align(t));
             let max_size = std::iter::once(&proc.output)
-                .chain(proc.unhandled.iter().copied().map(|h| &ir.break_types[h]))
+                .chain(
+                    proc.unhandled
+                        .iter()
+                        .copied()
+                        .map(|h| &ir.handler_type[h].break_ty),
+                )
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
                 .max_by_key(|&t| self.size(t));
 
@@ -501,18 +511,26 @@ impl<'ctx> CodeGen<'ctx> {
                             .collect();
 
                         let ret = self.builder.build_call(func, &args, "").unwrap();
-                        let (frame, val) = self.get_return(&ir.procsign[p], ret);
+                        let (frame, val) = self.get_return(&ir.proc_sign[p], ret);
 
                         if let Some(frame) = frame {
-                            let unhandled = &ir.procsign[p].unhandled;
+                            let unhandled = &ir.proc_sign[p].unhandled;
+                            let handlers = proc
+                                .handled
+                                .iter()
+                                .copied()
+                                .filter(|h| unhandled.contains(h));
+                            let redirect = proc
+                                .redirect
+                                .iter()
+                                .copied()
+                                .filter(|(h, _)| unhandled.contains(h));
                             blocks[idx] = self.handle_break(
                                 function,
                                 frame,
                                 val,
-                                proc.handled
-                                    .iter()
-                                    .copied()
-                                    .filter(|h| unhandled.contains(h)),
+                                handlers,
+                                redirect,
                                 !proc.unhandled.is_empty(),
                             );
                         }
@@ -522,7 +540,7 @@ impl<'ctx> CodeGen<'ctx> {
                             if let Ok(typ) = BasicTypeEnum::try_from(typ) {
                                 let val = val.expect(&format!(
                                     "call {} returns no value",
-                                    ir.procsign[p].debug_name
+                                    ir.proc_sign[p].debug_name
                                 ));
                                 let cast = self.build_union_cast(val, typ);
                                 valmap.insert(r, cast);
@@ -769,7 +787,7 @@ impl<'ctx> CodeGen<'ctx> {
                             )
                             .unwrap();
                     }
-                    I::Aggregate(r, ref rs) => {
+                    I::Aggregate(r, ref rs) | I::Handler(r, ref rs) => {
                         let aggr_ty = self.get_type(ir, &ir.regs[r]);
 
                         // do not aggregate void
@@ -872,6 +890,7 @@ impl<'ctx> CodeGen<'ctx> {
         frame: IntValue<'ctx>,
         val: Option<BasicValueEnum<'ctx>>,
         handlers: impl Iterator<Item = HandlerIdx>,
+        redirect: impl Iterator<Item = (HandlerIdx, HandlerIdx)>,
         bubble_break: bool,
     ) -> BasicBlock<'ctx> {
         let mut next = self.builder.get_insert_block().unwrap();
@@ -927,6 +946,57 @@ impl<'ctx> CodeGen<'ctx> {
             } else {
                 self.builder.build_return(None).unwrap();
             }
+
+            self.builder.position_at_end(branch_next);
+            next = branch_next;
+        }
+
+        // redirect
+        for (clone, original) in redirect {
+            let cmp_clone = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    frame,
+                    self.frame_type()
+                        .const_int(usize::from(clone) as u64, false),
+                    "",
+                )
+                .unwrap();
+
+            let branch_next = self.context.append_basic_block(function, "");
+            let branch_return = self.context.append_basic_block(function, "redirect");
+            self.builder
+                .build_conditional_branch(cmp_clone, branch_return, branch_next)
+                .unwrap();
+
+            let ret_type = function
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
+
+            let mut ret = ret_type.get_poison();
+            ret = self
+                .builder
+                .build_insert_value(
+                    ret,
+                    self.frame_type()
+                        .const_int(usize::from(original) as u64, false),
+                    0,
+                    "",
+                )
+                .unwrap()
+                .into_struct_value();
+            if let (Some(val), Some(field)) = (val, ret.get_type().get_field_type_at_index(1)) {
+                let cast = self.build_union_cast(val, field);
+                ret = self
+                    .builder
+                    .build_insert_value(ret, cast, 1, "")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_return(Some(&ret)).unwrap();
 
             self.builder.position_at_end(branch_next);
             next = branch_next;
@@ -1056,13 +1126,18 @@ impl<'ctx> CodeGen<'ctx> {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),
             },
-            Type::Handler(h) | Type::NakedHandler(h) => match ir.capture_types[h] {
-                Some(idx) => match self.structs[idx] {
-                    Some(t) => t.into(),
-                    None => self.context.void_type().into(),
-                },
-                None => self.context.void_type().into(),
-            },
+            Type::Handler(h) | Type::NakedHandler(h) => {
+                let ty = ir.handler_type[h]
+                    .captures
+                    .iter()
+                    .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
+                    .collect::<Vec<_>>();
+                if !ty.is_empty() {
+                    self.context.struct_type(&ty, false).into()
+                } else {
+                    self.context.void_type().into()
+                }
+            }
             Type::Never | Type::None => self.context.void_type().into(),
             Type::HandlerOutput => {
                 unreachable!("HandlerOutput never filled in with concrete handler type")

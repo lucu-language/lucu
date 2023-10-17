@@ -18,6 +18,15 @@ fun main() / debug {
 		69
 	})
 	putint(with throw {
+		let nonnaked = ident
+		with throw {
+			putint(nonnaked.ident(5))
+			420
+		}
+		putstr("unreachable\n")
+		69
+	})
+	putint(with throw {
 		let naked = throw
 		with naked {
 			putint(ident(5))

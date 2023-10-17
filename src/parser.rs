@@ -71,7 +71,7 @@ pub enum Expression {
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
     Op(ExprIdx, Op, ExprIdx),
     Yeet(Option<ExprIdx>),
-    Let(Ident, Option<Type>, ExprIdx),
+    Let(bool, Ident, Option<Type>, ExprIdx),
 
     TryWith(ExprIdx, Option<ReturnType>, Option<ExprIdx>),
     Handler(Handler),
@@ -88,6 +88,16 @@ pub enum Expression {
 pub struct Body {
     pub main: Vec<ExprIdx>,
     pub last: Option<ExprIdx>,
+}
+
+impl Body {
+    fn parse_or_default(tk: &mut Tokens) -> Ranged<Expression> {
+        let start = tk.pos_start();
+        match Self::parse_or_skip(tk) {
+            Some(body) => body.map(Expression::Body),
+            None => Ranged(Expression::Error, start, start),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -191,7 +201,7 @@ impl ParseContext {
                     self.for_each(handler, f);
                 }
             }
-            Expression::Let(_, _, expr) => {
+            Expression::Let(_, _, _, expr) => {
                 self.for_each(expr, f);
             }
             Expression::Handler(_) => {}
@@ -244,7 +254,7 @@ impl ParseContext {
                     self.for_each(handler, f);
                 }
             }
-            Expression::Let(_, _, expr) => {
+            Expression::Let(_, _, _, expr) => {
                 self.for_each(expr, f);
             }
             Expression::Handler(_) => {}
@@ -666,16 +676,11 @@ impl Parse for Function {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let decl = FunDecl::parse_or_skip(tk)?.0;
 
-        let start = tk.pos_start();
-        let body = Body::parse_or_skip(tk);
-        let expr = match body {
-            Some(b) => b.map(Expression::Body),
-            None => Ranged(Expression::Error, start, start),
-        };
+        let body = Body::parse_or_default(tk);
 
         Some(Function {
             decl,
-            body: tk.push_expr(expr),
+            body: tk.push_expr(body),
         })
     }
 }
@@ -731,7 +736,7 @@ impl Parse for Expression {
 
                 let break_type = ReturnType::parse(tk);
 
-                let body = Body::parse_or_skip(tk)?.map(Expression::Body);
+                let body = Body::parse_or_default(tk);
 
                 let handler = if tk.check(Token::With).is_some() {
                     let handler = Handler::parse_or_skip(tk)?;
@@ -751,7 +756,7 @@ impl Parse for Expression {
                 let handler = Expression::parse_or_skip(tk)?;
                 let handler = tk.push_expr(handler);
 
-                let body = Body::parse_or_skip(tk)?.map(Expression::Body);
+                let body = Body::parse_or_default(tk);
 
                 Some(Expression::TryWith(tk.push_expr(body), None, Some(handler)))
             }
@@ -763,7 +768,7 @@ impl Parse for Expression {
                 let condition = Expression::parse_or_default(tk);
                 let condition = tk.push_expr(condition);
 
-                let yes = Body::parse_or_skip(tk)?.map(Expression::Body);
+                let yes = Body::parse_or_default(tk);
                 let yes = tk.push_expr(yes);
 
                 let no = if tk.check(Token::Else).is_some() {
@@ -771,7 +776,7 @@ impl Parse for Expression {
                     let no = if tk.peek_check(Token::If) {
                         Expression::parse_or_default(tk)
                     } else {
-                        Body::parse_or_skip(tk)?.map(Expression::Body)
+                        Body::parse_or_default(tk)
                     };
                     Some(tk.push_expr(no))
                 } else {
@@ -799,7 +804,28 @@ impl Parse for Expression {
                 let value = Expression::parse_or_default(tk);
                 let value = tk.push_expr(value);
 
-                Some(Expression::Let(name, typ, value))
+                Some(Expression::Let(false, name, typ, value))
+            }
+
+            // mut x type = ...
+            Some(Ranged(Token::Mut, ..)) => {
+                tk.next();
+
+                let name = tk.ident()?;
+                let name = tk.push_ident(name);
+
+                let typ = if !tk.peek_check(Token::Equals) {
+                    Type::parse(tk)
+                } else {
+                    None
+                };
+
+                tk.expect(Token::Equals)?;
+
+                let value = Expression::parse_or_default(tk);
+                let value = tk.push_expr(value);
+
+                Some(Expression::Let(true, name, typ, value))
             }
 
             // break
@@ -846,9 +872,7 @@ impl Parse for Expression {
             }
 
             // block
-            Some(Ranged(Token::Open(Group::Brace), ..)) => {
-                Some(Expression::Body(Body::parse_or_skip(tk)?.0))
-            }
+            Some(Ranged(Token::Open(Group::Brace), ..)) => Some(Body::parse_or_default(tk).0),
 
             _ => {
                 let err = match tk.next() {

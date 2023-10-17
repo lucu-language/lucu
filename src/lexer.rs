@@ -15,6 +15,7 @@ pub enum Token {
     Yeets,
     Handle,
     Let,
+    Mut,
 
     // Symbols
     Semicolon,
@@ -57,6 +58,7 @@ impl fmt::Display for Token {
                 Token::Yeets => "'fails'".into(),
                 Token::Handle => "'handle'".into(),
                 Token::Let => "'let'".into(),
+                Token::Mut => "'mut'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
                 Token::Slash => "'/'".into(),
@@ -96,6 +98,7 @@ impl Token {
             self,
             Token::With
                 | Token::Let
+                | Token::Mut
                 | Token::Else
                 | Token::Period
                 | Token::Bang
@@ -327,6 +330,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "yeets" | "fails" => Token::Yeets,
                     "handle" => Token::Handle,
                     "let" => Token::Let,
+                    "mut" => Token::Mut,
                     _ => Token::Ident(word),
                 }
             }

@@ -20,6 +20,8 @@ impl<T> Ranged<T> {
     }
 }
 
+type Range = Ranged<()>;
+
 pub enum Error {
     // lexer
     UnknownSymbol,
@@ -47,6 +49,8 @@ pub enum Error {
     ExpectedEffect(String, Option<Ranged<()>>),
     NestedHandlers,
     TryReturnsHandler,
+    AssignImmutable(Option<Range>),
+    AssignExpression,
 }
 
 pub enum Expected {
@@ -428,6 +432,8 @@ impl Errors {
                         "effect handlers may not have another handler as their fail type".into(),
                     Error::TryReturnsHandler =>
                         "effect handlers may not escape try-with blocks".into(),
+                    Error::AssignImmutable(_) => "cannot assign to immutable value".into(),
+                    Error::AssignExpression => "cannot assign to expression".into(),
                 }
             );
             if color {
@@ -471,6 +477,11 @@ impl Errors {
                 Error::MultipleEffects(effects) => {
                     for effect in effects {
                         highlights.push(Highlight::from_file(file, effect, 1, Gravity::Whole));
+                    }
+                }
+                Error::AssignImmutable(def) => {
+                    if let Some(def) = def {
+                        highlights.push(Highlight::from_file(file, def, 1, Gravity::Whole));
                     }
                 }
                 _ => (),

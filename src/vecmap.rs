@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    hash::Hash,
     marker::PhantomData,
     ops::{Index, IndexMut},
 };
@@ -12,9 +14,29 @@ where
     key: PhantomData<fn(K) -> V>,
 }
 
+#[derive(Debug)]
+pub struct VecSet<K, V>
+where
+    K: Into<usize>,
+    V: Hash + Eq + Copy,
+{
+    vec: VecMap<K, V>,
+    set: HashMap<V, K>,
+}
+
 impl<K, V> Default for VecMap<K, V>
 where
     K: Into<usize>,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> Default for VecSet<K, V>
+where
+    K: Into<usize>,
+    V: Hash + Eq + Copy,
 {
     fn default() -> Self {
         Self::new()
@@ -69,8 +91,59 @@ where
     pub fn keys(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = K> {
         (0..self.len()).map(f)
     }
+    pub fn iter(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &V)> {
+        self.keys(f).zip(self.values())
+    }
+    pub fn iter_mut(&mut self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &mut V)> {
+        self.keys(f).zip(self.values_mut())
+    }
     pub fn len(&self) -> usize {
         self.vec.len()
+    }
+    pub fn get_mut2(&mut self, i: K, j: K) -> Option<(&mut V, &mut V)> {
+        let i: usize = i.into();
+        let j: usize = j.into();
+        if i == j {
+            return None;
+        }
+        let (start, end) = if i < j { (i, j) } else { (j, i) };
+
+        let (first, second) = self.vec.split_at_mut(start + 1);
+        Some((&mut first[start], &mut second[end - start - 1]))
+    }
+}
+
+impl<K, V> VecSet<K, V>
+where
+    K: Into<usize>,
+    V: Hash + Eq + Copy,
+{
+    pub fn new() -> Self {
+        Self {
+            vec: VecMap::new(),
+            set: HashMap::new(),
+        }
+    }
+    pub fn insert(&mut self, f: impl FnOnce(usize) -> K, value: V) -> &K {
+        if !self.set.contains_key(&value) {
+            self.set.insert(value, self.vec.push(f, value));
+        }
+        &self.set[&value]
+    }
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.vec.values()
+    }
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.vec.values_mut()
+    }
+    pub fn keys(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = K> {
+        self.vec.keys(f)
+    }
+    pub fn iter(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &V)> {
+        self.vec.iter(f)
+    }
+    pub fn iter_mut(&mut self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &mut V)> {
+        self.vec.iter_mut(f)
     }
 }
 
@@ -104,5 +177,27 @@ where
 {
     fn index_mut(&mut self, index: K) -> &mut Self::Output {
         &mut self.vec[index.into()]
+    }
+}
+
+impl<K, V> Index<K> for VecSet<K, V>
+where
+    K: Into<usize>,
+    V: Hash + Eq + Copy,
+{
+    type Output = V;
+
+    fn index(&self, index: K) -> &Self::Output {
+        &self.vec[index]
+    }
+}
+
+impl<K, V> IndexMut<K> for VecSet<K, V>
+where
+    K: Into<usize>,
+    V: Hash + Eq + Copy,
+{
+    fn index_mut(&mut self, index: K) -> &mut Self::Output {
+        &mut self.vec[index]
     }
 }

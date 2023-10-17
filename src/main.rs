@@ -208,6 +208,6 @@ mod tests {
 
     #[test]
     fn naked_vs_nonnaked() {
-        test_file("naked", "5\nreachable\n69\n")
+        test_file("naked", "5\n5\nreachable\n69\n")
     }
 }

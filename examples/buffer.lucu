@@ -22,6 +22,7 @@ handle Index u16 {
 # a buffer effect that allows you to push and get data
 # allowing the user to use keys smaller than the data type
 # or to create recursive data types using a buffer
+# TODO: $key should really be an internal opaque type here
 effect Buffer $val $key {
 	fun push(elem $val) $key
 	fun get(index $key) $val
@@ -33,9 +34,9 @@ fun array_buffer($N usize) Buffer $val $key
 	with Index $key
 {
 	# reserve a fixed-sized array on the stack
-	mut array [$N]$val = uninit()
+	mut array [$N]$val = ---
 	mut size  usize    = 0
-	Buffer {
+	handle Buffer $val $key {
 		fun push(elem $val) $key {
 			array[size] = elem
 			Index.from_index(size++)

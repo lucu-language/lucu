@@ -4,6 +4,9 @@ effect test {
 
 fun main() / q {
 	try {
+		1 = 2
+		let q = 5
+		q = 8
 		test
 	} with test {
 

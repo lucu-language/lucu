@@ -100,6 +100,7 @@ where
     pub fn len(&self) -> usize {
         self.vec.len()
     }
+    // from https://stackoverflow.com/a/74296885
     pub fn get_mut2(&mut self, i: K, j: K) -> Option<(&mut V, &mut V)> {
         let i: usize = i.into();
         let j: usize = j.into();

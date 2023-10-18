@@ -71,9 +71,9 @@ pub enum Expression {
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
     Op(ExprIdx, Op, ExprIdx),
     Yeet(Option<ExprIdx>),
-    Let(bool, Ident, Option<Type>, ExprIdx),
+    Let(bool, Ident, Option<TypeIdx>, ExprIdx),
 
-    TryWith(ExprIdx, Option<ReturnType>, Option<ExprIdx>),
+    TryWith(ExprIdx, Option<TypeIdx>, Option<ExprIdx>),
     Handler(Handler),
 
     String(String),
@@ -103,26 +103,31 @@ impl Body {
 #[derive(Debug)]
 pub struct Handler {
     pub effect: Ident,
-    pub break_type: Option<ReturnType>,
+    pub fail_type: FailType,
     pub functions: Vec<Function>,
 }
 
-#[derive(Debug)]
-pub struct Type {
-    pub ident: Ident,
-    pub yeets: Option<ReturnType>,
+#[derive(Debug, Default, Clone, Copy)]
+pub enum Type {
+    Never,
+    Path(Ident),
+    Handler(Ident, FailType),
+
+    #[default]
+    Error, // error at parsing, coerces to any type
 }
 
-#[derive(Debug)]
-pub enum ReturnType {
+#[derive(Debug, Clone, Copy)]
+pub enum FailType {
     Never,
-    Type(TypeIdx),
+    None,
+    Some(TypeIdx),
 }
 
 #[derive(Debug)]
 pub struct FunSign {
     pub inputs: VecMap<ParamIdx, (Ident, TypeIdx)>,
-    pub output: Option<ReturnType>,
+    pub output: Option<TypeIdx>,
     pub effects: Vec<Ident>,
 }
 
@@ -152,13 +157,13 @@ pub struct AST {
 }
 
 #[derive(Default)]
-pub struct ParseContext {
+pub struct Parsed {
     pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
     pub types: VecMap<TypeIdx, Ranged<Type>>,
     pub idents: VecMap<Ident, Ranged<String>>,
 }
 
-impl ParseContext {
+impl Parsed {
     pub fn for_each(&self, expr: ExprIdx, f: &mut impl FnMut(ExprIdx)) {
         f(expr);
         match self.exprs[expr].0 {
@@ -281,7 +286,7 @@ struct Tokens<'a> {
     iter: Tokenizer<'a>,
     peeked: Option<Option<<Tokenizer<'a> as Iterator>::Item>>,
     last: usize,
-    context: ParseContext,
+    context: Parsed,
 }
 
 impl<'a> Tokens<'a> {
@@ -487,12 +492,12 @@ trait ParseDefault: Parse + Default {
 
 impl<T> ParseDefault for T where T: Parse + Default {}
 
-pub fn parse_ast(tk: Tokenizer) -> (AST, ParseContext) {
+pub fn parse_ast(tk: Tokenizer) -> (AST, Parsed) {
     let mut tk = Tokens {
         iter: tk,
         peeked: None,
         last: 0,
-        context: ParseContext::default(),
+        context: Parsed::default(),
     };
 
     // parse ast
@@ -555,46 +560,44 @@ impl Parse for AST {
 
 impl Parse for Type {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        let id = tk.ident()?;
-
-        let break_type = if tk.check(Token::Yeets).is_some() {
-            if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
-                None
-            } else {
-                let t = Type::parse_or_skip(tk)?;
-                let t = tk.push_type(t);
-                Some(ReturnType::Type(t))
-            }
+        if tk.check(Token::Bang).is_some() {
+            Some(Type::Never)
         } else {
-            Some(ReturnType::Never)
-        };
+            let id = tk.ident()?;
+            let id = tk.push_ident(id);
 
-        Some(Type {
-            ident: tk.push_ident(id),
-            yeets: break_type,
-        })
+            match FailType::parse_or_skip(tk)?.0 {
+                FailType::Never => Some(Type::Path(id)),
+                ty => Some(Type::Handler(id, ty)),
+            }
+        }
     }
 }
 
-impl Parse for ReturnType {
+impl Parse for FailType {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        match tk.peek() {
-            // never returns
-            Some(Ranged(Token::Bang, ..)) => {
-                tk.next();
-                Some(ReturnType::Never)
+        if tk.check(Token::Yeets).is_some() {
+            if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
+                Some(FailType::None)
+            } else {
+                let t = Type::parse_or_default(tk);
+                let t = tk.push_type(t);
+                Some(FailType::Some(t))
             }
+        } else {
+            Some(FailType::Never)
+        }
+    }
+}
 
-            // no return type
-            Some(Ranged(t, ..)) if t.continues_statement() => None,
-            None => None,
-
-            // some return type
-            _ => {
-                let typ = Type::parse_or_skip(tk)?;
-                let typ = tk.push_type(typ);
-                Some(ReturnType::Type(typ))
-            }
+impl Parse for Option<TypeIdx> {
+    fn parse(tk: &mut Tokens) -> Option<Self> {
+        if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
+            Some(None)
+        } else {
+            let t = Type::parse_or_default(tk);
+            let t = tk.push_type(t);
+            Some(Some(t))
         }
     }
 }
@@ -610,13 +613,13 @@ impl Parse for FunSign {
         tk.group(Group::Paren, true, |tk| {
             let id = tk.ident()?;
             let name = tk.push_ident(id);
-            let typ = Type::parse_or_skip(tk)?;
+            let typ = Type::parse_or_default(tk);
             let typ = tk.push_type(typ);
             decl.inputs.push_value((name, typ));
             Some(())
         })?;
 
-        decl.output = ReturnType::parse(tk);
+        decl.output = Option::<TypeIdx>::parse_or_default(tk).0;
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
@@ -692,17 +695,7 @@ impl Parse for Handler {
 
         let mut funcs = Vec::new();
 
-        let break_type = if tk.check(Token::Yeets).is_some() {
-            if tk.peek_check(Token::Open(Group::Brace)) {
-                None
-            } else {
-                let t = Type::parse_or_skip(tk)?;
-                let t = tk.push_type(t);
-                Some(ReturnType::Type(t))
-            }
-        } else {
-            Some(ReturnType::Never)
-        };
+        let fail_type = FailType::parse_or_skip(tk)?.0;
 
         tk.group(Group::Brace, false, |tk| {
             // skip semicolons
@@ -721,7 +714,7 @@ impl Parse for Handler {
         Some(Handler {
             effect: ident,
             functions: funcs,
-            break_type,
+            fail_type,
         })
     }
 }
@@ -734,7 +727,7 @@ impl Parse for Expression {
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
 
-                let break_type = ReturnType::parse(tk);
+                let return_type = Option::<TypeIdx>::parse_or_default(tk).0;
 
                 let body = Body::parse_or_default(tk);
 
@@ -746,7 +739,11 @@ impl Parse for Expression {
                     None
                 };
 
-                Some(Expression::TryWith(tk.push_expr(body), break_type, handler))
+                Some(Expression::TryWith(
+                    tk.push_expr(body),
+                    return_type,
+                    handler,
+                ))
             }
 
             // short try-with
@@ -794,7 +791,8 @@ impl Parse for Expression {
                 let name = tk.push_ident(name);
 
                 let typ = if !tk.peek_check(Token::Equals) {
-                    Type::parse(tk)
+                    let ty = Type::parse_or_default(tk);
+                    Some(tk.push_type(ty))
                 } else {
                     None
                 };
@@ -815,7 +813,8 @@ impl Parse for Expression {
                 let name = tk.push_ident(name);
 
                 let typ = if !tk.peek_check(Token::Equals) {
-                    Type::parse(tk)
+                    let ty = Type::parse_or_default(tk);
+                    Some(tk.push_type(ty))
                 } else {
                     None
                 };

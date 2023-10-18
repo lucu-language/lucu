@@ -36,11 +36,11 @@ pub enum Error {
     UnknownEffectFun(Option<Ranged<()>>, Option<Ranged<()>>),
     UnknownField(Option<Ranged<()>>, Option<Ranged<()>>),
     UnknownValue,
+    UnknownType,
     UnhandledEffect,
     MultipleEffects(Vec<Ranged<()>>),
 
     // type analysis
-    UnknownType,
     ExpectedType(Option<Ranged<()>>),
     TypeMismatch(String, String),
     ExpectedHandler(String),

@@ -98,7 +98,7 @@ impl TypeIdx {
                 format!("'{}'", yeets.display_handler(val, ctx))
             }
             Type::None => "none".into(),
-            Type::Never => "!".into(),
+            Type::Never => "never".into(),
             Type::Unknown => "<unknown>".into(),
         }
     }

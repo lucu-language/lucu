@@ -429,7 +429,7 @@ impl Errors {
                     Error::ExpectedEffect(ref found, _) =>
                         format!("expected an effect type, found {}", found),
                     Error::NestedHandlers =>
-                        "effect handlers may not have another handler as their fail type".into(),
+                        "effect handlers may not escape other effect handlers".into(),
                     Error::TryReturnsHandler =>
                         "effect handlers may not escape try-with blocks".into(),
                     Error::AssignImmutable(_) => "cannot assign to immutable value".into(),

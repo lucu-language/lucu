@@ -163,9 +163,24 @@ pub enum Definition {
     BuiltinType(TypeIdx), // builtin type
 }
 
+#[derive(Debug)]
+pub struct Capture {
+    pub val: Val,
+    pub mutable: bool,
+}
+
+pub fn add_capture(captures: &mut Vec<Capture>, capture: Capture) {
+    let idx = captures.iter().position(|c| c.val == capture.val);
+    if let Some(idx) = idx {
+        captures[idx].mutable |= capture.mutable
+    } else {
+        captures.push(capture)
+    }
+}
+
 #[derive(Debug, Default)]
 pub enum HandlerDef {
-    Handler(ExprIdx, Vec<Val>),
+    Handler(ExprIdx, Vec<Capture>),
     Call(Val, Vec<ExprIdx>),
     Param(ParamIdx),
     Signature,
@@ -306,6 +321,82 @@ fn analyze_assignable(
     }
 }
 
+fn capture_ident(
+    ctx: &mut AsysContext,
+    scope: &mut Scope,
+    id: Ident,
+    effect: Option<Val>,
+    captures: &mut Vec<Capture>,
+) {
+    let val = ctx.asys.values[id];
+    if val.0 != usize::MAX {
+        match ctx.asys.defs[val] {
+            Definition::EffectFunction(e, _, _) => {
+                // TODO: do not capture effect function effects
+                if Some(e) != effect {
+                    add_capture(
+                        captures,
+                        Capture {
+                            val: e,
+                            mutable: false,
+                        },
+                    );
+                }
+            }
+            Definition::Function(fun, _) => {
+                let effects = ctx.ast.functions[fun]
+                    .decl
+                    .sign
+                    .effects
+                    .iter()
+                    .copied()
+                    .map(|i| ctx.asys.values[i]);
+                // TODO: do not capture effect function effects
+                for e in effects {
+                    if Some(e) != effect {
+                        add_capture(
+                            captures,
+                            Capture {
+                                val: e,
+                                mutable: false,
+                            },
+                        );
+                    }
+                }
+            }
+            Definition::Parameter(_, _, _) => {
+                if scope.get(&ctx.parsed.idents[id].0) == Some(val) {
+                    add_capture(
+                        captures,
+                        Capture {
+                            val,
+                            mutable: false,
+                        },
+                    );
+                }
+            }
+            Definition::Variable(mutable, _, _) => {
+                if scope.get(&ctx.parsed.idents[id].0) == Some(val) {
+                    add_capture(captures, Capture { val, mutable });
+                }
+            }
+            Definition::Effect(_) => {
+                if scope.get(&ctx.parsed.idents[id].0) == Some(val) {
+                    add_capture(
+                        captures,
+                        Capture {
+                            val,
+                            mutable: false,
+                        },
+                    );
+                }
+            }
+            Definition::BuiltinEffect => todo!(),
+            Definition::BuiltinType(_) => {}
+        }
+    }
+}
+
 fn analyze_expr(
     ctx: &mut AsysContext,
     scope: &mut Scope,
@@ -372,45 +463,13 @@ fn analyze_expr(
                 }
 
                 // add captures
-                ctx.parsed.for_each(fun.body, &mut |expr| {
-                    if let Expression::Ident(i) = ctx.parsed.exprs[expr].0 {
-                        let val = ctx.asys.values[i];
-
-                        // capture effects from (effect) functions
-                        if val.0 != usize::MAX {
-                            match ctx.asys.defs[val] {
-                                Definition::EffectFunction(e, _, _) => {
-                                    // TODO: do not capture effect function effects
-                                    if Some(e) != effect && !captures.contains(&e) {
-                                        captures.push(e);
-                                    }
-                                }
-                                Definition::Function(fun, _) => {
-                                    let effects = ctx.ast.functions[fun]
-                                        .decl
-                                        .sign
-                                        .effects
-                                        .iter()
-                                        .copied()
-                                        .map(|i| ctx.asys.values[i]);
-                                    // TODO: do not capture effect function effects
-                                    for e in effects {
-                                        if Some(e) != effect && !captures.contains(&e) {
-                                            captures.push(e);
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    if scope.get(&ctx.parsed.idents[i].0) == Some(val)
-                                        && !captures.contains(&val)
-                                    {
-                                        captures.push(val);
-                                    }
-                                }
-                            }
+                ctx.parsed
+                    .for_each(fun.body, &mut |expr| match ctx.parsed.exprs[expr].0 {
+                        Expression::Ident(id) => {
+                            capture_ident(ctx, scope, id, effect, &mut captures);
                         }
-                    }
-                });
+                        _ => {}
+                    });
             }
 
             // get handler type

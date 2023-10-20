@@ -14,9 +14,6 @@ fun main() / debug {
 	mut num = 69
 	putint(num)
 
-	try { num = 9000 }
-	putint(num)
-
 	let setter = handle set {
 		fun set(n int) {
 			num = n

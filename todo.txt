@@ -2,8 +2,8 @@ typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls
 
-variables todo:
-- mutable captures
+ir todo:
+- make handlers be pointers instead of constant (ref handler) everywhere
 
 tokenizer/parser:
 - seperate token from data

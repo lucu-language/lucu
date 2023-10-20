@@ -24,7 +24,7 @@ use inkwell::{
 use crate::{
     ir::{
         AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type,
-        TypeIdx, IR,
+        TypeIdx, Value, IR,
     },
     vecmap::VecMap,
 };
@@ -263,6 +263,19 @@ impl<'ctx> CodeGen<'ctx> {
     }
     fn return_type(&self, ir: &IR, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
         let out = self.get_type(ir, proc.output);
+        let out = match proc.output_ref {
+            true => match out {
+                AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
+            },
+            false => out,
+        };
         let out_name = BasicTypeEnum::try_from(out)
             .ok()
             .map(|t| self.name(t))
@@ -373,29 +386,31 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(captures) = &proc.captures {
             self.builder.position_at_end(blocks[0]);
 
-            let struc = match captures.input {
-                either::Either::Left(reg) => valmap.get(&reg).map(|val| val.into_struct_value()),
-                either::Either::Right(glob) => {
-                    BasicTypeEnum::try_from(self.get_type(ir, ir.globals[glob]))
-                        .ok()
-                        .map(|typ| {
-                            self.builder
-                                .build_load(typ, self.globals[glob].unwrap().as_pointer_value(), "")
-                                .unwrap()
-                                .into_struct_value()
-                        })
-                }
+            let ptr = match captures.input {
+                Value::Value(_) => unreachable!(),
+                Value::Reference(ptr) => valmap.get(&ptr).map(|val| val.into_pointer_value()),
+                Value::Global(glob) => self.globals[glob].map(|val| val.as_pointer_value()),
             };
 
-            if let Some(struc) = struc {
+            if let Some(ptr) = ptr {
+                let ty = BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
+                    .unwrap();
                 let mut member = 0;
-                for reg in captures.members.iter().copied() {
-                    if !self.get_type(ir, ir.regs[reg]).is_void_type() {
-                        let val = self
+                for (reg, reference) in captures.members.iter().copied() {
+                    let mem_ty = self.get_type(ir, ir.regs[reg]);
+                    if let Ok(mem_ty) = BasicTypeEnum::try_from(mem_ty) {
+                        let mut val = self
                             .builder
-                            .build_extract_value(struc, member, "capture")
+                            .build_struct_gep(ty, ptr, member, "capture")
                             .unwrap();
-                        valmap.insert(reg, val);
+                        if reference {
+                            val = self
+                                .builder
+                                .build_load(mem_ty, val, "mutcapture")
+                                .unwrap()
+                                .into_pointer_value();
+                        }
+                        valmap.insert(reg, val.into());
                         member += 1;
                     }
                 }
@@ -846,22 +861,32 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }
-                    I::SetScopedGlobal(g, r, next) => {
+                    I::SetScopedGlobalPtr(g, r, next) => {
                         if let Some(glob) = self.globals[g] {
-                            let val = valmap[&r];
+                            let ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.globals[g])).unwrap();
+                            let ptr = valmap[&r].into_pointer_value();
+                            let val = self.builder.build_load(ty, ptr, "").unwrap();
 
                             let tmp = self
                                 .builder
-                                .build_load(val.get_type(), glob.as_pointer_value(), "tmp")
+                                .build_load(ty, glob.as_pointer_value(), "tmp")
                                 .unwrap();
 
                             self.builder.position_at_end(blocks[usize::from(next)]);
+                            self.builder
+                                .build_store(
+                                    ptr,
+                                    self.builder
+                                        .build_load(ty, glob.as_pointer_value(), "")
+                                        .unwrap(),
+                                )
+                                .unwrap();
                             self.builder
                                 .build_store(glob.as_pointer_value(), tmp)
                                 .unwrap();
 
                             self.builder.position_at_end(blocks[idx]);
-
                             self.builder
                                 .build_store(glob.as_pointer_value(), val)
                                 .unwrap();
@@ -877,6 +902,66 @@ impl<'ctx> CodeGen<'ctx> {
                                 .unwrap();
                             valmap.insert(r, val);
                         }
+                    }
+                    I::GetGlobalPtr(r, g) => {
+                        if let Some(glob) = self.globals[g] {
+                            valmap.insert(r, glob.as_pointer_value().into());
+                        }
+                    }
+                    I::Reference(ptrr, r) => {
+                        if let Some(val) = valmap.get(&r).copied() {
+                            let ptr = self.builder.build_alloca(val.get_type(), "").unwrap();
+                            self.builder.build_store(ptr, val).unwrap();
+                            valmap.insert(ptrr, ptr.into());
+                        }
+                    }
+                    I::Load(r, ptrr) => {
+                        if let Some(val) = valmap.get(&ptrr).copied() {
+                            let ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
+                            let v = self
+                                .builder
+                                .build_load(ty, val.into_pointer_value(), "")
+                                .unwrap();
+                            valmap.insert(r, v);
+                        }
+                    }
+                    I::Store(ptrr, r) => {
+                        if let Some(val) = valmap.get(&r).copied() {
+                            let ptr = valmap[&ptrr];
+                            self.builder
+                                .build_store(ptr.into_pointer_value(), val)
+                                .unwrap();
+                        }
+                    }
+                    I::LoadCaptures(r, h, ref mems) => {
+                        let old = valmap[&h].into_struct_value();
+                        let old_ty = old.get_type();
+                        let new_ty = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r]))
+                            .unwrap()
+                            .into_struct_type();
+
+                        let mut new = new_ty.get_poison();
+                        for i in 0..old_ty.count_fields() {
+                            let mut mem = self.builder.build_extract_value(old, i, "").unwrap();
+                            if mems.contains(&(i as usize)) {
+                                mem = self
+                                    .builder
+                                    .build_load(
+                                        new_ty.get_field_type_at_index(i).unwrap(),
+                                        mem.into_pointer_value(),
+                                        "",
+                                    )
+                                    .unwrap();
+                            }
+                            new = self
+                                .builder
+                                .build_insert_value(new, mem, i, "")
+                                .unwrap()
+                                .into_struct_value();
+                        }
+
+                        valmap.insert(r, new.into());
                     }
                 }
             }
@@ -1144,7 +1229,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Type::Byte => self.context.i8_type().into(),
             Type::Bool => self.context.bool_type().into(),
-            Type::Pointer(ty) | Type::Reference(ty) => match self.get_type(ir, ty) {
+            Type::Pointer(ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
                 AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
                 AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),

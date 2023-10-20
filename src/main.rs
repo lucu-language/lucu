@@ -212,7 +212,12 @@ mod tests {
     }
 
     #[test]
-    fn mutation() {
-        test_file("setter", "69\n9000\n420\n24\n42\n")
+    fn mutation_outside() {
+        test_file("setter", "69\n420\n24\n42\n")
+    }
+
+    #[test]
+    fn mutation_inside() {
+        test_file("counter", "5\n6\n7\n")
     }
 }

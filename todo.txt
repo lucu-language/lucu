@@ -2,14 +2,9 @@ typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls
 
-variables todo:
-- mutable captures
-
-tokenizer/parser:
+would be nice:
+- tokenizer matches brackets
 - seperate token from data
 - custom anchor tokens per Parse instance
-
-would be nice:
-- try blocks no longer their own function
 - analyzer gives semantic IR
-- tokenizer matches brackets
+- try blocks no longer their own function

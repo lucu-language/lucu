@@ -2,8 +2,13 @@ effect test {
 	fun defined()
 }
 
-fun main() / q {
+fun never(a !) {
+	
+}
+
+fun main() test fails test / q {
 	try {
+		never(9)
 		1 = 2
 		let q = 5
 		q = 8

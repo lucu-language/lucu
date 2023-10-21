@@ -1,0 +1,21 @@
+effect counter {
+	fun count() int
+}
+
+fun init_counter(start int) counter {
+	mut n = start
+	handle counter {
+		fun count() int {
+			let last = n
+			n = n + 1
+			last
+		}
+	}
+}
+
+fun main() / debug {
+	let counter = init_counter(5)
+	putint(counter.count()) # 5
+	putint(counter.count()) # 6
+	putint(counter.count()) # 7
+}

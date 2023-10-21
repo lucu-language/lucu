@@ -210,4 +210,14 @@ mod tests {
     fn naked_vs_nonnaked() {
         test_file("naked", "5\n5\nreachable\n69\n")
     }
+
+    #[test]
+    fn mutation_outside() {
+        test_file("setter", "69\n420\n24\n42\n")
+    }
+
+    #[test]
+    fn mutation_inside() {
+        test_file("counter", "5\n6\n7\n")
+    }
 }

@@ -24,7 +24,7 @@ use inkwell::{
 use crate::{
     ir::{
         AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type,
-        IR,
+        TypeIdx, Value, IR,
     },
     vecmap::VecMap,
 };
@@ -121,7 +121,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         codegen.procs.push_value(func);
     }
 
-    for glob in ir.globals.values() {
+    for glob in ir.globals.values().copied() {
         let typ = codegen.get_type(ir, glob);
         match BasicTypeEnum::try_from(typ) {
             Ok(typ) => {
@@ -223,6 +223,7 @@ impl<'ctx> CodeGen<'ctx> {
         let fields: Vec<BasicTypeEnum> = typ
             .children
             .iter()
+            .copied()
             .filter_map(|typ| BasicTypeEnum::try_from(self.get_type(ir, typ)).ok())
             .collect();
 
@@ -261,7 +262,7 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
     fn return_type(&self, ir: &IR, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
-        let out = self.get_type(ir, &proc.output);
+        let out = self.get_type(ir, proc.output);
         let out_name = BasicTypeEnum::try_from(out)
             .ok()
             .map(|t| self.name(t))
@@ -279,6 +280,7 @@ impl<'ctx> CodeGen<'ctx> {
                         .copied()
                         .map(|h| &ir.handler_type[h].break_ty),
                 )
+                .copied()
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
                 .max_by_key(|&t| self.align(t));
             let max_size = std::iter::once(&proc.output)
@@ -288,6 +290,7 @@ impl<'ctx> CodeGen<'ctx> {
                         .copied()
                         .map(|h| &ir.handler_type[h].break_ty),
                 )
+                .copied()
                 .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
                 .max_by_key(|&t| self.size(t));
 
@@ -325,7 +328,7 @@ impl<'ctx> CodeGen<'ctx> {
         let in_types = proc
             .inputs
             .iter()
-            .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(ir, &ir.regs[r])).ok())
+            .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(ir, ir.regs[r])).ok())
             .collect::<Vec<_>>();
 
         let fn_type = match self.return_type(ir, &proc) {
@@ -361,7 +364,7 @@ impl<'ctx> CodeGen<'ctx> {
         for (n, &reg) in proc
             .inputs
             .iter()
-            .filter(|&&r| !self.get_type(ir, &ir.regs[r]).is_void_type())
+            .filter(|&&r| !self.get_type(ir, ir.regs[r]).is_void_type())
             .enumerate()
         {
             valmap.insert(reg, function.get_nth_param(n as u32).unwrap());
@@ -371,28 +374,32 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(blocks[0]);
 
             let struc = match captures.input {
-                either::Either::Left(reg) => valmap.get(&reg).map(|val| val.into_struct_value()),
-                either::Either::Right(glob) => {
-                    BasicTypeEnum::try_from(self.get_type(ir, &ir.globals[glob]))
-                        .ok()
-                        .map(|typ| {
-                            self.builder
-                                .build_load(typ, self.globals[glob].unwrap().as_pointer_value(), "")
-                                .unwrap()
-                                .into_struct_value()
-                        })
-                }
+                Value::Value(r) => valmap.get(&r).map(|b| b.into_struct_value()),
+                Value::Reference(ptr) => valmap.get(&ptr).map(|val| {
+                    let ty =
+                        BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
+                            .unwrap();
+                    self.builder
+                        .build_load(ty, val.into_pointer_value(), "")
+                        .unwrap()
+                        .into_struct_value()
+                }),
+                Value::Global(glob) => self.globals[glob].map(|val| {
+                    let ty = BasicTypeEnum::try_from(self.get_type(ir, ir.globals[glob])).unwrap();
+                    self.builder
+                        .build_load(ty, val.as_pointer_value(), "")
+                        .unwrap()
+                        .into_struct_value()
+                }),
             };
 
             if let Some(struc) = struc {
                 let mut member = 0;
                 for reg in captures.members.iter().copied() {
-                    if !self.get_type(ir, &ir.regs[reg]).is_void_type() {
-                        let val = self
-                            .builder
-                            .build_extract_value(struc, member, "capture")
-                            .unwrap();
-                        valmap.insert(reg, val);
+                    let mem_ty = self.get_type(ir, ir.regs[reg]);
+                    if BasicTypeEnum::try_from(mem_ty).is_ok() {
+                        let val = self.builder.build_extract_value(struc, member, "").unwrap();
+                        valmap.insert(reg, val.into());
                         member += 1;
                     }
                 }
@@ -410,7 +417,7 @@ impl<'ctx> CodeGen<'ctx> {
                         valmap.insert(r, self.context.i64_type().const_int(v, false).into());
                     }
                     I::InitString(r, ref v) => {
-                        let slice_type = self.get_type(ir, &ir.regs[r]).into_struct_type();
+                        let slice_type = self.get_type(ir, ir.regs[r]).into_struct_type();
                         let array_size_type =
                             self.context.ptr_sized_int_type(&self.target_data, None);
 
@@ -441,7 +448,7 @@ impl<'ctx> CodeGen<'ctx> {
                         continue 'outer;
                     }
                     I::Phi(r, [(r1, b1), (r2, b2)]) => {
-                        let typ = BasicTypeEnum::try_from(self.get_type(ir, &ir.regs[r])).ok();
+                        let typ = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).ok();
 
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
@@ -536,7 +543,7 @@ impl<'ctx> CodeGen<'ctx> {
                         }
 
                         if let Some(r) = r {
-                            let typ = self.get_type(ir, &ir.regs[r]);
+                            let typ = self.get_type(ir, ir.regs[r]);
                             if let Ok(typ) = BasicTypeEnum::try_from(typ) {
                                 let val = val.expect(&format!(
                                     "call {} returns no value",
@@ -788,7 +795,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap();
                     }
                     I::Aggregate(r, ref rs) | I::Handler(r, ref rs) => {
-                        let aggr_ty = self.get_type(ir, &ir.regs[r]);
+                        let aggr_ty = self.get_type(ir, ir.regs[r]);
 
                         // do not aggregate void
                         if !aggr_ty.is_void_type() {
@@ -809,13 +816,14 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Member(r, a, n) => {
                         // skip over empty children that are uncounted
-                        let t = match ir.regs[a] {
+                        let t = match ir.types[ir.regs[a]] {
                             Type::Aggregate(t) => t,
                             _ => panic!(),
                         };
                         let n = ir.aggregates[t]
                             .children
                             .iter()
+                            .copied()
                             .enumerate()
                             .filter_map(|(i, t)| {
                                 if self.get_type(ir, t).is_void_type() {
@@ -857,7 +865,6 @@ impl<'ctx> CodeGen<'ctx> {
                                 .unwrap();
 
                             self.builder.position_at_end(blocks[idx]);
-
                             self.builder
                                 .build_store(glob.as_pointer_value(), val)
                                 .unwrap();
@@ -866,12 +873,111 @@ impl<'ctx> CodeGen<'ctx> {
                     I::GetGlobal(r, g) => {
                         if let Some(glob) = self.globals[g] {
                             let typ =
-                                BasicTypeEnum::try_from(self.get_type(ir, &ir.regs[r])).unwrap();
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
                             let val = self
                                 .builder
                                 .build_load(typ, glob.as_pointer_value(), "")
                                 .unwrap();
                             valmap.insert(r, val);
+                        }
+                    }
+                    I::GetGlobalPtr(r, g) => {
+                        if let Some(glob) = self.globals[g] {
+                            valmap.insert(r, glob.as_pointer_value().into());
+                        }
+                    }
+                    I::Reference(ptrr, r) => {
+                        if let Some(val) = valmap.get(&r).copied() {
+                            let ptr = self.builder.build_alloca(val.get_type(), "").unwrap();
+                            self.builder.build_store(ptr, val).unwrap();
+                            valmap.insert(ptrr, ptr.into());
+                        }
+                    }
+                    I::Load(r, ptrr) => {
+                        if let Some(val) = valmap.get(&ptrr).copied() {
+                            let ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
+                            let v = self
+                                .builder
+                                .build_load(ty, val.into_pointer_value(), "")
+                                .unwrap();
+                            valmap.insert(r, v);
+                        }
+                    }
+                    I::Store(ptrr, r) => {
+                        if let Some(val) = valmap.get(&r).copied() {
+                            let ptr = valmap[&ptrr];
+                            self.builder
+                                .build_store(ptr.into_pointer_value(), val)
+                                .unwrap();
+                        }
+                    }
+                    I::RawHandler(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            let unraw = v.into_struct_value();
+                            let mems = match ir.types[ir.regs[r]] {
+                                Type::RawHandler(_, ref mems) => mems,
+                                _ => unreachable!(),
+                            };
+
+                            let struc_ty = self.get_type(ir, ir.regs[r]).into_struct_type();
+                            let mut struc = struc_ty.get_poison();
+
+                            for (mem, ty) in struc_ty.get_field_types().iter().copied().enumerate()
+                            {
+                                let mut val = self
+                                    .builder
+                                    .build_extract_value(unraw, mem as u32, "")
+                                    .unwrap();
+                                if mems.contains(&mem) {
+                                    val = self
+                                        .builder
+                                        .build_load(ty, val.into_pointer_value(), "")
+                                        .unwrap();
+                                }
+                                struc = self
+                                    .builder
+                                    .build_insert_value(struc, val, mem as u32, "")
+                                    .unwrap()
+                                    .into_struct_value();
+                            }
+
+                            valmap.insert(r, struc.into());
+                        }
+                    }
+                    I::UnrawHandler(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            let raw = v.into_struct_value();
+                            let mems = match ir.types[ir.regs[h]] {
+                                Type::RawHandler(_, ref mems) => mems,
+                                _ => unreachable!(),
+                            };
+
+                            let struc_ty = self.get_type(ir, ir.regs[r]).into_struct_type();
+                            let mut struc = struc_ty.get_poison();
+
+                            for mem in 0..struc_ty.count_fields() {
+                                let mut val =
+                                    self.builder.build_extract_value(raw, mem, "").unwrap();
+                                if mems.contains(&(mem as usize)) {
+                                    let ptr =
+                                        self.builder.build_alloca(val.get_type(), "").unwrap();
+                                    self.builder.build_store(ptr, val).unwrap();
+                                    val = ptr.into();
+                                }
+                                struc = self
+                                    .builder
+                                    .build_insert_value(struc, val, mem, "")
+                                    .unwrap()
+                                    .into_struct_value();
+                            }
+
+                            valmap.insert(r, struc.into());
+                        }
+                    }
+                    I::Copy(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            valmap.insert(r, v);
                         }
                     }
                 }
@@ -970,6 +1076,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_conditional_branch(cmp_clone, branch_return, branch_next)
                 .unwrap();
 
+            self.builder.position_at_end(branch_return);
             let ret_type = function
                 .get_type()
                 .get_return_type()
@@ -1110,14 +1217,9 @@ impl<'ctx> CodeGen<'ctx> {
             (None, ret.try_as_basic_value().left())
         }
     }
-    fn get_type(&self, ir: &IR, typ: &Type) -> AnyTypeEnum<'ctx> {
-        match *typ {
+    fn get_type(&self, ir: &IR, ty: TypeIdx) -> AnyTypeEnum<'ctx> {
+        match ir.types[ty] {
             Type::Int => self.context.i64_type().into(),
-            Type::BytePointer => self
-                .context
-                .i8_type()
-                .ptr_type(AddressSpace::default())
-                .into(),
             Type::ArraySize => self
                 .context
                 .ptr_sized_int_type(&self.target_data, None)
@@ -1130,7 +1232,32 @@ impl<'ctx> CodeGen<'ctx> {
                 let ty = ir.handler_type[h]
                     .captures
                     .iter()
+                    .copied()
                     .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
+                    .collect::<Vec<_>>();
+                if !ty.is_empty() {
+                    self.context.struct_type(&ty, false).into()
+                } else {
+                    self.context.void_type().into()
+                }
+            }
+            Type::RawHandler(h, ref mems) => {
+                let ty = ir.handler_type[h]
+                    .captures
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        let t = if mems.contains(&i) {
+                            match ir.types[t] {
+                                Type::Pointer(t) => t,
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            t
+                        };
+                        BasicTypeEnum::try_from(self.get_type(ir, t)).ok()
+                    })
                     .collect::<Vec<_>>();
                 if !ty.is_empty() {
                     self.context.struct_type(&ty, false).into()
@@ -1142,6 +1269,18 @@ impl<'ctx> CodeGen<'ctx> {
             Type::HandlerOutput => {
                 unreachable!("HandlerOutput never filled in with concrete handler type")
             }
+            Type::Byte => self.context.i8_type().into(),
+            Type::Bool => self.context.bool_type().into(),
+            Type::Pointer(ty) => match self.get_type(ir, ty) {
+                AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
+            },
         }
     }
 }

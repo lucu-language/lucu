@@ -71,6 +71,7 @@ impl BinOp {
 #[derive(Debug, Default)]
 pub enum Expression {
     Body(Body),
+    Loop(ExprIdx),
 
     Call(ExprIdx, Vec<ExprIdx>),
     Member(ExprIdx, Ident),
@@ -186,6 +187,9 @@ impl Parsed {
                     self.for_each(expr, f);
                 }
             }
+            Expression::Loop(expr) => {
+                self.for_each(expr, f);
+            }
             Expression::Call(expr, ref args) => {
                 self.for_each(expr, f);
                 for expr in args.iter().copied() {
@@ -241,6 +245,9 @@ impl Parsed {
                 if let Some(expr) = b.last {
                     self.for_each(expr, f);
                 }
+            }
+            Expression::Loop(expr) => {
+                self.for_each(expr, f);
             }
             Expression::Call(expr, ref args) => {
                 self.for_each(expr, f);
@@ -823,6 +830,13 @@ impl Parse for Expression {
             Some(Ranged(Token::TripleDash, ..)) => {
                 tk.next();
                 Some(Expression::Uninit)
+            }
+
+            Some(Ranged(Token::Loop, ..)) => {
+                tk.next();
+                let body = Body::parse_or_default(tk);
+                let body = tk.push_expr(body);
+                Some(Expression::Loop(body))
             }
 
             // try-with

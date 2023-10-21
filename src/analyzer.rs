@@ -553,6 +553,10 @@ fn analyze_expr(
                 None => TYPE_NONE,
             }
         }
+        Expression::Loop(expr) => {
+            analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
+            TYPE_NEVER
+        }
         Expression::Call(cexpr, ref exprs) => {
             // get function
             let fun = match ctx.parsed.exprs[cexpr].0 {

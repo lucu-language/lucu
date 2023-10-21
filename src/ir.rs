@@ -423,8 +423,6 @@ pub enum Instruction {
     // aggregate types
     Aggregate(Reg, Vec<Reg>),
     Member(Reg, Reg, usize),
-
-    // arrays
     ElementPtr(Reg, Reg, Reg),
 }
 
@@ -1752,6 +1750,33 @@ fn generate_expr(
             }
         }
         E::Member(_, _) => todo!(),
+        E::Loop(expr) => {
+            let loop_init = blocks.push(BlockIdx, Block::default());
+            let loop_start = blocks.push(BlockIdx, Block::default());
+            let mut loop_end = loop_start;
+            let mut loop_ctx = ctx.child(expr);
+            let _ = generate_expr(ir, &mut loop_ctx, blocks, &mut loop_end, proc_todo);
+            blocks[*block].next = Some(loop_init);
+            blocks[loop_init].next = Some(loop_start);
+            blocks[loop_end].next = Some(loop_init);
+
+            // add phi instructions for changed values
+            for val in loop_ctx.scope.keys().copied() {
+                let Some(no) = ctx.scope.get(&val) else { continue };
+                let Some(yes) = loop_ctx.scope.get(&val) else { continue };
+                let no = no.value(ir, &mut blocks[*block]);
+                let yes = yes.value(ir, &mut blocks[loop_end]);
+                if no != yes {
+                    let reg = ir.copy_reg(no);
+                    blocks[loop_init]
+                        .instructions
+                        .push(Instruction::Phi(reg, [(yes, loop_end), (no, *block)]));
+                    ctx.scope.insert(val, Value::Value(reg, Some(val)));
+                }
+            }
+
+            Err(Never)
+        }
         E::IfElse(cond, yes, no) => {
             let cond = generate_expr(ir, ctx.with_expr(cond), blocks, block, proc_todo)?
                 .expect("condition has no value")

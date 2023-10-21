@@ -80,7 +80,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     let syscall2 = context.create_inline_asm(
         syscall2_fn,
         "syscall".to_string(),
-        "=r,{rax},{rdi}".into(),
+        "={rax},{rax},{rdi},~{rcx},~{r11}".into(),
         true,
         false,
         None,
@@ -89,7 +89,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     let syscall4 = context.create_inline_asm(
         syscall4_fn,
         "syscall".to_string(),
-        "=r,{rax},{rdi},{rsi},{rdx}".into(),
+        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11}".into(),
         true,
         false,
         None,
@@ -453,11 +453,15 @@ impl<'ctx> CodeGen<'ctx> {
 
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
-                            phi.add_incoming(&[
-                                (&valmap[&r1], blocks[usize::from(b1)]),
-                                (&valmap[&r2], blocks[usize::from(b2)]),
-                            ]);
-                            valmap.insert(r, phi.as_basic_value());
+                            if let Some(v1) = valmap.get(&r1).copied() {
+                                phi.add_incoming(&[(&v1, blocks[usize::from(b1)])]);
+                            }
+                            if let Some(v2) = valmap.get(&r2).copied() {
+                                phi.add_incoming(&[(&v2, blocks[usize::from(b2)])]);
+                            }
+                            if phi.count_incoming() > 0 {
+                                valmap.insert(r, phi.as_basic_value());
+                            }
                         }
                     }
                     I::Equals(r, a, b) => {

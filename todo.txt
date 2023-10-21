@@ -6,6 +6,9 @@ typechecking todo:
 parser todo:
 - operator precedence
 
+ir todo:
+- handlers in handlers should capture parent handler, not copy parent captures
+
 would be nice:
 - tokenizer matches brackets
 - seperate token from data

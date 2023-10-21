@@ -1,10 +1,15 @@
+effect striter {
+	fun next() str
+}
+
 effect strbuf {
 	fun push(elem str) int
 	fun get(index int) str
+	fun iter() striter fails
 }
 
-fun array_buffer() strbuf {
-	mut array [1024]str = ---
+fun array_buffer() strbuf / debug {
+	mut array [255]str = ---
 	mut size  int       = 0
 	handle strbuf {
 		fun push(elem str) int {
@@ -13,6 +18,18 @@ fun array_buffer() strbuf {
 		}
 		fun get(index int) str {
 			array[index]
+		}
+		fun iter() striter fails {
+			mut current = 0
+			handle striter fails {
+				fun next() str {
+					if current < size {
+						array[current++]
+					} else {
+						fail
+					}
+				}
+			}
 		}
 	}
 }
@@ -28,5 +45,12 @@ fun main() / debug {
 		let a = push("Hello")
 		println_buffered(a)
 		println_buffered(b)
+
+		with strbuf.iter() {
+			loop {
+				putstr(next())
+				putstr("\n")
+			}
+		}
 	}
 }

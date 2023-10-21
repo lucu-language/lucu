@@ -263,19 +263,6 @@ impl<'ctx> CodeGen<'ctx> {
     }
     fn return_type(&self, ir: &IR, proc: &ProcSign) -> AnyTypeEnum<'ctx> {
         let out = self.get_type(ir, proc.output);
-        let out = match proc.output_ref {
-            true => match out {
-                AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
-            },
-            false => out,
-        };
         let out_name = BasicTypeEnum::try_from(out)
             .ok()
             .map(|t| self.name(t))
@@ -386,30 +373,32 @@ impl<'ctx> CodeGen<'ctx> {
         if let Some(captures) = &proc.captures {
             self.builder.position_at_end(blocks[0]);
 
-            let ptr = match captures.input {
-                Value::Value(_) => unreachable!(),
-                Value::Reference(ptr) => valmap.get(&ptr).map(|val| val.into_pointer_value()),
-                Value::Global(glob) => self.globals[glob].map(|val| val.as_pointer_value()),
+            let struc = match captures.input {
+                Value::Value(r) => valmap.get(&r).map(|b| b.into_struct_value()),
+                Value::Reference(ptr) => valmap.get(&ptr).map(|val| {
+                    let ty =
+                        BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
+                            .unwrap();
+                    self.builder
+                        .build_load(ty, val.into_pointer_value(), "")
+                        .unwrap()
+                        .into_struct_value()
+                }),
+                Value::Global(glob) => self.globals[glob].map(|val| {
+                    let ty = BasicTypeEnum::try_from(self.get_type(ir, ir.globals[glob])).unwrap();
+                    self.builder
+                        .build_load(ty, val.as_pointer_value(), "")
+                        .unwrap()
+                        .into_struct_value()
+                }),
             };
 
-            if let Some(ptr) = ptr {
-                let ty = BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
-                    .unwrap();
+            if let Some(struc) = struc {
                 let mut member = 0;
-                for (reg, reference) in captures.members.iter().copied() {
+                for reg in captures.members.iter().copied() {
                     let mem_ty = self.get_type(ir, ir.regs[reg]);
-                    if let Ok(mem_ty) = BasicTypeEnum::try_from(mem_ty) {
-                        let mut val = self
-                            .builder
-                            .build_struct_gep(ty, ptr, member, "capture")
-                            .unwrap();
-                        if reference {
-                            val = self
-                                .builder
-                                .build_load(mem_ty, val, "mutcapture")
-                                .unwrap()
-                                .into_pointer_value();
-                        }
+                    if BasicTypeEnum::try_from(mem_ty).is_ok() {
+                        let val = self.builder.build_extract_value(struc, member, "").unwrap();
                         valmap.insert(reg, val.into());
                         member += 1;
                     }
@@ -861,27 +850,16 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }
-                    I::SetScopedGlobalPtr(g, r, next) => {
+                    I::SetScopedGlobal(g, r, next) => {
                         if let Some(glob) = self.globals[g] {
-                            let ty =
-                                BasicTypeEnum::try_from(self.get_type(ir, ir.globals[g])).unwrap();
-                            let ptr = valmap[&r].into_pointer_value();
-                            let val = self.builder.build_load(ty, ptr, "").unwrap();
+                            let val = valmap[&r];
 
                             let tmp = self
                                 .builder
-                                .build_load(ty, glob.as_pointer_value(), "tmp")
+                                .build_load(val.get_type(), glob.as_pointer_value(), "tmp")
                                 .unwrap();
 
                             self.builder.position_at_end(blocks[usize::from(next)]);
-                            self.builder
-                                .build_store(
-                                    ptr,
-                                    self.builder
-                                        .build_load(ty, glob.as_pointer_value(), "")
-                                        .unwrap(),
-                                )
-                                .unwrap();
                             self.builder
                                 .build_store(glob.as_pointer_value(), tmp)
                                 .unwrap();
@@ -934,34 +912,68 @@ impl<'ctx> CodeGen<'ctx> {
                                 .unwrap();
                         }
                     }
-                    I::LoadCaptures(r, h, ref mems) => {
-                        let old = valmap[&h].into_struct_value();
-                        let old_ty = old.get_type();
-                        let new_ty = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r]))
-                            .unwrap()
-                            .into_struct_type();
+                    I::RawHandler(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            let unraw = v.into_struct_value();
+                            let mems = match ir.types[ir.regs[r]] {
+                                Type::RawHandler(_, ref mems) => mems,
+                                _ => unreachable!(),
+                            };
 
-                        let mut new = new_ty.get_poison();
-                        for i in 0..old_ty.count_fields() {
-                            let mut mem = self.builder.build_extract_value(old, i, "").unwrap();
-                            if mems.contains(&(i as usize)) {
-                                mem = self
+                            let struc_ty = self.get_type(ir, ir.regs[r]).into_struct_type();
+                            let mut struc = struc_ty.get_poison();
+
+                            for (mem, ty) in struc_ty.get_field_types().iter().copied().enumerate()
+                            {
+                                let mut val = self
                                     .builder
-                                    .build_load(
-                                        new_ty.get_field_type_at_index(i).unwrap(),
-                                        mem.into_pointer_value(),
-                                        "",
-                                    )
+                                    .build_extract_value(unraw, mem as u32, "")
                                     .unwrap();
+                                if mems.contains(&mem) {
+                                    val = self
+                                        .builder
+                                        .build_load(ty, val.into_pointer_value(), "")
+                                        .unwrap();
+                                }
+                                struc = self
+                                    .builder
+                                    .build_insert_value(struc, val, mem as u32, "")
+                                    .unwrap()
+                                    .into_struct_value();
                             }
-                            new = self
-                                .builder
-                                .build_insert_value(new, mem, i, "")
-                                .unwrap()
-                                .into_struct_value();
-                        }
 
-                        valmap.insert(r, new.into());
+                            valmap.insert(r, struc.into());
+                        }
+                    }
+                    I::UnrawHandler(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            let raw = v.into_struct_value();
+                            let mems = match ir.types[ir.regs[h]] {
+                                Type::RawHandler(_, ref mems) => mems,
+                                _ => unreachable!(),
+                            };
+
+                            let struc_ty = self.get_type(ir, ir.regs[r]).into_struct_type();
+                            let mut struc = struc_ty.get_poison();
+
+                            for mem in 0..struc_ty.count_fields() {
+                                let mut val =
+                                    self.builder.build_extract_value(raw, mem, "").unwrap();
+                                if mems.contains(&(mem as usize)) {
+                                    let ptr =
+                                        self.builder.build_alloca(val.get_type(), "").unwrap();
+                                    self.builder.build_store(ptr, val).unwrap();
+                                    val = ptr.into();
+                                }
+                                struc = self
+                                    .builder
+                                    .build_insert_value(struc, val, mem, "")
+                                    .unwrap()
+                                    .into_struct_value();
+                            }
+
+                            valmap.insert(r, struc.into());
+                        }
                     }
                 }
             }
@@ -1216,6 +1228,30 @@ impl<'ctx> CodeGen<'ctx> {
                     .iter()
                     .copied()
                     .filter_map(|t| BasicTypeEnum::try_from(self.get_type(ir, t)).ok())
+                    .collect::<Vec<_>>();
+                if !ty.is_empty() {
+                    self.context.struct_type(&ty, false).into()
+                } else {
+                    self.context.void_type().into()
+                }
+            }
+            Type::RawHandler(h, ref mems) => {
+                let ty = ir.handler_type[h]
+                    .captures
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        let t = if mems.contains(&i) {
+                            match ir.types[t] {
+                                Type::Pointer(t) => t,
+                                _ => unreachable!(),
+                            }
+                        } else {
+                            t
+                        };
+                        BasicTypeEnum::try_from(self.get_type(ir, t)).ok()
+                    })
                     .collect::<Vec<_>>();
                 if !ty.is_empty() {
                     self.context.struct_type(&ty, false).into()

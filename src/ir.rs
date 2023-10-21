@@ -52,27 +52,6 @@ impl Value {
             _ => Some(self),
         }
     }
-    fn copy_value(self, ir: &mut IRContext, block: &mut Block) -> Value {
-        match self {
-            Value::Value(_) => self,
-            Value::Reference(ptr) => match ir.ir.types[self.get_type(&ir.ir)] {
-                Type::NakedHandler(_) | Type::Handler(_) => self,
-                _ => {
-                    let reg = ir.next_reg(self.get_type(&ir.ir));
-                    block.instructions.push(Instruction::Load(reg, ptr));
-                    Value::Value(reg)
-                }
-            },
-            Value::Global(glob) => {
-                let ty = ir.insert_type(Type::Pointer(self.get_type(&ir.ir)));
-                let ptr = ir.next_reg(ty);
-                block
-                    .instructions
-                    .push(Instruction::GetGlobalPtr(ptr, glob));
-                Value::Reference(ptr)
-            }
-        }
-    }
     fn value(self, ir: &mut IRContext, block: &mut Block) -> Reg {
         match self {
             Value::Value(reg) => reg,
@@ -119,7 +98,7 @@ impl Value {
 #[derive(Debug)]
 pub struct Captures {
     pub input: Value,
-    pub members: Vec<(Reg, bool)>,
+    pub members: Vec<Reg>,
 }
 
 #[derive(Debug)]
@@ -128,7 +107,6 @@ pub struct ProcSign {
     pub captures: Option<Captures>,
 
     pub output: TypeIdx,
-    pub output_ref: bool,
     pub debug_name: String,
 
     pub unhandled: Vec<HandlerIdx>,
@@ -153,7 +131,7 @@ impl ProcImpl {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
     Byte,
@@ -166,6 +144,7 @@ pub enum Type {
 
     // Handler without a try-with block purther up the stack
     NakedHandler(HandlerIdx),
+    RawHandler(HandlerIdx, Rc<[usize]>),
 
     // Handler from a try-with block
     Handler(HandlerIdx),
@@ -226,19 +205,13 @@ impl TypeIdx {
     fn from_expr(ir: &IRContext, expr: ExprIdx) -> analyzer::TypeIdx {
         ir.asys.exprs[expr]
     }
-    fn into_result(self, isref: bool, ir: &mut IRContext) -> ExprResult {
+    fn into_result(self, ir: &mut IRContext) -> ExprResult {
         match self {
             TYPE_NEVER => Err(Never),
             TYPE_NONE => Ok(None),
             _ => {
-                if isref {
-                    let ty = ir.insert_type(Type::Pointer(self));
-                    let reg = ir.next_reg(ty);
-                    Ok(Some(Value::Reference(reg)))
-                } else {
-                    let reg = ir.next_reg(self);
-                    Ok(Some(Value::Value(reg)))
-                }
+                let reg = ir.next_reg(self);
+                Ok(Some(Value::Value(reg)))
             }
         }
     }
@@ -324,7 +297,7 @@ pub enum Instruction {
     InitString(Reg, String),
 
     // globals
-    SetScopedGlobalPtr(Global, Reg, BlockIdx),
+    SetScopedGlobal(Global, Reg, BlockIdx),
     GetGlobal(Reg, Global),
     GetGlobalPtr(Reg, Global),
 
@@ -360,7 +333,8 @@ pub enum Instruction {
 
     // handler types
     Handler(Reg, Vec<Reg>),
-    LoadCaptures(Reg, Reg, Vec<usize>),
+    RawHandler(Reg, Reg),
+    UnrawHandler(Reg, Reg),
 
     // aggregate types
     Aggregate(Reg, Vec<Reg>),
@@ -627,7 +601,7 @@ impl Display for IR {
                         }
                         Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
                         Instruction::Unreachable => writeln!(f, "       unreachable")?,
-                        Instruction::SetScopedGlobalPtr(g, r, e) => {
+                        Instruction::SetScopedGlobal(g, r, e) => {
                             writeln!(f, "{} <- ssg {}, {}", g, r, e)?
                         }
                         Instruction::GetGlobal(r, g) => writeln!(f, "{} <- ggl {}", r, g)?,
@@ -635,17 +609,8 @@ impl Display for IR {
                         Instruction::Reference(ptr, r) => writeln!(f, "{} <- &{}", ptr, r)?,
                         Instruction::Load(r, ptr) => writeln!(f, "{} <- load {}", r, ptr)?,
                         Instruction::Store(ptr, r) => writeln!(f, "       store {}, {}", ptr, r)?,
-                        Instruction::LoadCaptures(r, h, ref mems) => writeln!(
-                            f,
-                            "{} <- load {}[{}]",
-                            r,
-                            h,
-                            mems.iter()
-                                .copied()
-                                .map(|m| m.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )?,
+                        Instruction::RawHandler(r, h) => writeln!(f, "{} <- raw {}", r, h)?,
+                        Instruction::UnrawHandler(r, h) => writeln!(f, "{} <- unraw {}", r, h)?,
                     }
                 }
 
@@ -742,7 +707,6 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
             captures: None,
             unhandled: Vec::new(),
             redirect: Vec::new(),
-            output_ref: false,
         },
     );
     ir.ir.proc_impl.push_value(ProcImpl {
@@ -764,7 +728,6 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
             captures: None,
             unhandled: Vec::new(),
             redirect: Vec::new(),
-            output_ref: false,
         },
     );
     ir.ir.proc_impl.push_value(ProcImpl {
@@ -1149,16 +1112,9 @@ fn generate_proc_sign(
     let mut inputs = Vec::new();
     let mut scope = Scope::new();
     for (val, ty) in params.iter().copied() {
-        if matches!(ir.ir.types[ty], Type::Handler(_) | Type::NakedHandler(_)) {
-            let ty = ir.insert_type(Type::Pointer(ty));
-            let reg = ir.next_reg(ty);
-            scope.insert(val, Value::Reference(reg));
-            inputs.push(reg);
-        } else {
-            let reg = ir.next_reg(ty);
-            scope.insert(val, Value::Value(reg));
-            inputs.push(reg);
-        }
+        let reg = ir.next_reg(ty);
+        scope.insert(val, Value::Value(reg));
+        inputs.push(reg);
     }
 
     for idx in unhandled.iter().copied().chain(handled.iter().copied()) {
@@ -1172,10 +1128,9 @@ fn generate_proc_sign(
             }
             None => {
                 let ty = ir.insert_type(Type::Handler(idx));
-                let ty = ir.insert_type(Type::Pointer(ty));
                 let reg = ir.next_reg(ty);
                 inputs.push(reg);
-                scope.insert(effect, Value::Reference(reg));
+                scope.insert(effect, Value::Value(reg));
             }
         }
     }
@@ -1191,13 +1146,12 @@ fn generate_proc_sign(
                 val,
                 if reference {
                     let reg = ir.ir.regs.push(Reg, ty);
-                    members.push((reg, true));
+                    members.push(reg);
                     Value::Reference(reg)
                 } else {
-                    let ty = ir.ir.types.insert(TypeIdx, Type::Pointer(ty)).clone();
                     let reg = ir.ir.regs.push(Reg, ty);
-                    members.push((reg, false));
-                    Value::Reference(reg)
+                    members.push(reg);
+                    Value::Value(reg)
                 },
             );
         }
@@ -1210,11 +1164,10 @@ fn generate_proc_sign(
                 }
                 None => {
                     let ty = ir.insert_type(Type::Handler(idx));
-                    let ty = ir.insert_type(Type::Pointer(ty));
                     let reg = ir.next_reg(ty);
                     inputs.push(reg);
-                    scope.insert(effect, Value::Reference(reg));
-                    Value::Reference(reg)
+                    scope.insert(effect, Value::Value(reg));
+                    Value::Value(reg)
                 }
             },
             members,
@@ -1260,7 +1213,6 @@ fn generate_proc_sign(
                 .filter(|&h| !ir.ir.handler_type[h].break_ty.is_never())
                 .collect(),
             redirect: Vec::new(),
-            output_ref: false,
         },
     );
 
@@ -1286,10 +1238,8 @@ fn generate_proc_sign(
 
     // get output
     if let analyzer::Type::Handler(effect, _, def) = ir.asys.types[output] {
-        let (handler, isref) =
-            handler_type(ir, effect, def, proc_idx, &handler_defs, &scope, proc_todo);
+        let handler = handler_type(ir, effect, def, proc_idx, &handler_defs, &scope, proc_todo);
         ir.ir.proc_sign[proc_idx].output = handler;
-        ir.ir.proc_sign[proc_idx].output_ref = isref;
     }
 
     proc_idx
@@ -1303,16 +1253,34 @@ fn handler_type(
     defs: &[(ExprIdx, HandlerIdx)],
     scope: &Scope,
     proc_todo: &mut ProcTodo,
-) -> (TypeIdx, bool) {
-    let handler = match ir.asys.handlers[def.expect("function return handler type not filled in")] {
+) -> TypeIdx {
+    match ir.asys.handlers[def.expect("function return handler type not filled in")] {
         analyzer::HandlerDef::Handler(expr, _) => {
             let handler_idx = defs
                 .iter()
                 .find(|&&(e, _)| expr == e)
                 .expect("function returns handler not defined by self")
                 .1;
-            let (handler_idx, _) = load_captures(ir, handler_idx, HashMap::new());
-            (ir.insert_type(Type::NakedHandler(handler_idx)), false)
+            let mems = ir.handlers[handler_idx]
+                .captures
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(
+                    |(i, (_, _, reference))| {
+                        if reference {
+                            Some(i)
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .collect::<Rc<_>>();
+            if mems.is_empty() {
+                ir.insert_type(Type::NakedHandler(handler_idx))
+            } else {
+                ir.insert_type(Type::RawHandler(handler_idx, mems))
+            }
         }
         analyzer::HandlerDef::Call(fun, ref exprs) => {
             let param_types = exprs
@@ -1321,7 +1289,7 @@ fn handler_type(
                 .map(|expr| match ir.asys.types[ir.asys.exprs[expr]] {
                     analyzer::Type::Handler(effect, _, def) => {
                         // recursive call!
-                        handler_type(ir, effect, def, proc_idx, defs, scope, proc_todo).0
+                        handler_type(ir, effect, def, proc_idx, defs, scope, proc_todo)
                     }
                     _ => TypeIdx::from_type(ir, ir.asys.exprs[expr]),
                 })
@@ -1329,24 +1297,14 @@ fn handler_type(
 
             // recursive call!
             let proc = get_proc(ir, fun, proc_idx, &scope, param_types, None, proc_todo);
-            (
-                ir.ir.proc_sign[proc].output,
-                ir.ir.proc_sign[proc].output_ref,
-            )
+            ir.ir.proc_sign[proc].output
         }
         analyzer::HandlerDef::Param(p) => {
-            let reg = ir.ir.proc_sign[proc_idx].inputs[usize::from(p)];
-            let ty = ir.ir.regs[reg];
-            let ty = match ir.ir.types[ty] {
-                Type::Pointer(ty) => ty,
-                _ => unreachable!(),
-            };
-            (ty, true)
+            ir.ir.regs[ir.ir.proc_sign[proc_idx].inputs[usize::from(p)]]
         }
-        analyzer::HandlerDef::Signature => (ir.get_in_scope(effect, scope).get_type(&ir.ir), true),
+        analyzer::HandlerDef::Signature => ir.get_in_scope(effect, scope).get_type(&ir.ir),
         analyzer::HandlerDef::Error => unreachable!(),
-    };
-    handler
+    }
 }
 
 fn generate_proc_impl(ir: &mut IRContext, mut ctx: ProcCtx, proc_todo: &mut ProcTodo) -> ProcImpl {
@@ -1363,21 +1321,17 @@ fn generate_proc_impl(ir: &mut IRContext, mut ctx: ProcCtx, proc_todo: &mut Proc
         ) {
             // add return if we haven't already
             let ret = ret.map(|ret| {
-                if ir.ir.proc_sign[ctx.proc_idx].output_ref {
-                    ret.reference(ir, &mut blocks[end])
+                let r = ret.value(ir, &mut blocks[end]);
+                let output = ir.ir.proc_sign[ctx.proc_idx].output;
+
+                // create raw handler if required
+                if let Type::RawHandler(_, _) = ir.ir.types[output] {
+                    let raw = ir.next_reg(output);
+                    blocks[end]
+                        .instructions
+                        .push(Instruction::RawHandler(raw, r));
+                    raw
                 } else {
-                    let r = ret.value(ir, &mut blocks[end]);
-                    if let Type::NakedHandler(idx) = ir.ir.types[ir.ir.regs[r]] {
-                        let (cloned, captures) = load_captures(ir, idx, HashMap::new());
-                        if !captures.is_empty() {
-                            let ty = ir.insert_type(Type::NakedHandler(cloned));
-                            let cloned = ir.next_reg(ty);
-                            blocks[end]
-                                .instructions
-                                .push(Instruction::LoadCaptures(cloned, r, captures));
-                            return cloned;
-                        }
-                    }
                     r
                 }
             });
@@ -1473,8 +1427,8 @@ fn generate_expr(
             let val = ir.asys.values[name];
             let reg = generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)?
                 .expect("let value does not return a value")
-                .copy_value(ir, &mut blocks[*block]);
-            ctx.scope.insert(val, reg);
+                .value(ir, &mut blocks[*block]);
+            ctx.scope.insert(val, Value::Value(reg));
             Ok(None)
         }
         E::Call(func, ref args) => {
@@ -1497,9 +1451,9 @@ fn generate_expr(
                         generate_expr(ir, ctx.with_expr(handler), blocks, block, proc_todo)?
                             .expect("member parent does not return a value");
 
-                    let ty = ir.ir.types[handler_reg.get_type(&ir.ir)];
+                    let ty = &ir.ir.types[handler_reg.get_type(&ir.ir)];
                     match ty {
-                        Type::NakedHandler(handler_idx) | Type::Handler(handler_idx) => {
+                        &Type::NakedHandler(handler_idx) | &Type::Handler(handler_idx) => {
                             // add naked handler to handled
                             if matches!(ty, Type::NakedHandler(_)) {
                                 let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
@@ -1529,28 +1483,21 @@ fn generate_expr(
                                 Some(&mut reg_args),
                                 proc_todo,
                             );
-                            let output = ir.ir.proc_sign[proc_idx]
-                                .output
-                                .into_result(ir.ir.proc_sign[proc_idx].output_ref, ir);
+                            let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
 
                             // execute handler
                             match global {
                                 Some(glob) => {
                                     let next = blocks.push(BlockIdx, Block::default());
 
-                                    let reference = handler_reg.reference(ir, &mut blocks[*block]);
-                                    blocks[*block].instructions.push(
-                                        Instruction::SetScopedGlobalPtr(glob, reference, next),
-                                    );
+                                    let v = handler_reg.value(ir, &mut blocks[*block]);
+                                    blocks[*block]
+                                        .instructions
+                                        .push(Instruction::SetScopedGlobal(glob, v, next));
 
                                     let collect = reg_args
                                         .into_iter()
-                                        .map(|r| match ir.ir.types[r.get_type(&ir.ir)] {
-                                            Type::NakedHandler(_) | Type::Handler(_) => {
-                                                r.reference(ir, &mut blocks[*block])
-                                            }
-                                            _ => r.value(ir, &mut blocks[*block]),
-                                        })
+                                        .map(|r| r.value(ir, &mut blocks[*block]))
                                         .collect();
                                     blocks[*block].instructions.push(Instruction::Call(
                                         proc_idx,
@@ -1566,12 +1513,7 @@ fn generate_expr(
 
                                     let collect = reg_args
                                         .into_iter()
-                                        .map(|r| match ir.ir.types[r.get_type(&ir.ir)] {
-                                            Type::NakedHandler(_) | Type::Handler(_) => {
-                                                r.reference(ir, &mut blocks[*block])
-                                            }
-                                            _ => r.value(ir, &mut blocks[*block]),
-                                        })
+                                        .map(|r| r.value(ir, &mut blocks[*block]))
                                         .collect();
                                     blocks[*block].instructions.push(Instruction::Call(
                                         proc_idx,
@@ -1586,15 +1528,7 @@ fn generate_expr(
                             }
                             output
                         }
-                        Type::Int => todo!(),
-                        Type::Byte => todo!(),
-                        Type::Bool => todo!(),
-                        Type::ArraySize => todo!(),
-                        Type::Pointer(_) => todo!(),
-                        Type::Aggregate(_) => todo!(),
-                        Type::HandlerOutput => todo!(),
-                        Type::Never => todo!(),
-                        Type::None => todo!(),
+                        _ => todo!(),
                     }
                 }
                 E::Ident(id) => {
@@ -1613,19 +1547,12 @@ fn generate_expr(
                         proc_todo,
                     );
 
-                    let output = ir.ir.proc_sign[proc_idx]
-                        .output
-                        .into_result(ir.ir.proc_sign[proc_idx].output_ref, ir);
+                    let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
 
                     // execute function
                     let collect = reg_args
                         .into_iter()
-                        .map(|r| match ir.ir.types[r.get_type(&ir.ir)] {
-                            Type::NakedHandler(_) | Type::Handler(_) => {
-                                r.reference(ir, &mut blocks[*block])
-                            }
-                            _ => r.value(ir, &mut blocks[*block]),
-                        })
+                        .map(|r| r.value(ir, &mut blocks[*block]))
                         .collect();
                     blocks[*block].instructions.push(Instruction::Call(
                         proc_idx,
@@ -1642,16 +1569,13 @@ fn generate_expr(
             };
 
             if let Ok(Some(Value::Value(r))) = res {
-                let ty = ir.ir.regs[r];
-                if matches!(ir.ir.types[ty], Type::NakedHandler(_)) {
-                    let ty = ir.insert_type(Type::Pointer(ty));
-                    let ptr = ir.next_reg(ty);
-
+                if let Type::RawHandler(idx, _) = ir.ir.types[ir.ir.regs[r]] {
+                    let ty = ir.insert_type(Type::NakedHandler(idx));
+                    let unraw = ir.next_reg(ty);
                     blocks[*block]
                         .instructions
-                        .push(Instruction::Reference(ptr, r));
-
-                    Ok(Some(Value::Reference(ptr)))
+                        .push(Instruction::UnrawHandler(unraw, r));
+                    Ok(Some(Value::Value(unraw)))
                 } else {
                     res
                 }
@@ -1875,14 +1799,7 @@ fn generate_expr(
                 .instructions
                 .push(Instruction::Handler(closure_reg, captures));
 
-            let ty = ir.insert_type(Type::Pointer(ty));
-            let ptr = ir.next_reg(ty);
-
-            blocks[*block]
-                .instructions
-                .push(Instruction::Reference(ptr, closure_reg));
-
-            Ok(Some(Value::Reference(ptr)))
+            Ok(Some(Value::Value(closure_reg)))
         }
         E::TryWith(body, _, handler) => {
             if let Some(handler) = handler {
@@ -1890,9 +1807,9 @@ fn generate_expr(
                 let closure_reg =
                     generate_expr(ir, ctx.with_expr(handler), blocks, block, proc_todo)?
                         .expect("try handler does not return a value");
-                let ty = ir.ir.types[closure_reg.get_type(&ir.ir)];
+                let ty = &ir.ir.types[closure_reg.get_type(&ir.ir)];
                 let handler_idx = match ty {
-                    Type::NakedHandler(handler_idx) | Type::Handler(handler_idx) => handler_idx,
+                    &Type::NakedHandler(handler_idx) | &Type::Handler(handler_idx) => handler_idx,
                     _ => panic!(),
                 };
                 let naked = matches!(ty, Type::NakedHandler(_));
@@ -1940,18 +1857,16 @@ fn generate_expr(
                 let input_regs: Vec<Reg> = reset_captures.into_iter().map(|(_, r)| r).collect();
 
                 // execute proc
-                let output = ir.ir.proc_sign[proc_idx]
-                    .output
-                    .into_result(ir.ir.proc_sign[proc_idx].output_ref, ir);
+                let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
 
                 match global {
                     Some(glob) => {
                         let next = blocks.push(BlockIdx, Block::default());
 
-                        let reference = closure_reg.reference(ir, &mut blocks[*block]);
+                        let v = closure_reg.value(ir, &mut blocks[*block]);
                         blocks[*block]
                             .instructions
-                            .push(Instruction::SetScopedGlobalPtr(glob, reference, next));
+                            .push(Instruction::SetScopedGlobal(glob, v, next));
 
                         blocks[*block].instructions.push(Instruction::Call(
                             proc_idx,
@@ -1964,7 +1879,7 @@ fn generate_expr(
                     }
                     None => {
                         let mut input_regs = input_regs;
-                        input_regs.push(closure_reg.reference(ir, &mut blocks[*block]));
+                        input_regs.push(closure_reg.value(ir, &mut blocks[*block]));
 
                         blocks[*block].instructions.push(Instruction::Call(
                             proc_idx,
@@ -2008,9 +1923,7 @@ fn generate_expr(
                 let input_regs: Vec<Reg> = reset_captures.into_iter().map(|(_, r)| r).collect();
 
                 // execute proc
-                let output = ir.ir.proc_sign[proc_idx]
-                    .output
-                    .into_result(ir.ir.proc_sign[proc_idx].output_ref, ir);
+                let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
 
                 blocks[*block].instructions.push(Instruction::Call(
                     proc_idx,
@@ -2077,60 +1990,5 @@ fn generate_expr(
             Ok(Some(reg))
         }
         E::Error => unreachable!(),
-    }
-}
-
-fn load_captures(ir: &mut IRContext, idx: HandlerIdx, origin: Scope) -> (HandlerIdx, Vec<usize>) {
-    let captures_out_of_scope = ir.handlers[idx]
-        .captures
-        .iter()
-        .copied()
-        .enumerate()
-        .filter_map(|(i, (val, _, reference))| {
-            if reference && !origin.contains_key(&val) {
-                Some(i)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if !captures_out_of_scope.is_empty() {
-        // there are referenced captures that are now going out of scope
-        // we create a new handler that has these captures as full members
-        let cloned = HandlerCtx {
-            captures: ir.handlers[idx]
-                .captures
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(i, c)| {
-                    if captures_out_of_scope.contains(&i) {
-                        match ir.ir.types[c.1] {
-                            Type::Pointer(t) => (c.0, t, false),
-                            _ => unreachable!(),
-                        }
-                    } else {
-                        c
-                    }
-                })
-                .collect(),
-            ..ir.handlers[idx].clone()
-        };
-        let cloned = ir.handlers.push(HandlerIdx, cloned);
-        let ty = HandlerType {
-            captures: ir.handlers[cloned]
-                .captures
-                .iter()
-                .copied()
-                .map(|(_, t, _)| t)
-                .collect(),
-            break_ty: ir.ir.handler_type[idx].break_ty,
-        };
-        ir.ir.handler_type.push_value(ty);
-
-        (cloned, captures_out_of_scope)
-    } else {
-        (idx, Vec::new())
     }
 }

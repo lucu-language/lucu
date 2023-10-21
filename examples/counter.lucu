@@ -15,7 +15,7 @@ fun init_counter(start int) counter {
 
 fun main() / debug {
 	let counter = init_counter(5)
-	putint(counter.count())
-	putint(counter.count())
-	putint(counter.count())
+	putint(counter.count()) # 5
+	putint(counter.count()) # 6
+	putint(counter.count()) # 7
 }

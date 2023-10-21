@@ -18,7 +18,7 @@ where
 pub struct VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     vec: VecMap<K, V>,
     set: HashMap<V, K>,
@@ -117,7 +117,7 @@ where
 impl<K, V> VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     pub fn new() -> Self {
         Self {
@@ -127,9 +127,12 @@ where
     }
     pub fn insert(&mut self, f: impl FnOnce(usize) -> K, value: V) -> &K {
         if !self.set.contains_key(&value) {
-            self.set.insert(value, self.vec.push(f, value));
+            self.set.insert(value.clone(), self.vec.push(f, value));
+            let value = self.vec.vec.last().unwrap();
+            &self.set[value]
+        } else {
+            &self.set[&value]
         }
-        &self.set[&value]
     }
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.vec.values()
@@ -184,7 +187,7 @@ where
 impl<K, V> Index<K> for VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     type Output = V;
 
@@ -196,7 +199,7 @@ where
 impl<K, V> IndexMut<K> for VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     fn index_mut(&mut self, index: K) -> &mut Self::Output {
         &mut self.vec[index]

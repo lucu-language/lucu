@@ -39,10 +39,10 @@ fun array_buffer($N usize) Buffer $val $key
 	handle Buffer $val $key {
 		fun push(elem $val) $key {
 			array[size] = elem
-			Index.from_index(size++)
+			from_index(size++)
 		}
 		fun get(index $key) $val {
-			array[Index.to_index(index)]
+			array[to_index(index)]
 		}
 	}
 }

@@ -374,7 +374,8 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(blocks[0]);
 
             let struc = match captures.input {
-                Value::Value(r) => valmap.get(&r).map(|b| b.into_struct_value()),
+                Value::Value(r, _) => valmap.get(&r).map(|b| b.into_struct_value()),
+                Value::ValueIndex(_, _, _) => todo!(),
                 Value::Reference(ptr) => valmap.get(&ptr).map(|val| {
                     let ty =
                         BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
@@ -980,6 +981,66 @@ impl<'ctx> CodeGen<'ctx> {
                             valmap.insert(r, v);
                         }
                     }
+                    I::Uninit(r) => {
+                        if let Ok(ty) = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])) {
+                            valmap.insert(
+                                r,
+                                match ty {
+                                    BasicTypeEnum::ArrayType(t) => t.get_undef().into(),
+                                    BasicTypeEnum::FloatType(t) => t.get_undef().into(),
+                                    BasicTypeEnum::IntType(t) => t.get_undef().into(),
+                                    BasicTypeEnum::PointerType(t) => t.get_undef().into(),
+                                    BasicTypeEnum::StructType(t) => t.get_undef().into(),
+                                    BasicTypeEnum::VectorType(t) => t.get_undef().into(),
+                                },
+                            );
+                        }
+                    }
+                    I::Element(r, a, m) => {
+                        if let Some(&a) = valmap.get(&a) {
+                            let array_ty = a.get_type().into_array_type();
+                            let ptr = self.builder.build_alloca(array_ty, "").unwrap();
+                            self.builder.build_store(ptr, a).unwrap();
+
+                            let mem = valmap[&m].into_int_value();
+                            let elem_ty = array_ty.get_element_type();
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_in_bounds_gep(
+                                        array_ty,
+                                        ptr,
+                                        &[self.context.i64_type().const_int(0, false), mem],
+                                        "",
+                                    )
+                                    .unwrap()
+                            };
+
+                            let elem = self.builder.build_load(elem_ty, elem_ptr, "").unwrap();
+                            valmap.insert(r, elem);
+                        }
+                    }
+                    I::ElementPtr(r, a, m) => {
+                        if let Some(&ptr) = valmap.get(&a) {
+                            let array_ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
+                                    .unwrap();
+                            let ptr = ptr.into_pointer_value();
+
+                            let mem = valmap[&m].into_int_value();
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_in_bounds_gep(
+                                        array_ty,
+                                        ptr,
+                                        &[self.context.i64_type().const_int(0, false), mem],
+                                        "",
+                                    )
+                                    .unwrap()
+                            };
+
+                            valmap.insert(r, elem_ptr.into());
+                        }
+                    }
                 }
             }
 
@@ -1248,14 +1309,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .copied()
                     .enumerate()
                     .filter_map(|(i, t)| {
-                        let t = if mems.contains(&i) {
-                            match ir.types[t] {
-                                Type::Pointer(t) => t,
-                                _ => unreachable!(),
-                            }
-                        } else {
-                            t
-                        };
+                        let t = if mems.contains(&i) { t.inner(ir) } else { t };
                         BasicTypeEnum::try_from(self.get_type(ir, t)).ok()
                     })
                     .collect::<Vec<_>>();
@@ -1279,6 +1333,16 @@ impl<'ctx> CodeGen<'ctx> {
                 AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
                 AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
                 AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
+                AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
+            },
+            Type::ConstArray(size, ty) => match self.get_type(ir, ty) {
+                AnyTypeEnum::ArrayType(t) => t.array_type(size as u32).into(),
+                AnyTypeEnum::FloatType(t) => t.array_type(size as u32).into(),
+                AnyTypeEnum::FunctionType(_) => todo!(),
+                AnyTypeEnum::IntType(t) => t.array_type(size as u32).into(),
+                AnyTypeEnum::PointerType(t) => t.array_type(size as u32).into(),
+                AnyTypeEnum::StructType(t) => t.array_type(size as u32).into(),
+                AnyTypeEnum::VectorType(t) => t.array_type(size as u32).into(),
                 AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
             },
         }

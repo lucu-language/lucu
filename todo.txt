@@ -3,6 +3,9 @@ typechecking todo:
 - fail type of implicit handlers/naked handler calls
 - handler function must match signature
 
+parser todo:
+- operator precedence
+
 would be nice:
 - tokenizer matches brackets
 - seperate token from data

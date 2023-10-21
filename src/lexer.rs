@@ -26,8 +26,12 @@ pub enum Token {
     Bang,
     DoubleEquals,
     Dash,
+    DoubleDash,
+    TripleDash,
+    Caret,
     Asterisk,
     Plus,
+    DoublePlus,
     Less,
     Greater,
     Open(Group),
@@ -67,8 +71,12 @@ impl fmt::Display for Token {
                 Token::Bang => "'!'".into(),
                 Token::DoubleEquals => "'=='".into(),
                 Token::Dash => "'-'".into(),
+                Token::DoubleDash => "'--'".into(),
+                Token::TripleDash => "'---'".into(),
+                Token::Caret => "'^'".into(),
                 Token::Asterisk => "'*'".into(),
                 Token::Plus => "'+'".into(),
+                Token::DoublePlus => "'++'".into(),
                 Token::Less => "'<'".into(),
                 Token::Greater => "'>'".into(),
                 Token::Open(Group::Brace) => "'{'".into(),
@@ -250,11 +258,30 @@ impl<'a> Iterator for Tokenizer<'a> {
             ']' => Token::Close(Group::Bracket),
             '}' => Token::Close(Group::Brace),
             '!' => Token::Bang,
-            '-' => Token::Dash,
             '*' => Token::Asterisk,
-            '+' => Token::Plus,
             '<' => Token::Less,
             '>' => Token::Greater,
+            '^' => Token::Caret,
+            '-' => match self.next.peek() {
+                Some(&'-') => {
+                    self.next_char();
+                    match self.next.peek() {
+                        Some(&'-') => {
+                            self.next_char();
+                            Token::TripleDash
+                        }
+                        _ => Token::DoubleDash,
+                    }
+                }
+                _ => Token::Dash,
+            },
+            '+' => match self.next.peek() {
+                Some(&'+') => {
+                    self.next_char();
+                    Token::DoublePlus
+                }
+                _ => Token::Plus,
+            },
             '=' => {
                 match self.next.peek() {
                     Some(&'=') => {

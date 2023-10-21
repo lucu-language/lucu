@@ -891,6 +891,7 @@ fn get_proc(
                     ir,
                     handler_idx,
                     eff_fun_idx,
+                    proc_idx,
                     scope,
                     param_types,
                     Some(reg_args),
@@ -901,6 +902,7 @@ fn get_proc(
                     ir,
                     handler_idx,
                     eff_fun_idx,
+                    proc_idx,
                     scope,
                     param_types,
                     None,
@@ -1016,18 +1018,56 @@ fn get_handler_proc(
     ir: &mut IRContext,
     handler_idx: HandlerIdx,
     eff_fun_idx: EffFunIdx,
-    _scope: &Scope,
+    proc_idx: ProcIdx,
+    scope: &Scope,
     param_types: Box<[TypeIdx]>,
-    _reg_args: Option<&mut Vec<Value>>,
+    reg_args: Option<&mut Vec<Value>>,
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
-    let handler = &ir.handlers[handler_idx];
-    let eff_val = handler.effect;
+    let def = ir.handlers[handler_idx].definition;
+
+    let eff_val = ir.handlers[handler_idx].effect;
+    let effects = match ir.asys.defs[eff_val] {
+        Definition::Effect(eff_idx) => {
+            let decl = &ir.ast.effects[eff_idx].functions[eff_fun_idx];
+            decl.sign
+                .effects
+                .iter()
+                .map(|&e| {
+                    let effect = ir.asys.values[e];
+                    let handler_val = ir.get_in_scope(effect, scope);
+                    let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
+                        Type::NakedHandler(handler_idx) => {
+                            let proc = &mut ir.ir.proc_sign[proc_idx];
+                            if !proc.handled.contains(&handler_idx) {
+                                proc.handled.push(handler_idx);
+                            }
+                            handler_idx
+                        }
+                        Type::Handler(handler_idx) => handler_idx,
+                        _ => panic!(),
+                    };
+                    handler_idx
+                })
+                .collect()
+        }
+        Definition::BuiltinEffect => Vec::new(),
+        _ => unreachable!(),
+    };
 
     let procident = ProcIdent {
         fun: Either::Right((handler_idx, eff_fun_idx)),
-        handlers: Vec::new(), // TODO: handler effects
+        handlers: effects,
     };
+
+    if let Some(reg_args) = reg_args {
+        reg_args.extend(
+            procident
+                .handlers
+                .iter()
+                .filter_map(|&idx| scope[&ir.handlers[idx].effect].non_global()),
+        );
+    }
 
     // get proc
     if !ir.proc_map.contains_key(&procident) {
@@ -1037,7 +1077,7 @@ fn get_handler_proc(
             _ => unreachable!(),
         };
         let val = ir.asys.values[effect.functions[eff_fun_idx].name];
-        let ast_handler = match &ir.ctx.exprs[handler.definition.unwrap()].0 {
+        let ast_handler = match &ir.ctx.exprs[def.unwrap()].0 {
             Expression::Handler(handler) => handler,
             _ => unreachable!(),
         };
@@ -1370,12 +1410,37 @@ fn get_captures(
 
             // capture effects from (effect) functions
             let vals = match ir.asys.defs[val] {
-                Definition::EffectFunction(effect, _, _) => {
-                    // TODO: capture effect function effects
-                    if Some(effect) == exception {
-                        vec![]
-                    } else {
-                        vec![effect]
+                Definition::EffectFunction(eff_val, eff_fun_idx, _) => {
+                    match ir.asys.defs[eff_val] {
+                        Definition::Effect(eff_idx) => {
+                            let iter = ir.ast.effects[eff_idx].functions[eff_fun_idx]
+                                .sign
+                                .effects
+                                .iter()
+                                .copied()
+                                .filter_map(|i| {
+                                    let effect = ir.asys.values[i];
+                                    if Some(effect) == exception {
+                                        None
+                                    } else {
+                                        Some(effect)
+                                    }
+                                });
+
+                            if Some(eff_val) == exception {
+                                iter.collect()
+                            } else {
+                                std::iter::once(eff_val).chain(iter).collect()
+                            }
+                        }
+                        Definition::BuiltinEffect => {
+                            if Some(eff_val) == exception {
+                                vec![]
+                            } else {
+                                vec![eff_val]
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 }
                 Definition::Function(fun, _) => ir.ast.functions[fun]
@@ -1484,6 +1549,7 @@ fn generate_expr(
                                 ir,
                                 handler_idx,
                                 eff_fun_idx,
+                                ctx.proc_idx,
                                 &ctx.scope,
                                 reg_args
                                     .iter()
@@ -1957,10 +2023,9 @@ fn generate_expr(
         E::Int(i) => {
             let reg = ir.next_reg(TYPE_INT);
 
-            // TODO: handle overflow
             blocks[*block]
                 .instructions
-                .push(Instruction::Init(reg, i as i64 as u64));
+                .push(Instruction::Init(reg, i as u64));
 
             Ok(Some(Value::Value(reg)))
         }
@@ -1987,7 +2052,6 @@ fn generate_expr(
 
                             // add redirect to current proc
                             let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
-                            println!("{:?} vs {:?} with {:?}", proc.handled, idx, cloned);
                             if proc.handled.contains(&idx) {
                                 proc.handled.push(cloned);
                             } else {

@@ -1,10 +1,14 @@
 typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls
+- handler function must match signature
+
+ir todo:
+- polymorphism on handler inputs
 
 would be nice:
 - tokenizer matches brackets
 - seperate token from data
 - custom anchor tokens per Parse instance
 - analyzer gives semantic IR
-- try blocks no longer their own function
+- try blocks no longer their own function (better phi node generation?)

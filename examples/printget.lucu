@@ -1,0 +1,31 @@
+effect printget {
+	fun print() / get
+}
+
+effect get {
+	fun get() str
+}
+
+fun getter(s str) get {
+	handle get {
+		fun get() str{
+			s
+		}
+	}
+}
+ 
+fun main() / debug {
+	try {
+
+		with getter("one") { print() }
+		with getter("two") { print() }
+		with getter("tea") { print() }
+		
+	} with printget {
+
+		fun print() / get {
+			putstr(get())
+		}
+		
+	}
+}

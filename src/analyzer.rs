@@ -332,8 +332,7 @@ fn capture_ident(
     if val.0 != usize::MAX {
         match ctx.asys.defs[val] {
             Definition::EffectFunction(e, _, _) => {
-                // TODO: do not capture effect function effects
-                if Some(e) != effect {
+                if Some(e) != effect && scope.scoped_effects.iter().any(|(_, &(val, _))| e == val) {
                     add_capture(
                         captures,
                         Capture {
@@ -351,9 +350,11 @@ fn capture_ident(
                     .iter()
                     .copied()
                     .map(|i| ctx.asys.values[i]);
-                // TODO: do not capture effect function effects
+                // TODO: do not capture effect function handlers
                 for e in effects {
-                    if Some(e) != effect {
+                    if Some(e) != effect
+                        && scope.scoped_effects.iter().any(|(_, &(val, _))| e == val)
+                    {
                         add_capture(
                             captures,
                             Capture {
@@ -451,6 +452,15 @@ fn analyze_expr(
                 let mut child = scope.child();
                 let val = ctx.asys.values[fun.decl.name];
                 scope_sign(ctx, &mut child, val, &fun.decl.sign, errors);
+
+                let mut scoped = scope.scoped_effects.clone();
+                scoped.extend(fun.decl.sign.effects.iter().copied().filter_map(|i| {
+                    scope
+                        .effects
+                        .get(&ctx.parsed.idents[i].0)
+                        .map(|effect| (i, effect))
+                }));
+                child.scoped_effects = &scoped;
 
                 let found = analyze_expr(ctx, &mut child, fun.body, expected, errors);
 

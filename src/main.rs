@@ -220,4 +220,9 @@ mod tests {
     fn mutation_inside() {
         test_file("counter", "5\n6\n7\n")
     }
+
+    #[test]
+    fn effect_function_handlers() {
+        test_file("printget", "onetwotea")
+    }
 }

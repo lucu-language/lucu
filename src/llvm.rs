@@ -975,6 +975,11 @@ impl<'ctx> CodeGen<'ctx> {
                             valmap.insert(r, struc.into());
                         }
                     }
+                    I::Copy(r, h) => {
+                        if let Some(&v) = valmap.get(&h) {
+                            valmap.insert(r, v);
+                        }
+                    }
                 }
             }
 
@@ -1071,6 +1076,7 @@ impl<'ctx> CodeGen<'ctx> {
                 .build_conditional_branch(cmp_clone, branch_return, branch_next)
                 .unwrap();
 
+            self.builder.position_at_end(branch_return);
             let ret_type = function
                 .get_type()
                 .get_return_type()

@@ -32,17 +32,25 @@ impl Value {
             Value::Global(glob) => ir.globals[glob],
         }
     }
-    fn set_type(self, ir: &mut IR, t: TypeIdx) {
+    fn with_type(self, ir: &mut IRContext, block: &mut Block, ty: TypeIdx) -> Value {
         match self {
             Value::Value(reg) => {
-                ir.regs[reg] = t;
+                let new = ir.next_reg(ty);
+                block.instructions.push(Instruction::Copy(new, reg));
+                Value::Value(new)
             }
             Value::Reference(ptr) => {
-                let ty = ir.types.insert(TypeIdx, Type::Pointer(t)).clone();
-                ir.regs[ptr] = ty;
+                let ty = ir.insert_type(Type::Pointer(ty));
+                let new = ir.next_reg(ty);
+                block.instructions.push(Instruction::Copy(new, ptr));
+                Value::Reference(new)
             }
-            Value::Global(glob) => {
-                ir.globals[glob] = t;
+            Value::Global(_) => {
+                let ty = ir.insert_type(Type::Pointer(ty));
+                let ptr = self.reference(ir, block);
+                let new = ir.next_reg(ty);
+                block.instructions.push(Instruction::Copy(new, ptr));
+                Value::Reference(new)
             }
         }
     }
@@ -90,7 +98,7 @@ impl Value {
         match self {
             Value::Value(r) => r,
             Value::Reference(r) => r,
-            Value::Global(glob) => ir.next_reg(ir.ir.globals[glob]),
+            Value::Global(g) => ir.next_reg(ir.ir.globals[g]),
         }
     }
 }
@@ -295,6 +303,7 @@ pub struct Block {
 pub enum Instruction {
     Init(Reg, u64),
     InitString(Reg, String),
+    Copy(Reg, Reg),
 
     // globals
     SetScopedGlobal(Global, Reg, BlockIdx),
@@ -523,6 +532,7 @@ impl Display for IR {
                     match *instr {
                         Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
+                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
                         }
@@ -1834,7 +1844,7 @@ fn generate_expr(
                 );
 
                 let handlers = &[handler_idx];
-                let (handled, unhandled): (Cow<[HandlerIdx]>, &[HandlerIdx]) = if naked {
+                let (unhandled, handled): (Cow<[HandlerIdx]>, &[HandlerIdx]) = if naked {
                     (Cow::Borrowed(&[]), handlers)
                 } else {
                     (Cow::Borrowed(handlers), &[])
@@ -1844,8 +1854,8 @@ fn generate_expr(
                 let proc_idx = generate_proc_sign(
                     ir,
                     None,
-                    handled,
                     unhandled,
+                    handled,
                     &reset_params,
                     output,
                     debug_name,
@@ -1957,7 +1967,7 @@ fn generate_expr(
 
         E::Ident(id) => {
             let val = ir.asys.values[id];
-            let reg = ir.get_in_scope(val, &ctx.scope);
+            let mut reg = ir.get_in_scope(val, &ctx.scope);
             if let Type::Handler(idx) = ir.ir.types[reg.get_type(&ir.ir)] {
                 if let analyzer::Type::Handler(_, _, def) = ir.asys.types[ir.asys.exprs[ctx.expr]] {
                     if let Some(def) = def {
@@ -1972,12 +1982,12 @@ fn generate_expr(
                             let ty = ir.ir.handler_type[idx].clone();
                             ir.ir.handler_type.push_value(ty);
 
-                            // TODO: clone global?
                             let ty = ir.insert_type(Type::Handler(cloned));
-                            reg.set_type(&mut ir.ir, ty);
+                            reg = reg.with_type(ir, &mut blocks[*block], ty);
 
                             // add redirect to current proc
                             let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
+                            println!("{:?} vs {:?} with {:?}", proc.handled, idx, cloned);
                             if proc.handled.contains(&idx) {
                                 proc.handled.push(cloned);
                             } else {

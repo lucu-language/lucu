@@ -976,9 +976,12 @@ impl<'ctx> CodeGen<'ctx> {
                             valmap.insert(r, struc.into());
                         }
                     }
-                    I::Copy(r, h) => {
+                    I::Bitcast(r, h) => {
                         if let Some(&v) = valmap.get(&h) {
-                            valmap.insert(r, v);
+                            let ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
+                            let cast = self.builder.build_bitcast(v, ty, "").unwrap();
+                            valmap.insert(r, cast);
                         }
                     }
                     I::Uninit(r) => {
@@ -994,29 +997,6 @@ impl<'ctx> CodeGen<'ctx> {
                                     BasicTypeEnum::VectorType(t) => t.get_undef().into(),
                                 },
                             );
-                        }
-                    }
-                    I::Element(r, a, m) => {
-                        if let Some(&a) = valmap.get(&a) {
-                            let array_ty = a.get_type().into_array_type();
-                            let ptr = self.builder.build_alloca(array_ty, "").unwrap();
-                            self.builder.build_store(ptr, a).unwrap();
-
-                            let mem = valmap[&m].into_int_value();
-                            let elem_ty = array_ty.get_element_type();
-                            let elem_ptr = unsafe {
-                                self.builder
-                                    .build_in_bounds_gep(
-                                        array_ty,
-                                        ptr,
-                                        &[self.context.i64_type().const_int(0, false), mem],
-                                        "",
-                                    )
-                                    .unwrap()
-                            };
-
-                            let elem = self.builder.build_load(elem_ty, elem_ptr, "").unwrap();
-                            valmap.insert(r, elem);
                         }
                     }
                     I::ElementPtr(r, a, m) => {

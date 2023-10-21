@@ -225,4 +225,9 @@ mod tests {
     fn effect_function_handlers() {
         test_file("printget", "onetwotea")
     }
+
+    #[test]
+    fn arrays() {
+        test_file("strbuffer", "Hello\nworld\n")
+    }
 }

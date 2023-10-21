@@ -37,28 +37,32 @@ impl Value {
             Value::Global(glob) => ir.globals[glob],
         }
     }
-    fn with_type(&self, ir: &mut IRContext, block: &mut Block, ty: TypeIdx) -> Value {
+    fn bitcast(&self, ir: &mut IRContext, block: &mut Block, ty: TypeIdx) -> Value {
         match *self {
             Value::Value(reg, val) => {
                 let new = ir.next_reg(ty);
-                block.instructions.push(Instruction::Copy(new, reg));
+                block.instructions.push(Instruction::Bitcast(new, reg));
                 Value::Value(new, val)
             }
-            Value::ValueIndex(reg, val, ref idx) => {
-                todo!();
+            Value::ValueIndex(_, _, _) => {
+                todo!()
             }
             Value::Reference(ptr) => {
                 let ty = ir.insert_type(Type::Pointer(ty));
                 let new = ir.next_reg(ty);
-                block.instructions.push(Instruction::Copy(new, ptr));
+                block.instructions.push(Instruction::Bitcast(new, ptr));
                 Value::Reference(new)
             }
             Value::Global(glob) => {
-                let ty = ir.insert_type(Type::Pointer(ty));
-                let new = ir.next_reg(ty);
+                let t = ir.insert_type(Type::Pointer(ir.ir.globals[glob]));
+                let ptr = ir.next_reg(t);
                 block
                     .instructions
-                    .push(Instruction::GetGlobalPtr(new, glob));
+                    .push(Instruction::GetGlobalPtr(ptr, glob));
+
+                let t = ir.insert_type(Type::Pointer(t));
+                let new = ir.next_reg(t);
+                block.instructions.push(Instruction::Bitcast(new, ptr));
                 Value::Reference(new)
             }
         }
@@ -74,15 +78,22 @@ impl Value {
             Value::Value(reg, _) => reg,
             Value::ValueIndex(reg, _, ref idx) => {
                 let mut ty = ir.ir.regs[reg];
-                let mut reg = reg;
+                let ptr_ty = ir.insert_type(Type::Pointer(ty));
+                let mut ptr = ir.next_reg(ptr_ty);
+                block.instructions.push(Instruction::Reference(ptr, reg));
+
                 for idx in idx.iter().copied() {
                     ty = ty.inner(&ir.ir);
-                    let inner = ir.next_reg(ty);
+                    let inner_ty = ir.insert_type(Type::Pointer(ty));
+                    let inner = ir.next_reg(inner_ty);
                     block
                         .instructions
-                        .push(Instruction::Element(inner, reg, idx));
-                    reg = inner;
+                        .push(Instruction::ElementPtr(inner, ptr, idx));
+                    ptr = inner
                 }
+
+                let reg = ir.next_reg(ty);
+                block.instructions.push(Instruction::Load(reg, ptr));
                 reg
             }
             Value::Reference(ptr) => {
@@ -131,7 +142,7 @@ impl Value {
             }
         }
     }
-    fn register(&self, ir: &mut IRContext) -> Reg {
+    fn register(&self) -> Reg {
         match *self {
             Value::Value(r, _) => r,
             _ => unreachable!(),
@@ -367,7 +378,7 @@ pub enum Instruction {
     Init(Reg, u64),
     InitString(Reg, String),
     Uninit(Reg),
-    Copy(Reg, Reg),
+    Bitcast(Reg, Reg),
 
     // globals
     SetScopedGlobal(Global, Reg, BlockIdx),
@@ -414,7 +425,6 @@ pub enum Instruction {
     Member(Reg, Reg, usize),
 
     // arrays
-    Element(Reg, Reg, Reg),
     ElementPtr(Reg, Reg, Reg),
 }
 
@@ -601,7 +611,7 @@ impl Display for IR {
                     match *instr {
                         Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
-                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
+                        Instruction::Bitcast(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::Uninit(r) => writeln!(f, "{} <- ---", r)?,
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
@@ -691,8 +701,9 @@ impl Display for IR {
                         Instruction::Store(ptr, r) => writeln!(f, "       store {}, {}", ptr, r)?,
                         Instruction::RawHandler(r, h) => writeln!(f, "{} <- raw {}", r, h)?,
                         Instruction::UnrawHandler(r, h) => writeln!(f, "{} <- unraw {}", r, h)?,
-                        Instruction::Element(r, a, m) => writeln!(f, "{} <- {}[{}]", r, a, m)?,
-                        Instruction::ElementPtr(r, a, m) => writeln!(f, "{} <- &{}[{}]", r, a, m)?,
+                        Instruction::ElementPtr(r, a, m) => {
+                            writeln!(f, "{} <- gep {}, {}", r, a, m)?
+                        }
                     }
                 }
 
@@ -1662,7 +1673,7 @@ fn generate_expr(
                                         .collect();
                                     blocks[*block].instructions.push(Instruction::Call(
                                         proc_idx,
-                                        output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                                        output.clone().unwrap_or(None).map(|v| v.register()),
                                         collect,
                                     ));
 
@@ -1678,7 +1689,7 @@ fn generate_expr(
                                         .collect();
                                     blocks[*block].instructions.push(Instruction::Call(
                                         proc_idx,
-                                        output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                                        output.clone().unwrap_or(None).map(|v| v.register()),
                                         collect,
                                     ));
                                 }
@@ -1713,7 +1724,7 @@ fn generate_expr(
                         .collect();
                     blocks[*block].instructions.push(Instruction::Call(
                         proc_idx,
-                        output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                        output.clone().unwrap_or(None).map(|v| v.register()),
                         collect,
                     ));
 
@@ -1863,8 +1874,16 @@ fn generate_expr(
                             Value::Value(incremented, val),
                         );
                     }
-                    Value::ValueIndex(reg, val, ref idx) => {
-                        todo!();
+                    Value::ValueIndex(_, val, _) => {
+                        let ptr = left.reference(
+                            ir,
+                            val.expect("left operand not tied to variable"),
+                            &mut ctx.scope,
+                            &mut blocks[*block],
+                        );
+                        blocks[*block]
+                            .instructions
+                            .push(Instruction::Store(ptr, incremented));
                     }
                     Value::Reference(ptr) => {
                         blocks[*block]
@@ -2096,7 +2115,7 @@ fn generate_expr(
 
                         blocks[*block].instructions.push(Instruction::Call(
                             proc_idx,
-                            output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                            output.clone().unwrap_or(None).map(|v| v.register()),
                             input_regs,
                         ));
 
@@ -2109,7 +2128,7 @@ fn generate_expr(
 
                         blocks[*block].instructions.push(Instruction::Call(
                             proc_idx,
-                            output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                            output.clone().unwrap_or(None).map(|v| v.register()),
                             input_regs,
                         ));
                     }
@@ -2153,7 +2172,7 @@ fn generate_expr(
 
                 blocks[*block].instructions.push(Instruction::Call(
                     proc_idx,
-                    output.clone().unwrap_or(None).map(|v| v.register(ir)),
+                    output.clone().unwrap_or(None).map(|v| v.register()),
                     input_regs,
                 ));
 
@@ -2198,7 +2217,7 @@ fn generate_expr(
                             ir.ir.handler_type.push_value(ty);
 
                             let ty = ir.insert_type(Type::Handler(cloned));
-                            reg = reg.with_type(ir, &mut blocks[*block], ty);
+                            reg = reg.bitcast(ir, &mut blocks[*block], ty);
 
                             // add redirect to current proc
                             let proc = &mut ir.ir.proc_sign[ctx.proc_idx];

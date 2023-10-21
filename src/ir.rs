@@ -168,6 +168,15 @@ impl TypeIdx {
     fn is_never(self) -> bool {
         self == TYPE_NEVER
     }
+    fn is_handler(self, ir: &IRContext) -> bool {
+        match ir.ir.types[self] {
+            Type::NakedHandler(_)
+            | Type::RawHandler(_, _)
+            | Type::Handler(_)
+            | Type::HandlerOutput => true,
+            _ => false,
+        }
+    }
     fn from_type(ir: &mut IRContext, typ: analyzer::TypeIdx) -> TypeIdx {
         use analyzer::Type as T;
         match ir.asys.types[typ] {
@@ -372,6 +381,7 @@ impl From<HandlerIdx> for usize {
 struct ProcIdent {
     fun: Either<Val, (HandlerIdx, EffFunIdx)>,
     handlers: Vec<HandlerIdx>,
+    handler_params: Vec<TypeIdx>,
 }
 
 #[derive(Debug, Clone)]
@@ -767,6 +777,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
         ProcIdent {
             fun: Either::Right((debug, PUTINT_IDX)),
             handlers: Vec::new(),
+            handler_params: Vec::new(),
         },
         putint,
     );
@@ -774,6 +785,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
         ProcIdent {
             fun: Either::Right((debug, PUTSTR_IDX)),
             handlers: Vec::new(),
+            handler_params: Vec::new(),
         },
         putstr,
     );
@@ -940,6 +952,11 @@ fn get_proc(
             let procident = ProcIdent {
                 fun: Either::Left(val),
                 handlers: effects,
+                handler_params: param_types
+                    .iter()
+                    .copied()
+                    .filter(|t| t.is_handler(ir))
+                    .collect(),
             };
 
             if let Some(reg_args) = reg_args {
@@ -1058,6 +1075,11 @@ fn get_handler_proc(
     let procident = ProcIdent {
         fun: Either::Right((handler_idx, eff_fun_idx)),
         handlers: effects,
+        handler_params: param_types
+            .iter()
+            .copied()
+            .filter(|t| t.is_handler(ir))
+            .collect(),
     };
 
     if let Some(reg_args) = reg_args {
@@ -1272,6 +1294,11 @@ fn generate_proc_sign(
             ProcIdent {
                 fun,
                 handlers: unhandled.into_owned(),
+                handler_params: params
+                    .iter()
+                    .copied()
+                    .filter_map(|(_, t)| if t.is_handler(ir) { Some(t) } else { None })
+                    .collect(),
             },
             proc_idx,
         );

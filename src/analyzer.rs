@@ -350,7 +350,6 @@ fn capture_ident(
                     .iter()
                     .copied()
                     .map(|i| ctx.asys.values[i]);
-                // TODO: do not capture effect function handlers
                 for e in effects {
                     if Some(e) != effect
                         && scope.scoped_effects.iter().any(|(_, &(val, _))| e == val)

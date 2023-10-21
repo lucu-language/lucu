@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     error::{Error, Errors, Ranged},
-    parser::{self, ExprIdx, Expression, FunSign, Ident, Op, Parsed, AST},
+    parser::{self, BinOp, ExprIdx, Expression, FunSign, Ident, Parsed, UnOp, AST},
     vecmap::{VecMap, VecSet},
 };
 
@@ -90,30 +90,30 @@ impl TypeIdx {
     fn display(self, ctx: &AsysContext) -> String {
         match ctx.asys.types[self] {
             Type::FunctionLiteral(_) => "function literal".into(),
-
-            Type::Int => "'int'".into(),
-            Type::Str => "'str'".into(),
-            Type::Bool => "'bool'".into(),
-            Type::Handler(val, yeets, _) => {
-                format!("'{}'", yeets.display_handler(val, ctx))
-            }
             Type::None => "none".into(),
             Type::Never => "never".into(),
-            Type::Unknown => "<unknown>".into(),
+            _ => format!("'{}'", self.display_inner(ctx)),
         }
     }
     fn display_fails(self, ctx: &AsysContext) -> String {
         match ctx.asys.types[self] {
-            Type::FunctionLiteral(_) => " fails <unknown>".into(),
-            Type::Int => " fails int".into(),
-            Type::Str => " fails str".into(),
-            Type::Bool => " fails bool".into(),
-            Type::Handler(val, yeets, _) => {
-                format!(" fails {}", yeets.display_handler(val, ctx))
-            }
             Type::None => " fails".into(),
             Type::Never => "".into(),
-            Type::Unknown => " fails <unknown>".into(),
+            _ => format!(" fails {}", self.display_inner(ctx)),
+        }
+    }
+    fn display_inner(self, ctx: &AsysContext) -> String {
+        match ctx.asys.types[self] {
+            Type::FunctionLiteral(_) => "<unknown>".into(),
+            Type::Int => "int".into(),
+            Type::Str => "str".into(),
+            Type::Bool => "bool".into(),
+            Type::Handler(val, yeets, _) => yeets.display_handler(val, ctx),
+            Type::None => "()".into(),
+            Type::Never => "!".into(),
+            Type::Unknown => "<unknown>".into(),
+            Type::Pointer(ty) => format!("^{}", ty.display_inner(ctx)),
+            Type::ConstArray(size, ty) => format!("[{}]{}", size, ty.display_inner(ctx)),
         }
     }
     fn display_handler(self, handler: Val, ctx: &AsysContext) -> String {
@@ -189,10 +189,13 @@ pub enum HandlerDef {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     FunctionLiteral(Val),
     Handler(Val, TypeIdx, Option<HandlerIdx>),
+
+    Pointer(TypeIdx),
+    ConstArray(u64, TypeIdx),
 
     Int,
     Str,
@@ -311,6 +314,19 @@ fn analyze_assignable(
                 }
             } else {
                 TYPE_UNKNOWN
+            }
+        }
+        Expression::BinOp(left, BinOp::Index, right) => {
+            let array = analyze_assignable(ctx, scope, left, expr, errors);
+            analyze_expr(ctx, scope, right, TYPE_INT, errors);
+
+            match ctx.asys.types[array] {
+                Type::ConstArray(_, ty) => ty,
+                Type::Unknown => TYPE_UNKNOWN,
+                _ => {
+                    // TODO: error
+                    TYPE_UNKNOWN
+                }
             }
         }
         Expression::Error => TYPE_UNKNOWN,
@@ -847,22 +863,40 @@ fn analyze_expr(
             };
             TypeIdx::join(yes_type, no_type).unwrap_or(TYPE_NONE)
         }
-        Expression::Op(left, op, right) => match op {
-            Op::Assign => {
+        Expression::BinOp(left, op, right) => match op {
+            BinOp::Assign => {
                 let left_type = analyze_assignable(ctx, scope, left, expr, errors);
                 analyze_expr(ctx, scope, right, left_type, errors);
                 TYPE_NONE
             }
+            BinOp::Index => {
+                let array = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors);
+                analyze_expr(ctx, scope, right, TYPE_INT, errors);
+
+                match ctx.asys.types[array] {
+                    Type::ConstArray(_, ty) => ty,
+                    Type::Unknown => TYPE_UNKNOWN,
+                    _ => {
+                        // TODO: error
+                        TYPE_UNKNOWN
+                    }
+                }
+            }
             _ => {
                 let (op_type, ret_type) = match op {
-                    Op::Equals | Op::Less | Op::Greater => (TYPE_INT, TYPE_BOOL),
-                    Op::Divide | Op::Multiply | Op::Subtract | Op::Add => (TYPE_INT, TYPE_INT),
-                    Op::Assign => unreachable!(),
+                    BinOp::Equals | BinOp::Less | BinOp::Greater => (TYPE_INT, TYPE_BOOL),
+                    BinOp::Divide | BinOp::Multiply | BinOp::Subtract | BinOp::Add => {
+                        (TYPE_INT, TYPE_INT)
+                    }
+                    BinOp::Assign | BinOp::Index => unreachable!(),
                 };
                 analyze_expr(ctx, scope, left, op_type, errors);
                 analyze_expr(ctx, scope, right, op_type, errors);
                 ret_type
             }
+        },
+        Expression::UnOp(uexpr, op) => match op {
+            UnOp::PostIncrement => analyze_assignable(ctx, scope, uexpr, expr, errors),
         },
         Expression::Yeet(val) => {
             // TODO: yeet type analysis
@@ -898,6 +932,10 @@ fn analyze_expr(
             // default type for literal
             _ => TYPE_INT,
         },
+        Expression::Uninit => {
+            // TODO: error if expected_type is undefined
+            expected_type
+        }
         Expression::Error => TYPE_UNKNOWN,
     };
 
@@ -955,11 +993,20 @@ fn analyze_type(
     ty: parser::TypeIdx,
     errors: &mut Errors,
 ) -> TypeIdx {
+    use parser::Type as T;
     let (id, fail) = match ctx.parsed.types[ty].0 {
-        parser::Type::Never => return TYPE_NEVER,
-        parser::Type::Error => return TYPE_UNKNOWN,
-        parser::Type::Path(id) => (id, parser::FailType::Never),
-        parser::Type::Handler(id, fail) => (id, fail),
+        T::Never => return TYPE_NEVER,
+        T::Error => return TYPE_UNKNOWN,
+        T::Path(id) => (id, parser::FailType::Never),
+        T::Handler(id, fail) => (id, fail),
+        T::Pointer(ty) => {
+            let inner = analyze_type(ctx, scope, ty, errors);
+            return ctx.asys.insert_type(Type::Pointer(inner));
+        }
+        T::ConstArray(size, ty) => {
+            let inner = analyze_type(ctx, scope, ty, errors);
+            return ctx.asys.insert_type(Type::ConstArray(size, inner));
+        }
     };
 
     let name = &ctx.parsed.idents[id].0;

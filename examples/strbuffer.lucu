@@ -1,0 +1,32 @@
+effect strbuf {
+	fun push(elem str) int
+	fun get(index int) str
+}
+
+fun array_buffer() strbuf {
+	mut array [1024]str = ---
+	mut size  int       = 0
+	handle strbuf {
+		fun push(elem str) int {
+			array[size] = elem
+			size++
+		}
+		fun get(index int) str {
+			array[index]
+		}
+	}
+}
+
+fun println_buffered(index int) / debug strbuf {
+	putstr(get(index))
+	putstr("\n")
+}
+
+fun main() / debug {
+	with array_buffer() {
+		let b = push("world")
+		let a = push("Hello")
+		println_buffered(a)
+		println_buffered(b)
+	}
+}

@@ -20,7 +20,7 @@ impl<T> Ranged<T> {
     }
 }
 
-type Range = Ranged<()>;
+pub type Range = Ranged<()>;
 
 pub enum Error {
     // lexer
@@ -58,6 +58,7 @@ pub enum Expected {
     Identifier,
     Definition,
     Expression,
+    Type,
 }
 
 impl From<Token> for Expected {
@@ -370,6 +371,7 @@ impl Errors {
                             Expected::Identifier => "identifier".into(),
                             Expected::Definition => "effect or function definition".into(),
                             Expected::Expression => "expression".into(),
+                            Expected::Type => "type".into(),
                         }
                     ),
                     Error::UnclosedGroup(_) =>

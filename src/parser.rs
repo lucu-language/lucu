@@ -2,7 +2,7 @@ use std::matches;
 
 use crate::{
     analyzer::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
-    error::{Error, Expected, Ranged},
+    error::{Error, Expected, Range, Ranged},
     lexer::{Group, Token, Tokenizer},
     vecmap::VecMap,
 };
@@ -35,7 +35,7 @@ impl From<Ident> for usize {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Op {
+pub enum BinOp {
     Assign,
     Equals,
     Less,
@@ -44,19 +44,25 @@ pub enum Op {
     Multiply,
     Subtract,
     Add,
+    Index,
 }
 
-impl Op {
-    fn from_token(value: &Token) -> Option<Op> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnOp {
+    PostIncrement,
+}
+
+impl BinOp {
+    fn from_token(value: &Token) -> Option<BinOp> {
         match value {
-            Token::Equals => Some(Op::Assign),
-            Token::Slash => Some(Op::Divide),
-            Token::DoubleEquals => Some(Op::Equals),
-            Token::Dash => Some(Op::Subtract),
-            Token::Asterisk => Some(Op::Multiply),
-            Token::Plus => Some(Op::Add),
-            Token::Less => Some(Op::Less),
-            Token::Greater => Some(Op::Greater),
+            Token::Equals => Some(BinOp::Assign),
+            Token::Slash => Some(BinOp::Divide),
+            Token::DoubleEquals => Some(BinOp::Equals),
+            Token::Dash => Some(BinOp::Subtract),
+            Token::Asterisk => Some(BinOp::Multiply),
+            Token::Plus => Some(BinOp::Add),
+            Token::Less => Some(BinOp::Less),
+            Token::Greater => Some(BinOp::Greater),
             _ => None,
         }
     }
@@ -69,7 +75,8 @@ pub enum Expression {
     Call(ExprIdx, Vec<ExprIdx>),
     Member(ExprIdx, Ident),
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
-    Op(ExprIdx, Op, ExprIdx),
+    BinOp(ExprIdx, BinOp, ExprIdx),
+    UnOp(ExprIdx, UnOp),
     Yeet(Option<ExprIdx>),
     Let(bool, Ident, Option<TypeIdx>, ExprIdx),
 
@@ -79,6 +86,7 @@ pub enum Expression {
     String(String),
     Int(i128),
     Ident(Ident),
+    Uninit,
 
     #[default]
     Error, // error at parsing, coerces to any type
@@ -107,11 +115,14 @@ pub struct Handler {
     pub functions: Vec<Function>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub enum Type {
     Never,
     Path(Ident),
     Handler(Ident, FailType),
+
+    Pointer(TypeIdx),
+    ConstArray(u64, TypeIdx),
 
     #[default]
     Error, // error at parsing, coerces to any type
@@ -191,7 +202,7 @@ impl Parsed {
                     self.for_each(no, f);
                 }
             }
-            Expression::Op(left, _, right) => {
+            Expression::BinOp(left, _, right) => {
                 self.for_each(left, f);
                 self.for_each(right, f);
             }
@@ -209,11 +220,15 @@ impl Parsed {
             Expression::Let(_, _, _, expr) => {
                 self.for_each(expr, f);
             }
+            Expression::UnOp(expr, _) => {
+                self.for_each(expr, f);
+            }
             Expression::Handler(_) => {}
             Expression::String(_) => {}
             Expression::Int(_) => {}
             Expression::Ident(_) => {}
             Expression::Error => {}
+            Expression::Uninit => {}
         }
     }
     pub fn for_each_ignore_try(&self, expr: ExprIdx, f: &mut impl FnMut(ExprIdx)) {
@@ -243,7 +258,7 @@ impl Parsed {
                     self.for_each(no, f);
                 }
             }
-            Expression::Op(left, _, right) => {
+            Expression::BinOp(left, _, right) => {
                 self.for_each(left, f);
                 self.for_each(right, f);
             }
@@ -262,11 +277,15 @@ impl Parsed {
             Expression::Let(_, _, _, expr) => {
                 self.for_each(expr, f);
             }
+            Expression::UnOp(expr, _) => {
+                self.for_each(expr, f);
+            }
             Expression::Handler(_) => {}
             Expression::String(_) => {}
             Expression::Int(_) => {}
             Expression::Ident(_) => {}
             Expression::Error => {}
+            Expression::Uninit => {}
         }
     }
     pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
@@ -307,6 +326,12 @@ impl<'a> Tokens<'a> {
         };
         self.last = tok.as_ref().map(|p| p.2).unwrap_or(usize::MAX);
         tok
+    }
+    fn peek_range(&mut self) -> Range {
+        match self.peek() {
+            Some(r) => r.empty(),
+            None => Ranged((), usize::MAX, usize::MAX),
+        }
     }
     fn ranged<T>(&mut self, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<Ranged<T>> {
         let start = self.pos_start();
@@ -392,6 +417,45 @@ impl<'a> Tokens<'a> {
         };
         self.iter.errors.push(err);
         None
+    }
+    fn int(&mut self) -> Option<Ranged<i128>> {
+        let err = match self.next() {
+            Some(Ranged(Token::Int(s), start, end)) => return Some(Ranged(s, start, end)),
+            Some(t) => t.with(Error::Unexpected(Expected::Identifier)),
+            None => Ranged(
+                Error::Unexpected(Expected::Identifier),
+                usize::MAX,
+                usize::MAX,
+            ),
+        };
+        self.iter.errors.push(err);
+        None
+    }
+    fn group_single<T>(
+        &mut self,
+        group: Group,
+        f: impl FnOnce(&mut Self) -> Option<T>,
+    ) -> Option<Ranged<T>> {
+        let open = self.expect(Token::Open(group))?;
+        match f(self) {
+            Some(t) => match self.peek() {
+                Some(c) if c.0 == Token::Close(group) => {
+                    let tok = self.next().unwrap();
+                    Some(Ranged(t, open.1, tok.2))
+                }
+                None => {
+                    self.iter
+                        .errors
+                        .push(Ranged(Error::UnclosedGroup(group), open.1, open.2));
+                    Some(Ranged(t, open.1, usize::MAX))
+                }
+                _ => Some(self.skip_close(Ranged(group, open.1, open.2)).with(t)),
+            },
+            None => {
+                self.skip_close(Ranged(group, open.1, open.2));
+                None
+            }
+        }
     }
     fn group(
         &mut self,
@@ -560,15 +624,47 @@ impl Parse for AST {
 
 impl Parse for Type {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        if tk.check(Token::Bang).is_some() {
-            Some(Type::Never)
-        } else {
-            let id = tk.ident()?;
-            let id = tk.push_ident(id);
+        match tk.peek() {
+            Some(Ranged(Token::Bang, ..)) => {
+                tk.next();
+                Some(Type::Never)
+            }
+            Some(Ranged(Token::Caret, ..)) => {
+                tk.next();
 
-            match FailType::parse_or_skip(tk)?.0 {
-                FailType::Never => Some(Type::Path(id)),
-                ty => Some(Type::Handler(id, ty)),
+                let ty = Type::parse_or_default(tk);
+                let ty = tk.push_type(ty);
+
+                Some(Type::Pointer(ty))
+            }
+            Some(Ranged(Token::Open(Group::Bracket), ..)) => {
+                let num = tk
+                    .group_single(Group::Bracket, |tk| {
+                        let n = tk.int()?.0;
+                        // TODO: Error on too big or negative
+                        Some(n as u64)
+                    })?
+                    .0;
+
+                let ty = Type::parse_or_default(tk);
+                let ty = tk.push_type(ty);
+
+                Some(Type::ConstArray(num, ty))
+            }
+            Some(Ranged(Token::Ident(_), ..)) => {
+                let id = tk.ident()?;
+                let id = tk.push_ident(id);
+
+                match FailType::parse_or_skip(tk)?.0 {
+                    FailType::Never => Some(Type::Path(id)),
+                    ty => Some(Type::Handler(id, ty)),
+                }
+            }
+            _ => {
+                let err = tk.peek_range().with(Error::Unexpected(Expected::Type));
+                tk.next();
+                tk.iter.errors.push(err);
+                None
             }
         }
     }
@@ -723,6 +819,12 @@ impl Parse for Expression {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let start = tk.pos_start();
         let mut expr = tk.ranged(|tk| match tk.peek() {
+            // uninit
+            Some(Ranged(Token::TripleDash, ..)) => {
+                tk.next();
+                Some(Expression::Uninit)
+            }
+
             // try-with
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
@@ -916,9 +1018,35 @@ impl Parse for Expression {
                     );
                 }
 
+                // index
+                Some(Ranged(Token::Open(Group::Bracket), ..)) => {
+                    let index = tk
+                        .group_single(Group::Bracket, |tk| {
+                            let expr = Expression::parse_or_default(tk);
+                            Some(tk.push_expr(expr))
+                        })?
+                        .0;
+
+                    expr = Ranged(
+                        Expression::BinOp(tk.push_expr(expr), BinOp::Index, index),
+                        start,
+                        tk.pos_end(),
+                    )
+                }
+
+                // post-increment
+                Some(Ranged(Token::DoublePlus, ..)) => {
+                    tk.next();
+                    expr = Ranged(
+                        Expression::UnOp(tk.push_expr(expr), UnOp::PostIncrement),
+                        start,
+                        tk.pos_end(),
+                    )
+                }
+
                 // binary ops
                 // TODO: operator precedence
-                Some(Ranged(t, ..)) => match Op::from_token(t) {
+                Some(Ranged(t, ..)) => match BinOp::from_token(t) {
                     Some(op) => {
                         tk.next();
 
@@ -926,7 +1054,7 @@ impl Parse for Expression {
                         let right = tk.push_expr(right);
 
                         expr = Ranged(
-                            Expression::Op(tk.push_expr(expr), op, right),
+                            Expression::BinOp(tk.push_expr(expr), op, right),
                             start,
                             tk.pos_end(),
                         )

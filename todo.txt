@@ -5,9 +5,6 @@ typechecking todo:
 
 parser todo:
 - operator precedence
-- unification of try blocks and easy of use:
-  - try with
-  - try loop
 
 ir todo:
 - better phi generation

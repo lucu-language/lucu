@@ -8,9 +8,9 @@ effect strbuf {
 	fun iter() striter fails
 }
 
-fun array_buffer() strbuf / debug {
+fun array_buffer() strbuf {
 	mut array [255]str = ---
-	mut size  int       = 0
+	mut size  int      = 0
 	handle strbuf {
 		fun push(elem str) int {
 			array[size] = elem

@@ -5,10 +5,16 @@ typechecking todo:
 
 parser todo:
 - operator precedence
+- unification of try blocks and easy of use:
+  - try with
+  - try loop
+
+ir todo:
+- better phi generation
 
 would be nice:
 - tokenizer matches brackets
 - seperate token from data
 - custom anchor tokens per Parse instance
 - analyzer gives semantic IR
-- try blocks no longer their own function (better phi node generation?)
+- try blocks no longer their own function

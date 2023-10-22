@@ -80,7 +80,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     let syscall2 = context.create_inline_asm(
         syscall2_fn,
         "syscall".to_string(),
-        "=r,{rax},{rdi}".into(),
+        "={rax},{rax},{rdi},~{rcx},~{r11}".into(),
         true,
         false,
         None,
@@ -89,7 +89,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     let syscall4 = context.create_inline_asm(
         syscall4_fn,
         "syscall".to_string(),
-        "=r,{rax},{rdi},{rsi},{rdx}".into(),
+        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11}".into(),
         true,
         false,
         None,
@@ -453,11 +453,15 @@ impl<'ctx> CodeGen<'ctx> {
 
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
-                            phi.add_incoming(&[
-                                (&valmap[&r1], blocks[usize::from(b1)]),
-                                (&valmap[&r2], blocks[usize::from(b2)]),
-                            ]);
-                            valmap.insert(r, phi.as_basic_value());
+                            if let Some(v1) = valmap.get(&r1).copied() {
+                                phi.add_incoming(&[(&v1, blocks[usize::from(b1)])]);
+                            }
+                            if let Some(v2) = valmap.get(&r2).copied() {
+                                phi.add_incoming(&[(&v2, blocks[usize::from(b2)])]);
+                            }
+                            if phi.count_incoming() > 0 {
+                                valmap.insert(r, phi.as_basic_value());
+                            }
                         }
                     }
                     I::Equals(r, a, b) => {
@@ -821,22 +825,13 @@ impl<'ctx> CodeGen<'ctx> {
                             Type::Aggregate(t) => t,
                             _ => panic!(),
                         };
-                        let n = ir.aggregates[t]
-                            .children
-                            .iter()
-                            .copied()
-                            .enumerate()
-                            .filter_map(|(i, t)| {
-                                if self.get_type(ir, t).is_void_type() {
-                                    None
-                                } else {
-                                    Some(i)
-                                }
-                            })
-                            .position(|i| i == n);
 
                         // get member
-                        if let Some(n) = n {
+                        if BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).is_ok() {
+                            let mut mem = [n];
+                            self.get_actual_indices(ir, &ir.aggregates[t].children, &mut mem);
+                            let n = mem[0];
+
                             let aggr = valmap[&a].into_struct_value();
 
                             let member = self
@@ -917,7 +912,15 @@ impl<'ctx> CodeGen<'ctx> {
                         if let Some(&v) = valmap.get(&h) {
                             let unraw = v.into_struct_value();
                             let mems = match ir.types[ir.regs[r]] {
-                                Type::RawHandler(_, ref mems) => mems,
+                                Type::RawHandler(handler, ref mems) => {
+                                    let mut idx = Vec::from(&**mems);
+                                    self.get_actual_indices(
+                                        ir,
+                                        &ir.handler_type[handler].captures,
+                                        &mut idx,
+                                    );
+                                    idx
+                                }
                                 _ => unreachable!(),
                             };
 
@@ -950,7 +953,15 @@ impl<'ctx> CodeGen<'ctx> {
                         if let Some(&v) = valmap.get(&h) {
                             let raw = v.into_struct_value();
                             let mems = match ir.types[ir.regs[h]] {
-                                Type::RawHandler(_, ref mems) => mems,
+                                Type::RawHandler(handler, ref mems) => {
+                                    let mut idx = Vec::from(&**mems);
+                                    self.get_actual_indices(
+                                        ir,
+                                        &ir.handler_type[handler].captures,
+                                        &mut idx,
+                                    );
+                                    idx
+                                }
                                 _ => unreachable!(),
                             };
 
@@ -1256,6 +1267,23 @@ impl<'ctx> CodeGen<'ctx> {
             }
         } else {
             (None, ret.try_as_basic_value().left())
+        }
+    }
+    fn get_actual_indices(&self, ir: &IR, mut ty: &[TypeIdx], idx: &mut [usize]) {
+        let mut offset = 0;
+        let mut mem = 0;
+        for idx in idx.iter_mut() {
+            let skip = *idx - offset;
+
+            for _ in 0..skip {
+                if BasicTypeEnum::try_from(self.get_type(ir, ty[0])).is_ok() {
+                    mem += 1;
+                }
+                ty = &ty[1..];
+            }
+
+            offset = *idx;
+            *idx = mem;
         }
     }
     fn get_type(&self, ir: &IR, ty: TypeIdx) -> AnyTypeEnum<'ctx> {

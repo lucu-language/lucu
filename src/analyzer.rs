@@ -488,13 +488,17 @@ fn analyze_expr(
                 }
 
                 // add captures
-                ctx.parsed
-                    .for_each(fun.body, &mut |expr| match ctx.parsed.exprs[expr].0 {
+                ctx.parsed.for_each(
+                    fun.body,
+                    true,
+                    true,
+                    &mut |expr| match ctx.parsed.exprs[expr].0 {
                         Expression::Ident(id) => {
                             capture_ident(ctx, scope, id, effect, &mut captures);
                         }
                         _ => {}
-                    });
+                    },
+                );
             }
 
             // get handler type
@@ -552,6 +556,10 @@ fn analyze_expr(
                 Some(expr) => analyze_expr(ctx, &mut child, expr, expected_type, errors),
                 None => TYPE_NONE,
             }
+        }
+        Expression::Loop(expr) => {
+            analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
+            TYPE_NEVER
         }
         Expression::Call(cexpr, ref exprs) => {
             // get function

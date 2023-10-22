@@ -108,18 +108,20 @@ impl Value {
             }
         }
     }
-    fn reference(&self, ir: &mut IRContext, val: Val, scope: &mut Scope, block: &mut Block) -> Reg {
+    fn reference(&self, ir: &mut IRContext, scope: &mut Scope, block: &mut Block) -> Reg {
         match *self {
-            Value::Value(reg, _) => {
+            Value::Value(reg, val) => {
                 let ty = ir.insert_type(Type::Pointer(self.get_type(&ir.ir)));
                 let ptr = ir.next_reg(ty);
                 block.instructions.push(Instruction::Reference(ptr, reg));
-                scope.insert(val, Value::Reference(ptr));
+                if let Some(val) = val {
+                    scope.insert(val, Value::Reference(ptr));
+                }
                 ptr
             }
-            Value::ValueIndex(reg, _, ref idx) => {
+            Value::ValueIndex(reg, val, ref idx) => {
                 let mut ty = ir.ir.regs[reg];
-                let mut ptr = Value::Value(reg, None).reference(ir, val, scope, block);
+                let mut ptr = Value::Value(reg, val).reference(ir, scope, block);
                 for idx in idx.iter().copied() {
                     ty = ty.inner(&ir.ir);
                     let inner_ty = ir.insert_type(Type::Pointer(ty));
@@ -423,8 +425,6 @@ pub enum Instruction {
     // aggregate types
     Aggregate(Reg, Vec<Reg>),
     Member(Reg, Reg, usize),
-
-    // arrays
     ElementPtr(Reg, Reg, Reg),
 }
 
@@ -1323,7 +1323,7 @@ fn generate_proc_sign(
 
     // create handlers
     let mut handler_defs = Vec::new();
-    ir.ctx.for_each_ignore_try(body, &mut |expr| {
+    ir.ctx.for_each(body, false, false, &mut |expr| {
         if let Expression::Handler(h) = &ir.ctx.exprs[expr].0 {
             // get break type
             let break_type = match ir.asys.types[ir.asys.exprs[expr]] {
@@ -1416,15 +1416,14 @@ fn handler_type(
                 .iter()
                 .copied()
                 .enumerate()
-                .filter_map(
-                    |(i, (_, _, reference))| {
-                        if reference {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    },
-                )
+                .filter_map(|(i, (val, _, reference))| {
+                    // it is a reference at was not given as a parameter
+                    if reference && !scope.contains_key(&val) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
                 .collect::<Rc<_>>();
             if mems.is_empty() {
                 ir.insert_type(Type::NakedHandler(handler_idx))
@@ -1504,7 +1503,7 @@ fn get_captures(
     exception: Option<Val>,
 ) -> Vec<(Val, Reg)> {
     let mut captures = Vec::new();
-    ir.ctx.for_each(expr, &mut |expr| {
+    ir.ctx.for_each(expr, true, false, &mut |expr| {
         if let Expression::Ident(i) = ir.ctx.exprs[expr].0 {
             let val = ir.asys.values[i];
 
@@ -1752,6 +1751,33 @@ fn generate_expr(
             }
         }
         E::Member(_, _) => todo!(),
+        E::Loop(expr) => {
+            let loop_init = blocks.push(BlockIdx, Block::default());
+            let loop_start = blocks.push(BlockIdx, Block::default());
+            let mut loop_end = loop_start;
+            let mut loop_ctx = ctx.child(expr);
+            let _ = generate_expr(ir, &mut loop_ctx, blocks, &mut loop_end, proc_todo);
+            blocks[*block].next = Some(loop_init);
+            blocks[loop_init].next = Some(loop_start);
+            blocks[loop_end].next = Some(loop_init);
+
+            // add phi instructions for changed values
+            for val in loop_ctx.scope.keys().copied() {
+                let Some(no) = ctx.scope.get(&val) else { continue };
+                let Some(yes) = loop_ctx.scope.get(&val) else { continue };
+                let no = no.value(ir, &mut blocks[*block]);
+                let yes = yes.value(ir, &mut blocks[loop_end]);
+                if no != yes {
+                    let reg = ir.copy_reg(no);
+                    blocks[loop_init]
+                        .instructions
+                        .push(Instruction::Phi(reg, [(yes, loop_end), (no, *block)]));
+                    ctx.scope.insert(val, Value::Value(reg, Some(val)));
+                }
+            }
+
+            Err(Never)
+        }
         E::IfElse(cond, yes, no) => {
             let cond = generate_expr(ir, ctx.with_expr(cond), blocks, block, proc_todo)?
                 .expect("condition has no value")
@@ -1874,13 +1900,8 @@ fn generate_expr(
                             Value::Value(incremented, val),
                         );
                     }
-                    Value::ValueIndex(_, val, _) => {
-                        let ptr = left.reference(
-                            ir,
-                            val.expect("left operand not tied to variable"),
-                            &mut ctx.scope,
-                            &mut blocks[*block],
-                        );
+                    Value::ValueIndex(_, _, _) => {
+                        let ptr = left.reference(ir, &mut ctx.scope, &mut blocks[*block]);
                         blocks[*block]
                             .instructions
                             .push(Instruction::Store(ptr, incremented));
@@ -1912,13 +1933,8 @@ fn generate_expr(
                             Value::Value(right, val),
                         );
                     }
-                    Value::ValueIndex(_, val, _) => {
-                        let ptr = left.reference(
-                            ir,
-                            val.expect("left operand not tied to variable"),
-                            &mut ctx.scope,
-                            &mut blocks[*block],
-                        );
+                    Value::ValueIndex(_, _, _) => {
+                        let ptr = left.reference(ir, &mut ctx.scope, &mut blocks[*block]);
                         blocks[*block]
                             .instructions
                             .push(Instruction::Store(ptr, right));
@@ -2024,7 +2040,7 @@ fn generate_expr(
                             .map(|c| {
                                 let reg = ir.get_in_scope(c.val, &ctx.scope);
                                 if c.mutable {
-                                    reg.reference(ir, c.val, &mut ctx.scope, &mut blocks[*block])
+                                    reg.reference(ir, &mut ctx.scope, &mut blocks[*block])
                                 } else {
                                     reg.value(ir, &mut blocks[*block])
                                 }

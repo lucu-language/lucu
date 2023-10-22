@@ -228,6 +228,6 @@ mod tests {
 
     #[test]
     fn arrays() {
-        test_file("strbuffer", "Hello\nworld\n")
+        test_file("strbuffer", "Hello\nworld\nworld\nHello\n")
     }
 }

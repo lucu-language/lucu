@@ -1,0 +1,64 @@
+# we define an effect for iterating over a string collection
+effect striter {
+	fun next() str
+}
+
+# we define an effect for interacting with a string buffer
+effect strbuf {
+	fun push(elem str) int
+	fun get(index int) str
+
+	# the iterator fails when next() is called if it is done
+	fun iter() striter fails
+}
+
+# implementation of these effects using a constant sized string array
+fun array_buffer() strbuf {
+	mut array [255]str = ---
+	mut size  int      = 0
+	handle strbuf {
+		fun push(elem str) int {
+			array[size] = elem
+			size++
+		}
+		fun get(index int) str {
+			array[index]
+		}
+		fun iter() striter fails {
+			mut current = 0
+			handle striter fails {
+				fun next() str {
+					if current < size {
+						array[current++]
+					} else {
+						fail
+					}
+				}
+			}
+		}
+	}
+}
+
+# example of using a string buffer
+# the internal 'debug' effect contains the 'putstr' function
+fun main() / debug {
+
+	# a 'with' block puts the effect handler in scope
+	# which allows us to use the defined effect functions
+	with array_buffer() {
+
+		# we push some elements
+		push("Hello")
+		push("world")
+
+		# a 'with loop' block is the same as a regular 'with',
+		# but it loops until it gets a failure
+		# this way we can iterate over all pushed elements and print them
+		with iter() loop {
+			putstr(next())
+			putstr("\n")
+		}
+
+	}
+
+}

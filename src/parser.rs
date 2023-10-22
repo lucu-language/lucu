@@ -831,7 +831,12 @@ impl Parse for Expression {
 
                 let return_type = Option::<TypeIdx>::parse_or_default(tk).0;
 
-                let body = Body::parse_or_default(tk);
+                // allow for try-loop
+                let body = if tk.peek_check(Token::Loop) {
+                    Expression::parse_or_default(tk)
+                } else {
+                    Body::parse_or_default(tk)
+                };
 
                 let handler = if tk.check(Token::With).is_some() {
                     let handler = Handler::parse_or_skip(tk)?;
@@ -855,7 +860,12 @@ impl Parse for Expression {
                 let handler = Expression::parse_or_skip(tk)?;
                 let handler = tk.push_expr(handler);
 
-                let body = Body::parse_or_default(tk);
+                // allow for with-loop
+                let body = if tk.peek_check(Token::Loop) {
+                    Expression::parse_or_default(tk)
+                } else {
+                    Body::parse_or_default(tk)
+                };
 
                 Some(Expression::TryWith(tk.push_expr(body), None, Some(handler)))
             }

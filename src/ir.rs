@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Display},
     rc::Rc,
     write,
@@ -389,7 +389,7 @@ pub enum Instruction {
 
     // conditionals
     Branch(Reg, BlockIdx, BlockIdx),
-    Phi(Reg, [(Reg, BlockIdx); 2]),
+    Phi(Reg, Vec<(Reg, BlockIdx)>),
 
     // operations (r0 = r1 op r2)
     Equals(Reg, Reg, Reg),
@@ -467,8 +467,6 @@ pub struct HandlerType {
     pub break_ty: TypeIdx,
 }
 
-type Scope = HashMap<Val, Value>;
-
 struct IRContext<'a> {
     ir: IR,
 
@@ -494,7 +492,7 @@ impl<'a> IRContext<'a> {
         self.ir.types.insert(TypeIdx, ty).clone()
     }
     fn get_in_scope(&mut self, val: Val, scope: &Scope) -> Value {
-        match scope.get(&val) {
+        match scope.get(val) {
             Some(r) => r.clone(),
             None => {
                 let idx = self.implied_handlers[&val];
@@ -517,7 +515,7 @@ impl<'a> IRContext<'a> {
                 Some(analyzer::HandlerDef::Handler(_, captures)) => captures
                     .iter()
                     .map(|c| {
-                        let ty = match scope.get(&c.val) {
+                        let ty = match scope.get(c.val) {
                             Some(reg) => reg.get_type(&self.ir),
                             None => TypeIdx::from_val(self, c.val),
                         };
@@ -616,9 +614,15 @@ impl Display for IR {
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
                         }
-                        Instruction::Phi(r, [(r1, b1), (r2, b2)]) => {
-                            writeln!(f, "{} <- phi [ {}, {} ], [ {}, {} ]", r, r1, b1, r2, b2,)?
-                        }
+                        Instruction::Phi(r, ref v) => writeln!(
+                            f,
+                            "{} <- phi {}",
+                            r,
+                            v.iter()
+                                .map(|(r, b)| format!("[ {}, {} ]", r, b))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )?,
                         Instruction::Equals(out, left, right) => {
                             writeln!(f, "{} <- {} == {}", out, left, right)?
                         }
@@ -731,26 +735,62 @@ const TYPE_BOOL: TypeIdx = TypeIdx(7);
 
 pub const STR_SLICE: AggrIdx = AggrIdx(0);
 
-#[derive(Debug, Clone)]
-struct ProcCtx {
+#[derive(Debug, Default)]
+struct Scope<'a> {
+    parent: Option<&'a Scope<'a>>,
+    values: HashMap<Val, Value>,
+}
+
+impl<'a> Scope<'a> {
+    fn insert(&mut self, k: Val, v: Value) {
+        self.values.insert(k, v);
+    }
+    fn get(&self, k: Val) -> Option<&Value> {
+        match self.values.get(&k) {
+            Some(v) => Some(v),
+            None => self.parent.map(|p| p.get(k)).unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProcCtx<'a> {
     proc_idx: ProcIdx,
     expr: ExprIdx,
     inside_handler: Option<HandlerIdx>,
-    scope: Scope,
+    scope: Scope<'a>,
     handler_defs: Rc<[(ExprIdx, HandlerIdx)]>,
 }
-impl ProcCtx {
+
+impl<'a> ProcCtx<'a> {
     fn with_expr(&mut self, expr: ExprIdx) -> &mut Self {
         self.expr = expr;
         self
     }
-    fn child(&self, expr: ExprIdx) -> Self {
-        let mut clone = self.clone();
-        clone.expr = expr;
-        clone
+    fn child<T>(
+        &'a self,
+        expr: ExprIdx,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (HashMap<Val, Value>, T) {
+        let mut child = Self {
+            proc_idx: self.proc_idx,
+            expr,
+            inside_handler: self.inside_handler,
+            scope: Scope {
+                parent: Some(&self.scope),
+                values: HashMap::new(),
+            },
+            handler_defs: self.handler_defs.clone(),
+        };
+
+        let t = f(&mut child);
+
+        let mut values = child.scope.values;
+        values.retain(|k, _| self.scope.values.contains_key(k));
+        (values, t)
     }
 }
-type ProcTodo = Vec<ProcCtx>;
+type ProcTodo = Vec<ProcCtx<'static>>;
 
 pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
     let mut ir = IRContext {
@@ -898,7 +938,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
         let eff_ident = ast_handler.effect;
         let eff_val = ir.asys.values[eff_ident];
 
-        let handler_idx = ir.new_handler(eff_val, false, break_type, expr, &HashMap::new());
+        let handler_idx = ir.new_handler(eff_val, false, break_type, expr, &Scope::default());
 
         // add handler to implied
         ir.implied_handlers.insert(eff_val, handler_idx);
@@ -1033,12 +1073,13 @@ fn get_proc(
             };
 
             if let Some(reg_args) = reg_args {
-                reg_args.extend(
-                    procident
-                        .handlers
-                        .iter()
-                        .filter_map(|&idx| scope[&ir.handlers[idx].effect].non_global().cloned()),
-                );
+                reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
+                    scope
+                        .get(ir.handlers[idx].effect)
+                        .unwrap()
+                        .non_global()
+                        .cloned()
+                }));
             }
 
             // get proc
@@ -1156,12 +1197,13 @@ fn get_handler_proc(
     };
 
     if let Some(reg_args) = reg_args {
-        reg_args.extend(
-            procident
-                .handlers
-                .iter()
-                .filter_map(|&idx| scope[&ir.handlers[idx].effect].non_global().cloned()),
-        );
+        reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
+            scope
+                .get(ir.handlers[idx].effect)
+                .unwrap()
+                .non_global()
+                .cloned()
+        }));
     }
 
     // get proc
@@ -1255,7 +1297,7 @@ fn generate_proc_sign(
 ) -> ProcIdx {
     // get inputs
     let mut inputs = Vec::new();
-    let mut scope = Scope::new();
+    let mut scope = Scope::default();
     for (val, ty) in params.iter().copied() {
         let reg = ir.next_reg(ty);
         scope.insert(val, Value::Value(reg, Some(val)));
@@ -1382,7 +1424,10 @@ fn generate_proc_sign(
         proc_idx,
         expr: body,
         inside_handler,
-        scope: scope.clone(),
+        scope: Scope {
+            parent: None,
+            values: scope.values.clone(),
+        },
         handler_defs: Rc::clone(&handler_defs),
     });
 
@@ -1418,7 +1463,7 @@ fn handler_type(
                 .enumerate()
                 .filter_map(|(i, (val, _, reference))| {
                     // it is a reference at was not given as a parameter
-                    if reference && !scope.contains_key(&val) {
+                    if reference && scope.get(val).is_none() {
                         Some(i)
                     } else {
                         None
@@ -1568,7 +1613,7 @@ fn get_captures(
 
             // capture vals
             for val in vals {
-                if let Some(e) = scope.get(&val) {
+                if let Some(e) = scope.get(val) {
                     if !captures.iter().any(|&(v, _)| v == val) {
                         let reg = e.value(ir, block);
                         captures.push((val, reg));
@@ -1755,26 +1800,32 @@ fn generate_expr(
             let loop_init = blocks.push(BlockIdx, Block::default());
             let loop_start = blocks.push(BlockIdx, Block::default());
             let mut loop_end = loop_start;
-            let mut loop_ctx = ctx.child(expr);
-            let _ = generate_expr(ir, &mut loop_ctx, blocks, &mut loop_end, proc_todo);
+
+            let (loop_changed, _) = ctx.child(expr, |child| {
+                generate_expr(ir, child, blocks, &mut loop_end, proc_todo)
+            });
+
             blocks[*block].next = Some(loop_init);
             blocks[loop_init].next = Some(loop_start);
             blocks[loop_end].next = Some(loop_init);
 
             // add phi instructions for changed values
-            for val in loop_ctx.scope.keys().copied() {
-                let Some(no) = ctx.scope.get(&val) else { continue };
-                let Some(yes) = loop_ctx.scope.get(&val) else { continue };
-                let no = no.value(ir, &mut blocks[*block]);
-                let yes = yes.value(ir, &mut blocks[loop_end]);
-                if no != yes {
-                    let reg = ir.copy_reg(no);
-                    blocks[loop_init]
-                        .instructions
-                        .push(Instruction::Phi(reg, [(yes, loop_end), (no, *block)]));
-                    ctx.scope.insert(val, Value::Value(reg, Some(val)));
-                }
-            }
+            generate_phi(
+                ir,
+                blocks,
+                loop_init,
+                &mut ctx.scope,
+                &[
+                    Path {
+                        changed: loop_changed,
+                        block_end: loop_end,
+                    },
+                    Path {
+                        changed: HashMap::new(),
+                        block_end: *block,
+                    },
+                ],
+            );
 
             Err(Never)
         }
@@ -1788,8 +1839,9 @@ fn generate_expr(
                     let no_start = blocks.push(BlockIdx, Block::default());
 
                     let mut no_end = no_start;
-                    let mut no_ctx = ctx.child(no);
-                    let no_reg = generate_expr(ir, &mut no_ctx, blocks, &mut no_end, proc_todo);
+                    let (no_changed, no_reg) = ctx.child(no, |child| {
+                        generate_expr(ir, child, blocks, &mut no_end, proc_todo)
+                    });
 
                     let yes_start = blocks.push(BlockIdx, Block::default());
 
@@ -1798,30 +1850,34 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, no_start));
 
                     let mut yes_end = yes_start;
-                    let mut yes_ctx = ctx.child(yes);
-                    let yes_reg = generate_expr(ir, &mut yes_ctx, blocks, &mut yes_end, proc_todo);
+                    let (yes_changed, yes_reg) = ctx.child(yes, |child| {
+                        generate_expr(ir, child, blocks, &mut yes_end, proc_todo)
+                    });
 
                     let end = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block].next = Some(no_start);
                     blocks[yes_end].next = Some(end);
                     blocks[no_end].next = Some(end);
-                    *block = end;
 
                     // add phi instructions for changed values
-                    for val in yes_ctx.scope.keys().copied() {
-                        let Some(no) = no_ctx.scope.get(&val) else { continue };
-                        let Some(yes) = yes_ctx.scope.get(&val) else { continue };
-                        let no = no.value(ir, &mut blocks[no_end]);
-                        let yes = yes.value(ir, &mut blocks[yes_end]);
-                        if no != yes {
-                            let reg = ir.copy_reg(no);
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::Phi(reg, [(yes, yes_end), (no, no_end)]));
-                            ctx.scope.insert(val, Value::Value(reg, Some(val)));
-                        }
-                    }
+                    generate_phi(
+                        ir,
+                        blocks,
+                        end,
+                        &mut ctx.scope,
+                        &[
+                            Path {
+                                changed: yes_changed,
+                                block_end: yes_end,
+                            },
+                            Path {
+                                changed: no_changed,
+                                block_end: no_end,
+                            },
+                        ],
+                    );
+                    *block = end;
 
                     match (yes_reg, no_reg) {
                         (Ok(Some(yes)), Ok(Some(no))) => {
@@ -1829,9 +1885,10 @@ fn generate_expr(
                             let no = no.value(ir, &mut blocks[no_end]);
                             if ir.ir.regs[yes] == ir.ir.regs[no] {
                                 let out = ir.copy_reg(yes);
-                                blocks[*block]
-                                    .instructions
-                                    .push(Instruction::Phi(out, [(yes, yes_end), (no, no_end)]));
+                                blocks[*block].instructions.push(Instruction::Phi(
+                                    out,
+                                    vec![(yes, yes_end), (no, no_end)],
+                                ));
                                 Ok(Some(Value::Value(out, None)))
                             } else {
                                 Ok(None)
@@ -1845,8 +1902,6 @@ fn generate_expr(
                 }
                 None => {
                     let yes_start = blocks.push(BlockIdx, Block::default());
-
-                    let no_end = *block;
                     let end = blocks.push(BlockIdx, Block::default());
 
                     blocks[*block]
@@ -1854,27 +1909,31 @@ fn generate_expr(
                         .push(Instruction::Branch(cond, yes_start, end));
 
                     let mut yes_end = yes_start;
-                    let mut yes_ctx = ctx.child(yes);
-                    let _ = generate_expr(ir, &mut yes_ctx, blocks, &mut yes_end, proc_todo);
+                    let (yes_changed, _) = ctx.child(yes, |child| {
+                        generate_expr(ir, child, blocks, &mut yes_end, proc_todo)
+                    });
 
                     blocks[*block].next = Some(end);
                     blocks[yes_end].next = Some(end);
-                    *block = end;
 
                     // add phi instructions for changed values
-                    for val in yes_ctx.scope.keys().copied() {
-                        let Some(no) = ctx.scope.get(&val) else { continue };
-                        let Some(yes) = yes_ctx.scope.get(&val) else { continue };
-                        let no = no.value(ir, &mut blocks[end]);
-                        let yes = yes.value(ir, &mut blocks[yes_end]);
-                        if no != yes {
-                            let reg = ir.copy_reg(no);
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::Phi(reg, [(yes, yes_end), (no, no_end)]));
-                            ctx.scope.insert(val, Value::Value(reg, Some(val)));
-                        }
-                    }
+                    generate_phi(
+                        ir,
+                        blocks,
+                        end,
+                        &mut ctx.scope,
+                        &[
+                            Path {
+                                changed: yes_changed,
+                                block_end: yes_end,
+                            },
+                            Path {
+                                changed: HashMap::new(),
+                                block_end: *block,
+                            },
+                        ],
+                    );
+                    *block = end;
 
                     Ok(None)
                 }
@@ -2256,5 +2315,53 @@ fn generate_expr(
             Ok(Some(Value::Value(reg, None)))
         }
         E::Error => unreachable!(),
+    }
+}
+
+struct Path {
+    changed: HashMap<Val, Value>,
+    block_end: BlockIdx,
+}
+
+fn generate_phi(
+    ir: &mut IRContext,
+    blocks: &mut VecMap<BlockIdx, Block>,
+    block: BlockIdx,
+    scope: &mut Scope,
+    paths: &[Path],
+) {
+    let mut keys = HashSet::<Val>::new();
+    for path in paths.iter() {
+        keys.extend(path.changed.keys());
+    }
+
+    for val in keys.into_iter() {
+        let values = paths
+            .iter()
+            .map(|path| match path.changed.get(&val) {
+                Some(v) => (v, path.block_end),
+                None => (scope.get(val).unwrap(), block),
+            })
+            .collect::<Vec<_>>();
+
+        if values.iter().all(|(v, _)| matches!(v, Value::Value(_, _))) {
+            let regs = values
+                .into_iter()
+                .map(|(v, e)| v.value(ir, &mut blocks[e]))
+                .zip(paths.iter().map(|p| p.block_end))
+                .collect::<Vec<_>>();
+            let new = ir.copy_reg(regs[0].0);
+            blocks[block].instructions.push(Instruction::Phi(new, regs));
+            scope.insert(val, Value::Value(new, Some(val)))
+        } else {
+            let regs = values
+                .into_iter()
+                .map(|(v, e)| v.reference(ir, &mut Scope::default(), &mut blocks[e]))
+                .zip(paths.iter().map(|p| p.block_end))
+                .collect::<Vec<_>>();
+            let new = ir.copy_reg(regs[0].0);
+            blocks[block].instructions.push(Instruction::Phi(new, regs));
+            scope.insert(val, Value::Reference(new))
+        }
     }
 }

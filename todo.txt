@@ -2,12 +2,16 @@ typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls
 - handler function must match signature
+- functions that return handlers must not be (mutually) recursive
+- functions must not be (mutually) recursive through try blocks
 
 parser todo:
 - operator precedence
 
-ir todo:
-- better phi generation
+todo:
+- packages
+- prelude
+- separate generation code from data types
 
 would be nice:
 - tokenizer matches brackets

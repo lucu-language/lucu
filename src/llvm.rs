@@ -448,16 +448,15 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap();
                         continue 'outer;
                     }
-                    I::Phi(r, [(r1, b1), (r2, b2)]) => {
+                    I::Phi(r, ref v) => {
                         let typ = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).ok();
 
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
-                            if let Some(v1) = valmap.get(&r1).copied() {
-                                phi.add_incoming(&[(&v1, blocks[usize::from(b1)])]);
-                            }
-                            if let Some(v2) = valmap.get(&r2).copied() {
-                                phi.add_incoming(&[(&v2, blocks[usize::from(b2)])]);
+                            for (r, b) in v.iter().copied() {
+                                if let Some(v) = valmap.get(&r).copied() {
+                                    phi.add_incoming(&[(&v, blocks[usize::from(b)])]);
+                                }
                             }
                             if phi.count_incoming() > 0 {
                                 valmap.insert(r, phi.as_basic_value());

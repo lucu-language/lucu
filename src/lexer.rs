@@ -17,6 +17,7 @@ pub enum Token {
     Let,
     Mut,
     Loop,
+    Import,
 
     // Symbols
     Semicolon,
@@ -65,6 +66,7 @@ impl fmt::Display for Token {
                 Token::Let => "'let'".into(),
                 Token::Mut => "'mut'".into(),
                 Token::Loop => "'loop'".into(),
+                Token::Import => "'import'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
                 Token::Slash => "'/'".into(),
@@ -376,6 +378,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "let" => Token::Let,
                     "mut" => Token::Mut,
                     "loop" => Token::Loop,
+                    "import" => Token::Import,
                     _ => Token::Ident(word),
                 }
             }

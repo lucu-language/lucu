@@ -2,11 +2,14 @@
 
 extern crate test;
 
-use std::{env, fs::read_to_string, path::Path, print, println, process::Command};
+use std::{
+    collections::HashMap, env, fs::read_to_string, path::Path, print, println, process::Command,
+};
 
-use error::{File, FileIdx};
-use parser::Parsed;
-use vecmap::VecMap;
+use analyzer::{analyze, Analysis};
+use error::{Errors, File, FileIdx};
+use lexer::Tokenizer;
+use parser::{parse_ast, Parsed};
 
 use crate::{error::Ranged, lexer::Token};
 
@@ -18,29 +21,46 @@ mod llvm;
 mod parser;
 mod vecmap;
 
-fn main() {
-    let mut errors = error::Errors::new();
+fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, Analysis), Errors> {
+    let mut parsed = Parsed::default();
+    let mut errors = Errors::new();
 
+    let preamble = core_path.join("preamble.lucu");
+    let mut files_todo = vec![
+        (main_file.to_path_buf(), parsed.main),
+        (preamble, parsed.core),
+    ];
+
+    let mut libs = HashMap::new();
+    libs.insert("core", core_path);
+
+    while let Some((path, pkg)) = files_todo.pop() {
+        let content = std::fs::read_to_string(&path).unwrap();
+        let idx = errors.files.push(
+            FileIdx,
+            File {
+                content: content.clone(),
+                name: path.to_string_lossy().into_owned(),
+            },
+        );
+        let tok = Tokenizer::new(&content, idx, &mut errors);
+        parse_ast(tok, pkg, &mut parsed, &path, &libs, &mut files_todo);
+    }
+
+    let asys = analyze(&parsed, &mut errors);
+
+    if errors.is_empty() {
+        Ok((parsed, asys))
+    } else {
+        Err(errors)
+    }
+}
+
+fn main() {
     let debug = true;
+    let color = true;
     let args: Vec<String> = env::args().collect();
     let file = read_to_string(args[1].clone()).unwrap().replace('\t', "  ");
-
-    let mut files = VecMap::new();
-    let preamble = read_to_string("core/preamble.lucu").unwrap();
-    let core = files.push(
-        FileIdx,
-        File {
-            content: &preamble,
-            name: "preamble.lucu",
-        },
-    );
-    let main = files.push(
-        FileIdx,
-        File {
-            content: &file,
-            name: &args[1],
-        },
-    );
 
     if debug {
         // print extra semicolons
@@ -48,7 +68,7 @@ fn main() {
 
         let mut chars = file.chars().enumerate().peekable();
 
-        for tok in lexer::Tokenizer::new(file.as_str(), main, &mut error::Errors::new()) {
+        for tok in lexer::Tokenizer::new(file.as_str(), FileIdx(0), &mut error::Errors::new()) {
             let start = tok.1;
 
             // print until start
@@ -73,89 +93,79 @@ fn main() {
     }
 
     // analyze
+    match parse_from_filename(Path::new(&args[1]), Path::new("core")) {
+        Ok((parsed, asys)) => {
+            if debug {
+                // visualize idents
+                println!("\n--- SCOPE ANALYSIS ---");
 
-    let mut parsed = Parsed::default();
+                let mut idents = asys
+                    .values
+                    .values()
+                    .zip(parsed.idents.values())
+                    .collect::<Vec<_>>();
+                idents.sort_by_key(|(_, range)| range.1);
 
-    let tokenizer = lexer::Tokenizer::new(&file, main, &mut errors);
-    parser::parse_ast(tokenizer, parsed.main, &mut parsed);
-    let tokenizer = lexer::Tokenizer::new(&preamble, core, &mut errors);
-    parser::parse_ast(tokenizer, parsed.core, &mut parsed);
+                let mut chars = file.chars().enumerate();
+                let mut idents = idents.into_iter().peekable();
 
-    let asys = analyzer::analyze(&parsed, &mut errors);
+                while let Some((i, char)) = chars.next() {
+                    if let Some(id) = idents.peek().filter(|id| id.1 .1 == i) {
+                        // background!
+                        let mut bg = 100;
 
-    if debug {
-        // visualize idents
-        println!("\n--- SCOPE ANALYSIS ---");
+                        let num = usize::from(*id.0);
+                        if num != usize::MAX {
+                            bg = 41 + (num % 14);
 
-        let mut idents = asys
-            .values
-            .values()
-            .zip(parsed.idents.values())
-            .collect::<Vec<_>>();
-        idents.sort_by_key(|(_, range)| range.1);
-
-        let mut chars = file.chars().enumerate();
-        let mut idents = idents.into_iter().peekable();
-
-        while let Some((i, char)) = chars.next() {
-            if let Some(id) = idents.peek().filter(|id| id.1 .1 == i) {
-                // background!
-                let mut bg = 100;
-
-                let num = usize::from(*id.0);
-                if num != usize::MAX {
-                    bg = 41 + (num % 14);
-
-                    if bg >= 48 {
-                        bg = 101 + (bg - 48)
-                    }
-                }
-
-                print!("\x1b[{};30m{} {}", bg, num, char);
-
-                if id.1 .2 != i + 1 {
-                    while let Some((i, char)) = chars.next() {
-                        print!("{}", char);
-                        if id.1 .2 == i + 1 {
-                            break;
+                            if bg >= 48 {
+                                bg = 101 + (bg - 48)
+                            }
                         }
+
+                        print!("\x1b[{};30m{} {}", bg, num, char);
+
+                        if id.1 .2 != i + 1 {
+                            while let Some((i, char)) = chars.next() {
+                                print!("{}", char);
+                                if id.1 .2 == i + 1 {
+                                    break;
+                                }
+                            }
+                        }
+
+                        print!("\x1b[0m");
+                        idents.next();
+                    } else {
+                        print!("{}", char);
                     }
                 }
-
-                print!("\x1b[0m");
-                idents.next();
-            } else {
-                print!("{}", char);
+                println!();
             }
+
+            // generate ir
+            let ir = ir::generate_ir(&parsed, &asys);
+            if debug {
+                println!("\n--- IR ---");
+                println!("{}", ir);
+                println!("\n--- LLVM ---");
+            }
+
+            // generate llvm
+            llvm::generate_ir(&ir, &Path::new("out.o"), debug);
+
+            // output
+            if debug {
+                println!("\n--- OUTPUT ---");
+            }
+
+            Command::new("./link.sh").arg("out").status().unwrap();
+            Command::new("./out").status().unwrap();
         }
-        println!();
+        Err(errors) => {
+            errors.print(color);
+        }
     }
-
-    // print errors
-    if !errors.is_empty() {
-        println!();
-        errors.print(&files, true);
-        return;
-    }
-
-    // generate ir
-    let ir = ir::generate_ir(&parsed, &asys);
-    if debug {
-        println!("\n--- IR ---");
-        println!("{}", ir);
-        println!("\n--- LLVM ---");
-    }
-
-    // generate llvm
-    llvm::generate_ir(&ir, &Path::new("out.o"), debug);
-
-    // output
-    if debug {
-        println!("\n--- OUTPUT ---");
-    }
-
-    Command::new("./link.sh").arg("out").status().unwrap();
-    Command::new("./out").status().unwrap();
 }
 
 #[cfg(test)]
@@ -165,49 +175,21 @@ mod tests {
     use super::*;
 
     fn execute(filename: &str, output: &str) -> String {
-        let file = read_to_string(filename).unwrap().replace('\t', "  ");
+        match parse_from_filename(Path::new(filename), Path::new("core")) {
+            Ok((parsed, asys)) => {
+                let ir = ir::generate_ir(&parsed, &asys);
+                llvm::generate_ir(&ir, &Path::new(&format!("{}.o", output)), false);
 
-        let mut errors = error::Errors::new();
+                Command::new("./link.sh").arg(output).status().unwrap();
 
-        let mut files = VecMap::new();
-        let preamble = read_to_string("core/preamble.lucu").unwrap();
-        let core = files.push(
-            FileIdx,
-            File {
-                content: &preamble,
-                name: "preamble.lucu",
-            },
-        );
-        let main = files.push(
-            FileIdx,
-            File {
-                content: &file,
-                name: filename,
-            },
-        );
-
-        let mut parsed = Parsed::default();
-
-        let tokenizer = lexer::Tokenizer::new(&file, main, &mut errors);
-        parser::parse_ast(tokenizer, parsed.main, &mut parsed);
-        let tokenizer = lexer::Tokenizer::new(&preamble, core, &mut errors);
-        parser::parse_ast(tokenizer, parsed.core, &mut parsed);
-
-        let asys = analyzer::analyze(&parsed, &mut errors);
-
-        if !errors.is_empty() {
-            println!();
-            errors.print(&files, true);
-            return "[ERROR]".into();
+                let vec = Command::new(output).output().unwrap().stdout;
+                String::from_utf8(vec).unwrap()
+            }
+            Err(errors) => {
+                errors.print(false);
+                String::from("[ERROR]")
+            }
         }
-
-        let ir = ir::generate_ir(&parsed, &asys);
-        llvm::generate_ir(&ir, &Path::new(&format!("{}.o", output)), false);
-
-        Command::new("./link.sh").arg(output).status().unwrap();
-
-        let vec = Command::new(output).output().unwrap().stdout;
-        String::from_utf8(vec).unwrap()
     }
 
     fn test_file(filename: &str, expected: &str) {
@@ -226,8 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn factorial() {
-        test_file("factorial", "12\n479001600\n")
+    fn imports() {
+        test_file("factorial", "12\n479001600\n144\n")
     }
 
     #[test]

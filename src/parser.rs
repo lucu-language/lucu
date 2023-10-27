@@ -1,4 +1,9 @@
-use std::matches;
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    matches,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     error::{Error, Expected, Range, Ranged},
@@ -148,7 +153,7 @@ pub struct Package {
     pub effects: Vec<EffIdx>,
     pub implied: Vec<ExprIdx>,
     pub functions: Vec<FunIdx>,
-    pub children: Vec<PackageIdx>,
+    pub imports: HashMap<String, PackageIdx>,
 }
 
 pub struct Parsed {
@@ -397,6 +402,22 @@ impl<'a> Tokens<'a> {
         self.iter.errors.push(err);
         None
     }
+    fn string(&mut self) -> Option<Ranged<String>> {
+        let err = match self.next() {
+            Some(Ranged(Token::String(s), start, end, _)) => {
+                return Some(Ranged(s, start, end, self.iter.file))
+            }
+            Some(t) => t.with(Error::Unexpected(Expected::String)),
+            None => Ranged(
+                Error::Unexpected(Expected::String),
+                usize::MAX,
+                usize::MAX,
+                self.iter.file,
+            ),
+        };
+        self.iter.errors.push(err);
+        None
+    }
     fn int(&mut self) -> Option<Ranged<i128>> {
         let err = match self.next() {
             Some(Ranged(Token::Int(s), start, end, _)) => {
@@ -554,7 +575,14 @@ trait ParseDefault: Parse + Default {
 
 impl<T> ParseDefault for T where T: Parse + Default {}
 
-pub fn parse_ast<'a>(tk: Tokenizer<'a>, idx: PackageIdx, parsed: &'a mut Parsed) {
+pub fn parse_ast<'a>(
+    tk: Tokenizer<'a>,
+    idx: PackageIdx,
+    parsed: &'a mut Parsed,
+    file_path: &Path,
+    lib_paths: &HashMap<&str, &Path>,
+    todo_packages: &mut Vec<(PathBuf, PackageIdx)>,
+) {
     let mut tk = Tokens {
         iter: tk,
         peeked: None,
@@ -565,6 +593,76 @@ pub fn parse_ast<'a>(tk: Tokenizer<'a>, idx: PackageIdx, parsed: &'a mut Parsed)
     // parse ast
     loop {
         match tk.peek() {
+            // import
+            Some(Ranged(Token::Import, ..)) => {
+                tk.next();
+                if let Some(string) = tk.string() {
+                    // parse path
+                    let split = string.0.split(":").collect::<Vec<_>>();
+                    let (lib, path) = match split.len() {
+                        1 => (None, split[0]),
+                        2 => (Some(split[0]), split[1]),
+                        _ => {
+                            // TODO: error
+                            panic!();
+                        }
+                    };
+
+                    if path.is_empty() {
+                        // TODO: error
+                        panic!();
+                    }
+
+                    // get dir path
+                    let path = match lib {
+                        Some(lib) => match lib_paths.get(lib) {
+                            Some(root) => root.join(&path),
+                            None => {
+                                // TODO: error
+                                panic!();
+                            }
+                        },
+                        None => file_path.join(path),
+                    };
+
+                    // get or create package
+                    let existing = todo_packages.iter().find(|(other, _)| other.eq(&path));
+                    let pkg = match existing {
+                        Some(&(_, pkg)) => pkg,
+                        None => {
+                            let pkg = tk.context.packages.push(PackageIdx, Package::default());
+                            match std::fs::read_dir(&path) {
+                                Ok(files) => {
+                                    let iter = files.filter_map(|entry| {
+                                        // get lucu files
+                                        let path = entry.ok()?.path();
+                                        if path.extension() == Some(OsStr::new("lucu")) {
+                                            Some(path)
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    for path in iter {
+                                        todo_packages.push((path, pkg));
+                                    }
+                                }
+                                Err(_) => {
+                                    // TODO: error
+                                    panic!();
+                                }
+                            }
+                            pkg
+                        }
+                    };
+
+                    // add to import list
+                    tk.context.packages[idx].imports.insert(
+                        path.file_name().unwrap().to_string_lossy().into_owned(),
+                        pkg,
+                    );
+                }
+            }
+
             // effect
             Some(Ranged(Token::Effect, ..)) => {
                 if let Some(Ranged(effect, ..)) = Effect::parse_or_skip(&mut tk) {

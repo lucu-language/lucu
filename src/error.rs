@@ -68,6 +68,7 @@ pub enum Expected {
     Identifier,
     Definition,
     Expression,
+    String,
     Type,
 }
 
@@ -92,6 +93,7 @@ impl Error {
 }
 
 pub struct Errors {
+    pub files: VecMap<FileIdx, File>,
     vec: Vec<Ranged<Error>>,
 }
 
@@ -340,14 +342,17 @@ fn print_error(file: &str, filename: &str, highlights: &[Highlight], color: bool
     }
 }
 
-pub struct File<'a> {
-    pub content: &'a str,
-    pub name: &'a str,
+pub struct File {
+    pub content: String,
+    pub name: String,
 }
 
 impl Errors {
     pub fn new() -> Self {
-        Self { vec: Vec::new() }
+        Self {
+            vec: Vec::new(),
+            files: VecMap::new(),
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.vec.is_empty()
@@ -355,7 +360,9 @@ impl Errors {
     pub fn push(&mut self, e: Ranged<Error>) {
         self.vec.push(e);
     }
-    pub fn print(mut self, files: &VecMap<FileIdx, File>, color: bool) {
+    pub fn print(mut self, color: bool) {
+        let files = &self.files;
+
         // stable sort as the ranges may start with the same position
         self.vec.sort_by_key(|r| r.1);
 
@@ -390,6 +397,7 @@ impl Errors {
                             Expected::Definition => "effect or function definition".into(),
                             Expected::Expression => "expression".into(),
                             Expected::Type => "type".into(),
+                            Expected::String => "string literal".into(),
                         }
                     ),
                     Error::UnclosedGroup(_) =>

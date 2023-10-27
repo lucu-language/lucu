@@ -1,13 +1,7 @@
-fun factorial(n int) int {
-	mut return = 1
-	if n > 1 {
-		let previous = factorial(n - 1)
-		return = previous * n
-	}
-	return
-}
+import "core:math"
 
 fun main() / debug {
 	putint(12)
-	putint(factorial(12))
+	putint(math.factorial(12))
+	putint(math.fibonacci(12))
 }

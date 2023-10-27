@@ -253,6 +253,7 @@ impl TypeIdx {
                 ir.insert_type(Type::ConstArray(size, inner))
             }
             T::FunctionLiteral(_) => todo!(),
+            T::PackageLiteral(_) => todo!(),
 
             // Supposed to be handled on a case-by-case basis
             T::Handler(_, _, _) => unreachable!(),
@@ -1631,90 +1632,138 @@ fn generate_expr(
             let res = match ir.parsed.exprs[func].0 {
                 E::Member(handler, id) => {
                     let val = ir.asys.values[id];
-
-                    // get handler
-                    let handler_reg =
-                        generate_expr(ir, ctx.with_expr(handler), blocks, block, proc_todo)?
-                            .expect("member parent does not return a value");
-
-                    let ty = &ir.ir.types[handler_reg.get_type(&ir.ir)];
-                    match ty {
-                        &Type::NakedHandler(handler_idx) | &Type::Handler(handler_idx) => {
-                            // add naked handler to handled
-                            if matches!(ty, Type::NakedHandler(_)) {
-                                let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
-                                if !proc.handled.contains(&handler_idx) {
-                                    proc.handled.push(handler_idx);
-                                }
-                            }
-
-                            let handler = &ir.handlers[handler_idx];
-                            let global = handler.global;
-
-                            // get output
-                            let eff_fun_idx = match ir.asys.defs[val] {
-                                Definition::EffectFunction(_, eff_fun_idx, _) => eff_fun_idx,
-                                _ => panic!(),
-                            };
-                            let proc_idx = get_handler_proc(
+                    match ir.asys.types[ir.asys.exprs[handler]] {
+                        analyzer::Type::PackageLiteral(_) => {
+                            // function of package
+                            let proc_idx = get_proc(
                                 ir,
-                                handler_idx,
-                                eff_fun_idx,
+                                val,
                                 ctx.proc_idx,
                                 &ctx.scope,
                                 reg_args.iter().map(|r| r.get_type(&ir.ir)).collect(),
                                 Some(&mut reg_args),
                                 proc_todo,
                             );
+
                             let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
 
-                            // execute handler
-                            match global {
-                                Some(glob) => {
-                                    let next = blocks.push(BlockIdx, Block::default());
-
-                                    let v = handler_reg.value(ir, &mut blocks[*block]);
-                                    blocks[*block]
-                                        .instructions
-                                        .push(Instruction::SetScopedGlobal(glob, v, next));
-
-                                    let collect = reg_args
-                                        .into_iter()
-                                        .map(|r| r.value(ir, &mut blocks[*block]))
-                                        .collect();
-                                    blocks[*block].instructions.push(Instruction::Call(
-                                        proc_idx,
-                                        output.clone().unwrap_or(None).map(|v| v.register()),
-                                        collect,
-                                    ));
-
-                                    blocks[*block].next = Some(next);
-                                    *block = next;
-                                }
-                                None => {
-                                    reg_args.push(handler_reg);
-
-                                    let collect = reg_args
-                                        .into_iter()
-                                        .map(|r| r.value(ir, &mut blocks[*block]))
-                                        .collect();
-                                    blocks[*block].instructions.push(Instruction::Call(
-                                        proc_idx,
-                                        output.clone().unwrap_or(None).map(|v| v.register()),
-                                        collect,
-                                    ));
-                                }
-                            }
+                            // execute function
+                            let collect = reg_args
+                                .into_iter()
+                                .map(|r| r.value(ir, &mut blocks[*block]))
+                                .collect();
+                            blocks[*block].instructions.push(Instruction::Call(
+                                proc_idx,
+                                output.clone().unwrap_or(None).map(|v| v.register()),
+                                collect,
+                            ));
 
                             if ir.ir.proc_sign[proc_idx].output.is_never() {
                                 blocks[*block].instructions.push(Instruction::Unreachable);
                             }
                             output
                         }
+                        analyzer::Type::Handler(_, _, _) => {
+                            // function of handler
+                            let handler_reg = generate_expr(
+                                ir,
+                                ctx.with_expr(handler),
+                                blocks,
+                                block,
+                                proc_todo,
+                            )?
+                            .expect("member parent does not return a value");
+
+                            let ty = &ir.ir.types[handler_reg.get_type(&ir.ir)];
+                            match ty {
+                                &Type::NakedHandler(handler_idx) | &Type::Handler(handler_idx) => {
+                                    // add naked handler to handled
+                                    if matches!(ty, Type::NakedHandler(_)) {
+                                        let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
+                                        if !proc.handled.contains(&handler_idx) {
+                                            proc.handled.push(handler_idx);
+                                        }
+                                    }
+
+                                    let handler = &ir.handlers[handler_idx];
+                                    let global = handler.global;
+
+                                    // get output
+                                    let eff_fun_idx = match ir.asys.defs[val] {
+                                        Definition::EffectFunction(_, eff_fun_idx, _) => {
+                                            eff_fun_idx
+                                        }
+                                        _ => panic!(),
+                                    };
+                                    let proc_idx = get_handler_proc(
+                                        ir,
+                                        handler_idx,
+                                        eff_fun_idx,
+                                        ctx.proc_idx,
+                                        &ctx.scope,
+                                        reg_args.iter().map(|r| r.get_type(&ir.ir)).collect(),
+                                        Some(&mut reg_args),
+                                        proc_todo,
+                                    );
+                                    let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
+
+                                    // execute handler
+                                    match global {
+                                        Some(glob) => {
+                                            let next = blocks.push(BlockIdx, Block::default());
+
+                                            let v = handler_reg.value(ir, &mut blocks[*block]);
+                                            blocks[*block]
+                                                .instructions
+                                                .push(Instruction::SetScopedGlobal(glob, v, next));
+
+                                            let collect = reg_args
+                                                .into_iter()
+                                                .map(|r| r.value(ir, &mut blocks[*block]))
+                                                .collect();
+                                            blocks[*block].instructions.push(Instruction::Call(
+                                                proc_idx,
+                                                output
+                                                    .clone()
+                                                    .unwrap_or(None)
+                                                    .map(|v| v.register()),
+                                                collect,
+                                            ));
+
+                                            blocks[*block].next = Some(next);
+                                            *block = next;
+                                        }
+                                        None => {
+                                            reg_args.push(handler_reg);
+
+                                            let collect = reg_args
+                                                .into_iter()
+                                                .map(|r| r.value(ir, &mut blocks[*block]))
+                                                .collect();
+                                            blocks[*block].instructions.push(Instruction::Call(
+                                                proc_idx,
+                                                output
+                                                    .clone()
+                                                    .unwrap_or(None)
+                                                    .map(|v| v.register()),
+                                                collect,
+                                            ));
+                                        }
+                                    }
+
+                                    if ir.ir.proc_sign[proc_idx].output.is_never() {
+                                        blocks[*block].instructions.push(Instruction::Unreachable);
+                                    }
+                                    output
+                                }
+                                _ => todo!(),
+                            }
+                        }
                         _ => todo!(),
                     }
                 }
                 E::Ident(id) => {
+                    // function of current package
                     let val = ir.asys.values[id];
                     let proc_idx = get_proc(
                         ir,

@@ -1,6 +1,6 @@
 use std::{fmt, iter::Peekable, str::Chars};
 
-use crate::error::{Error, Errors, Ranged};
+use crate::error::{Error, Errors, FileIdx, Ranged};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
@@ -171,13 +171,15 @@ pub struct Tokenizer<'a> {
     pos: usize,
 
     pub errors: &'a mut Errors,
+    pub file: FileIdx,
+
     brace: Vec<bool>,
     prev_unfinished: bool,
     peek: Option<Ranged<Token>>,
 }
 
 impl<'a> Tokenizer<'a> {
-    pub fn new(s: &'a str, errors: &'a mut Errors) -> Self {
+    pub fn new(s: &'a str, file: FileIdx, errors: &'a mut Errors) -> Self {
         Self {
             next: s.chars().peekable(),
             pos: 0,
@@ -185,6 +187,7 @@ impl<'a> Tokenizer<'a> {
             prev_unfinished: true,
             peek: None,
             errors,
+            file,
         }
     }
     fn next_char(&mut self) -> Option<char> {
@@ -237,7 +240,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     if let Some(newline) = prev_newline.filter(|_| {
                         self.brace.last().copied().unwrap_or(false) && !self.prev_unfinished
                     }) {
-                        return Some(Ranged(Token::Semicolon, newline, newline + 1));
+                        return Some(Ranged(Token::Semicolon, newline, newline + 1, self.file));
                     } else {
                         return None;
                     }
@@ -303,13 +306,21 @@ impl<'a> Iterator for Tokenizer<'a> {
                     match self.next_char() {
                         Some('"') => break Token::String(full),
                         Some('\n') => {
-                            self.errors
-                                .push(Ranged(Error::UnclosedString, pos, self.pos - 1));
+                            self.errors.push(Ranged(
+                                Error::UnclosedString,
+                                pos,
+                                self.pos - 1,
+                                self.file,
+                            ));
                             break Token::String(full);
                         }
                         None => {
-                            self.errors
-                                .push(Ranged(Error::UnclosedString, pos, self.pos));
+                            self.errors.push(Ranged(
+                                Error::UnclosedString,
+                                pos,
+                                self.pos,
+                                self.file,
+                            ));
                             break Token::String(full);
                         }
 
@@ -323,8 +334,12 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                             Some(c) => c, // TODO: give error
                             None => {
-                                self.errors
-                                    .push(Ranged(Error::UnclosedString, pos, self.pos));
+                                self.errors.push(Ranged(
+                                    Error::UnclosedString,
+                                    pos,
+                                    self.pos,
+                                    self.file,
+                                ));
                                 break Token::String(full);
                             }
                         }),
@@ -386,7 +401,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 self.prev_unfinished = false;
 
                 self.errors
-                    .push(Ranged(Error::UnknownSymbol, pos, self.pos));
+                    .push(Ranged(Error::UnknownSymbol, pos, self.pos, self.file));
                 Token::UnknownSymbol
             }
         };
@@ -406,11 +421,11 @@ impl<'a> Iterator for Tokenizer<'a> {
                 && !self.prev_unfinished
                 && !token.continues_statement()
         }) {
-            self.peek = Some(Ranged(token, pos, self.pos));
-            Some(Ranged(Token::Semicolon, newline, newline + 1))
+            self.peek = Some(Ranged(token, pos, self.pos, self.file));
+            Some(Ranged(Token::Semicolon, newline, newline + 1, self.file))
         } else {
             self.prev_unfinished = token.unfinished_statement();
-            Some(Ranged(token, pos, self.pos))
+            Some(Ranged(token, pos, self.pos, self.file))
         }
     }
 

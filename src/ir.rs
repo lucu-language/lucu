@@ -9,9 +9,9 @@ use std::{
 use either::Either;
 
 use crate::{
-    analyzer::{self, Analysis, Definition, EffFunIdx, Val, DEBUG, PUTINT_IDX, PUTSTR_IDX},
-    parser::{BinOp, ExprIdx, Expression, Parsed, UnOp, AST},
-    vecmap::{VecMap, VecSet},
+    analyzer::{self, Analysis, Definition, Val},
+    parser::{BinOp, EffFunIdx, ExprIdx, Expression, Parsed, UnOp},
+    vecmap::{vecmap_index, VecMap, VecSet},
 };
 
 #[derive(Debug, Clone)]
@@ -275,7 +275,6 @@ impl TypeIdx {
 
             // TODO: type type
             Definition::BuiltinType(_) => todo!(),
-            Definition::BuiltinEffect => todo!(),
             Definition::Effect(_) => todo!(),
         }
     }
@@ -306,38 +305,11 @@ pub struct AggregateType {
     pub debug_name: String,
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct BlockIdx(usize);
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct TypeIdx(usize);
-
-impl From<BlockIdx> for usize {
-    fn from(value: BlockIdx) -> Self {
-        value.0
-    }
-}
-
-impl From<TypeIdx> for usize {
-    fn from(value: TypeIdx) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct AggrIdx(usize);
-
-impl From<AggrIdx> for usize {
-    fn from(value: AggrIdx) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Reg(usize);
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Global(usize);
+vecmap_index!(BlockIdx);
+vecmap_index!(TypeIdx);
+vecmap_index!(AggrIdx);
+vecmap_index!(Reg);
+vecmap_index!(Global);
 
 impl Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -354,18 +326,6 @@ impl Display for Global {
 impl Display for BlockIdx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "L{}", self.0)
-    }
-}
-
-impl From<Reg> for usize {
-    fn from(value: Reg) -> Self {
-        value.0
-    }
-}
-
-impl From<Global> for usize {
-    fn from(value: Global) -> Self {
-        value.0
     }
 }
 
@@ -475,8 +435,7 @@ struct IRContext<'a> {
 
     handlers: VecMap<HandlerIdx, HandlerCtx>,
 
-    ast: &'a AST,
-    ctx: &'a Parsed,
+    parsed: &'a Parsed,
     asys: &'a Analysis,
 }
 
@@ -792,13 +751,12 @@ impl<'a> ProcCtx<'a> {
 }
 type ProcTodo = Vec<ProcCtx<'static>>;
 
-pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
+pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
         implied_handlers: HashMap::new(),
-        ast,
-        ctx,
+        parsed: ctx,
         asys,
         ir: IR {
             proc_sign: VecMap::new(),
@@ -872,10 +830,18 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
     });
 
     // define debug
+    let debug_effect = ctx.packages[ctx.core]
+        .effects
+        .iter()
+        .copied()
+        .map(|i| &ctx.effects[i])
+        .find(|e| ctx.idents[e.name].0.eq("debug"))
+        .unwrap();
+
     let debug = ir.handlers.push(
         HandlerIdx,
         HandlerCtx {
-            effect: DEBUG,
+            effect: asys.values[debug_effect.name],
             global: None,
             definition: None,
             captures: Vec::new(),
@@ -888,7 +854,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
 
     ir.proc_map.insert(
         ProcIdent {
-            fun: Either::Right((debug, PUTINT_IDX)),
+            fun: Either::Right((debug, EffFunIdx(0))),
             handlers: Vec::new(),
             handler_params: Vec::new(),
         },
@@ -896,7 +862,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
     );
     ir.proc_map.insert(
         ProcIdent {
-            fun: Either::Right((debug, PUTSTR_IDX)),
+            fun: Either::Right((debug, EffFunIdx(1))),
             handlers: Vec::new(),
             handler_params: Vec::new(),
         },
@@ -905,7 +871,7 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
 
     // generate main signature
     let main = asys.main.expect("no main function");
-    let fun = &ir.ast.functions[main];
+    let fun = &ir.parsed.functions[main];
     let val = ir.asys.values[fun.decl.name];
     let mut proc_todo = Vec::new();
 
@@ -923,8 +889,13 @@ pub fn generate_ir(ast: &AST, ctx: &Parsed, asys: &Analysis) -> IR {
     );
 
     // generate implied handlers
-    for expr in ast.implied.iter().copied() {
-        let ast_handler = match &ir.ctx.exprs[expr].0 {
+    for expr in ctx
+        .packages
+        .values()
+        .flat_map(|p| p.implied.iter())
+        .copied()
+    {
+        let ast_handler = match &ir.parsed.exprs[expr].0 {
             Expression::Handler(ast_handler) => ast_handler,
             _ => unreachable!(),
         };
@@ -992,8 +963,9 @@ fn get_proc(
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     match ir.asys.defs[val] {
-        Definition::EffectFunction(eff_val, eff_fun_idx, _) => {
+        Definition::EffectFunction(eff_idx, eff_fun_idx, _) => {
             // get handler
+            let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
             let handler_val = ir.get_in_scope(eff_val, scope);
             let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                 Type::NakedHandler(handler_idx) => {
@@ -1037,7 +1009,7 @@ fn get_proc(
         }
         Definition::Function(func_idx, _) => {
             // create proc identity
-            let fun = &ir.ast.functions[func_idx];
+            let fun = &ir.parsed.functions[func_idx];
 
             let effects = fun
                 .decl
@@ -1100,7 +1072,7 @@ fn get_proc(
                 let output = TypeIdx::from_function(ir, val);
 
                 // generate debug name
-                let mut debug_name = ir.ctx.idents[fun.decl.name].0.clone();
+                let mut debug_name = ir.parsed.idents[fun.decl.name].0.clone();
 
                 if handlers.len() > 0 {
                     debug_name += ".";
@@ -1108,11 +1080,11 @@ fn get_proc(
                     for &handler in handlers.iter() {
                         let eff_val = ir.handlers[handler].effect;
                         let eff_name = ir
-                            .ast
+                            .parsed
                             .effects
                             .values()
                             .find(|e| ir.asys.values[e.name] == eff_val)
-                            .map(|e| ir.ctx.idents[e.name].0.as_str())
+                            .map(|e| ir.parsed.idents[e.name].0.as_str())
                             .unwrap_or("debug");
 
                         debug_name += eff_name;
@@ -1160,7 +1132,7 @@ fn get_handler_proc(
     let eff_val = ir.handlers[handler_idx].effect;
     let effects = match ir.asys.defs[eff_val] {
         Definition::Effect(eff_idx) => {
-            let decl = &ir.ast.effects[eff_idx].functions[eff_fun_idx];
+            let decl = &ir.parsed.effects[eff_idx].functions[eff_fun_idx];
             decl.sign
                 .effects
                 .iter()
@@ -1182,7 +1154,6 @@ fn get_handler_proc(
                 })
                 .collect()
         }
-        Definition::BuiltinEffect => Vec::new(),
         _ => unreachable!(),
     };
 
@@ -1210,11 +1181,11 @@ fn get_handler_proc(
     if !ir.proc_map.contains_key(&procident) {
         let handlers = &procident.handlers;
         let effect = match ir.asys.defs[eff_val] {
-            Definition::Effect(idx) => &ir.ast.effects[idx],
+            Definition::Effect(idx) => &ir.parsed.effects[idx],
             _ => unreachable!(),
         };
         let val = ir.asys.values[effect.functions[eff_fun_idx].name];
-        let ast_handler = match &ir.ctx.exprs[def.unwrap()].0 {
+        let ast_handler = match &ir.parsed.exprs[def.unwrap()].0 {
             Expression::Handler(handler) => handler,
             _ => unreachable!(),
         };
@@ -1239,8 +1210,10 @@ fn get_handler_proc(
         let output = TypeIdx::from_function(ir, val);
 
         // generate debug name
-        let eff_name = ir.ctx.idents[effect.name].0.as_str();
-        let proc_name = ir.ctx.idents[effect.functions[eff_fun_idx].name].0.as_str();
+        let eff_name = ir.parsed.idents[effect.name].0.as_str();
+        let proc_name = ir.parsed.idents[effect.functions[eff_fun_idx].name]
+            .0
+            .as_str();
         let mut debug_name = format!("{}.{}.{}", proc_name, eff_name, usize::from(handler_idx));
 
         if handlers.len() > 0 {
@@ -1249,11 +1222,11 @@ fn get_handler_proc(
             for &handler in handlers.iter() {
                 let eff_val = ir.handlers[handler].effect;
                 let eff_name = ir
-                    .ast
+                    .parsed
                     .effects
                     .values()
                     .find(|e| ir.asys.values[e.name] == eff_val)
-                    .map(|e| ir.ctx.idents[e.name].0.as_str())
+                    .map(|e| ir.parsed.idents[e.name].0.as_str())
                     .unwrap_or("debug");
 
                 debug_name += eff_name;
@@ -1365,8 +1338,8 @@ fn generate_proc_sign(
 
     // create handlers
     let mut handler_defs = Vec::new();
-    ir.ctx.for_each(body, false, false, &mut |expr| {
-        if let Expression::Handler(h) = &ir.ctx.exprs[expr].0 {
+    ir.parsed.for_each(body, false, false, &mut |expr| {
+        if let Expression::Handler(h) = &ir.parsed.exprs[expr].0 {
             // get break type
             let break_type = match ir.asys.types[ir.asys.exprs[expr]] {
                 analyzer::Type::Handler(_, t, _) => TypeIdx::from_type(ir, t),
@@ -1392,7 +1365,7 @@ fn generate_proc_sign(
             unhandled: inside_handler
                 .iter()
                 .copied()
-                .filter(|_| ir.ctx.yeets(body))
+                .filter(|_| ir.parsed.yeets(body))
                 .collect(),
             handled: handled
                 .iter()
@@ -1548,16 +1521,17 @@ fn get_captures(
     exception: Option<Val>,
 ) -> Vec<(Val, Reg)> {
     let mut captures = Vec::new();
-    ir.ctx.for_each(expr, true, false, &mut |expr| {
-        if let Expression::Ident(i) = ir.ctx.exprs[expr].0 {
+    ir.parsed.for_each(expr, true, false, &mut |expr| {
+        if let Expression::Ident(i) = ir.parsed.exprs[expr].0 {
             let val = ir.asys.values[i];
 
             // capture effects from (effect) functions
             let vals = match ir.asys.defs[val] {
-                Definition::EffectFunction(eff_val, eff_fun_idx, _) => {
+                Definition::EffectFunction(eff_idx, eff_fun_idx, _) => {
+                    let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
                     match ir.asys.defs[eff_val] {
                         Definition::Effect(eff_idx) => {
-                            let iter = ir.ast.effects[eff_idx].functions[eff_fun_idx]
+                            let iter = ir.parsed.effects[eff_idx].functions[eff_fun_idx]
                                 .sign
                                 .effects
                                 .iter()
@@ -1577,17 +1551,10 @@ fn get_captures(
                                 std::iter::once(eff_val).chain(iter).collect()
                             }
                         }
-                        Definition::BuiltinEffect => {
-                            if Some(eff_val) == exception {
-                                vec![]
-                            } else {
-                                vec![eff_val]
-                            }
-                        }
                         _ => unreachable!(),
                     }
                 }
-                Definition::Function(fun, _) => ir.ast.functions[fun]
+                Definition::Function(fun, _) => ir.parsed.functions[fun]
                     .decl
                     .sign
                     .effects
@@ -1633,7 +1600,7 @@ fn generate_expr(
     proc_todo: &mut ProcTodo,
 ) -> ExprResult {
     use Expression as E;
-    match ir.ctx.exprs[ctx.expr].0 {
+    match ir.parsed.exprs[ctx.expr].0 {
         E::Body(ref body) => {
             for &expr in body.main.iter() {
                 generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)?;
@@ -1661,7 +1628,7 @@ fn generate_expr(
                 .collect::<Result<Vec<_>, _>>()?;
 
             // TODO: currently we assume func is an Ident expr or Effect Member expr
-            let res = match ir.ctx.exprs[func].0 {
+            let res = match ir.parsed.exprs[func].0 {
                 E::Member(handler, id) => {
                     let val = ir.asys.values[id];
 

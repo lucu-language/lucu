@@ -5,6 +5,20 @@ use std::{
     ops::{Index, IndexMut},
 };
 
+macro_rules! vecmap_index {
+    ($name:ident) => {
+        #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+        pub struct $name(pub(crate) usize);
+
+        impl From<$name> for usize {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
+}
+pub(crate) use vecmap_index;
+
 #[derive(Debug)]
 pub struct VecMap<K, V>
 where

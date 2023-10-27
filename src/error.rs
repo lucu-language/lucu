@@ -1,22 +1,32 @@
 use std::iter;
 
-use crate::lexer::{Group, Token};
+use crate::{
+    lexer::{Group, Token},
+    vecmap::{vecmap_index, VecMap},
+};
+
+vecmap_index!(FileIdx);
 
 #[derive(Debug, Clone, Copy)]
-pub struct Ranged<T>(pub T, pub usize, pub usize);
+pub struct Ranged<T>(pub T, pub usize, pub usize, pub FileIdx);
 
 impl<T> Ranged<T> {
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Ranged<U> {
-        Ranged(f(self.0), self.1, self.2)
+        Ranged(f(self.0), self.1, self.2, self.3)
     }
     pub fn empty(&self) -> Ranged<()> {
-        Ranged((), self.1, self.2)
+        Ranged((), self.1, self.2, self.3)
     }
     pub fn with<U>(&self, val: U) -> Ranged<U> {
-        Ranged(val, self.1, self.2)
+        Ranged(val, self.1, self.2, self.3)
     }
     pub fn clamp(self, min: usize, max: usize) -> Self {
-        Ranged(self.0, self.1.clamp(min, max), self.2.clamp(min, max))
+        Ranged(
+            self.0,
+            self.1.clamp(min, max),
+            self.2.clamp(min, max),
+            self.3,
+        )
     }
 }
 
@@ -166,7 +176,10 @@ fn highlight(i: usize, s: &str, color: bool, bold: bool) -> String {
 
 const LINE_TOLERANCE: usize = 3;
 
-fn print_error(lines: &[&str], filename: &str, highlights: &[Highlight], color: bool) {
+fn print_error(file: &str, filename: &str, highlights: &[Highlight], color: bool) {
+    // get file lines
+    let lines = file.lines().collect::<Vec<_>>();
+
     if let Some(first) = highlights.first() {
         // print header
         if color {
@@ -327,6 +340,11 @@ fn print_error(lines: &[&str], filename: &str, highlights: &[Highlight], color: 
     }
 }
 
+pub struct File<'a> {
+    pub content: &'a str,
+    pub name: &'a str,
+}
+
 impl Errors {
     pub fn new() -> Self {
         Self { vec: Vec::new() }
@@ -337,15 +355,15 @@ impl Errors {
     pub fn push(&mut self, e: Ranged<Error>) {
         self.vec.push(e);
     }
-    pub fn print(mut self, file: &str, filename: &str, color: bool) {
-        // get file lines
-        let lines = file.lines().collect::<Vec<_>>();
-
+    pub fn print(mut self, files: &VecMap<FileIdx, File>, color: bool) {
         // stable sort as the ranges may start with the same position
         self.vec.sort_by_key(|r| r.1);
 
         // print errors
         for err in self.vec {
+            let file = &files[err.3].content;
+            let filename = &files[err.3].name;
+
             let err = err.clamp(0, file.len());
             let (start, end) = get_lines(file, err.empty());
 
@@ -489,7 +507,7 @@ impl Errors {
                 _ => (),
             }
 
-            print_error(&lines, filename, &highlights, color);
+            print_error(file, filename, &highlights, color);
             println!();
         }
     }

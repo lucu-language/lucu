@@ -4,6 +4,10 @@ extern crate test;
 
 use std::{env, fs::read_to_string, path::Path, print, println, process::Command};
 
+use error::{File, FileIdx};
+use parser::Parsed;
+use vecmap::VecMap;
+
 use crate::{error::Ranged, lexer::Token};
 
 mod analyzer;
@@ -21,13 +25,30 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let file = read_to_string(args[1].clone()).unwrap().replace('\t', "  ");
 
+    let mut files = VecMap::new();
+    let preamble = read_to_string("core/preamble.lucu").unwrap();
+    let core = files.push(
+        FileIdx,
+        File {
+            content: &preamble,
+            name: "preamble.lucu",
+        },
+    );
+    let main = files.push(
+        FileIdx,
+        File {
+            content: &file,
+            name: &args[1],
+        },
+    );
+
     if debug {
         // print extra semicolons
         println!("\n--- SEMICOLONS ---");
 
         let mut chars = file.chars().enumerate().peekable();
 
-        for tok in lexer::Tokenizer::new(file.as_str(), &mut error::Errors::new()) {
+        for tok in lexer::Tokenizer::new(file.as_str(), main, &mut error::Errors::new()) {
             let start = tok.1;
 
             // print until start
@@ -52,9 +73,15 @@ fn main() {
     }
 
     // analyze
-    let tokenizer = lexer::Tokenizer::new(file.as_str(), &mut errors);
-    let (ast, ctx) = parser::parse_ast(tokenizer);
-    let asys = analyzer::analyze(&ast, &ctx, &mut errors);
+
+    let mut parsed = Parsed::default();
+
+    let tokenizer = lexer::Tokenizer::new(&file, main, &mut errors);
+    parser::parse_ast(tokenizer, parsed.main, &mut parsed);
+    let tokenizer = lexer::Tokenizer::new(&preamble, core, &mut errors);
+    parser::parse_ast(tokenizer, parsed.core, &mut parsed);
+
+    let asys = analyzer::analyze(&parsed, &mut errors);
 
     if debug {
         // visualize idents
@@ -63,7 +90,7 @@ fn main() {
         let mut idents = asys
             .values
             .values()
-            .zip(ctx.idents.values())
+            .zip(parsed.idents.values())
             .collect::<Vec<_>>();
         idents.sort_by_key(|(_, range)| range.1);
 
@@ -107,12 +134,12 @@ fn main() {
     // print errors
     if !errors.is_empty() {
         println!();
-        errors.print(file.as_str(), &args[1], true);
+        errors.print(&files, true);
         return;
     }
 
     // generate ir
-    let ir = ir::generate_ir(&ast, &ctx, &asys);
+    let ir = ir::generate_ir(&parsed, &asys);
     if debug {
         println!("\n--- IR ---");
         println!("{}", ir);
@@ -142,17 +169,39 @@ mod tests {
 
         let mut errors = error::Errors::new();
 
-        let tokenizer = lexer::Tokenizer::new(&file, &mut errors);
-        let (ast, ctx) = parser::parse_ast(tokenizer);
-        let asys = analyzer::analyze(&ast, &ctx, &mut errors);
+        let mut files = VecMap::new();
+        let preamble = read_to_string("core/preamble.lucu").unwrap();
+        let core = files.push(
+            FileIdx,
+            File {
+                content: &preamble,
+                name: "preamble.lucu",
+            },
+        );
+        let main = files.push(
+            FileIdx,
+            File {
+                content: &file,
+                name: filename,
+            },
+        );
+
+        let mut parsed = Parsed::default();
+
+        let tokenizer = lexer::Tokenizer::new(&file, main, &mut errors);
+        parser::parse_ast(tokenizer, parsed.main, &mut parsed);
+        let tokenizer = lexer::Tokenizer::new(&preamble, core, &mut errors);
+        parser::parse_ast(tokenizer, parsed.core, &mut parsed);
+
+        let asys = analyzer::analyze(&parsed, &mut errors);
 
         if !errors.is_empty() {
             println!();
-            errors.print(&file, filename, true);
+            errors.print(&files, true);
             return "[ERROR]".into();
         }
 
-        let ir = ir::generate_ir(&ast, &ctx, &asys);
+        let ir = ir::generate_ir(&parsed, &asys);
         llvm::generate_ir(&ir, &Path::new(&format!("{}.o", output)), false);
 
         Command::new("./link.sh").arg(output).status().unwrap();

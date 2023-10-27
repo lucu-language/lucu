@@ -1,67 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     error::{Error, Errors, Ranged},
-    parser::{self, BinOp, ExprIdx, Expression, FunSign, Ident, Parsed, UnOp, AST},
-    vecmap::{VecMap, VecSet},
+    parser::{
+        self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, FunIdx, FunSign, Ident, PackageIdx,
+        ParamIdx, Parsed, UnOp,
+    },
+    vecmap::{vecmap_index, VecMap, VecSet},
 };
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct Val(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct ParamIdx(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct FunIdx(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct EffIdx(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct EffFunIdx(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TypeIdx(usize);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct HandlerIdx(usize);
-
-impl From<Val> for usize {
-    fn from(value: Val) -> Self {
-        value.0
-    }
-}
-
-impl From<ParamIdx> for usize {
-    fn from(value: ParamIdx) -> Self {
-        value.0
-    }
-}
-
-impl From<FunIdx> for usize {
-    fn from(value: FunIdx) -> Self {
-        value.0
-    }
-}
-
-impl From<EffIdx> for usize {
-    fn from(value: EffIdx) -> Self {
-        value.0
-    }
-}
-
-impl From<EffFunIdx> for usize {
-    fn from(value: EffFunIdx) -> Self {
-        value.0
-    }
-}
-
-impl From<TypeIdx> for usize {
-    fn from(value: TypeIdx) -> Self {
-        value.0
-    }
-}
+vecmap_index!(Val);
+vecmap_index!(TypeIdx);
+vecmap_index!(HandlerIdx);
 
 impl TypeIdx {
     fn matches(self, other: TypeIdx) -> bool {
@@ -120,7 +70,7 @@ impl TypeIdx {
         let effect_name = match handler.0 {
             usize::MAX => "<unknown>".into(),
             _ => match ctx.asys.defs[handler] {
-                Definition::Effect(e) => ctx.parsed.idents[ctx.ast.effects[e].name].0.clone(),
+                Definition::Effect(e) => ctx.parsed.idents[ctx.parsed.effects[e].name].0.clone(),
                 _ => "<unknown>".into(),
             },
         };
@@ -138,16 +88,9 @@ impl TypeIdx {
                 Definition::Function(_, _) => ctx.asys.insert_type(Type::FunctionLiteral(val)),
 
                 Definition::BuiltinType(_) => TYPE_UNKNOWN,
-                Definition::BuiltinEffect => TYPE_UNKNOWN,
                 Definition::Effect(_) => TYPE_UNKNOWN,
             },
         }
-    }
-}
-
-impl From<HandlerIdx> for usize {
-    fn from(value: HandlerIdx) -> Self {
-        value.0
     }
 }
 
@@ -156,10 +99,9 @@ pub enum Definition {
     Parameter(Val, ParamIdx, TypeIdx), // parameter index in function
     Variable(bool, ExprIdx, TypeIdx),  // variable defined at expr
     Effect(EffIdx),                    // effect index in ast
-    EffectFunction(Val, EffFunIdx, TypeIdx), // effect value, function index in effect
+    EffectFunction(EffIdx, EffFunIdx, TypeIdx), // effect value, function index in effect
     Function(FunIdx, TypeIdx),         // function index in ast
 
-    BuiltinEffect,        // builtin effects
     BuiltinType(TypeIdx), // builtin type
 }
 
@@ -216,15 +158,21 @@ pub struct Analysis {
 
 struct AsysContext<'a> {
     asys: Analysis,
-    ast: &'a AST,
     parsed: &'a Parsed,
 }
 
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     values: HashMap<String, Val>,
-    effects: &'a HashMap<String, (Val, HashMap<String, Val>)>,
-    scoped_effects: &'a Vec<(Ident, &'a (Val, HashMap<String, Val>))>,
+    effects: &'a HashMap<String, Val>,
+    scoped_effects: &'a HashSet<Val>,
+}
+
+#[derive(Default, Clone)]
+struct Package {
+    effects: HashMap<String, Val>,
+    values: HashMap<String, Val>,
+    implied: HashSet<Val>,
 }
 
 impl<'a> Scope<'a> {
@@ -248,28 +196,21 @@ impl Val {
     fn definition_range(&self, ctx: &AsysContext) -> Option<Ranged<()>> {
         match ctx.asys.defs[*self] {
             Definition::Parameter(f, p, _) => match ctx.asys.defs[f] {
-                Definition::EffectFunction(e, f, _) => match ctx.asys.defs[e] {
-                    Definition::Effect(e) => Some(
-                        ctx.parsed.idents[ctx.ast.effects[e].functions[f].sign.inputs[p].0].empty(),
-                    ),
-                    _ => None,
-                },
+                Definition::EffectFunction(e, f, _) => Some(
+                    ctx.parsed.idents[ctx.parsed.effects[e].functions[f].sign.inputs[p].0].empty(),
+                ),
                 Definition::Function(f, _) => {
-                    Some(ctx.parsed.idents[ctx.ast.functions[f].decl.sign.inputs[p].0].empty())
+                    Some(ctx.parsed.idents[ctx.parsed.functions[f].decl.sign.inputs[p].0].empty())
                 }
                 _ => None,
             },
-            Definition::Effect(e) => Some(ctx.parsed.idents[ctx.ast.effects[e].name].empty()),
-            Definition::EffectFunction(e, f, _) => match ctx.asys.defs[e] {
-                Definition::Effect(e) => {
-                    Some(ctx.parsed.idents[ctx.ast.effects[e].functions[f].name].empty())
-                }
-                _ => None,
-            },
-            Definition::Function(f, _) => {
-                Some(ctx.parsed.idents[ctx.ast.functions[f].decl.name].empty())
+            Definition::Effect(e) => Some(ctx.parsed.idents[ctx.parsed.effects[e].name].empty()),
+            Definition::EffectFunction(e, f, _) => {
+                Some(ctx.parsed.idents[ctx.parsed.effects[e].functions[f].name].empty())
             }
-            Definition::BuiltinEffect => None,
+            Definition::Function(f, _) => {
+                Some(ctx.parsed.idents[ctx.parsed.functions[f].decl.name].empty())
+            }
             Definition::Variable(_, e, _) => match ctx.parsed.exprs[e].0 {
                 Expression::Let(_, name, _, _) => Some(ctx.parsed.idents[name].empty()),
                 _ => None,
@@ -348,7 +289,8 @@ fn capture_ident(
     if val.0 != usize::MAX {
         match ctx.asys.defs[val] {
             Definition::EffectFunction(e, _, _) => {
-                if Some(e) != effect && scope.scoped_effects.iter().any(|(_, &(val, _))| e == val) {
+                let e = ctx.asys.values[ctx.parsed.effects[e].name];
+                if Some(e) != effect && scope.scoped_effects.contains(&e) {
                     add_capture(
                         captures,
                         Capture {
@@ -359,7 +301,7 @@ fn capture_ident(
                 }
             }
             Definition::Function(fun, _) => {
-                let effects = ctx.ast.functions[fun]
+                let effects = ctx.parsed.functions[fun]
                     .decl
                     .sign
                     .effects
@@ -367,9 +309,7 @@ fn capture_ident(
                     .copied()
                     .map(|i| ctx.asys.values[i]);
                 for e in effects {
-                    if Some(e) != effect
-                        && scope.scoped_effects.iter().any(|(_, &(val, _))| e == val)
-                    {
+                    if Some(e) != effect && scope.scoped_effects.contains(&e) {
                         add_capture(
                             captures,
                             Capture {
@@ -407,7 +347,6 @@ fn capture_ident(
                     );
                 }
             }
-            Definition::BuiltinEffect => todo!(),
             Definition::BuiltinType(_) => {}
         }
     }
@@ -440,15 +379,22 @@ fn analyze_expr(
 
             // put effect in scope
             let ident = handler.effect;
-            let funs = scope_effect(ctx, ident, scope, errors);
-            let effect = funs.as_ref().copied().map(|(e, _)| e);
+            let effect = scope_effect(ctx, ident, scope, errors);
 
             // match fun names to effect
-            if let Some((effect, funs)) = funs {
+            if let Some(effect) = effect {
                 for fun in handler.functions.iter() {
                     let name = &ctx.parsed.idents[fun.decl.name].0;
-                    match funs.get(name) {
-                        Some(&val) => ctx.asys.values[fun.decl.name] = val,
+                    let effectfun = match ctx.asys.defs[effect] {
+                        Definition::Effect(idx) => ctx.parsed.effects[idx]
+                            .functions
+                            .values()
+                            .find(|decl| ctx.parsed.idents[decl.name].0.eq(name))
+                            .map(|decl| ctx.asys.values[decl.name]),
+                        _ => None,
+                    };
+                    match effectfun {
+                        Some(val) => ctx.asys.values[fun.decl.name] = val,
                         None => errors.push(ctx.parsed.idents[fun.decl.name].with(
                             Error::UnknownEffectFun(
                                 effect.definition_range(ctx),
@@ -469,12 +415,14 @@ fn analyze_expr(
                 scope_sign(ctx, &mut child, val, &fun.decl.sign, errors);
 
                 let mut scoped = scope.scoped_effects.clone();
-                scoped.extend(fun.decl.sign.effects.iter().copied().filter_map(|i| {
-                    scope
+                scoped.extend(
+                    fun.decl
+                        .sign
                         .effects
-                        .get(&ctx.parsed.idents[i].0)
-                        .map(|effect| (i, effect))
-                }));
+                        .iter()
+                        .copied()
+                        .filter_map(|i| scope.effects.get(&ctx.parsed.idents[i].0).copied()),
+                );
                 child.scoped_effects = &scoped;
 
                 let found = analyze_expr(ctx, &mut child, fun.body, expected, errors);
@@ -527,9 +475,15 @@ fn analyze_expr(
                     match scope
                         .scoped_effects
                         .iter()
-                        .find(|&&(ident, _)| ctx.parsed.idents[ident].0.eq(name))
+                        .find(|&&v| match ctx.asys.defs[v] {
+                            Definition::Effect(idx) => {
+                                ctx.parsed.idents[ctx.parsed.effects[idx].name].0.eq(name)
+                            }
+                            _ => false,
+                        })
+                        .copied()
                     {
-                        Some((_, &(val, _))) => {
+                        Some(val) => {
                             // handled effects may be implicitly converted to handlers that never fail
                             ctx.asys.values[ident] = val;
                             let handler = ctx.asys.handlers.push(HandlerIdx, HandlerDef::Signature);
@@ -578,8 +532,22 @@ fn analyze_expr(
                             let effect_funs = scope
                                 .scoped_effects
                                 .iter()
-                                .flat_map(|&(i, &(_, ref h))| {
-                                    h.iter().map(move |(s, &v)| (i, s, v))
+                                .copied()
+                                .flat_map(|val| match ctx.asys.defs[val] {
+                                    Definition::Effect(idx) => {
+                                        let effect_ident = ctx.parsed.effects[idx].name;
+                                        let ctx = &*ctx;
+                                        ctx.parsed.effects[idx].functions.values().map(
+                                            move |decl| {
+                                                (
+                                                    effect_ident,
+                                                    &ctx.parsed.idents[decl.name].0,
+                                                    ctx.asys.values[decl.name],
+                                                )
+                                            },
+                                        )
+                                    }
+                                    _ => unreachable!(),
                                 })
                                 .filter_map(|(i, s, v)| match name == s {
                                     true => Some((i, v)),
@@ -629,7 +597,7 @@ fn analyze_expr(
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
                         (
                             Some(
-                                ctx.ast.functions[fun_idx]
+                                ctx.parsed.functions[fun_idx]
                                     .decl
                                     .sign
                                     .inputs
@@ -637,35 +605,26 @@ fn analyze_expr(
                                     .map(|&(ident, _)| {
                                         TypeIdx::from_val(ctx, ctx.asys.values[ident]).to_base(ctx)
                                     })
-                                    .collect(),
+                                    .collect::<Vec<_>>(),
                             ),
                             return_type,
                         )
                     }
-                    Definition::EffectFunction(effect, fun_idx, return_type) => {
+                    Definition::EffectFunction(eff_idx, fun_idx, return_type) => {
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
-                        match ctx.asys.defs[effect] {
-                            Definition::Effect(eff_idx) => (
-                                Some(
-                                    ctx.ast.effects[eff_idx].functions[fun_idx]
-                                        .sign
-                                        .inputs
-                                        .values()
-                                        .map(|&(ident, _)| {
-                                            TypeIdx::from_val(ctx, ctx.asys.values[ident])
-                                                .to_base(ctx)
-                                        })
-                                        .collect(),
-                                ),
-                                return_type,
+                        (
+                            Some(
+                                ctx.parsed.effects[eff_idx].functions[fun_idx]
+                                    .sign
+                                    .inputs
+                                    .values()
+                                    .map(|&(ident, _)| {
+                                        TypeIdx::from_val(ctx, ctx.asys.values[ident]).to_base(ctx)
+                                    })
+                                    .collect::<Vec<_>>(),
                             ),
-                            Definition::BuiltinEffect => match fun {
-                                PUTINT => (Some(vec![TYPE_INT]), TYPE_NONE),
-                                PUTSTR => (Some(vec![TYPE_STR]), TYPE_NONE),
-                                _ => unreachable!(),
-                            },
-                            _ => unreachable!(),
-                        }
+                            return_type,
+                        )
                     }
                     _ => {
                         errors.push(ctx.parsed.exprs[cexpr].with(Error::ExpectedFunction(
@@ -731,7 +690,7 @@ fn analyze_expr(
 
                 if let Some((eff_val, handler_break)) = handler_type {
                     let effect = match ctx.asys.defs[eff_val] {
-                        Definition::Effect(idx) => ctx.ast.effects[idx].name,
+                        Definition::Effect(idx) => ctx.parsed.effects[idx].name,
                         _ => panic!(),
                     };
 
@@ -741,12 +700,7 @@ fn analyze_expr(
                     };
 
                     let mut scoped = child.scoped_effects.clone();
-
-                    let pos = scoped.iter().position(|(_, &(v, _))| v == eff_val);
-                    match pos {
-                        Some(pos) => scoped[pos].0 = effect,
-                        None => scoped.push((effect, &scope.effects[&ctx.parsed.idents[effect].0])),
-                    }
+                    scoped.insert(ctx.asys.values[effect]);
 
                     child.scoped_effects = &scoped;
                     if !TypeIdx::matches(expected_break, expected_return) {
@@ -788,10 +742,10 @@ fn analyze_expr(
                         Some(val)
                     }
                     None => match scope.effects.get(name) {
-                        Some(&(effect, _)) => {
+                        Some(&effect) => {
                             ctx.asys.values[ident] = effect;
 
-                            if !scope.scoped_effects.iter().any(|(_, &(v, _))| v == effect) {
+                            if !scope.scoped_effects.contains(&effect) {
                                 errors.push(ctx.parsed.idents[ident].with(Error::UnhandledEffect));
                             }
 
@@ -824,7 +778,6 @@ fn analyze_expr(
                     }
                 }
                 Definition::Effect(_) => Some(h),
-                Definition::BuiltinEffect => None,
                 _ => {
                     // TODO: type definition
                     errors.push(ctx.parsed.idents[field].with(Error::UnknownField(
@@ -837,15 +790,16 @@ fn analyze_expr(
 
             match effect {
                 Some(effect) => {
-                    let funs = &scope
-                        .effects
-                        .values()
-                        .find(|&&(e, _)| e == effect)
-                        .expect("unknown effect value")
-                        .1;
-
                     let name = &ctx.parsed.idents[field].0;
-                    match funs.get(name).copied() {
+                    let fun = match ctx.asys.defs[effect] {
+                        Definition::Effect(idx) => ctx.parsed.effects[idx]
+                            .functions
+                            .values()
+                            .find(|decl| ctx.parsed.idents[decl.name].0.eq(name))
+                            .map(|decl| ctx.asys.values[decl.name]),
+                        _ => None,
+                    };
+                    match fun {
                         Some(fun) => {
                             ctx.asys.values[field] = fun;
                             ctx.asys.insert_type(Type::FunctionLiteral(fun))
@@ -969,12 +923,12 @@ fn scope_effect<'a>(
     ident: Ident,
     scope: &'a mut Scope,
     errors: &mut Errors,
-) -> Option<(Val, &'a HashMap<String, Val>)> {
+) -> Option<Val> {
     let name = &ctx.parsed.idents[ident].0;
     match scope.effects.get(name) {
-        Some(&(val, ref vec)) => {
+        Some(&val) => {
             ctx.asys.values[ident] = val;
-            Some((val, vec))
+            Some(val)
         }
         None => {
             errors.push(ctx.parsed.idents[ident].with(Error::UnknownEffect));
@@ -1046,7 +1000,7 @@ fn analyze_type(
 
         // check effects
         None => match scope.effects.get(name) {
-            Some(&(val, _)) => {
+            Some(&val) => {
                 ctx.asys.values[id] = val;
                 let fail = match fail {
                     parser::FailType::Never => TYPE_NEVER,
@@ -1110,13 +1064,6 @@ fn scope_sign(
 pub const STR: Val = Val(0);
 pub const INT: Val = Val(1);
 
-pub const DEBUG: Val = Val(2);
-pub const PUTINT: Val = Val(3);
-pub const PUTSTR: Val = Val(4);
-
-pub const PUTINT_IDX: EffFunIdx = EffFunIdx(0);
-pub const PUTSTR_IDX: EffFunIdx = EffFunIdx(1);
-
 pub const TYPE_NONE: TypeIdx = TypeIdx(1);
 pub const TYPE_NEVER: TypeIdx = TypeIdx(2);
 
@@ -1125,7 +1072,7 @@ const TYPE_INT: TypeIdx = TypeIdx(3);
 const TYPE_STR: TypeIdx = TypeIdx(4);
 const TYPE_BOOL: TypeIdx = TypeIdx(5);
 
-pub fn analyze(ast: &AST, parsed: &Parsed, errors: &mut Errors) -> Analysis {
+pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     let mut asys = Analysis {
         values: VecMap::filled(parsed.idents.len(), Val(usize::MAX)),
         exprs: VecMap::filled(parsed.exprs.len(), TYPE_UNKNOWN),
@@ -1134,6 +1081,7 @@ pub fn analyze(ast: &AST, parsed: &Parsed, errors: &mut Errors) -> Analysis {
         handlers: VecMap::new(),
         types: VecSet::new(),
     };
+
     asys.types.insert(TypeIdx, Type::Unknown);
     asys.types.insert(TypeIdx, Type::None);
     asys.types.insert(TypeIdx, Type::Never);
@@ -1141,149 +1089,200 @@ pub fn analyze(ast: &AST, parsed: &Parsed, errors: &mut Errors) -> Analysis {
     asys.types.insert(TypeIdx, Type::Str);
     asys.types.insert(TypeIdx, Type::Bool);
 
-    let mut effects = HashMap::new();
-    let mut values = HashMap::new();
-    let mut scoped_effects = Vec::new();
+    asys.defs.push_value(Definition::BuiltinType(TYPE_STR));
+    asys.defs.push_value(Definition::BuiltinType(TYPE_INT));
 
-    // built-in values
-    values.insert("str".to_owned(), STR);
-    values.insert("int".to_owned(), INT);
+    let mut packages = VecMap::filled(parsed.packages.len(), Package::default());
+    let vals = &mut packages[parsed.core].values;
+    vals.insert("str".into(), STR);
+    vals.insert("int".into(), INT);
 
-    let mut debug = HashMap::new();
-    debug.insert("putint".to_owned(), PUTINT);
-    debug.insert("putstr".to_owned(), PUTSTR);
-    effects.insert("debug".to_owned(), (DEBUG, debug));
+    let mut ctx = AsysContext { asys, parsed };
 
-    asys.defs = VecMap::filled(5, Definition::BuiltinEffect);
-    asys.defs[PUTINT] = Definition::EffectFunction(DEBUG, EffFunIdx(0), TYPE_NONE);
-    asys.defs[PUTSTR] = Definition::EffectFunction(DEBUG, EffFunIdx(1), TYPE_NONE);
-    asys.defs[STR] = Definition::BuiltinType(TYPE_STR);
-    asys.defs[INT] = Definition::BuiltinType(TYPE_INT);
+    for (i, package) in parsed.packages.iter(PackageIdx) {
+        let values = packages[parsed.core].values.clone();
+        let global_scope = Scope {
+            parent: None,
+            values,
+            effects: &HashMap::new(),
+            scoped_effects: &HashSet::new(),
+        };
 
-    let mut ctx = AsysContext { asys, ast, parsed };
+        let pkg = &mut packages[i];
 
-    let mut global_scope = Scope {
-        parent: None,
-        values,
-        effects: &HashMap::new(),
-        scoped_effects: &Vec::new(),
-    };
+        // put names in scope
+        // TODO: error on conflict
+        for (i, effect) in package
+            .effects
+            .iter()
+            .copied()
+            .map(|idx| (idx, &parsed.effects[idx]))
+        {
+            // add effect to scope
+            let val = ctx.asys.push_val(effect.name, Definition::Effect(i));
+            pkg.effects
+                .insert(parsed.idents[effect.name].0.clone(), val);
+        }
+        for &implied in package.implied.iter() {
+            let handler = match &parsed.exprs[implied].0 {
+                Expression::Handler(handler) => handler,
+                _ => panic!(),
+            };
+            let name = &parsed.idents[handler.effect].0;
+            if let Some(effect) = pkg.effects.get(name).copied() {
+                pkg.implied.insert(effect);
+            }
+        }
 
-    // put names in scope
-    // TODO: error on conflict
-    for (i, effect) in ast.effects.values().enumerate() {
-        // add effect to scope
-        let val = ctx
-            .asys
-            .push_val(effect.name, Definition::Effect(EffIdx(i)));
-        effects.insert(parsed.idents[effect.name].0.clone(), (val, HashMap::new()));
-    }
-    for effect in ast.effects.values() {
-        // add effect to scope
-        let val = ctx.asys.values[effect.name];
-        let name = &parsed.idents[effect.name].0;
-
-        // remember effect functions
-        for (i, func) in effect.functions.values().enumerate() {
+        for (i, effect) in package
+            .effects
+            .iter()
+            .copied()
+            .map(|idx| (idx, &parsed.effects[idx]))
+        {
+            for (fi, decl) in effect.functions.iter(EffFunIdx) {
+                let scope = Scope {
+                    parent: Some(&global_scope),
+                    values: HashMap::new(),
+                    effects: &pkg.effects,
+                    scoped_effects: &pkg.implied, // TODO: add function scoped effects
+                };
+                let return_type = analyze_return(&mut ctx, &scope, decl.sign.output, errors);
+                ctx.asys
+                    .push_val(decl.name, Definition::EffectFunction(i, fi, return_type));
+            }
+        }
+        for (i, fun) in package
+            .functions
+            .iter()
+            .copied()
+            .map(|i| (i, &parsed.functions[i]))
+        {
+            // add function to scope
             let scope = Scope {
                 parent: Some(&global_scope),
                 values: HashMap::new(),
-                effects: &effects,
-                scoped_effects: &scoped_effects,
+                effects: &pkg.effects,
+                scoped_effects: &pkg.implied, // TODO: add function scoped effects
             };
-            let return_type = analyze_return(&mut ctx, &scope, func.sign.output, errors);
-            effects.get_mut(name).unwrap().1.insert(
-                parsed.idents[func.name].0.clone(),
-                ctx.asys.push_val(
-                    func.name,
-                    Definition::EffectFunction(val, EffFunIdx(i), return_type),
-                ),
+            let return_type = analyze_return(&mut ctx, &scope, fun.decl.sign.output, errors);
+            pkg.values.insert(
+                parsed.idents[fun.decl.name].0.clone(),
+                ctx.asys
+                    .push_val(fun.decl.name, Definition::Function(i, return_type)),
             );
+
+            // check if main
+            if parsed.idents[fun.decl.name].0 == "main" {
+                ctx.asys.main = Some(i);
+            }
         }
     }
-    for &implied in ast.implied.iter() {
-        let handler = match &parsed.exprs[implied].0 {
-            Expression::Handler(handler) => handler,
-            _ => panic!(),
-        };
-        let name = &parsed.idents[handler.effect].0;
-        if let Some(effect) = effects.get(name) {
-            scoped_effects.push((handler.effect, effect));
-        }
-    }
-    for (i, func) in ast.functions.values().enumerate() {
-        // add function to scope
-        let scope = Scope {
-            parent: Some(&global_scope),
-            values: HashMap::new(),
-            effects: &effects,
-            scoped_effects: &scoped_effects,
-        };
-        let return_type = analyze_return(&mut ctx, &scope, func.decl.sign.output, errors);
-        global_scope.values.insert(
-            parsed.idents[func.decl.name].0.clone(),
-            ctx.asys
-                .push_val(func.decl.name, Definition::Function(FunIdx(i), return_type)),
+
+    for (i, package) in parsed.packages.iter(PackageIdx) {
+        let mut values = HashMap::new();
+        values.extend(
+            packages[parsed.core]
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        values.extend(
+            packages[i]
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
         );
 
-        // check if main
-        if parsed.idents[func.decl.name].0 == "main" {
-            ctx.asys.main = Some(FunIdx(i));
-        }
-    }
+        let mut effects = HashMap::new();
+        effects.extend(
+            packages[parsed.core]
+                .effects
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        effects.extend(
+            packages[i]
+                .effects
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
 
-    // analyze effects and functions
-    for &implied in ast.implied.iter() {
-        let mut scope = Scope {
-            parent: Some(&global_scope),
-            values: HashMap::new(),
-            effects: &effects,
-            scoped_effects: &scoped_effects,
+        let mut scoped_effects = HashSet::new();
+        scoped_effects.extend(packages[parsed.core].implied.iter().copied());
+        scoped_effects.extend(packages[i].implied.iter().copied());
+
+        let global_scope = Scope {
+            parent: None,
+            values,
+            effects: &HashMap::new(),
+            scoped_effects: &HashSet::new(),
         };
-        analyze_expr(&mut ctx, &mut scope, implied, TYPE_UNKNOWN, errors);
-    }
-    for effect in ast.effects.values() {
-        for fun in effect.functions.values() {
+
+        // analyze effects and functions
+        for &implied in package.implied.iter() {
             let mut scope = Scope {
                 parent: Some(&global_scope),
                 values: HashMap::new(),
                 effects: &effects,
                 scoped_effects: &scoped_effects,
             };
-            let val = ctx.asys.values[fun.name];
-            scope_sign(&mut ctx, &mut scope, val, &fun.sign, errors);
+            analyze_expr(&mut ctx, &mut scope, implied, TYPE_UNKNOWN, errors);
         }
-    }
-    for fun in ast.functions.values() {
-        let mut scope = Scope {
-            parent: Some(&global_scope),
-            values: HashMap::new(),
-            effects: &effects,
-            scoped_effects: &scoped_effects,
-        };
-        let val = ctx.asys.values[fun.decl.name];
-        scope_sign(&mut ctx, &mut scope, val, &fun.decl.sign, errors);
+        for effect in package
+            .effects
+            .iter()
+            .copied()
+            .map(|idx| &parsed.effects[idx])
+        {
+            for fun in effect.functions.values() {
+                let mut scope = Scope {
+                    parent: Some(&global_scope),
+                    values: HashMap::new(),
+                    effects: &effects,
+                    scoped_effects: &scoped_effects,
+                };
+                let val = ctx.asys.values[fun.name];
+                scope_sign(&mut ctx, &mut scope, val, &fun.sign, errors);
+            }
+        }
+        for fun in package
+            .functions
+            .iter()
+            .copied()
+            .map(|i| &parsed.functions[i])
+        {
+            let mut scope = Scope {
+                parent: Some(&global_scope),
+                values: HashMap::new(),
+                effects: &effects,
+                scoped_effects: &scoped_effects,
+            };
+            let val = ctx.asys.values[fun.decl.name];
+            scope_sign(&mut ctx, &mut scope, val, &fun.decl.sign, errors);
 
-        let mut scoped = scope.scoped_effects.clone();
-        scoped.extend(fun.decl.sign.effects.iter().filter_map(|&i| {
-            scope
-                .effects
-                .get(&parsed.idents[i].0)
-                .map(|effect| (i, effect))
-        }));
-        scope.scoped_effects = &scoped;
+            let mut scoped = scope.scoped_effects.clone();
+            scoped.extend(
+                fun.decl
+                    .sign
+                    .effects
+                    .iter()
+                    .filter_map(|&i| scope.effects.get(&parsed.idents[i].0).copied()),
+            );
+            scope.scoped_effects = &scoped;
 
-        let expected = match ctx.asys.defs[val] {
-            Definition::Function(_, return_type) => return_type,
-            _ => unreachable!(),
-        };
-        let found = analyze_expr(&mut ctx, &mut scope, fun.body, expected, errors);
-
-        // set concrete handler type
-        if matches!(ctx.asys.types[expected], Type::Handler(_, _, _)) {
-            match &mut ctx.asys.defs[val] {
-                Definition::Function(_, typ) => *typ = found,
+            let expected = match ctx.asys.defs[val] {
+                Definition::Function(_, return_type) => return_type,
                 _ => unreachable!(),
+            };
+            let found = analyze_expr(&mut ctx, &mut scope, fun.body, expected, errors);
+
+            // set concrete handler type
+            if matches!(ctx.asys.types[expected], Type::Handler(_, _, _)) {
+                match &mut ctx.asys.defs[val] {
+                    Definition::Function(_, typ) => *typ = found,
+                    _ => unreachable!(),
+                }
             }
         }
     }

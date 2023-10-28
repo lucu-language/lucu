@@ -199,6 +199,7 @@ pub enum Type {
 
     Pointer(TypeIdx),
     ConstArray(u64, TypeIdx),
+    Slice(TypeIdx),
 
     Aggregate(AggrIdx),
 
@@ -245,7 +246,10 @@ impl TypeIdx {
             T::USize => ir.insert_type(Type::IntSize),
             T::UPtr => ir.insert_type(Type::IntPtr),
             T::U8 => ir.insert_type(Type::Int8),
-            T::Str => ir.insert_type(Type::Aggregate(STR_SLICE)),
+            T::Str => {
+                let u8 = ir.insert_type(Type::Int8);
+                ir.insert_type(Type::Slice(u8))
+            }
             T::Bool => ir.insert_type(Type::Bool),
             T::None => ir.insert_type(Type::None),
             T::Never => ir.insert_type(Type::Never),
@@ -256,6 +260,10 @@ impl TypeIdx {
             T::ConstArray(size, ty) => {
                 let inner = TypeIdx::from_type(ir, ty);
                 ir.insert_type(Type::ConstArray(size, inner))
+            }
+            T::Slice(ty) => {
+                let inner = TypeIdx::from_type(ir, ty);
+                ir.insert_type(Type::Slice(inner))
             }
             T::FunctionLiteral(_) => todo!(),
             T::PackageLiteral(_) => todo!(),
@@ -727,8 +735,6 @@ const TYPE_STR_SLICE: TypeIdx = TypeIdx(5);
 const TYPE_INT: TypeIdx = TypeIdx(6);
 const TYPE_BOOL: TypeIdx = TypeIdx(7);
 
-pub const STR_SLICE: AggrIdx = AggrIdx(0);
-
 #[derive(Debug, Default)]
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
@@ -854,7 +860,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
         children: vec![byteptr, arrsize],
         debug_name: "str".into(),
     });
-    ir.insert_type(Type::Aggregate(STR_SLICE));
+    ir.insert_type(Type::Slice(byte));
     ir.insert_type(Type::Int);
     ir.insert_type(Type::Bool);
 
@@ -962,6 +968,22 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
             Instruction::PrintStr(suffix),
             Instruction::Exit(1),
             Instruction::Unreachable,
+        ],
+    );
+
+    // define len
+    let len_fun = get_function(ctx, ctx.preamble, "len");
+    let input = ir.next_reg(TYPE_STR_SLICE);
+    let output = ir.next_reg(arrsize);
+    define_function(
+        &mut ir,
+        Either::Left(asys.values[len_fun.decl.name]),
+        "len".into(),
+        vec![input],
+        arrsize,
+        vec![
+            Instruction::Member(output, input, 1),
+            Instruction::Return(Some(output)),
         ],
     );
 
@@ -2196,39 +2218,123 @@ fn generate_expr(
                 let array = generate_expr(ir, ctx.with_expr(left), blocks, block, proc_todo)?
                     .expect("left operand has no value");
 
-                let right = generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
-                    .expect("right operand has no value")
-                    .value(ir, &mut blocks[*block]);
+                match ir.parsed.exprs[right].0 {
+                    E::BinOp(left, BinOp::Range, right) => {
+                        // get range
+                        let left =
+                            generate_expr(ir, ctx.with_expr(left), blocks, block, proc_todo)?
+                                .expect("range left has no value")
+                                .value(ir, &mut blocks[*block]);
 
-                match ir.ir.types[array.get_type(&ir.ir)] {
-                    Type::Pointer(_) => {
-                        let ptr = array.value(ir, &mut blocks[*block]);
+                        let right =
+                            generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
+                                .expect("range right has no value")
+                                .value(ir, &mut blocks[*block]);
+
+                        // get array pointer
+                        let ptr = match ir.ir.types[array.get_type(&ir.ir)] {
+                            Type::Pointer(_) => array.value(ir, &mut blocks[*block]),
+                            Type::ConstArray(_, elem_ty) => {
+                                let full_ptr =
+                                    array.reference(ir, &mut ctx.scope, &mut blocks[*block]);
+
+                                let ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                let ptr = ir.next_reg(ptr_ty);
+
+                                // TODO: should this be elementptr?
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::Cast(ptr, full_ptr));
+
+                                ptr
+                            }
+                            Type::Slice(elem_ty) => {
+                                let slice = array.value(ir, &mut blocks[*block]);
+
+                                let ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                let ptr = ir.next_reg(ptr_ty);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::Member(ptr, slice, 0));
+
+                                ptr
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        // get slice start and length
                         let adjacent = ir.copy_reg(ptr);
                         blocks[*block]
                             .instructions
-                            .push(Instruction::AdjacentPtr(adjacent, ptr, right));
-                        Ok(Some(Value::Reference(adjacent)))
+                            .push(Instruction::AdjacentPtr(adjacent, ptr, left));
+
+                        let len = ir.copy_reg(left);
+                        blocks[*block]
+                            .instructions
+                            .push(Instruction::Sub(len, right, left));
+
+                        // create slice
+                        let elem_ty = ir.ir.regs[ptr].inner(&ir.ir);
+                        let slice_ty = ir.insert_type(Type::Slice(elem_ty));
+                        let slice = ir.next_reg(slice_ty);
+                        blocks[*block]
+                            .instructions
+                            .push(Instruction::Aggregate(slice, vec![adjacent, len]));
+
+                        Ok(Some(Value::Value(slice, None)))
                     }
-                    Type::ConstArray(_, elem_ty) => match array {
-                        Value::Value(reg, val) => {
-                            Ok(Some(Value::ValueIndex(reg, val, Rc::new([right]))))
+                    _ => {
+                        let right =
+                            generate_expr(ir, ctx.with_expr(right), blocks, block, proc_todo)?
+                                .expect("right operand has no value")
+                                .value(ir, &mut blocks[*block]);
+
+                        match ir.ir.types[array.get_type(&ir.ir)] {
+                            Type::Pointer(_) => {
+                                let ptr = array.value(ir, &mut blocks[*block]);
+                                let adjacent = ir.copy_reg(ptr);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::AdjacentPtr(adjacent, ptr, right));
+                                Ok(Some(Value::Reference(adjacent)))
+                            }
+                            Type::ConstArray(_, elem_ty) => match array {
+                                Value::Value(reg, val) => {
+                                    Ok(Some(Value::ValueIndex(reg, val, Rc::new([right]))))
+                                }
+                                Value::ValueIndex(reg, val, idx) => Ok(Some(Value::ValueIndex(
+                                    reg,
+                                    val,
+                                    idx.iter().copied().chain(std::iter::once(right)).collect(),
+                                ))),
+                                Value::Reference(ptr) => {
+                                    let elem_ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                    let elem_ptr = ir.next_reg(elem_ptr_ty);
+                                    blocks[*block]
+                                        .instructions
+                                        .push(Instruction::ElementPtr(elem_ptr, ptr, right));
+                                    Ok(Some(Value::Reference(elem_ptr)))
+                                }
+                                Value::Global(_) => unreachable!(),
+                            },
+                            Type::Slice(elem_ty) => {
+                                let slice = array.value(ir, &mut blocks[*block]);
+
+                                let ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                let ptr = ir.next_reg(ptr_ty);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::Member(ptr, slice, 0));
+
+                                let adjacent = ir.copy_reg(ptr);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::AdjacentPtr(adjacent, ptr, right));
+                                Ok(Some(Value::Reference(adjacent)))
+                            }
+                            _ => unreachable!(),
                         }
-                        Value::ValueIndex(reg, val, idx) => Ok(Some(Value::ValueIndex(
-                            reg,
-                            val,
-                            idx.iter().copied().chain(std::iter::once(right)).collect(),
-                        ))),
-                        Value::Reference(ptr) => {
-                            let elem_ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
-                            let elem_ptr = ir.next_reg(elem_ptr_ty);
-                            blocks[*block]
-                                .instructions
-                                .push(Instruction::ElementPtr(elem_ptr, ptr, right));
-                            Ok(Some(Value::Reference(elem_ptr)))
-                        }
-                        Value::Global(_) => unreachable!(),
-                    },
-                    _ => unreachable!(),
+                    }
                 }
             }
             _ => {
@@ -2245,6 +2351,7 @@ fn generate_expr(
                     BinOp::Divide | BinOp::Multiply | BinOp::Subtract | BinOp::Add => {
                         ir.ir.regs[left]
                     }
+                    BinOp::Range => unreachable!(),
                     BinOp::Assign | BinOp::Index => unreachable!(),
                 });
 
@@ -2256,6 +2363,7 @@ fn generate_expr(
                     BinOp::Add => Instruction::Add(out, left, right),
                     BinOp::Less => Instruction::Less(out, left, right),
                     BinOp::Greater => Instruction::Greater(out, left, right),
+                    BinOp::Range => unreachable!(),
                     BinOp::Assign | BinOp::Index => unreachable!(),
                 };
                 blocks[*block].instructions.push(instr);

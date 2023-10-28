@@ -33,6 +33,21 @@ fun panic(s str) ! {
 }
 
 ##
+# returns the length of a slice
+##
+fun len(s []u8) usize {
+	# internally defined
+	loop {}
+}
+
+##
+# modulo operator
+##
+fun mod(a int, b int) int {
+	a - ((a / b) * b)
+}
+
+##
 # implicit break effect
 # breaks up to the nearest try block
 ##

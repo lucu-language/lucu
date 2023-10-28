@@ -22,7 +22,8 @@ pub enum Token {
 
     // Symbols
     Semicolon,
-    Period,
+    Dot,
+    DoubleDot,
     Slash,
     Comma,
     Equals,
@@ -72,7 +73,8 @@ impl fmt::Display for Token {
                 Token::Import => "'import'".into(),
                 Token::Cast => "'cast'".into(),
                 Token::Semicolon => "';'".into(),
-                Token::Period => "'.'".into(),
+                Token::Dot => "'.'".into(),
+                Token::DoubleDot => "'..'".into(),
                 Token::Slash => "'/'".into(),
                 Token::Comma => "','".into(),
                 Token::Equals => "'='".into(),
@@ -118,7 +120,7 @@ impl Token {
                 | Token::Let
                 | Token::Mut
                 | Token::Else
-                | Token::Period
+                | Token::Dot
                 | Token::Bang
                 | Token::Yeet
                 | Token::Try
@@ -155,7 +157,7 @@ impl Token {
                 | Token::Comma
                 | Token::Close(_)
                 | Token::Open(Group::Brace)
-                | Token::Period
+                | Token::Dot
                 | Token::Slash
                 | Token::Equals
                 | Token::Greater
@@ -265,7 +267,6 @@ impl<'a> Iterator for Tokenizer<'a> {
         // get next token
         let token = match char {
             ';' => Token::Semicolon,
-            '.' => Token::Period,
             '/' => Token::Slash,
             ',' => Token::Comma,
             '(' => Token::Open(Group::Paren),
@@ -280,6 +281,13 @@ impl<'a> Iterator for Tokenizer<'a> {
             '>' => Token::Greater,
             '^' => Token::Caret,
             '&' => Token::Ampersand,
+            '.' => match self.next.peek() {
+                Some(&'.') => {
+                    self.next_char();
+                    Token::DoubleDot
+                }
+                _ => Token::Dot,
+            },
             '-' => match self.next.peek() {
                 Some(&'-') => {
                     self.next_char();

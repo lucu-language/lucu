@@ -4,8 +4,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use either::Either;
-
 use crate::{
     error::{Error, Expected, Range, Ranged},
     lexer::{Group, Token, Tokenizer},
@@ -33,6 +31,7 @@ pub enum BinOp {
     Subtract,
     Add,
     Index,
+    Range,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +52,7 @@ impl BinOp {
             Token::Plus => Some(BinOp::Add),
             Token::Less => Some(BinOp::Less),
             Token::Greater => Some(BinOp::Greater),
+            Token::DoubleDot => Some(BinOp::Range),
             _ => None,
         }
     }
@@ -116,6 +116,7 @@ pub enum Type {
     Pointer(TypeIdx),
     MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
+    Slice(TypeIdx),
 
     #[default]
     Error, // error at parsing, coerces to any type
@@ -718,14 +719,23 @@ impl Parse for Type {
                 Some(Type::Pointer(ty))
             }
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
+                enum ArrType {
+                    Const(u64),
+                    Pointer,
+                    Slice,
+                }
+
                 let num = tk
                     .group_single(Group::Bracket, |tk| {
+                        // TODO: custom expected message
                         if tk.check(Token::Caret).is_some() {
-                            Some(Either::Right(()))
+                            Some(ArrType::Pointer)
+                        } else if tk.peek_check(Token::Close(Group::Bracket)) {
+                            Some(ArrType::Slice)
                         } else {
                             let n = tk.int()?.0;
                             // TODO: Error on too big or negative
-                            Some(Either::Left(n as u64))
+                            Some(ArrType::Const(n as u64))
                         }
                     })?
                     .0;
@@ -734,8 +744,9 @@ impl Parse for Type {
                 let ty = tk.push_type(ty);
 
                 match num {
-                    Either::Left(num) => Some(Type::ConstArray(num, ty)),
-                    Either::Right(_) => Some(Type::MultiPointer(ty)),
+                    ArrType::Const(num) => Some(Type::ConstArray(num, ty)),
+                    ArrType::Pointer => Some(Type::MultiPointer(ty)),
+                    ArrType::Slice => Some(Type::Slice(ty)),
                 }
             }
             Some(Ranged(Token::Ident(_), ..)) => {
@@ -812,7 +823,7 @@ impl Parse for FunSign {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
                 let Some(effect) = tk.ident() else { continue };
                 let effect = tk.push_ident(effect);
-                let (package, effect) = if tk.check(Token::Period).is_some() {
+                let (package, effect) = if tk.check(Token::Dot).is_some() {
                     let package = effect;
                     let Some(effect) = tk.ident() else { continue };
                     let effect = tk.push_ident(effect);
@@ -887,7 +898,7 @@ impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let effect = tk.ident()?;
         let effect = tk.push_ident(effect);
-        let (package, effect) = if tk.check(Token::Period).is_some() {
+        let (package, effect) = if tk.check(Token::Dot).is_some() {
             let package = effect;
             let effect = tk.ident()?;
             let effect = tk.push_ident(effect);
@@ -1153,7 +1164,7 @@ impl Parse for Expression {
         loop {
             match tk.peek() {
                 // member
-                Some(Ranged(Token::Period, ..)) => {
+                Some(Ranged(Token::Dot, ..)) => {
                     tk.next();
                     let member = tk.ident()?;
                     expr = Ranged(

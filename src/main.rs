@@ -46,7 +46,7 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
 
         match path.extension() == Some(OsStr::new("lucu")) {
             true => {
-                let content = read_to_string(&path).unwrap();
+                let content = read_to_string(&path).unwrap().replace('\t', "  ");
                 let idx = errors.files.push(
                     FileIdx,
                     File {
@@ -69,7 +69,7 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
                         }
                     });
                     for path in iter {
-                        let content = read_to_string(&path).unwrap();
+                        let content = read_to_string(&path).unwrap().replace('\t', "  ");
                         let idx = errors.files.push(
                             FileIdx,
                             File {

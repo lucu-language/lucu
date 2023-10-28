@@ -1,7 +1,8 @@
 import "core:sys/unix"
 
-fun main() / debug unix.sys {
-	putstr("reachable\n")
+fun main() / unix.sys {
+	unix.putint(69)
+	unix.putstr("reachable\n")
 	unix.exit(0)
-	putstr("unreachable\n")
+	unix.putstr("unreachable\n")
 }

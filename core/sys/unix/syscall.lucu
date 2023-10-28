@@ -17,15 +17,15 @@ fun exit(code uptr) ! / sys {
 	unreachable()
 }
 
-fun read(buf [^]u8, len usize) usize / sys {
-	cast syscall3(0, 0, cast buf, cast len)
+fun read(buf []u8) usize / sys {
+	cast syscall3(0, 0, cast &buf[0], cast len(buf))
 }
 
-fun read_line(buf [^]u8) usize / sys {
+fun read_line(buf []u8) []u8 / sys {
 	mut current usize = 0
 
 	try loop {
-		let count = read(&buf[current], 1)
+		let count = read(buf[current..current + 1])
 		if count == 0 {
 			break()
 		}
@@ -35,9 +35,9 @@ fun read_line(buf [^]u8) usize / sys {
 		}
 	}
 
-	current
+	buf[0..current]
 }
 
-fun write(buf [^]u8, len usize) usize / sys {
-	cast syscall3(1, 1, cast buf, cast len)
+fun write(buf []u8) usize / sys {
+	cast syscall3(1, 1, cast &buf[0], cast len(buf))
 }

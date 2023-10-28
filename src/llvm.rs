@@ -833,25 +833,58 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Member(r, a, n) => {
                         // skip over empty children that are uncounted
-                        let t = match ir.types[ir.regs[a]] {
-                            Type::Aggregate(t) => t,
+                        match ir.types[ir.regs[a]] {
+                            Type::Aggregate(t) => {
+                                // get member
+                                if BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).is_ok() {
+                                    let mut mem = [n];
+                                    self.get_actual_indices(
+                                        ir,
+                                        &ir.aggregates[t].children,
+                                        &mut mem,
+                                    );
+                                    let n = mem[0];
+
+                                    let aggr = valmap[&a].into_struct_value();
+
+                                    let member = self
+                                        .builder
+                                        .build_extract_value(aggr, n as u32, "member")
+                                        .unwrap();
+
+                                    valmap.insert(r, member);
+                                }
+                            }
+                            Type::Slice(_) => {
+                                // get slice data
+                                let slice = self.get_type(ir, ir.regs[a]).into_struct_type();
+                                match n {
+                                    0 => {
+                                        // ptr
+                                        if slice.count_fields() > 1 {
+                                            let aggr = valmap[&a].into_struct_value();
+                                            let member = self
+                                                .builder
+                                                .build_extract_value(aggr, 0, "member")
+                                                .unwrap();
+                                            valmap.insert(r, member);
+                                        }
+                                    }
+                                    1 => {
+                                        // len
+                                        let idx = slice.count_fields() - 1;
+
+                                        let aggr = valmap[&a].into_struct_value();
+                                        let member = self
+                                            .builder
+                                            .build_extract_value(aggr, idx, "member")
+                                            .unwrap();
+                                        valmap.insert(r, member);
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
                             _ => panic!(),
-                        };
-
-                        // get member
-                        if BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).is_ok() {
-                            let mut mem = [n];
-                            self.get_actual_indices(ir, &ir.aggregates[t].children, &mut mem);
-                            let n = mem[0];
-
-                            let aggr = valmap[&a].into_struct_value();
-
-                            let member = self
-                                .builder
-                                .build_extract_value(aggr, n as u32, "member")
-                                .unwrap();
-
-                            valmap.insert(r, member);
                         }
                     }
                     I::Unreachable => {
@@ -1385,6 +1418,27 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int => self.int_type().into(),
             Type::IntSize => self.isize_type().into(),
             Type::IntPtr => self.iptr_type().into(),
+            Type::Slice(ty) => {
+                let ptr: AnyTypeEnum = match self.get_type(ir, ty) {
+                    AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
+                    AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
+                };
+                if let Ok(ptr) = BasicTypeEnum::try_from(ptr) {
+                    self.context
+                        .struct_type(&[ptr, self.isize_type().into()], false)
+                        .into()
+                } else {
+                    self.context
+                        .struct_type(&[self.isize_type().into()], false)
+                        .into()
+                }
+            }
             Type::Aggregate(idx) => match self.structs[idx] {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),

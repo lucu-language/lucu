@@ -68,6 +68,7 @@ impl TypeIdx {
             Type::Unknown => "<unknown>".into(),
             Type::Pointer(ty) => format!("^{}", ty.display_inner(ctx)),
             Type::MultiPointer(ty) => format!("[^]{}", ty.display_inner(ctx)),
+            Type::Slice(ty) => format!("[]{}", ty.display_inner(ctx)),
             Type::ConstArray(size, ty) => format!("[{}]{}", size, ty.display_inner(ctx)),
         }
     }
@@ -147,6 +148,7 @@ pub enum Type {
     Pointer(TypeIdx),
     MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
+    Slice(TypeIdx),
 
     Int,
     USize,
@@ -289,6 +291,8 @@ fn analyze_assignable(
 
             match ctx.asys.types[array] {
                 Type::ConstArray(_, ty) => ty,
+                Type::MultiPointer(ty) => ty,
+                Type::Slice(ty) => ty,
                 Type::Unknown => TYPE_UNKNOWN,
                 _ => {
                     // TODO: error
@@ -883,15 +887,36 @@ fn analyze_expr(
             }
             BinOp::Index => {
                 let array = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors);
-                analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
 
-                match ctx.asys.types[array] {
-                    Type::ConstArray(_, ty) => ty,
-                    Type::MultiPointer(ty) => ty,
-                    Type::Unknown => TYPE_UNKNOWN,
+                match ctx.parsed.exprs[right].0 {
+                    Expression::BinOp(left, BinOp::Range, right) => {
+                        analyze_expr(ctx, scope, left, TYPE_USIZE, errors);
+                        analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
+
+                        match ctx.asys.types[array] {
+                            Type::ConstArray(_, ty) => ctx.asys.insert_type(Type::Slice(ty)),
+                            Type::MultiPointer(ty) => ctx.asys.insert_type(Type::Slice(ty)),
+                            Type::Slice(ty) => ctx.asys.insert_type(Type::Slice(ty)),
+                            Type::Unknown => TYPE_UNKNOWN,
+                            _ => {
+                                // TODO: error
+                                TYPE_UNKNOWN
+                            }
+                        }
+                    }
                     _ => {
-                        // TODO: error
-                        TYPE_UNKNOWN
+                        analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
+
+                        match ctx.asys.types[array] {
+                            Type::ConstArray(_, ty) => ty,
+                            Type::MultiPointer(ty) => ty,
+                            Type::Slice(ty) => ty,
+                            Type::Unknown => TYPE_UNKNOWN,
+                            _ => {
+                                // TODO: error
+                                TYPE_UNKNOWN
+                            }
+                        }
                     }
                 }
             }
@@ -899,6 +924,10 @@ fn analyze_expr(
                 let ret_ty = match op {
                     BinOp::Equals | BinOp::Less | BinOp::Greater => Some(TYPE_BOOL),
                     BinOp::Divide | BinOp::Multiply | BinOp::Subtract | BinOp::Add => None,
+                    BinOp::Range => {
+                        // TODO: error
+                        Some(TYPE_UNKNOWN)
+                    }
                     BinOp::Assign | BinOp::Index => unreachable!(),
                 };
                 match ret_ty {
@@ -933,8 +962,8 @@ fn analyze_expr(
                 match (&ctx.asys.types[ty], &ctx.asys.types[expected_type]) {
                     (t1, Type::UPtr) if t1.is_ptr() => expected_type,
                     (Type::UPtr, t2) if t2.is_ptr() => expected_type,
-                    (t1, t2) if t1.is_ptr() && t2.is_ptr() => expected_type,
                     (t1, t2) if t1.is_int() && t2.is_int() => expected_type,
+                    (Type::Str, Type::Slice(TYPE_U8)) => expected_type,
                     (_t1, _t2) => ty,
                 }
             }
@@ -963,6 +992,7 @@ fn analyze_expr(
         // these have no identifiers
         Expression::String(_) => match ctx.asys.types[expected_type] {
             Type::Str => TYPE_STR,
+            Type::Slice(TYPE_U8) => expected_type,
 
             // default type for literal
             _ => TYPE_STR,
@@ -1083,6 +1113,10 @@ fn analyze_type(
         T::ConstArray(size, ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
             return ctx.asys.insert_type(Type::ConstArray(size, inner));
+        }
+        T::Slice(ty) => {
+            let inner = analyze_type(ctx, scope, ty, errors);
+            return ctx.asys.insert_type(Type::Slice(inner));
         }
     };
 

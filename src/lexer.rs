@@ -18,6 +18,7 @@ pub enum Token {
     Mut,
     Loop,
     Import,
+    Cast,
 
     // Symbols
     Semicolon,
@@ -36,11 +37,13 @@ pub enum Token {
     DoublePlus,
     Less,
     Greater,
+    Ampersand,
     Open(Group),
     Close(Group),
 
     // Literals
     String(String),
+    Character(String),
     Ident(String),
     Int(i128),
 
@@ -67,6 +70,7 @@ impl fmt::Display for Token {
                 Token::Mut => "'mut'".into(),
                 Token::Loop => "'loop'".into(),
                 Token::Import => "'import'".into(),
+                Token::Cast => "'cast'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Period => "'.'".into(),
                 Token::Slash => "'/'".into(),
@@ -83,6 +87,7 @@ impl fmt::Display for Token {
                 Token::DoublePlus => "'++'".into(),
                 Token::Less => "'<'".into(),
                 Token::Greater => "'>'".into(),
+                Token::Ampersand => "'&'".into(),
                 Token::Open(Group::Brace) => "'{'".into(),
                 Token::Open(Group::Paren) => "'('".into(),
                 Token::Open(Group::Bracket) => "'['".into(),
@@ -90,6 +95,7 @@ impl fmt::Display for Token {
                 Token::Close(Group::Paren) => "')'".into(),
                 Token::Close(Group::Bracket) => "']'".into(),
                 Token::String(s) => format!("\"{}\"", s),
+                Token::Character(s) => format!("'{}'", s),
                 Token::Ident(s) => format!("'{}'", s),
                 Token::Int(i) => format!("'{}'", i),
                 Token::UnknownSymbol => "'ERR'".into(),
@@ -128,6 +134,10 @@ impl Token {
                 | Token::Asterisk
                 | Token::Plus
                 | Token::Comma
+                | Token::Import
+                | Token::Ampersand
+                | Token::Loop
+                | Token::Cast
                 | Token::Open(_)
 
                 // prevents double semicolons
@@ -269,6 +279,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             '<' => Token::Less,
             '>' => Token::Greater,
             '^' => Token::Caret,
+            '&' => Token::Ampersand,
             '-' => match self.next.peek() {
                 Some(&'-') => {
                     self.next_char();
@@ -301,12 +312,21 @@ impl<'a> Iterator for Tokenizer<'a> {
                     }
                 }
             }
-            '"' => {
-                // string
+            '"' | '\'' => {
+                // string / character
+                let term = char;
+                let token = |s| {
+                    if term == '"' {
+                        Token::String(s)
+                    } else {
+                        Token::Character(s)
+                    }
+                };
+
                 let mut full = String::new();
                 loop {
                     match self.next_char() {
-                        Some('"') => break Token::String(full),
+                        Some(c) if c == term => break token(full),
                         Some('\n') => {
                             self.errors.push(Ranged(
                                 Error::UnclosedString,
@@ -314,7 +334,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                                 self.pos - 1,
                                 self.file,
                             ));
-                            break Token::String(full);
+                            break token(full);
                         }
                         None => {
                             self.errors.push(Ranged(
@@ -323,7 +343,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                                 self.pos,
                                 self.file,
                             ));
-                            break Token::String(full);
+                            break token(full);
                         }
 
                         Some('\\') => full.push(match self.next_char() {
@@ -331,6 +351,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                             Some('t') => '\t',
                             Some('r') => '\r',
                             Some('"') => '"',
+                            Some('\'') => '\'',
                             Some('\\') => '\\',
                             Some('\n') => '\n',
 
@@ -342,7 +363,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                                     self.pos,
                                     self.file,
                                 ));
-                                break Token::String(full);
+                                break token(full);
                             }
                         }),
                         Some(c) => full.push(c),
@@ -379,6 +400,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "mut" => Token::Mut,
                     "loop" => Token::Loop,
                     "import" => Token::Import,
+                    "cast" => Token::Cast,
                     _ => Token::Ident(word),
                 }
             }

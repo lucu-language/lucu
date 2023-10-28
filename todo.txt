@@ -4,13 +4,15 @@ typechecking todo:
 - handler function must match signature
 - functions that return handlers must not be (mutually) recursive
 - functions must not be (mutually) recursive through try blocks
+- a lot of other things
 
 parser todo:
 - operator precedence
 
+llvm todo:
+- phi nodes that reference early registers do not work
+
 todo:
-- packages
-- prelude
 - separate generation code from data types
 
 would be nice:

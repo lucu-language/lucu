@@ -59,6 +59,7 @@ impl TypeIdx {
             Type::Int => "int".into(),
             Type::USize => "usize".into(),
             Type::UPtr => "uptr".into(),
+            Type::U8 => "u8".into(),
             Type::Str => "str".into(),
             Type::Bool => "bool".into(),
             Type::Handler(val, yeets, _) => yeets.display_handler(val, ctx),
@@ -66,6 +67,7 @@ impl TypeIdx {
             Type::Never => "!".into(),
             Type::Unknown => "<unknown>".into(),
             Type::Pointer(ty) => format!("^{}", ty.display_inner(ctx)),
+            Type::MultiPointer(ty) => format!("[^]{}", ty.display_inner(ctx)),
             Type::ConstArray(size, ty) => format!("[{}]{}", size, ty.display_inner(ctx)),
         }
     }
@@ -92,6 +94,7 @@ impl TypeIdx {
 
                 Definition::BuiltinType(_) => TYPE_UNKNOWN,
                 Definition::Effect(_) => TYPE_UNKNOWN,
+                Definition::Package(pkg) => ctx.asys.insert_type(Type::PackageLiteral(pkg)),
             },
         }
     }
@@ -106,6 +109,7 @@ pub enum Definition {
     Function(FunIdx, TypeIdx),         // function index in ast
 
     BuiltinType(TypeIdx), // builtin type
+    Package(PackageIdx),  // package
 }
 
 #[derive(Debug)]
@@ -141,17 +145,28 @@ pub enum Type {
     Handler(Val, TypeIdx, Option<HandlerIdx>),
 
     Pointer(TypeIdx),
+    MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
 
     Int,
     USize,
     UPtr,
+    U8,
 
     Str,
     Bool,
     None,
     Never,
     Unknown,
+}
+
+impl Type {
+    fn is_int(&self) -> bool {
+        matches!(self, Type::Int | Type::USize | Type::UPtr | Type::U8)
+    }
+    fn is_ptr(&self) -> bool {
+        matches!(self, Type::Pointer(_) | Type::MultiPointer(_))
+    }
 }
 
 pub struct Analysis {
@@ -226,6 +241,7 @@ impl Val {
                 _ => None,
             },
             Definition::BuiltinType(_) => None,
+            Definition::Package(_) => None,
         }
     }
 }
@@ -358,6 +374,7 @@ fn capture_ident(
                 }
             }
             Definition::BuiltinType(_) => {}
+            Definition::Package(_) => {}
         }
     }
 }
@@ -389,7 +406,7 @@ fn analyze_expr(
 
             // put effect in scope
             let ident = handler.effect;
-            let effect = scope_effect(ctx, ident, scope, errors);
+            let effect = analyze_effect(ctx, ident, scope, errors);
 
             // match fun names to effect
             if let Some(effect) = effect {
@@ -422,17 +439,17 @@ fn analyze_expr(
 
                 let mut child = scope.child();
                 let val = ctx.asys.values[fun.decl.name];
-                scope_sign(ctx, &mut child, val, &fun.decl.sign, errors);
+                scope_sign(ctx, &mut child, &fun.decl.sign);
 
                 let mut scoped = scope.scoped_effects.clone();
-                scoped.extend(
-                    fun.decl
-                        .sign
-                        .effects
-                        .iter()
-                        .copied()
-                        .filter_map(|i| scope.effects.get(&ctx.parsed.idents[i.effect].0).copied()),
-                );
+                scoped.extend(fun.decl.sign.effects.iter().copied().filter_map(|i| {
+                    let val = ctx.asys.values[i.effect];
+                    if val.0 == usize::MAX {
+                        None
+                    } else {
+                        Some(val)
+                    }
+                }));
                 child.scoped_effects = &scoped;
 
                 let found = analyze_expr(ctx, &mut child, fun.body, expected, errors);
@@ -772,7 +789,7 @@ fn analyze_expr(
                         None => match ctx.parsed.packages[scope.pkg].imports.get(name) {
                             Some(&pkg) => {
                                 let ty = ctx.asys.insert_type(Type::PackageLiteral(pkg));
-                                ctx.asys.push_val(ident, Definition::BuiltinType(ty));
+                                ctx.asys.push_val(ident, Definition::Package(pkg));
                                 ctx.asys.exprs[expr] = ty;
                                 Some(ty)
                             }
@@ -869,6 +886,7 @@ fn analyze_expr(
 
                 match ctx.asys.types[array] {
                     Type::ConstArray(_, ty) => ty,
+                    Type::MultiPointer(ty) => ty,
                     Type::Unknown => TYPE_UNKNOWN,
                     _ => {
                         // TODO: error
@@ -898,6 +916,27 @@ fn analyze_expr(
         },
         Expression::UnOp(uexpr, op) => match op {
             UnOp::PostIncrement => analyze_assignable(ctx, scope, uexpr, expr, errors),
+            UnOp::Reference => {
+                let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, errors);
+                match ctx.asys.types[expected_type] {
+                    Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty)),
+                    Type::MultiPointer(_) => {
+                        // TODO: make sure only arrays may implicitly convert to multi pointer
+                        ctx.asys.insert_type(Type::MultiPointer(ty))
+                    }
+                    _ => ctx.asys.insert_type(Type::Pointer(ty)),
+                }
+            }
+            UnOp::Cast => {
+                let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, errors);
+                match (&ctx.asys.types[ty], &ctx.asys.types[expected_type]) {
+                    (t1, Type::UPtr) if t1.is_ptr() => expected_type,
+                    (Type::UPtr, t2) if t2.is_ptr() => expected_type,
+                    (t1, t2) if t1.is_ptr() && t2.is_ptr() => expected_type,
+                    (t1, t2) if t1.is_int() && t2.is_int() => expected_type,
+                    (_t1, _t2) => ty,
+                }
+            }
         },
         Expression::Yeet(val) => {
             // TODO: yeet type analysis
@@ -927,10 +966,20 @@ fn analyze_expr(
             // default type for literal
             _ => TYPE_STR,
         },
+        Expression::Character(_) => match ctx.asys.types[expected_type] {
+            // TODO: check if fits
+            Type::U8 => TYPE_U8,
+
+            // default type for literal
+            // TODO: character type
+            _ => TYPE_U8,
+        },
         Expression::Int(_) => match ctx.asys.types[expected_type] {
+            // TODO: check if fits
             Type::Int => TYPE_INT,
             Type::USize => TYPE_USIZE,
             Type::UPtr => TYPE_UPTR,
+            Type::U8 => TYPE_U8,
 
             // default type for literal
             _ => TYPE_INT,
@@ -959,10 +1008,10 @@ fn analyze_expr(
     ctx.asys.exprs[expr]
 }
 
-fn scope_effect<'a>(
+fn analyze_effect(
     ctx: &mut AsysContext,
     ident: EffectIdent,
-    scope: &'a mut Scope,
+    scope: &Scope,
     errors: &mut Errors,
 ) -> Option<Val> {
     let effects = match ident.package {
@@ -970,8 +1019,7 @@ fn scope_effect<'a>(
             let name = &ctx.parsed.idents[package].0;
             match ctx.parsed.packages[scope.pkg].imports.get(name) {
                 Some(&pkg) => {
-                    let ty = ctx.asys.insert_type(Type::PackageLiteral(pkg));
-                    ctx.asys.push_val(package, Definition::BuiltinType(ty));
+                    ctx.asys.push_val(package, Definition::Package(pkg));
                     &ctx.packages[pkg].effects
                 }
                 None => {
@@ -1026,6 +1074,10 @@ fn analyze_type(
         T::Pointer(ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
             return ctx.asys.insert_type(Type::Pointer(inner));
+        }
+        T::MultiPointer(ty) => {
+            let inner = analyze_type(ctx, scope, ty, errors);
+            return ctx.asys.insert_type(Type::MultiPointer(inner));
         }
         T::ConstArray(size, ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
@@ -1086,16 +1138,16 @@ fn analyze_type(
     }
 }
 
-fn scope_sign(
+fn analyze_sign(
     ctx: &mut AsysContext,
-    scope: &mut Scope,
+    scope: &Scope,
     val: Val,
     func: &FunSign,
     errors: &mut Errors,
 ) {
     // put effects in scope
     for &effect in func.effects.iter() {
-        scope_effect(ctx, effect, scope, errors);
+        analyze_effect(ctx, effect, scope, errors);
     }
 
     // put args in scope
@@ -1113,13 +1165,18 @@ fn scope_sign(
             }
             _ => typ,
         };
+        ctx.asys
+            .push_val(param, Definition::Parameter(val, ParamIdx(i), typ));
+    }
+}
 
+fn scope_sign(ctx: &mut AsysContext, scope: &mut Scope, func: &FunSign) {
+    // put args in scope
+    for &(param, _) in func.inputs.values() {
         // add parameter to scope
-        scope.values.insert(
-            ctx.parsed.idents[param].0.clone(),
-            ctx.asys
-                .push_val(param, Definition::Parameter(val, ParamIdx(i), typ)),
-        );
+        scope
+            .values
+            .insert(ctx.parsed.idents[param].0.clone(), ctx.asys.values[param]);
     }
 }
 
@@ -1133,6 +1190,7 @@ const TYPE_BOOL: TypeIdx = TypeIdx(5);
 
 const TYPE_USIZE: TypeIdx = TypeIdx(6);
 const TYPE_UPTR: TypeIdx = TypeIdx(7);
+const TYPE_U8: TypeIdx = TypeIdx(8);
 
 pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     let mut asys = Analysis {
@@ -1152,11 +1210,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     asys.types.insert(TypeIdx, Type::Bool);
     asys.types.insert(TypeIdx, Type::USize);
     asys.types.insert(TypeIdx, Type::UPtr);
+    asys.types.insert(TypeIdx, Type::U8);
 
     let str = asys.defs.push(Val, Definition::BuiltinType(TYPE_STR));
     let int = asys.defs.push(Val, Definition::BuiltinType(TYPE_INT));
     let usize = asys.defs.push(Val, Definition::BuiltinType(TYPE_USIZE));
     let uptr = asys.defs.push(Val, Definition::BuiltinType(TYPE_UPTR));
+    let u8 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U8));
 
     let mut packages = VecMap::filled(parsed.packages.len(), Package::default());
     let vals = &mut packages[parsed.preamble].values;
@@ -1164,6 +1224,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     vals.insert("int".into(), int);
     vals.insert("usize".into(), usize);
     vals.insert("uptr".into(), uptr);
+    vals.insert("u8".into(), u8);
 
     // TODO: determine best order for analysing packages
     // and error on import cycles
@@ -1174,18 +1235,8 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
         packages,
     };
 
+    // analyze effect signatures
     for (idx, package) in parsed.packages.iter(PackageIdx) {
-        let values = ctx.packages[parsed.preamble].values.clone();
-        let mut effects = ctx.packages[parsed.preamble].effects.clone();
-
-        let global_scope = Scope {
-            parent: None,
-            values,
-            effects: &HashMap::new(),
-            scoped_effects: &HashSet::new(),
-            pkg: idx,
-        };
-
         // put names in scope
         // TODO: error on conflict
         for (i, effect) in package
@@ -1199,7 +1250,6 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
             ctx.packages[idx]
                 .effects
                 .insert(parsed.idents[effect.name].0.clone(), val);
-            effects.insert(parsed.idents[effect.name].0.clone(), val);
         }
         for &implied in package.implied.iter() {
             let handler = match &parsed.exprs[implied].0 {
@@ -1211,6 +1261,49 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 ctx.packages[idx].implied.insert(effect);
             }
         }
+    }
+
+    // analyze function signatures
+    for (idx, package) in parsed.packages.iter(PackageIdx) {
+        let mut values = HashMap::new();
+        values.extend(
+            ctx.packages[parsed.preamble]
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        values.extend(
+            ctx.packages[idx]
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+
+        let mut effects = HashMap::new();
+        effects.extend(
+            ctx.packages[parsed.preamble]
+                .effects
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        effects.extend(
+            ctx.packages[idx]
+                .effects
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+
+        let mut scoped_effects = HashSet::new();
+        scoped_effects.extend(ctx.packages[parsed.preamble].implied.iter().copied());
+        scoped_effects.extend(ctx.packages[idx].implied.iter().copied());
+
+        let global_scope = Scope {
+            parent: None,
+            values,
+            effects: &effects,
+            scoped_effects: &scoped_effects,
+            pkg: idx,
+        };
 
         for (i, effect) in package
             .effects
@@ -1227,10 +1320,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                     pkg: idx,
                 };
                 let return_type = analyze_return(&mut ctx, &scope, decl.sign.output, errors);
-                ctx.asys
+                let val = ctx
+                    .asys
                     .push_val(decl.name, Definition::EffectFunction(i, fi, return_type));
+                analyze_sign(&mut ctx, &scope, val, &decl.sign, errors);
             }
         }
+
         for (i, fun) in package
             .functions
             .iter()
@@ -1246,11 +1342,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 pkg: idx,
             };
             let return_type = analyze_return(&mut ctx, &scope, fun.decl.sign.output, errors);
-            ctx.packages[idx].values.insert(
-                parsed.idents[fun.decl.name].0.clone(),
-                ctx.asys
-                    .push_val(fun.decl.name, Definition::Function(i, return_type)),
-            );
+            let val = ctx
+                .asys
+                .push_val(fun.decl.name, Definition::Function(i, return_type));
+            ctx.packages[idx]
+                .values
+                .insert(parsed.idents[fun.decl.name].0.clone(), val);
+            analyze_sign(&mut ctx, &scope, val, &fun.decl.sign, errors);
 
             // check if main
             if parsed.idents[fun.decl.name].0 == "main" {
@@ -1259,7 +1357,8 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
         }
     }
 
-    for (i, package) in parsed.packages.iter(PackageIdx) {
+    // analyze effect and function bodies
+    for (idx, package) in parsed.packages.iter(PackageIdx) {
         let mut values = HashMap::new();
         values.extend(
             ctx.packages[parsed.preamble]
@@ -1268,7 +1367,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         values.extend(
-            ctx.packages[i]
+            ctx.packages[idx]
                 .values
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone())),
@@ -1282,7 +1381,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         effects.extend(
-            ctx.packages[i]
+            ctx.packages[idx]
                 .effects
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone())),
@@ -1290,14 +1389,14 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
 
         let mut scoped_effects = HashSet::new();
         scoped_effects.extend(ctx.packages[parsed.preamble].implied.iter().copied());
-        scoped_effects.extend(ctx.packages[i].implied.iter().copied());
+        scoped_effects.extend(ctx.packages[idx].implied.iter().copied());
 
         let global_scope = Scope {
             parent: None,
             values,
             effects: &effects,
             scoped_effects: &scoped_effects,
-            pkg: i,
+            pkg: idx,
         };
 
         // analyze effects and functions
@@ -1307,7 +1406,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 values: HashMap::new(),
                 effects: &effects,
                 scoped_effects: &scoped_effects,
-                pkg: i,
+                pkg: idx,
             };
             analyze_expr(&mut ctx, &mut scope, implied, TYPE_UNKNOWN, errors);
         }
@@ -1323,10 +1422,9 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                     values: HashMap::new(),
                     effects: &effects,
                     scoped_effects: &scoped_effects,
-                    pkg: i,
+                    pkg: idx,
                 };
-                let val = ctx.asys.values[fun.name];
-                scope_sign(&mut ctx, &mut scope, val, &fun.sign, errors);
+                scope_sign(&mut ctx, &mut scope, &fun.sign);
             }
         }
         for fun in package
@@ -1340,19 +1438,20 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 values: HashMap::new(),
                 effects: &effects,
                 scoped_effects: &scoped_effects,
-                pkg: i,
+                pkg: idx,
             };
             let val = ctx.asys.values[fun.decl.name];
-            scope_sign(&mut ctx, &mut scope, val, &fun.decl.sign, errors);
+            scope_sign(&mut ctx, &mut scope, &fun.decl.sign);
 
             let mut scoped = scope.scoped_effects.clone();
-            scoped.extend(
-                fun.decl
-                    .sign
-                    .effects
-                    .iter()
-                    .filter_map(|&i| scope.effects.get(&parsed.idents[i.effect].0).copied()),
-            );
+            scoped.extend(fun.decl.sign.effects.iter().filter_map(|&i| {
+                let val = ctx.asys.values[i.effect];
+                if val.0 == usize::MAX {
+                    None
+                } else {
+                    Some(val)
+                }
+            }));
             scope.scoped_effects = &scoped;
 
             let expected = match ctx.asys.defs[val] {

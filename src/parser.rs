@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use either::Either;
+
 use crate::{
     error::{Error, Expected, Range, Ranged},
     lexer::{Group, Token, Tokenizer},
@@ -36,6 +38,8 @@ pub enum BinOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
     PostIncrement,
+    Reference,
+    Cast,
 }
 
 impl BinOp {
@@ -71,6 +75,7 @@ pub enum Expression {
     Handler(Handler),
 
     String(String),
+    Character(String),
     Int(i128),
     Ident(Ident),
     Uninit,
@@ -109,6 +114,7 @@ pub enum Type {
     Handler(Ident, FailType),
 
     Pointer(TypeIdx),
+    MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
 
     #[default]
@@ -266,6 +272,7 @@ impl Parsed {
                 }
             }
             Expression::String(_) => {}
+            Expression::Character(_) => {}
             Expression::Int(_) => {}
             Expression::Ident(_) => {}
             Expression::Error => {}
@@ -713,16 +720,23 @@ impl Parse for Type {
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 let num = tk
                     .group_single(Group::Bracket, |tk| {
-                        let n = tk.int()?.0;
-                        // TODO: Error on too big or negative
-                        Some(n as u64)
+                        if tk.check(Token::Caret).is_some() {
+                            Some(Either::Right(()))
+                        } else {
+                            let n = tk.int()?.0;
+                            // TODO: Error on too big or negative
+                            Some(Either::Left(n as u64))
+                        }
                     })?
                     .0;
 
                 let ty = Type::parse_or_default(tk);
                 let ty = tk.push_type(ty);
 
-                Some(Type::ConstArray(num, ty))
+                match num {
+                    Either::Left(num) => Some(Type::ConstArray(num, ty)),
+                    Either::Right(_) => Some(Type::MultiPointer(ty)),
+                }
             }
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
@@ -761,7 +775,11 @@ impl Parse for FailType {
 
 impl Parse for Option<TypeIdx> {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
+        if tk
+            .peek()
+            .map(|t| t.0.continues_statement() || t.0 == Token::Loop)
+            .unwrap_or(true)
+        {
             Some(None)
         } else {
             let t = Type::parse_or_default(tk);
@@ -1051,6 +1069,26 @@ impl Parse for Expression {
                 }
             }
 
+            // reference
+            Some(Ranged(Token::Ampersand, ..)) => {
+                tk.next();
+
+                let right = Expression::parse_or_default(tk);
+                let right = tk.push_expr(right);
+
+                Some(Expression::UnOp(right, UnOp::Reference))
+            }
+
+            // cast
+            Some(Ranged(Token::Cast, ..)) => {
+                tk.next();
+
+                let right = Expression::parse_or_default(tk);
+                let right = tk.push_expr(right);
+
+                Some(Expression::UnOp(right, UnOp::Cast))
+            }
+
             // ident
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
@@ -1072,6 +1110,13 @@ impl Parse for Expression {
                 Some(Expression::String(s))
             }
 
+            // character
+            Some(Ranged(Token::Character(s), ..)) => {
+                let s = s.clone();
+                tk.next();
+                Some(Expression::Character(s))
+            }
+
             // int
             Some(&Ranged(Token::Int(num), ..)) => {
                 tk.next();
@@ -1080,6 +1125,14 @@ impl Parse for Expression {
 
             // block
             Some(Ranged(Token::Open(Group::Brace), ..)) => Some(Body::parse_or_default(tk).0),
+
+            // paren
+            Some(Ranged(Token::Open(Group::Paren), ..)) => {
+                let expr = tk
+                    .group_single(Group::Paren, |tk| Some(Expression::parse_or_default(tk).0))?
+                    .0;
+                Some(expr)
+            }
 
             _ => {
                 let err = match tk.next() {

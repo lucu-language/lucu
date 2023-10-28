@@ -999,11 +999,39 @@ impl<'ctx> CodeGen<'ctx> {
                             valmap.insert(r, struc.into());
                         }
                     }
-                    I::Bitcast(r, h) => {
+                    I::Cast(r, h) => {
                         if let Some(&v) = valmap.get(&h) {
                             let ty =
                                 BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
-                            let cast = self.builder.build_bitcast(v, ty, "").unwrap();
+
+                            let cast = if v.is_pointer_value() && ty.is_int_type() {
+                                self.builder
+                                    .build_ptr_to_int(
+                                        v.into_pointer_value(),
+                                        ty.into_int_type(),
+                                        "",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else if v.is_int_value() && ty.is_pointer_type() {
+                                self.builder
+                                    .build_int_to_ptr(
+                                        v.into_int_value(),
+                                        ty.into_pointer_type(),
+                                        "",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else if v.is_int_value() && ty.is_int_type() {
+                                // TODO: check how this works with sign/truncation
+                                self.builder
+                                    .build_int_cast(v.into_int_value(), ty.into_int_type(), "")
+                                    .unwrap()
+                                    .into()
+                            } else {
+                                self.builder.build_bitcast(v, ty, "").unwrap()
+                            };
+
                             valmap.insert(r, cast);
                         }
                     }
@@ -1038,6 +1066,23 @@ impl<'ctx> CodeGen<'ctx> {
                                         &[self.isize_type().const_int(0, false), mem],
                                         "",
                                     )
+                                    .unwrap()
+                            };
+
+                            valmap.insert(r, elem_ptr.into());
+                        }
+                    }
+                    I::AdjacentPtr(r, a, m) => {
+                        if let Some(&ptr) = valmap.get(&a) {
+                            let pointee_ty =
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
+                                    .unwrap();
+                            let ptr = ptr.into_pointer_value();
+
+                            let mem = valmap[&m].into_int_value();
+                            let elem_ptr = unsafe {
+                                self.builder
+                                    .build_in_bounds_gep(pointee_ty, ptr, &[mem], "")
                                     .unwrap()
                             };
 
@@ -1378,7 +1423,7 @@ impl<'ctx> CodeGen<'ctx> {
             Type::HandlerOutput => {
                 unreachable!("HandlerOutput never filled in with concrete handler type")
             }
-            Type::Byte => self.context.i8_type().into(),
+            Type::Int8 => self.context.i8_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::Pointer(ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),

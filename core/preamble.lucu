@@ -31,3 +31,17 @@ fun panic(s str) ! {
 	# internally defined
 	loop {}
 }
+
+##
+# implicit break effect
+# breaks up to the nearest try block
+##
+effect break {
+	fun break() !
+}
+
+handle break fails {
+	fun break() ! {
+		fail
+	}
+}

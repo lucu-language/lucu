@@ -1,0 +1,13 @@
+import "core:sys/unix"
+
+fun main() / unix.sys {
+	loop {
+		mut buf [255]u8 = ---
+
+		# get line
+		let count = unix.read_line(&buf[0])
+
+		# write back
+		unix.write(&buf[0], count)
+	}
+}

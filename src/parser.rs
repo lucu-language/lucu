@@ -136,8 +136,15 @@ pub struct EffectIdent {
 }
 
 #[derive(Debug)]
+pub struct Param {
+    pub mutable: bool,
+    pub name: Ident,
+    pub ty: TypeIdx,
+}
+
+#[derive(Debug)]
 pub struct FunSign {
-    pub inputs: VecMap<ParamIdx, (Ident, TypeIdx)>,
+    pub inputs: VecMap<ParamIdx, Param>,
     pub output: Option<TypeIdx>,
     pub effects: Vec<EffectIdent>,
 }
@@ -809,11 +816,12 @@ impl Parse for FunSign {
         };
 
         tk.group(Group::Paren, true, |tk| {
+            let mutable = tk.check(Token::Mut).is_some();
             let id = tk.ident()?;
             let name = tk.push_ident(id);
-            let typ = Type::parse_or_default(tk);
-            let typ = tk.push_type(typ);
-            decl.inputs.push_value((name, typ));
+            let ty = Type::parse_or_default(tk);
+            let ty = tk.push_type(ty);
+            decl.inputs.push_value(Param { mutable, name, ty });
             Some(())
         })?;
 

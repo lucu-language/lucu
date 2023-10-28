@@ -17,11 +17,11 @@ fun exit(code uptr) ! / sys {
 	unreachable()
 }
 
-fun read(buf []u8) usize / sys {
+fun read(mut buf []u8) usize / sys {
 	cast syscall3(0, 0, cast &buf[0], cast len(buf))
 }
 
-fun read_line(buf []u8) []u8 / sys {
+fun read_line(mut buf []u8) []u8 / sys {
 	mut current usize = 0
 
 	try loop {

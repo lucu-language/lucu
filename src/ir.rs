@@ -282,7 +282,7 @@ impl TypeIdx {
     }
     fn from_val(ir: &mut IRContext, val: Val) -> TypeIdx {
         match ir.asys.defs[val] {
-            Definition::Parameter(_, _, t) => TypeIdx::from_type(ir, t),
+            Definition::Parameter(_, _, _, t) => TypeIdx::from_type(ir, t),
             Definition::Variable(_, _, t) => TypeIdx::from_type(ir, t),
             Definition::EffectFunction(_, _, _) => todo!(),
             Definition::Function(_, _) => todo!(),
@@ -1202,8 +1202,7 @@ fn get_proc(
                     .sign
                     .inputs
                     .values()
-                    .copied()
-                    .map(|(ident, _)| ir.asys.values[ident])
+                    .map(|param| ir.asys.values[param.name])
                     .zip(param_types.iter().copied())
                     .map(|(a, b)| (a, b, false))
                     .collect::<Vec<_>>();
@@ -1341,8 +1340,7 @@ fn get_handler_proc(
             .sign
             .inputs
             .values()
-            .copied()
-            .map(|(ident, _)| ir.asys.values[ident])
+            .map(|param| ir.asys.values[param.name])
             .zip(param_types.iter().copied())
             .map(|(a, b)| (a, b, false))
             .collect::<Vec<_>>();
@@ -1719,11 +1717,11 @@ fn get_captures(
                         }
                     })
                     .collect(),
-                Definition::Parameter(_, _, _) => {
+                Definition::Parameter(_, mutable, _, _) => {
                     if Some(val) == exception {
                         vec![]
                     } else {
-                        vec![(val, false)]
+                        vec![(val, mutable)]
                     }
                 }
                 Definition::Variable(mutable, _, _) => {

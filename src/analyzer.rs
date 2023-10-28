@@ -86,7 +86,7 @@ impl TypeIdx {
         match val.0 == usize::MAX {
             true => TYPE_UNKNOWN,
             false => match ctx.asys.defs[val] {
-                Definition::Parameter(_, _, t) => t,
+                Definition::Parameter(_, _, _, t) => t,
                 Definition::Variable(_, _, t) => t,
                 Definition::EffectFunction(_, _, _) => {
                     ctx.asys.insert_type(Type::FunctionLiteral(val))
@@ -103,11 +103,11 @@ impl TypeIdx {
 
 #[derive(Debug, Clone)]
 pub enum Definition {
-    Parameter(Val, ParamIdx, TypeIdx), // parameter index in function
-    Variable(bool, ExprIdx, TypeIdx),  // variable defined at expr
-    Effect(EffIdx),                    // effect index in ast
+    Parameter(Val, bool, ParamIdx, TypeIdx), // parameter index in function
+    Variable(bool, ExprIdx, TypeIdx),        // variable defined at expr
+    Effect(EffIdx),                          // effect index in ast
     EffectFunction(EffIdx, EffFunIdx, TypeIdx), // effect value, function index in effect
-    Function(FunIdx, TypeIdx),         // function index in ast
+    Function(FunIdx, TypeIdx),               // function index in ast
 
     BuiltinType(TypeIdx), // builtin type
     Package(PackageIdx),  // package
@@ -169,6 +169,9 @@ impl Type {
     fn is_ptr(&self) -> bool {
         matches!(self, Type::Pointer(_) | Type::MultiPointer(_))
     }
+    fn is_view(&self) -> bool {
+        self.is_ptr() || matches!(self, Type::Slice(_))
+    }
 }
 
 pub struct Analysis {
@@ -222,13 +225,14 @@ impl<'a> Scope<'a> {
 impl Val {
     fn definition_range(&self, ctx: &AsysContext) -> Option<Ranged<()>> {
         match ctx.asys.defs[*self] {
-            Definition::Parameter(f, p, _) => match ctx.asys.defs[f] {
+            Definition::Parameter(f, _, p, _) => match ctx.asys.defs[f] {
                 Definition::EffectFunction(e, f, _) => Some(
-                    ctx.parsed.idents[ctx.parsed.effects[e].functions[f].sign.inputs[p].0].empty(),
+                    ctx.parsed.idents[ctx.parsed.effects[e].functions[f].sign.inputs[p].name]
+                        .empty(),
                 ),
-                Definition::Function(f, _) => {
-                    Some(ctx.parsed.idents[ctx.parsed.functions[f].decl.sign.inputs[p].0].empty())
-                }
+                Definition::Function(f, _) => Some(
+                    ctx.parsed.idents[ctx.parsed.functions[f].decl.sign.inputs[p].name].empty(),
+                ),
                 _ => None,
             },
             Definition::Effect(e) => Some(ctx.parsed.idents[ctx.parsed.effects[e].name].empty()),
@@ -265,31 +269,32 @@ fn analyze_assignable(
     expr: ExprIdx,
     parent: ExprIdx,
     errors: &mut Errors,
-) -> TypeIdx {
-    let ty = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
+) -> (TypeIdx, bool) {
     match ctx.parsed.exprs[expr].0 {
         Expression::Ident(id) => {
+            let ty = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
             let val = ctx.asys.values[id];
             if val.0 != usize::MAX {
                 match ctx.asys.defs[val] {
+                    Definition::Parameter(_, true, _, _) => ty,
                     Definition::Variable(true, _, _) => ty,
                     _ => {
                         errors.push(
                             ctx.parsed.exprs[parent]
                                 .with(Error::AssignImmutable(val.definition_range(ctx))),
                         );
-                        TYPE_UNKNOWN
+                        (TYPE_UNKNOWN, false)
                     }
                 }
             } else {
-                TYPE_UNKNOWN
+                (TYPE_UNKNOWN, false)
             }
         }
         Expression::BinOp(left, BinOp::Index, right) => {
             let array = analyze_assignable(ctx, scope, left, expr, errors);
             analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
 
-            match ctx.asys.types[array] {
+            let ty = match ctx.asys.types[array.0] {
                 Type::ConstArray(_, ty) => ty,
                 Type::MultiPointer(ty) => ty,
                 Type::Slice(ty) => ty,
@@ -298,12 +303,14 @@ fn analyze_assignable(
                     // TODO: error
                     TYPE_UNKNOWN
                 }
-            }
+            };
+            (ty, array.1)
         }
-        Expression::Error => TYPE_UNKNOWN,
+        Expression::Error => (TYPE_UNKNOWN, false),
         _ => {
+            analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
             errors.push(ctx.parsed.exprs[parent].with(Error::AssignExpression));
-            TYPE_UNKNOWN
+            (TYPE_UNKNOWN, false)
         }
     }
 }
@@ -350,15 +357,9 @@ fn capture_ident(
                     }
                 }
             }
-            Definition::Parameter(_, _, _) => {
+            Definition::Parameter(_, mutable, _, _) => {
                 if scope.get(&ctx.parsed.idents[id].0) == Some(val) {
-                    add_capture(
-                        captures,
-                        Capture {
-                            val,
-                            mutable: false,
-                        },
-                    );
+                    add_capture(captures, Capture { val, mutable });
                 }
             }
             Definition::Variable(mutable, _, _) => {
@@ -387,10 +388,10 @@ fn analyze_expr(
     ctx: &mut AsysContext,
     scope: &mut Scope,
     expr: ExprIdx,
-    expected_type: TypeIdx,
+    expected_ty: TypeIdx,
     errors: &mut Errors,
-) -> TypeIdx {
-    let found_type = match ctx.parsed.exprs[expr].0 {
+) -> (TypeIdx, bool) {
+    let (found_ty, mutable) = match ctx.parsed.exprs[expr].0 {
         // analyze
         Expression::Handler(ref handler) => {
             // resolve yeet
@@ -457,7 +458,7 @@ fn analyze_expr(
                 }));
                 child.scoped_effects = &scoped;
 
-                let found = analyze_expr(ctx, &mut child, fun.body, expected, errors);
+                let found = analyze_expr(ctx, &mut child, fun.body, expected, errors).0;
 
                 // set concrete handler type
                 if matches!(ctx.asys.types[expected], Type::Handler(_, _, _)) {
@@ -494,14 +495,20 @@ fn analyze_expr(
                 None => TYPE_UNKNOWN,
             };
 
-            handler_type
+            (handler_type, false)
         }
         Expression::Ident(ident) => {
             let name = &ctx.parsed.idents[ident].0;
             match scope.get(name) {
                 Some(val) => {
                     ctx.asys.values[ident] = val;
-                    TypeIdx::from_val(ctx, val)
+                    let ty = TypeIdx::from_val(ctx, val);
+                    let mutable = match ctx.asys.defs[val] {
+                        Definition::Parameter(_, true, _, _) => true,
+                        Definition::Variable(true, _, _) => true,
+                        _ => false,
+                    };
+                    (ty, mutable)
                 }
                 None => {
                     match scope
@@ -519,12 +526,15 @@ fn analyze_expr(
                             // handled effects may be implicitly converted to handlers that never fail
                             ctx.asys.values[ident] = val;
                             let handler = ctx.asys.handlers.push(HandlerIdx, HandlerDef::Signature);
-                            ctx.asys
-                                .insert_type(Type::Handler(val, TYPE_NEVER, Some(handler)))
+                            (
+                                ctx.asys
+                                    .insert_type(Type::Handler(val, TYPE_NEVER, Some(handler))),
+                                false,
+                            )
                         }
                         None => {
                             errors.push(ctx.parsed.idents[ident].with(Error::UnknownValue));
-                            TYPE_UNKNOWN
+                            (TYPE_UNKNOWN, false)
                         }
                     }
                 }
@@ -539,13 +549,13 @@ fn analyze_expr(
                 analyze_expr(ctx, &mut child, expr, TYPE_UNKNOWN, errors);
             }
             match b.last {
-                Some(expr) => analyze_expr(ctx, &mut child, expr, expected_type, errors),
-                None => TYPE_NONE,
+                Some(expr) => analyze_expr(ctx, &mut child, expr, expected_ty, errors),
+                None => (TYPE_NONE, false),
             }
         }
         Expression::Loop(expr) => {
             analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
-            TYPE_NEVER
+            (TYPE_NEVER, false)
         }
         Expression::Call(cexpr, ref exprs) => {
             // get function
@@ -608,7 +618,7 @@ fn analyze_expr(
                     }
                 }
                 _ => {
-                    let fun = analyze_expr(ctx, scope, cexpr, TYPE_UNKNOWN, errors);
+                    let fun = analyze_expr(ctx, scope, cexpr, TYPE_UNKNOWN, errors).0;
                     match ctx.asys.types[fun] {
                         Type::FunctionLiteral(fun) => Some(fun),
                         Type::Unknown => None,
@@ -635,8 +645,12 @@ fn analyze_expr(
                                     .sign
                                     .inputs
                                     .values()
-                                    .map(|&(ident, _)| {
-                                        TypeIdx::from_val(ctx, ctx.asys.values[ident]).to_base(ctx)
+                                    .map(|param| {
+                                        (
+                                            TypeIdx::from_val(ctx, ctx.asys.values[param.name])
+                                                .to_base(ctx),
+                                            param.mutable,
+                                        )
                                     })
                                     .collect::<Vec<_>>(),
                             ),
@@ -651,8 +665,12 @@ fn analyze_expr(
                                     .sign
                                     .inputs
                                     .values()
-                                    .map(|&(ident, _)| {
-                                        TypeIdx::from_val(ctx, ctx.asys.values[ident]).to_base(ctx)
+                                    .map(|param| {
+                                        (
+                                            TypeIdx::from_val(ctx, ctx.asys.values[param.name])
+                                                .to_base(ctx),
+                                            param.mutable,
+                                        )
                                     })
                                     .collect::<Vec<_>>(),
                             ),
@@ -691,11 +709,15 @@ fn analyze_expr(
                             .with(Error::ParameterMismatch(params.len(), exprs.len())),
                     );
                 }
-                for (expr, expected) in exprs.iter().copied().zip(params.into_iter()) {
-                    analyze_expr(ctx, scope, expr, expected, errors);
+                for (expr, (expected, mutable)) in exprs.iter().copied().zip(params.into_iter()) {
+                    let param = analyze_expr(ctx, scope, expr, expected, errors);
+                    if mutable && !param.1 && ctx.asys.types[param.0].is_view() {
+                        // TODO: custom error
+                        errors.push(ctx.parsed.exprs[expr].with(Error::AssignImmutable(None)))
+                    }
                 }
             }
-            return_type
+            (return_type, false)
         }
         Expression::TryWith(expr, return_type, handler) => {
             let return_type = analyze_return(ctx, scope, return_type, errors);
@@ -707,7 +729,7 @@ fn analyze_expr(
 
             let mut child = scope.child();
             let ty = if let Some(handler) = handler {
-                let handler_type = analyze_expr(ctx, &mut child, handler, TYPE_UNKNOWN, errors);
+                let handler_type = analyze_expr(ctx, &mut child, handler, TYPE_UNKNOWN, errors).0;
 
                 let handler_type = match ctx.asys.types[handler_type] {
                     Type::Handler(handler, break_type, _) => Some((handler, break_type)),
@@ -747,13 +769,13 @@ fn analyze_expr(
                         analyze_expr(ctx, &mut child, expr, expected_break, errors)
                     }
                 } else {
-                    TYPE_UNKNOWN
+                    (TYPE_UNKNOWN, false)
                 }
             } else {
                 analyze_expr(ctx, &mut child, expr, expected_return, errors)
             };
 
-            if matches!(ctx.asys.types[ty], Type::Handler(_, _, _)) {
+            if matches!(ctx.asys.types[ty.0], Type::Handler(_, _, _)) {
                 let expr = match &ctx.parsed.exprs[expr].0 {
                     Expression::Body(body) => body.last.unwrap(),
                     _ => expr,
@@ -808,7 +830,7 @@ fn analyze_expr(
                 }
             } else {
                 // TODO: allow parent expr to be effect of package
-                Some(analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors))
+                Some(analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors).0)
             };
 
             if let Some(handler) = handler {
@@ -818,7 +840,7 @@ fn analyze_expr(
                         match ctx.packages[pkg].values.get(name) {
                             Some(&val) => {
                                 ctx.asys.values[field] = val;
-                                TypeIdx::from_val(ctx, val)
+                                (TypeIdx::from_val(ctx, val), false)
                             }
                             None => {
                                 // TODO: custom error
@@ -826,7 +848,7 @@ fn analyze_expr(
                                     None,
                                     Some(ctx.parsed.exprs[expr].empty()),
                                 )));
-                                TYPE_UNKNOWN
+                                (TYPE_UNKNOWN, false)
                             }
                         }
                     }
@@ -843,7 +865,7 @@ fn analyze_expr(
                         match fun {
                             Some(fun) => {
                                 ctx.asys.values[field] = fun;
-                                ctx.asys.insert_type(Type::FunctionLiteral(fun))
+                                (ctx.asys.insert_type(Type::FunctionLiteral(fun)), false)
                             }
                             None => {
                                 errors.push(ctx.parsed.idents[field].with(
@@ -852,48 +874,55 @@ fn analyze_expr(
                                         Some(ctx.parsed.exprs[expr].empty()),
                                     ),
                                 ));
-                                TYPE_UNKNOWN
+                                (TYPE_UNKNOWN, false)
                             }
                         }
                     }
-                    Type::Unknown => TYPE_UNKNOWN,
+                    Type::Unknown => (TYPE_UNKNOWN, false),
                     _ => {
                         // TODO: type definition
                         errors.push(ctx.parsed.idents[field].with(Error::UnknownField(
                             None,
                             Some(ctx.parsed.exprs[expr].empty()),
                         )));
-                        TYPE_UNKNOWN
+                        (TYPE_UNKNOWN, false)
                     }
                 }
             } else {
-                TYPE_UNKNOWN
+                (TYPE_UNKNOWN, false)
             }
         }
         Expression::IfElse(cond, no, yes) => {
             analyze_expr(ctx, scope, cond, TYPE_BOOL, errors);
-            let yes_type = analyze_expr(ctx, scope, no, expected_type, errors);
+            let yes_type = analyze_expr(ctx, scope, no, expected_ty, errors);
             let no_type = match yes {
-                Some(expr) => analyze_expr(ctx, scope, expr, expected_type, errors),
-                None => TYPE_NONE,
+                Some(expr) => analyze_expr(ctx, scope, expr, expected_ty, errors),
+                None => (TYPE_NONE, false),
             };
-            TypeIdx::join(yes_type, no_type).unwrap_or(TYPE_NONE)
+            (
+                TypeIdx::join(yes_type.0, no_type.0).unwrap_or(TYPE_NONE),
+                yes_type.1 && no_type.1,
+            )
         }
         Expression::BinOp(left, op, right) => match op {
             BinOp::Assign => {
-                let left_type = analyze_assignable(ctx, scope, left, expr, errors);
-                analyze_expr(ctx, scope, right, left_type, errors);
-                TYPE_NONE
+                let left_type = analyze_assignable(ctx, scope, left, expr, errors).0;
+                let right_type = analyze_expr(ctx, scope, right, left_type, errors);
+                if !right_type.1 && ctx.asys.types[right_type.0].is_view() {
+                    // TODO: custom error
+                    errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutable(None)));
+                }
+                (TYPE_NONE, false)
             }
             BinOp::Index => {
                 let array = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors);
 
-                match ctx.parsed.exprs[right].0 {
+                let elem = match ctx.parsed.exprs[right].0 {
                     Expression::BinOp(left, BinOp::Range, right) => {
                         analyze_expr(ctx, scope, left, TYPE_USIZE, errors);
                         analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
 
-                        match ctx.asys.types[array] {
+                        match ctx.asys.types[array.0] {
                             Type::ConstArray(_, ty) => ctx.asys.insert_type(Type::Slice(ty)),
                             Type::MultiPointer(ty) => ctx.asys.insert_type(Type::Slice(ty)),
                             Type::Slice(ty) => ctx.asys.insert_type(Type::Slice(ty)),
@@ -907,7 +936,7 @@ fn analyze_expr(
                     _ => {
                         analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
 
-                        match ctx.asys.types[array] {
+                        match ctx.asys.types[array.0] {
                             Type::ConstArray(_, ty) => ty,
                             Type::MultiPointer(ty) => ty,
                             Type::Slice(ty) => ty,
@@ -918,7 +947,8 @@ fn analyze_expr(
                             }
                         }
                     }
-                }
+                };
+                (elem, array.1)
             }
             _ => {
                 let ret_ty = match op {
@@ -932,14 +962,14 @@ fn analyze_expr(
                 };
                 match ret_ty {
                     Some(ret_ty) => {
-                        let op_ty = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors);
+                        let op_ty = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors).0;
                         analyze_expr(ctx, scope, right, op_ty, errors);
-                        ret_ty
+                        (ret_ty, false)
                     }
                     None => {
-                        let op_ty = analyze_expr(ctx, scope, left, expected_type, errors);
+                        let op_ty = analyze_expr(ctx, scope, left, expected_ty, errors).0;
                         analyze_expr(ctx, scope, right, op_ty, errors);
-                        op_ty
+                        (op_ty, false)
                     }
                 }
             }
@@ -948,22 +978,23 @@ fn analyze_expr(
             UnOp::PostIncrement => analyze_assignable(ctx, scope, uexpr, expr, errors),
             UnOp::Reference => {
                 let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, errors);
-                match ctx.asys.types[expected_type] {
-                    Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty)),
+                let ptr = match ctx.asys.types[expected_ty] {
+                    Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty.0)),
                     Type::MultiPointer(_) => {
                         // TODO: make sure only arrays may implicitly convert to multi pointer
-                        ctx.asys.insert_type(Type::MultiPointer(ty))
+                        ctx.asys.insert_type(Type::MultiPointer(ty.0))
                     }
-                    _ => ctx.asys.insert_type(Type::Pointer(ty)),
-                }
+                    _ => ctx.asys.insert_type(Type::Pointer(ty.0)),
+                };
+                (ptr, ty.1)
             }
             UnOp::Cast => {
                 let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, errors);
-                match (&ctx.asys.types[ty], &ctx.asys.types[expected_type]) {
-                    (t1, Type::UPtr) if t1.is_ptr() => expected_type,
-                    (Type::UPtr, t2) if t2.is_ptr() => expected_type,
-                    (t1, t2) if t1.is_int() && t2.is_int() => expected_type,
-                    (Type::Str, Type::Slice(TYPE_U8)) => expected_type,
+                match (&ctx.asys.types[ty.0], &ctx.asys.types[expected_ty]) {
+                    (t1, Type::UPtr) if t1.is_ptr() => (expected_ty, false),
+                    (Type::UPtr, t2) if t2.is_ptr() => (expected_ty, true),
+                    (t1, t2) if t1.is_int() && t2.is_int() => (expected_ty, false),
+                    (Type::Str, Type::Slice(TYPE_U8)) => (expected_ty, false),
                     (_t1, _t2) => ty,
                 }
             }
@@ -973,7 +1004,7 @@ fn analyze_expr(
             if let Some(expr) = val {
                 analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, errors);
             }
-            TYPE_NEVER
+            (TYPE_NEVER, false)
         }
         Expression::Let(mutable, name, ty, rexpr) => {
             let val_type = match ty {
@@ -981,62 +1012,75 @@ fn analyze_expr(
                 None => TYPE_UNKNOWN,
             };
             let val_type = analyze_expr(ctx, scope, rexpr, val_type, errors);
+            if mutable && !val_type.1 && ctx.asys.types[val_type.0].is_view() {
+                // TODO: custom error type
+                errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignImmutable(None)));
+            }
 
             let val = ctx
                 .asys
-                .push_val(name, Definition::Variable(mutable, expr, val_type));
+                .push_val(name, Definition::Variable(mutable, expr, val_type.0));
             scope.values.insert(ctx.parsed.idents[name].0.clone(), val);
-            TYPE_NONE
+            (TYPE_NONE, false)
         }
 
         // these have no identifiers
-        Expression::String(_) => match ctx.asys.types[expected_type] {
-            Type::Str => TYPE_STR,
-            Type::Slice(TYPE_U8) => expected_type,
+        Expression::String(_) => (
+            match ctx.asys.types[expected_ty] {
+                Type::Str => TYPE_STR,
+                Type::Slice(TYPE_U8) => expected_ty,
 
-            // default type for literal
-            _ => TYPE_STR,
-        },
-        Expression::Character(_) => match ctx.asys.types[expected_type] {
-            // TODO: check if fits
-            Type::U8 => TYPE_U8,
+                // default type for literal
+                _ => TYPE_STR,
+            },
+            false,
+        ),
+        Expression::Character(_) => (
+            match ctx.asys.types[expected_ty] {
+                // TODO: check if fits
+                Type::U8 => TYPE_U8,
 
-            // default type for literal
-            // TODO: character type
-            _ => TYPE_U8,
-        },
-        Expression::Int(_) => match ctx.asys.types[expected_type] {
-            // TODO: check if fits
-            Type::Int => TYPE_INT,
-            Type::USize => TYPE_USIZE,
-            Type::UPtr => TYPE_UPTR,
-            Type::U8 => TYPE_U8,
+                // default type for literal
+                // TODO: character type
+                _ => TYPE_U8,
+            },
+            false,
+        ),
+        Expression::Int(_) => (
+            match ctx.asys.types[expected_ty] {
+                // TODO: check if fits
+                Type::Int => TYPE_INT,
+                Type::USize => TYPE_USIZE,
+                Type::UPtr => TYPE_UPTR,
+                Type::U8 => TYPE_U8,
 
-            // default type for literal
-            _ => TYPE_INT,
-        },
+                // default type for literal
+                _ => TYPE_INT,
+            },
+            false,
+        ),
         Expression::Uninit => {
             // TODO: error if expected_type is undefined
-            expected_type
+            (expected_ty, false)
         }
-        Expression::Error => TYPE_UNKNOWN,
+        Expression::Error => (TYPE_UNKNOWN, false),
     };
 
-    let typ = match (expected_type, found_type.to_base(ctx)) {
-        (a, b) if TypeIdx::matches(a, b) => found_type,
-        (_, TYPE_NEVER) => expected_type,
+    let typ = match (expected_ty, found_ty.to_base(ctx)) {
+        (a, b) if TypeIdx::matches(a, b) => found_ty,
+        (_, TYPE_NEVER) => expected_ty,
 
         (_, _) => {
             errors.push(ctx.parsed.exprs[expr].with(Error::TypeMismatch(
-                expected_type.display(ctx),
-                found_type.display(ctx),
+                expected_ty.display(ctx),
+                found_ty.display(ctx),
             )));
-            expected_type
+            expected_ty
         }
     };
 
     ctx.asys.exprs[expr] = typ;
-    ctx.asys.exprs[expr]
+    (typ, mutable)
 }
 
 fn analyze_effect(
@@ -1186,10 +1230,10 @@ fn analyze_sign(
     }
 
     // put args in scope
-    for (i, &(param, ty)) in func.inputs.values().enumerate() {
+    for (i, param) in func.inputs.values().enumerate() {
         // resolve type
-        let typ = analyze_type(ctx, scope, ty, errors);
-        let typ = match ctx.asys.types[typ] {
+        let ty = analyze_type(ctx, scope, param.ty, errors);
+        let ty = match ctx.asys.types[ty] {
             Type::Handler(effect, yeet, _) => {
                 let handler = ctx
                     .asys
@@ -1198,20 +1242,23 @@ fn analyze_sign(
                 ctx.asys
                     .insert_type(Type::Handler(effect, yeet, Some(handler)))
             }
-            _ => typ,
+            _ => ty,
         };
-        ctx.asys
-            .push_val(param, Definition::Parameter(val, ParamIdx(i), typ));
+        ctx.asys.push_val(
+            param.name,
+            Definition::Parameter(val, param.mutable, ParamIdx(i), ty),
+        );
     }
 }
 
 fn scope_sign(ctx: &mut AsysContext, scope: &mut Scope, func: &FunSign) {
     // put args in scope
-    for &(param, _) in func.inputs.values() {
+    for param in func.inputs.values() {
         // add parameter to scope
-        scope
-            .values
-            .insert(ctx.parsed.idents[param].0.clone(), ctx.asys.values[param]);
+        scope.values.insert(
+            ctx.parsed.idents[param.name].0.clone(),
+            ctx.asys.values[param.name],
+        );
     }
 }
 
@@ -1493,7 +1540,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 Definition::Function(_, return_type) => return_type,
                 _ => unreachable!(),
             };
-            let found = analyze_expr(&mut ctx, &mut scope, fun.body, expected, errors);
+            let found = analyze_expr(&mut ctx, &mut scope, fun.body, expected, errors).0;
 
             // set concrete handler type
             if matches!(ctx.asys.types[expected], Type::Handler(_, _, _)) {

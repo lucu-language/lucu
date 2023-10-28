@@ -1,4 +1,33 @@
+##
+# everything in this file is always in scope
+# many functions are defined internally and will be annotated as such
+# internal functions will have a dummy return value for the type checker
+##
+
+##
+# crude way of reading and writing data
+# defined for the main function
+##
 effect debug {
 	fun putint(n int)
 	fun putstr(s str)
+}
+
+##
+# marks that a code path is unreachable
+# this function should NEVER actually be called
+# for displaying an error, &panic is preferred
+##
+fun unreachable() ! {
+	# internally defined
+	loop {}
+}
+
+##
+# exits the program and displays an error
+# preferred to be used only for debugging
+##
+fun panic(s str) ! {
+	# internally defined
+	loop {}
 }

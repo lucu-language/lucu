@@ -1,0 +1,18 @@
+##
+# system effect for unix-like targets
+# defined for the main function
+##
+effect sys {
+	fun syscall0(nr uptr) uptr
+	fun syscall1(nr uptr, a0 uptr) uptr
+	fun syscall2(nr uptr, a0 uptr, a1 uptr) uptr
+	fun syscall3(nr uptr, a0 uptr, a1 uptr, a2 uptr) uptr
+	fun syscall4(nr uptr, a0 uptr, a1 uptr, a2 uptr, a3 uptr) uptr
+	fun syscall5(nr uptr, a0 uptr, a1 uptr, a2 uptr, a3 uptr, a4 uptr) uptr
+	fun syscall6(nr uptr, a0 uptr, a1 uptr, a2 uptr, a3 uptr, a4 uptr, a5 uptr) uptr
+}
+
+fun exit(code uptr) ! / sys {
+	syscall1(60, code)
+	unreachable()
+}

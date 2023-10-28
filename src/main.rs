@@ -3,15 +3,19 @@
 extern crate test;
 
 use std::{
-    collections::HashMap, env, fs::read_to_string, path::Path, print, println, process::Command,
+    collections::HashMap,
+    env,
+    ffi::OsStr,
+    fs::{read_dir, read_to_string},
+    path::Path,
+    println,
+    process::Command,
 };
 
 use analyzer::{analyze, Analysis};
 use error::{Errors, File, FileIdx};
 use lexer::Tokenizer;
 use parser::{parse_ast, Parsed};
-
-use crate::{error::Ranged, lexer::Token};
 
 mod analyzer;
 mod error;
@@ -26,25 +30,63 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
     let mut errors = Errors::new();
 
     let preamble = core_path.join("preamble.lucu");
+    let system = core_path.join("sys/unix"); // TODO: get current system
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
-        (preamble, parsed.core),
+        (preamble, parsed.preamble),
+        (system, parsed.system),
     ];
 
     let mut libs = HashMap::new();
     libs.insert("core", core_path);
 
-    while let Some((path, pkg)) = files_todo.pop() {
-        let content = std::fs::read_to_string(&path).unwrap();
-        let idx = errors.files.push(
-            FileIdx,
-            File {
-                content: content.clone(),
-                name: path.to_string_lossy().into_owned(),
+    let mut n = 0;
+    while let Some(&(ref path, pkg)) = files_todo.get(n) {
+        n += 1;
+
+        match path.extension() == Some(OsStr::new("lucu")) {
+            true => {
+                let content = read_to_string(&path).unwrap();
+                let idx = errors.files.push(
+                    FileIdx,
+                    File {
+                        content: content.clone(),
+                        name: path.to_string_lossy().into_owned(),
+                    },
+                );
+                let tok = Tokenizer::new(&content, idx, &mut errors);
+                parse_ast(tok, pkg, &mut parsed, &path.clone(), &libs, &mut files_todo);
+            }
+            false => match read_dir(&path) {
+                Ok(files) => {
+                    let iter = files.filter_map(|entry| {
+                        // get lucu files
+                        let path = entry.ok()?.path();
+                        if path.extension() == Some(OsStr::new("lucu")) {
+                            Some(path)
+                        } else {
+                            None
+                        }
+                    });
+                    for path in iter {
+                        let content = read_to_string(&path).unwrap();
+                        let idx = errors.files.push(
+                            FileIdx,
+                            File {
+                                content: content.clone(),
+                                name: path.to_string_lossy().into_owned(),
+                            },
+                        );
+                        let tok = Tokenizer::new(&content, idx, &mut errors);
+                        parse_ast(tok, pkg, &mut parsed, &path.clone(), &libs, &mut files_todo);
+                    }
+                }
+                Err(_) => {
+                    // TODO: error
+                    panic!();
+                }
             },
-        );
-        let tok = Tokenizer::new(&content, idx, &mut errors);
-        parse_ast(tok, pkg, &mut parsed, &path, &libs, &mut files_todo);
+        }
     }
 
     let asys = analyze(&parsed, &mut errors);
@@ -60,89 +102,10 @@ fn main() {
     let debug = true;
     let color = true;
     let args: Vec<String> = env::args().collect();
-    let file = read_to_string(args[1].clone()).unwrap().replace('\t', "  ");
-
-    if debug {
-        // print extra semicolons
-        println!("\n--- SEMICOLONS ---");
-
-        let mut chars = file.chars().enumerate().peekable();
-
-        for tok in lexer::Tokenizer::new(file.as_str(), FileIdx(0), &mut error::Errors::new()) {
-            let start = tok.1;
-
-            // print until start
-            while let Some(char) = chars.peek().filter(|&(i, _)| *i < start).map(|&(_, c)| c) {
-                chars.next();
-                print!("{}", char);
-            }
-
-            // print extra semicolon
-            if matches!(tok, Ranged(Token::Semicolon, ..))
-                && !chars.peek().is_some_and(|&(_, c)| c == ';')
-            {
-                print!("\x1b[7m;\x1b[0m");
-            }
-        }
-
-        // print remaining
-        for char in chars.map(|(_, c)| c) {
-            print!("{}", char);
-        }
-        println!();
-    }
 
     // analyze
     match parse_from_filename(Path::new(&args[1]), Path::new("core")) {
         Ok((parsed, asys)) => {
-            if debug {
-                // visualize idents
-                println!("\n--- SCOPE ANALYSIS ---");
-
-                let mut idents = asys
-                    .values
-                    .values()
-                    .zip(parsed.idents.values())
-                    .collect::<Vec<_>>();
-                idents.sort_by_key(|(_, range)| range.1);
-
-                let mut chars = file.chars().enumerate();
-                let mut idents = idents.into_iter().peekable();
-
-                while let Some((i, char)) = chars.next() {
-                    if let Some(id) = idents.peek().filter(|id| id.1 .1 == i) {
-                        // background!
-                        let mut bg = 100;
-
-                        let num = usize::from(*id.0);
-                        if num != usize::MAX {
-                            bg = 41 + (num % 14);
-
-                            if bg >= 48 {
-                                bg = 101 + (bg - 48)
-                            }
-                        }
-
-                        print!("\x1b[{};30m{} {}", bg, num, char);
-
-                        if id.1 .2 != i + 1 {
-                            while let Some((i, char)) = chars.next() {
-                                print!("{}", char);
-                                if id.1 .2 == i + 1 {
-                                    break;
-                                }
-                            }
-                        }
-
-                        print!("\x1b[0m");
-                        idents.next();
-                    } else {
-                        print!("{}", char);
-                    }
-                }
-                println!();
-            }
-
             // generate ir
             let ir = ir::generate_ir(&parsed, &asys);
             if debug {

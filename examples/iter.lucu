@@ -5,8 +5,8 @@ effect striter {
 
 # we define an effect for interacting with a string buffer
 effect strbuf {
-	fun push(elem str) int
-	fun get(index int) str
+	fun push(elem str) usize
+	fun get(index usize) str
 
 	# the iterator fails when next() is called if it is done
 	fun iter() striter fails
@@ -15,17 +15,17 @@ effect strbuf {
 # implementation of these effects using a constant sized string array
 fun array_buffer() strbuf {
 	mut array [255]str = ---
-	mut size  int      = 0
+	mut size  usize    = 0
 	handle strbuf {
-		fun push(elem str) int {
+		fun push(elem str) usize {
 			array[size] = elem
 			size++
 		}
-		fun get(index int) str {
+		fun get(index usize) str {
 			array[index]
 		}
 		fun iter() striter fails {
-			mut current = 0
+			mut current usize = 0
 			handle striter fails {
 				fun next() str {
 					if current < size {

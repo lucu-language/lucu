@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     matches,
     path::{Path, PathBuf},
 };
@@ -98,7 +97,7 @@ impl Body {
 
 #[derive(Debug)]
 pub struct Handler {
-    pub effect: Ident,
+    pub effect: EffectIdent,
     pub fail_type: FailType,
     pub functions: Vec<Function>,
 }
@@ -123,11 +122,17 @@ pub enum FailType {
     Some(TypeIdx),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EffectIdent {
+    pub package: Option<Ident>,
+    pub effect: Ident,
+}
+
 #[derive(Debug)]
 pub struct FunSign {
     pub inputs: VecMap<ParamIdx, (Ident, TypeIdx)>,
     pub output: Option<TypeIdx>,
-    pub effects: Vec<Ident>,
+    pub effects: Vec<EffectIdent>,
 }
 
 #[derive(Debug)]
@@ -162,7 +167,10 @@ pub struct Parsed {
     pub packages: VecMap<PackageIdx, Package>,
 
     pub main: PackageIdx,
-    pub core: PackageIdx,
+    pub preamble: PackageIdx,
+
+    // package inside core of the current system
+    pub system: PackageIdx,
 
     pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
     pub types: VecMap<TypeIdx, Ranged<Type>>,
@@ -174,13 +182,15 @@ impl Default for Parsed {
         let mut packages = VecMap::new();
         let core = packages.push(PackageIdx, Package::default());
         let main = packages.push(PackageIdx, Package::default());
+        let system = packages.push(PackageIdx, Package::default());
 
         Self {
             effects: VecMap::new(),
             functions: VecMap::new(),
             packages,
             main,
-            core,
+            preamble: core,
+            system,
             exprs: VecMap::new(),
             types: VecMap::new(),
             idents: VecMap::new(),
@@ -624,6 +634,7 @@ pub fn parse_ast<'a>(
                         },
                         None => file_path.join(path),
                     };
+                    let name = path.file_name().unwrap().to_string_lossy().into_owned();
 
                     // get or create package
                     let existing = todo_packages.iter().find(|(other, _)| other.eq(&path));
@@ -631,35 +642,13 @@ pub fn parse_ast<'a>(
                         Some(&(_, pkg)) => pkg,
                         None => {
                             let pkg = tk.context.packages.push(PackageIdx, Package::default());
-                            match std::fs::read_dir(&path) {
-                                Ok(files) => {
-                                    let iter = files.filter_map(|entry| {
-                                        // get lucu files
-                                        let path = entry.ok()?.path();
-                                        if path.extension() == Some(OsStr::new("lucu")) {
-                                            Some(path)
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                    for path in iter {
-                                        todo_packages.push((path, pkg));
-                                    }
-                                }
-                                Err(_) => {
-                                    // TODO: error
-                                    panic!();
-                                }
-                            }
+                            todo_packages.push((path, pkg));
                             pkg
                         }
                     };
 
                     // add to import list
-                    tk.context.packages[idx].imports.insert(
-                        path.file_name().unwrap().to_string_lossy().into_owned(),
-                        pkg,
-                    );
+                    tk.context.packages[idx].imports.insert(name, pkg);
                 }
             }
 
@@ -805,7 +794,15 @@ impl Parse for FunSign {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
                 let Some(effect) = tk.ident() else { continue };
                 let effect = tk.push_ident(effect);
-                decl.effects.push(effect);
+                let (package, effect) = if tk.check(Token::Period).is_some() {
+                    let package = effect;
+                    let Some(effect) = tk.ident() else { continue };
+                    let effect = tk.push_ident(effect);
+                    (Some(package), effect)
+                } else {
+                    (None, effect)
+                };
+                decl.effects.push(EffectIdent { package, effect });
             }
         }
 
@@ -870,8 +867,16 @@ impl Parse for Function {
 
 impl Parse for Handler {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        let id = tk.ident()?;
-        let ident = tk.push_ident(id);
+        let effect = tk.ident()?;
+        let effect = tk.push_ident(effect);
+        let (package, effect) = if tk.check(Token::Period).is_some() {
+            let package = effect;
+            let effect = tk.ident()?;
+            let effect = tk.push_ident(effect);
+            (Some(package), effect)
+        } else {
+            (None, effect)
+        };
 
         let mut funcs = Vec::new();
 
@@ -892,7 +897,7 @@ impl Parse for Handler {
         })?;
 
         Some(Handler {
-            effect: ident,
+            effect: EffectIdent { package, effect },
             functions: funcs,
             fail_type,
         })

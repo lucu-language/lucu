@@ -1,0 +1,7 @@
+import "core:sys/unix"
+
+fun main() / debug unix.sys {
+	putstr("reachable\n")
+	unix.exit(0)
+	putstr("unreachable\n")
+}

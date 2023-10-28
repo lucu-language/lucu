@@ -15,8 +15,8 @@ use inkwell::{
         StructType,
     },
     values::{
-        BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue, IntValue,
-        PointerValue,
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
+        GlobalValue, IntValue, PointerValue,
     },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -40,10 +40,7 @@ struct CodeGen<'ctx> {
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
-    syscall2_fn: FunctionType<'ctx>,
-    syscall4_fn: FunctionType<'ctx>,
-    syscall2: PointerValue<'ctx>,
-    syscall4: PointerValue<'ctx>,
+    syscalls: Vec<(FunctionType<'ctx>, PointerValue<'ctx>)>,
 }
 
 pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
@@ -64,37 +61,50 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         .unwrap();
     let target_data = target_machine.get_target_data();
 
-    let syscall2_fn = context.i64_type().fn_type(
-        &[context.i64_type().into(), context.i64_type().into()],
-        false,
-    );
-    let syscall4_fn = context.i64_type().fn_type(
-        &[
-            context.i64_type().into(),
-            context.i64_type().into(),
-            context.i64_type().into(),
-            context.i64_type().into(),
-        ],
-        false,
-    );
-    let syscall2 = context.create_inline_asm(
-        syscall2_fn,
-        "syscall".to_string(),
-        "={rax},{rax},{rdi},~{rcx},~{r11}".into(),
-        true,
-        false,
-        None,
-        false,
-    );
-    let syscall4 = context.create_inline_asm(
-        syscall4_fn,
-        "syscall".to_string(),
-        "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11}".into(),
-        true,
-        false,
-        None,
-        false,
-    );
+    let uintptr = context.ptr_sized_int_type(&target_data, None);
+
+    // TODO: this is x86_64 only
+    const SYS_RET: &'static str = "rax";
+    const SYS_NR: &'static str = "rax";
+    const SYS_ARGS: [&'static str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+    const SYS_CLOBBER: [&'static str; 2] = ["rcx", "r11"];
+
+    let syscalls = (0..=6)
+        .map(|n| {
+            let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
+                .take(n + 1)
+                .collect::<Vec<_>>();
+            let ty = uintptr.fn_type(&inputs, false);
+
+            let constrains = format!(
+                "={{{}}},{{{}}},{},{}",
+                SYS_RET,
+                SYS_NR,
+                SYS_ARGS
+                    .iter()
+                    .take(n)
+                    .map(|r| format!("{{{}}}", r))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                SYS_CLOBBER
+                    .iter()
+                    .map(|r| format!("~{{{}}}", r))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let asm = context.create_inline_asm(
+                ty,
+                "syscall".into(),
+                constrains,
+                true,
+                false,
+                None,
+                false,
+            );
+
+            (ty, asm)
+        })
+        .collect();
 
     let mut codegen = CodeGen {
         context: &context,
@@ -104,11 +114,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         structs: VecMap::new(),
         procs: VecMap::new(),
         globals: VecMap::new(),
-
-        syscall2_fn,
-        syscall4_fn,
-        syscall2,
-        syscall4,
+        syscalls,
     };
 
     for typ in ir.aggregates.values() {
@@ -179,11 +185,11 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
     codegen
         .builder
         .build_indirect_call(
-            codegen.syscall2_fn,
-            codegen.syscall2,
+            codegen.syscalls[1].0,
+            codegen.syscalls[1].1,
             &[
-                codegen.context.i64_type().const_int(60, true).into(),
-                codegen.context.i64_type().const_int(0, true).into(),
+                codegen.iptr_type().const_int(60, true).into(),
+                codegen.iptr_type().const_int(0, true).into(),
             ],
             "",
         )
@@ -236,6 +242,16 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
     fn frame_type(&self) -> IntType<'ctx> {
+        self.isize_type()
+    }
+    fn iptr_type(&self) -> IntType<'ctx> {
+        self.context.ptr_sized_int_type(&self.target_data, None)
+    }
+    fn isize_type(&self) -> IntType<'ctx> {
+        self.context.ptr_sized_int_type(&self.target_data, None)
+    }
+    fn int_type(&self) -> IntType<'ctx> {
+        // TODO: other architectures
         self.context.i64_type()
     }
     fn size(&self, t: BasicTypeEnum) -> u64 {
@@ -415,7 +431,8 @@ impl<'ctx> CodeGen<'ctx> {
                 use Instruction as I;
                 match *instr {
                     I::Init(r, v) => {
-                        valmap.insert(r, self.context.i64_type().const_int(v, false).into());
+                        let ty = self.get_type(ir, ir.regs[r]).into_int_type();
+                        valmap.insert(r, ty.const_int(v, false).into());
                     }
                     I::InitString(r, ref v) => {
                         let slice_type = self.get_type(ir, ir.regs[r]).into_struct_type();
@@ -634,8 +651,8 @@ impl<'ctx> CodeGen<'ctx> {
                                     bufty,
                                     buf,
                                     &[
-                                        self.context.i64_type().const_int(0, false),
-                                        self.context.i64_type().const_int(20, false),
+                                        self.isize_type().const_int(0, false),
+                                        self.isize_type().const_int(20, false),
                                     ],
                                     "last",
                                 )
@@ -653,10 +670,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder.build_unconditional_branch(block_loop).unwrap();
                         self.builder.position_at_end(block_loop);
 
-                        let number = self
-                            .builder
-                            .build_phi(self.context.i64_type(), "d")
-                            .unwrap();
+                        let number = self.builder.build_phi(self.int_type(), "d").unwrap();
                         let last = self
                             .builder
                             .build_phi(
@@ -669,7 +683,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .builder
                             .build_int_unsigned_rem(
                                 number.as_basic_value().into_int_value(),
-                                self.context.i64_type().const_int(10, false),
+                                self.int_type().const_int(10, false),
                                 "rem",
                             )
                             .unwrap();
@@ -692,8 +706,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     self.context.i8_type(),
                                     last.as_basic_value().into_pointer_value(),
                                     &[self
-                                        .context
-                                        .i64_type()
+                                        .isize_type()
                                         .const_int_from_string("-1", StringRadix::Decimal)
                                         .unwrap()],
                                     "cur",
@@ -706,7 +719,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .builder
                             .build_int_unsigned_div(
                                 number.as_basic_value().into_int_value(),
-                                self.context.i64_type().const_int(10, false),
+                                self.int_type().const_int(10, false),
                                 "div",
                             )
                             .unwrap();
@@ -721,7 +734,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_int_compare(
                                 IntPredicate::ULT,
                                 number.as_basic_value().into_int_value(),
-                                self.context.i64_type().const_int(10, false),
+                                self.int_type().const_int(10, false),
                                 "cmp",
                             )
                             .unwrap();
@@ -736,8 +749,8 @@ impl<'ctx> CodeGen<'ctx> {
                                     bufty,
                                     buf,
                                     &[
-                                        self.context.i64_type().const_int(0, false),
-                                        self.context.i64_type().const_int(21, false),
+                                        self.isize_type().const_int(0, false),
+                                        self.isize_type().const_int(21, false),
                                     ],
                                     "ptr",
                                 )
@@ -745,11 +758,11 @@ impl<'ctx> CodeGen<'ctx> {
                         };
                         let buf_end = self
                             .builder
-                            .build_ptr_to_int(buf_end, self.context.i64_type(), "end")
+                            .build_ptr_to_int(buf_end, self.iptr_type(), "end")
                             .unwrap();
                         let buf_start = self
                             .builder
-                            .build_ptr_to_int(cur, self.context.i64_type(), "start")
+                            .build_ptr_to_int(cur, self.iptr_type(), "start")
                             .unwrap();
                         let buf_len = self
                             .builder
@@ -758,11 +771,11 @@ impl<'ctx> CodeGen<'ctx> {
 
                         self.builder
                             .build_indirect_call(
-                                self.syscall4_fn,
-                                self.syscall4,
+                                self.syscalls[3].0,
+                                self.syscalls[3].1,
                                 &[
-                                    self.context.i64_type().const_int(1, false).into(),
-                                    self.context.i64_type().const_int(1, false).into(),
+                                    self.iptr_type().const_int(1, false).into(),
+                                    self.iptr_type().const_int(1, false).into(),
                                     buf_start.into(),
                                     buf_len.into(),
                                 ],
@@ -781,16 +794,16 @@ impl<'ctx> CodeGen<'ctx> {
                             .into_pointer_value();
                         let buf = self
                             .builder
-                            .build_ptr_to_int(ptr, self.context.i64_type(), "buf")
+                            .build_ptr_to_int(ptr, self.iptr_type(), "buf")
                             .unwrap();
                         let len = self.builder.build_extract_value(val, 1, "len").unwrap();
                         self.builder
                             .build_indirect_call(
-                                self.syscall4_fn,
-                                self.syscall4,
+                                self.syscalls[3].0,
+                                self.syscalls[3].1,
                                 &[
-                                    self.context.i64_type().const_int(1, false).into(),
-                                    self.context.i64_type().const_int(1, false).into(),
+                                    self.iptr_type().const_int(1, false).into(),
+                                    self.iptr_type().const_int(1, false).into(),
                                     buf.into(),
                                     len.into(),
                                 ],
@@ -1022,7 +1035,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     .build_in_bounds_gep(
                                         array_ty,
                                         ptr,
-                                        &[self.context.i64_type().const_int(0, false), mem],
+                                        &[self.isize_type().const_int(0, false), mem],
                                         "",
                                     )
                                     .unwrap()
@@ -1030,6 +1043,43 @@ impl<'ctx> CodeGen<'ctx> {
 
                             valmap.insert(r, elem_ptr.into());
                         }
+                    }
+                    I::Syscall(ret, nr, ref args) => {
+                        let fargs = std::iter::once(valmap[&nr])
+                            .chain(args.iter().map(|r| valmap[r]))
+                            .map(|v| BasicMetadataValueEnum::from(v))
+                            .collect::<Vec<_>>();
+
+                        let val = self
+                            .builder
+                            .build_indirect_call(
+                                self.syscalls[args.len()].0,
+                                self.syscalls[args.len()].1,
+                                &fargs,
+                                "",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_left();
+
+                        if let Some(ret) = ret {
+                            valmap.insert(ret, val);
+                        }
+                    }
+                    I::Exit(code) => {
+                        self.builder
+                            .build_indirect_call(
+                                self.syscalls[1].0,
+                                self.syscalls[1].1,
+                                &[
+                                    self.iptr_type().const_int(60, true).into(),
+                                    self.iptr_type().const_int(code, true).into(),
+                                ],
+                                "",
+                            )
+                            .unwrap();
+                        self.builder.build_unreachable().unwrap();
+                        continue 'outer;
                     }
                 }
             }
@@ -1287,11 +1337,9 @@ impl<'ctx> CodeGen<'ctx> {
     }
     fn get_type(&self, ir: &IR, ty: TypeIdx) -> AnyTypeEnum<'ctx> {
         match ir.types[ty] {
-            Type::Int => self.context.i64_type().into(),
-            Type::ArraySize => self
-                .context
-                .ptr_sized_int_type(&self.target_data, None)
-                .into(),
+            Type::Int => self.int_type().into(),
+            Type::IntSize => self.isize_type().into(),
+            Type::IntPtr => self.iptr_type().into(),
             Type::Aggregate(idx) => match self.structs[idx] {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),

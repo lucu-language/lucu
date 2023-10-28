@@ -439,6 +439,7 @@ fn analyze_expr(
 
                 let mut child = scope.child();
                 let val = ctx.asys.values[fun.decl.name];
+                analyze_sign(ctx, &child, val, &fun.decl.sign, errors);
                 scope_sign(ctx, &mut child, &fun.decl.sign);
 
                 let mut scoped = scope.scoped_effects.clone();

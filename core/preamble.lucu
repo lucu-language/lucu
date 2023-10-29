@@ -26,7 +26,7 @@ fun unreachable() ! {
 # exits the program and displays an error
 # preferred to be used only for debugging
 ##
-fun panic(s str) ! {
+fun panic(msg str) ! {
 	# internally defined
 	loop {}
 }
@@ -35,17 +35,17 @@ fun panic(s str) ! {
 # panics with message if the assertion is not met
 # preferred to be used only for debugging
 ##
-fun assert(all bool, s str) {
+fun assert(all bool, msg str) {
 	if all {
 	} else { # fails
-		panic(s)
+		panic(msg)
 	}
 }
 
 ##
 # returns the length of a slice
 ##
-fun len(s []u8) usize {
+fun len(slice []u8) usize {
 	# internally defined
 	---
 }
@@ -53,8 +53,8 @@ fun len(s []u8) usize {
 ##
 # modulo operator
 ##
-fun mod(a int, b int) int {
-	a - ((a / b) * b)
+fun mod(dividend int, divisor int) int {
+	dividend - ((dividend / divisor) * divisor)
 }
 
 ##

@@ -22,20 +22,20 @@ fun read(mut buf []u8) usize / sys {
 }
 
 fun read_line(mut buf []u8) usize / sys {
-	mut current usize = 0
+	mut len usize = 0
 
 	try loop {
-		let count = read(buf[current..current + 1])
-		if count == 0 {
+		let read = read(buf[len..len + 1])
+		if read == 0 {
 			break()
 		}
 
-		if buf[current++] == '\n' {
+		if buf[len++] == '\n' {
 			break()
 		}
 	}
 
-	current
+	len
 }
 
 fun write(buf []u8) usize / sys {

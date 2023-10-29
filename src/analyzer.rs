@@ -24,6 +24,13 @@ impl TypeIdx {
             _ => false,
         }
     }
+    fn is_zero_view(self, ctx: &AsysContext) -> bool {
+        match ctx.asys.types[self] {
+            Type::Pointer(_) | Type::Slice(_) => true,
+            Type::ConstArray(_, ty) if ty.is_view(ctx) => true,
+            _ => false,
+        }
+    }
     fn join(self, other: TypeIdx) -> Option<TypeIdx> {
         if self == other {
             return Some(self);
@@ -49,6 +56,12 @@ impl TypeIdx {
             Type::FunctionLiteral(_) => "function literal".into(),
             Type::None => "none".into(),
             Type::Never => "never".into(),
+            Type::Int => "int".into(),
+            Type::USize => "usize".into(),
+            Type::UPtr => "uptr".into(),
+            Type::U8 => "u8".into(),
+            Type::Str => "str".into(),
+            Type::Bool => "bool".into(),
             _ => format!("'{}'", self.display_inner(ctx)),
         }
     }
@@ -301,7 +314,9 @@ fn analyze_assignable(
                 Type::Slice(ty) => ty,
                 Type::Unknown => TYPE_UNKNOWN,
                 _ => {
-                    // TODO: error
+                    errors.push(
+                        ctx.parsed.exprs[left].with(Error::ExpectedArray(array.0.display(ctx))),
+                    );
                     TYPE_UNKNOWN
                 }
             };
@@ -651,6 +666,7 @@ fn analyze_expr(
                                             TypeIdx::from_val(ctx, ctx.asys.values[param.name])
                                                 .to_base(ctx),
                                             param.mutable,
+                                            ctx.parsed.idents[param.name].empty(),
                                         )
                                     })
                                     .collect::<Vec<_>>(),
@@ -671,6 +687,7 @@ fn analyze_expr(
                                             TypeIdx::from_val(ctx, ctx.asys.values[param.name])
                                                 .to_base(ctx),
                                             param.mutable,
+                                            ctx.parsed.idents[param.name].empty(),
                                         )
                                     })
                                     .collect::<Vec<_>>(),
@@ -710,11 +727,15 @@ fn analyze_expr(
                             .with(Error::ParameterMismatch(params.len(), exprs.len())),
                     );
                 }
-                for (expr, (expected, mutable)) in exprs.iter().copied().zip(params.into_iter()) {
+                for (expr, (expected, mutable, range)) in
+                    exprs.iter().copied().zip(params.into_iter())
+                {
                     let param = analyze_expr(ctx, scope, expr, expected, errors);
                     if mutable && !param.1 && param.0.is_view(ctx) {
-                        // TODO: custom error
-                        errors.push(ctx.parsed.exprs[expr].with(Error::AssignImmutable(None)))
+                        errors.push(
+                            ctx.parsed.exprs[expr]
+                                .with(Error::MoveImmutableView(None, Some(range))),
+                        )
                     }
                 }
             }
@@ -822,8 +843,9 @@ fn analyze_expr(
                                 Some(ty)
                             }
                             None => {
-                                // TODO: custom error
-                                errors.push(ctx.parsed.idents[ident].with(Error::UnknownValue));
+                                errors.push(
+                                    ctx.parsed.idents[ident].with(Error::UnknownValueOrPackage),
+                                );
                                 None
                             }
                         },
@@ -844,11 +866,9 @@ fn analyze_expr(
                                 (TypeIdx::from_val(ctx, val), false)
                             }
                             None => {
-                                // TODO: custom error
-                                errors.push(ctx.parsed.idents[field].with(Error::UnknownField(
-                                    None,
-                                    Some(ctx.parsed.exprs[expr].empty()),
-                                )));
+                                errors.push(ctx.parsed.idents[field].with(
+                                    Error::UnknownPackageValue(ctx.parsed.exprs[expr].empty()),
+                                ));
                                 (TYPE_UNKNOWN, false)
                             }
                         }
@@ -910,8 +930,7 @@ fn analyze_expr(
                 let left_type = analyze_assignable(ctx, scope, left, expr, errors).0;
                 let right_type = analyze_expr(ctx, scope, right, left_type, errors);
                 if !right_type.1 && right_type.0.is_view(ctx) {
-                    // TODO: custom error
-                    errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutable(None)));
+                    errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutableView(None)));
                 }
                 (TYPE_NONE, false)
             }
@@ -919,8 +938,8 @@ fn analyze_expr(
                 let array = analyze_expr(ctx, scope, left, TYPE_UNKNOWN, errors);
 
                 let elem = match ctx.parsed.exprs[right].0 {
-                    Expression::BinOp(left, BinOp::Range, right) => {
-                        analyze_expr(ctx, scope, left, TYPE_USIZE, errors);
+                    Expression::BinOp(rleft, BinOp::Range, right) => {
+                        analyze_expr(ctx, scope, rleft, TYPE_USIZE, errors);
                         analyze_expr(ctx, scope, right, TYPE_USIZE, errors);
 
                         match ctx.asys.types[array.0] {
@@ -928,7 +947,10 @@ fn analyze_expr(
                             Type::Slice(ty) => ctx.asys.insert_type(Type::Slice(ty)),
                             Type::Unknown => TYPE_UNKNOWN,
                             _ => {
-                                // TODO: error
+                                errors.push(
+                                    ctx.parsed.exprs[left]
+                                        .with(Error::ExpectedArray(array.0.display(ctx))),
+                                );
                                 TYPE_UNKNOWN
                             }
                         }
@@ -941,7 +963,10 @@ fn analyze_expr(
                             Type::Slice(ty) => ty,
                             Type::Unknown => TYPE_UNKNOWN,
                             _ => {
-                                // TODO: error
+                                errors.push(
+                                    ctx.parsed.exprs[left]
+                                        .with(Error::ExpectedArray(array.0.display(ctx))),
+                                );
                                 TYPE_UNKNOWN
                             }
                         }
@@ -954,7 +979,7 @@ fn analyze_expr(
                     BinOp::Equals | BinOp::Less | BinOp::Greater => Some(TYPE_BOOL),
                     BinOp::Divide | BinOp::Multiply | BinOp::Subtract | BinOp::Add => None,
                     BinOp::Range => {
-                        // TODO: error
+                        errors.push(ctx.parsed.exprs[expr].with(Error::NakedRange));
                         Some(TYPE_UNKNOWN)
                     }
                     BinOp::Assign | BinOp::Index => unreachable!(),
@@ -1008,8 +1033,7 @@ fn analyze_expr(
             };
             let val_type = analyze_expr(ctx, scope, rexpr, val_type, errors);
             if mutable && !val_type.1 && val_type.0.is_view(ctx) {
-                // TODO: custom error type
-                errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignImmutable(None)));
+                errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignImmutableView(None)));
             }
 
             let val = ctx
@@ -1042,9 +1066,22 @@ fn analyze_expr(
             false,
         ),
         Expression::Int(n) => {
-            if n == 0 && expected_ty != TYPE_UNKNOWN && !expected_ty.is_view(ctx) {
+            if n == 0 {
                 // zero init
-                (expected_ty, true)
+                if expected_ty.is_zero_view(ctx) {
+                    errors.push(
+                        ctx.parsed.exprs[expr].with(Error::ZeroinitView(expected_ty.display(ctx))),
+                    );
+                    (TYPE_UNKNOWN, false)
+                } else if expected_ty == TYPE_NEVER {
+                    errors.push(ctx.parsed.exprs[expr].with(Error::NeverValue));
+                    (TYPE_UNKNOWN, false)
+                } else if expected_ty == TYPE_UNKNOWN {
+                    errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
+                    (TYPE_UNKNOWN, false)
+                } else {
+                    (expected_ty, true)
+                }
             } else {
                 (
                     match ctx.asys.types[expected_ty] {
@@ -1079,20 +1116,28 @@ fn analyze_expr(
                     }
                     (expected_ty, mutable || !elem_ty.is_view(ctx))
                 }
-                Type::Unknown => {
-                    // TODO: default type (const array?)
-                    panic!();
-                }
                 _ => {
-                    // TODO: error
-                    panic!();
+                    // TODO: default type (const array?)
+                    errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
+                    (TYPE_UNKNOWN, false)
                 }
             }
         }
         Expression::Uninit => {
-            // TODO: error if expected_type is undefined
-            // TODO: error if view type
-            (expected_ty, true)
+            if expected_ty.is_view(ctx) {
+                errors.push(
+                    ctx.parsed.exprs[expr].with(Error::UndefinedView(expected_ty.display(ctx))),
+                );
+                (TYPE_UNKNOWN, false)
+            } else if expected_ty == TYPE_NEVER {
+                errors.push(ctx.parsed.exprs[expr].with(Error::NeverValue));
+                (TYPE_UNKNOWN, false)
+            } else if expected_ty == TYPE_UNKNOWN {
+                errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
+                (TYPE_UNKNOWN, false)
+            } else {
+                (expected_ty, true)
+            }
         }
         Expression::Error => (TYPE_UNKNOWN, false),
     };
@@ -1129,25 +1174,28 @@ fn analyze_effect(
                     &ctx.packages[pkg].effects
                 }
                 None => {
-                    // TODO: custom error
-                    errors.push(ctx.parsed.idents[package].with(Error::UnknownValue));
+                    errors.push(ctx.parsed.idents[package].with(Error::UnknownPackage));
                     return None;
                 }
             }
         }
         None => &scope.effects,
     };
-    let ident = ident.effect;
 
-    let name = &ctx.parsed.idents[ident].0;
+    let name = &ctx.parsed.idents[ident.effect].0;
     match effects.get(name) {
         Some(&val) => {
-            ctx.asys.values[ident] = val;
+            ctx.asys.values[ident.effect] = val;
             Some(val)
         }
         None => {
-            // TODO: custom error on package
-            errors.push(ctx.parsed.idents[ident].with(Error::UnknownEffect));
+            match ident.package {
+                Some(package) => errors.push(ctx.parsed.idents[ident.effect].with(
+                    Error::UnknownPackageEffect(ctx.parsed.idents[package].empty()),
+                )),
+
+                None => errors.push(ctx.parsed.idents[ident.effect].with(Error::UnknownEffect)),
+            }
             None
         }
     }
@@ -1337,9 +1385,6 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     vals.insert("u8".into(), u8);
     vals.insert("bool".into(), bool);
 
-    // TODO: determine best order for analysing packages
-    // and error on import cycles
-
     let mut ctx = AsysContext {
         asys,
         parsed,
@@ -1349,7 +1394,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     // analyze effect signatures
     for (idx, package) in parsed.packages.iter(PackageIdx) {
         // put names in scope
-        // TODO: error on conflict
+        // TODO: error on conflict (or overloads?)
         for (i, effect) in package
             .effects
             .iter()

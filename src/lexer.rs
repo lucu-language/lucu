@@ -46,7 +46,7 @@ pub enum Token {
     String(String),
     Character(String),
     Ident(String),
-    Int(i128),
+    Int(Option<u64>), // possibly too large
 
     // Error
     UnknownSymbol,
@@ -99,7 +99,7 @@ impl fmt::Display for Token {
                 Token::String(s) => format!("\"{}\"", s),
                 Token::Character(s) => format!("'{}'", s),
                 Token::Ident(s) => format!("'{}'", s),
-                Token::Int(i) => format!("'{}'", i),
+                Token::Int(i) => format!("'{}'", i.unwrap_or(u64::MAX)),
                 Token::UnknownSymbol => "'ERR'".into(),
             }
         )
@@ -363,7 +363,15 @@ impl<'a> Iterator for Tokenizer<'a> {
                             Some('\\') => '\\',
                             Some('\n') => '\n',
 
-                            Some(c) => c, // TODO: give error
+                            Some(c) => {
+                                self.errors.push(Ranged(
+                                    Error::UnknownEscape,
+                                    self.pos - 2,
+                                    self.pos,
+                                    self.file,
+                                ));
+                                c
+                            }
                             None => {
                                 self.errors.push(Ranged(
                                     Error::UnclosedString,
@@ -416,19 +424,39 @@ impl<'a> Iterator for Tokenizer<'a> {
                 self.prev_unfinished = false;
 
                 // number
-                let mut num = i128::from(char.to_digit(10).unwrap());
+                let mut num = u64::from(char.to_digit(10).unwrap());
+                let mut too_large = false;
                 loop {
                     match self.next.peek() {
                         Some(&'_') => {}
                         Some(&('0'..='9')) => {
-                            // TODO: error if too big
-                            num *= 10;
-                            num += i128::from(self.next_char().unwrap().to_digit(10).unwrap());
+                            // try to multiply by 10 and add the new digit
+                            num = match num.checked_mul(10).and_then(|num| {
+                                num.checked_add(u64::from(
+                                    self.next_char().unwrap().to_digit(10).unwrap(),
+                                ))
+                            }) {
+                                Some(num) => num,
+                                None => {
+                                    too_large = true;
+                                    0
+                                }
+                            }
                         }
                         _ => break,
                     }
                 }
-                Token::Int(num)
+                Token::Int(if too_large {
+                    self.errors.push(Ranged(
+                        Error::IntTooLarge(u64::MAX),
+                        pos,
+                        self.pos,
+                        self.file,
+                    ));
+                    None
+                } else {
+                    Some(num)
+                })
             }
             _ => {
                 self.prev_unfinished = false;

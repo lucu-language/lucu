@@ -55,7 +55,14 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
                     },
                 );
                 let tok = Tokenizer::new(&content, idx, &mut errors);
-                parse_ast(tok, pkg, &mut parsed, &path.clone(), &libs, &mut files_todo);
+                parse_ast(
+                    tok,
+                    pkg,
+                    &mut parsed,
+                    &path.clone().parent().unwrap(),
+                    &libs,
+                    &mut files_todo,
+                );
             }
             false => match read_dir(&path) {
                 Ok(files) => {
@@ -81,10 +88,7 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
                         parse_ast(tok, pkg, &mut parsed, &path.clone(), &libs, &mut files_todo);
                     }
                 }
-                Err(_) => {
-                    // TODO: error
-                    panic!();
-                }
+                Err(_) => {}
             },
         }
     }

@@ -2,14 +2,14 @@ import "core:sys/unix"
 
 fun main() / debug unix.sys {
 	# create buffers
-	mut state [256]u8 = 0
-	mut state = state[0..256]
+	mut state [64]u8 = 0
+	mut state = state[0..64]
 
-	mut next [256]u8 = ---
-	mut next = next[0..256]
+	mut next [64]u8 = ---
+	mut next = next[0..64]
 
 	# init state
-	state[255] = 1
+	state[63] = 1
 
 	loop {
 		# print state
@@ -35,17 +35,9 @@ fun rule(l u8, m u8, r u8) u8 {
 }
 
 fun next_state(original []u8, mut next []u8) {
-	assert(len(original) == len(next), "states do not have the same length")
-
+	assert(len(next) == len(original), "states do not have the same length")
+	assert(len(next) > 1,              "states must have at least two cells")
 	let len = len(next)
-	if len == 0 {
-		break()
-	}
-	if len == 1 {
-		let cell = original[0]
-		next[0] = rule(cell, cell, cell)
-		break()
-	}
 
 	# first index
 	next[0] = rule(original[len - 1], original[0], original[1])
@@ -66,7 +58,7 @@ fun next_state(original []u8, mut next []u8) {
 
 fun print_state(state []u8) / debug {
 	mut current usize = 0
-	loop {
+	try loop {
 		if current == len(state) {
 			break()
 		}

@@ -77,7 +77,7 @@ pub enum Expression {
     Array(Vec<ExprIdx>),
     String(String),
     Character(String),
-    Int(i128),
+    Int(u64),
     Ident(Ident),
     Uninit,
 
@@ -448,22 +448,6 @@ impl<'a> Tokens<'a> {
         self.iter.errors.push(err);
         None
     }
-    fn int(&mut self) -> Option<Ranged<i128>> {
-        let err = match self.next() {
-            Some(Ranged(Token::Int(s), start, end, _)) => {
-                return Some(Ranged(s, start, end, self.iter.file))
-            }
-            Some(t) => t.with(Error::Unexpected(Expected::Identifier)),
-            None => Ranged(
-                Error::Unexpected(Expected::Identifier),
-                usize::MAX,
-                usize::MAX,
-                self.iter.file,
-            ),
-        };
-        self.iter.errors.push(err);
-        None
-    }
     fn group_single<T>(
         &mut self,
         group: Group,
@@ -628,32 +612,34 @@ pub fn parse_ast<'a>(
                 tk.next();
                 if let Some(string) = tk.string() {
                     // parse path
-                    let split = string.0.split(":").collect::<Vec<_>>();
-                    let (lib, path) = match split.len() {
-                        1 => (None, split[0]),
-                        2 => (Some(split[0]), split[1]),
-                        _ => {
-                            // TODO: error
-                            panic!();
-                        }
+                    let split = string.0.split_once(":");
+                    let (lib, path) = match split {
+                        Some((lib, path)) => (Some(lib), path),
+                        None => (None, string.0.as_str()),
                     };
-
-                    if path.is_empty() {
-                        // TODO: error
-                        panic!();
-                    }
 
                     // get dir path
                     let path = match lib {
                         Some(lib) => match lib_paths.get(lib) {
                             Some(root) => root.join(&path),
                             None => {
-                                // TODO: error
-                                panic!();
+                                tk.iter
+                                    .errors
+                                    .push(string.with(Error::UnresolvedLibrary(lib.into())));
+                                continue;
                             }
                         },
                         None => file_path.join(path),
                     };
+                    // test if dir exists
+                    if !path.is_dir() {
+                        tk.iter.errors.push(
+                            string
+                                .with(Error::NoSuchDirectory(path.to_string_lossy().into_owned())),
+                        );
+                        continue;
+                    }
+
                     let name = path.file_name().unwrap().to_string_lossy().into_owned();
 
                     // get or create package
@@ -736,25 +722,25 @@ impl Parse for Type {
                     Slice,
                 }
 
-                let num = tk
-                    .group_single(Group::Bracket, |tk| {
-                        // TODO: custom expected message
-                        if tk.peek_check(Token::Close(Group::Bracket)) {
-                            Some(ArrType::Slice)
-                        } else {
-                            let n = tk.int()?.0;
-                            // TODO: Error on too big or negative
-                            Some(ArrType::Const(n as u64))
-                        }
-                    })?
-                    .0;
+                let num = tk.group_single(Group::Bracket, |tk| match tk.peek() {
+                    Some(&Ranged(Token::Close(Group::Bracket), ..)) => Some(ArrType::Slice),
+                    Some(&Ranged(Token::Int(i), ..)) => Some(ArrType::Const(i?)),
+                    _ => {
+                        let err = tk.peek_range().with(Error::Unexpected(Expected::ArrayKind));
+                        tk.iter.errors.push(err);
+                        None
+                    }
+                });
 
                 let ty = Type::parse_or_default(tk);
                 let ty = tk.push_type(ty);
 
                 match num {
-                    ArrType::Const(num) => Some(Type::ConstArray(num, ty)),
-                    ArrType::Slice => Some(Type::Slice(ty)),
+                    Some(Ranged(num, ..)) => match num {
+                        ArrType::Const(num) => Some(Type::ConstArray(num, ty)),
+                        ArrType::Slice => Some(Type::Slice(ty)),
+                    },
+                    None => Some(Type::Error),
                 }
             }
             Some(Ranged(Token::Ident(_), ..)) => {
@@ -1140,7 +1126,7 @@ impl Parse for Expression {
             // int
             Some(&Ranged(Token::Int(num), ..)) => {
                 tk.next();
-                Some(Expression::Int(num))
+                Some(Expression::Int(num?))
             }
 
             // block

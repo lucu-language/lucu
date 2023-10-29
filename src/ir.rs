@@ -2236,21 +2236,27 @@ fn generate_expr(
                                 .value(ir, &mut blocks[*block]);
 
                         // get array pointer
-                        let ptr = match ir.ir.types[array.get_type(&ir.ir)] {
-                            Type::Pointer(_) => array.value(ir, &mut blocks[*block]),
-                            Type::ConstArray(_, elem_ty) => {
-                                let full_ptr =
-                                    array.reference(ir, &mut ctx.scope, &mut blocks[*block]);
+                        let adjacent = match ir.ir.types[array.get_type(&ir.ir)] {
+                            Type::Pointer(_) => {
+                                let ptr = array.value(ir, &mut blocks[*block]);
 
-                                let ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
-                                let ptr = ir.next_reg(ptr_ty);
-
-                                // TODO: should this be elementptr?
+                                let adjacent = ir.copy_reg(ptr);
                                 blocks[*block]
                                     .instructions
-                                    .push(Instruction::Cast(ptr, full_ptr));
+                                    .push(Instruction::AdjacentPtr(adjacent, ptr, left));
 
-                                ptr
+                                adjacent
+                            }
+                            Type::ConstArray(_, elem_ty) => {
+                                let ptr = array.reference(ir, &mut ctx.scope, &mut blocks[*block]);
+
+                                let adjacent_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                let adjacent = ir.next_reg(adjacent_ty);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::ElementPtr(adjacent, ptr, left));
+
+                                adjacent
                             }
                             Type::Slice(elem_ty) => {
                                 let slice = array.value(ir, &mut blocks[*block]);
@@ -2261,24 +2267,24 @@ fn generate_expr(
                                     .instructions
                                     .push(Instruction::Member(ptr, slice, 0));
 
-                                ptr
+                                let adjacent = ir.copy_reg(ptr);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::AdjacentPtr(adjacent, ptr, left));
+
+                                adjacent
                             }
                             _ => unreachable!(),
                         };
 
-                        // get slice start and length
-                        let adjacent = ir.copy_reg(ptr);
-                        blocks[*block]
-                            .instructions
-                            .push(Instruction::AdjacentPtr(adjacent, ptr, left));
-
+                        // get slice length
                         let len = ir.copy_reg(left);
                         blocks[*block]
                             .instructions
                             .push(Instruction::Sub(len, right, left));
 
                         // create slice
-                        let elem_ty = ir.ir.regs[ptr].inner(&ir.ir);
+                        let elem_ty = ir.ir.regs[adjacent].inner(&ir.ir);
                         let slice_ty = ir.insert_type(Type::Slice(elem_ty));
                         let slice = ir.next_reg(slice_ty);
                         blocks[*block]

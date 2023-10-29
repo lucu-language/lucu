@@ -1,3 +1,6 @@
+import "undefinedlib:hello"
+import "undefined/dir"
+
 effect test {
 	fun defined()
 }
@@ -10,7 +13,7 @@ fun main() test fails test / q {
 	try {
 		never(9)
 		1 = 2
-		let q = 5
+		let q ["hello"]u8 = 51294129847198246918246981264981624
 		q = 8
 		test
 	} with test {
@@ -21,7 +24,7 @@ fun main() test fails test / q {
 		}
 
 		fun defined() {
-			var@"unclosed
+			var@"\unclosed
 		}
 
 	}

@@ -1,7 +1,6 @@
 ##
 # everything in this file is always in scope
 # many functions are defined internally and will be annotated as such
-# internal functions will have a dummy return value for the type checker
 ##
 
 ##
@@ -48,7 +47,7 @@ fun assert(b bool, s str) {
 ##
 fun len(s []u8) usize {
 	# internally defined
-	loop {}
+	---
 }
 
 ##

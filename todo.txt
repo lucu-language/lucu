@@ -1,10 +1,9 @@
 typechecking todo:
 - fail type in handlers
-- fail type of implicit handlers/naked handler calls
+- fail type of implicit handlers/naked handler calls (and only allowed in try blocks if they fail!)
 - handler function must match signature
 - functions that return handlers must not be (mutually) recursive
 - functions must not be (mutually) recursive through try blocks
-- a lot of other things
 
 parser todo:
 - operator precedence
@@ -12,8 +11,9 @@ parser todo:
 todo:
 - separate generation code from data types
 - for loops
-- array literals
 - unbounded ranges
+- fail in try blocks
+- opaque types (they will be view types)
 
 would be nice:
 - tokenizer matches brackets

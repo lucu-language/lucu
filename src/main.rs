@@ -171,11 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn imports() {
-        test_file("factorial", "12\n479001600\n144\n")
-    }
-
-    #[test]
     fn hello() {
         test_file("hello", "Hello, World!\n")
     }

@@ -1080,7 +1080,7 @@ fn analyze_expr(
                     (expected_ty, mutable || !elem_ty.is_view(ctx))
                 }
                 Type::Unknown => {
-                    // TODO: error
+                    // TODO: default type (const array?)
                     panic!();
                 }
                 _ => {

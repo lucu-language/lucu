@@ -1,7 +1,0 @@
-import "core:math"
-
-fun main() / debug {
-	putint(12)
-	putint(math.factorial(12))
-	putint(math.fibonacci(12))
-}

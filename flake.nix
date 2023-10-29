@@ -5,7 +5,8 @@
 
     package = pkgs: with pkgs; rustPlatform.buildRustPackage rec {
       src = ./.;
-      name = "lucu";
+      pname = "lucu";
+      version = "unstable";
       cargoLock = {
         lockFile = (src + "/Cargo.lock");
         allowBuiltinFetchGit = true;

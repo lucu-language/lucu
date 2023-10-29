@@ -17,7 +17,6 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum Value {
     Value(Reg, Option<Val>),
-    ValueIndex(Reg, Option<Val>, Rc<[Reg]>),
     Reference(Reg),
     Global(Global),
 }
@@ -26,13 +25,6 @@ impl Value {
     pub fn get_type(&self, ir: &IR) -> TypeIdx {
         match *self {
             Value::Value(reg, _) => ir.regs[reg],
-            Value::ValueIndex(reg, _, ref idx) => {
-                let mut ty = ir.regs[reg];
-                for _ in 0..idx.len() {
-                    ty = ty.inner(ir)
-                }
-                ty
-            }
             Value::Reference(reg) => ir.regs[reg].inner(ir),
             Value::Global(glob) => ir.globals[glob],
         }
@@ -43,9 +35,6 @@ impl Value {
                 let new = ir.next_reg(ty);
                 block.instructions.push(Instruction::Cast(new, reg));
                 Value::Value(new, val)
-            }
-            Value::ValueIndex(_, _, _) => {
-                todo!()
             }
             Value::Reference(ptr) => {
                 let ty = ir.insert_type(Type::Pointer(ty));
@@ -76,26 +65,6 @@ impl Value {
     fn value(&self, ir: &mut IRContext, block: &mut Block) -> Reg {
         match *self {
             Value::Value(reg, _) => reg,
-            Value::ValueIndex(reg, _, ref idx) => {
-                let mut ty = ir.ir.regs[reg];
-                let ptr_ty = ir.insert_type(Type::Pointer(ty));
-                let mut ptr = ir.next_reg(ptr_ty);
-                block.instructions.push(Instruction::Reference(ptr, reg));
-
-                for idx in idx.iter().copied() {
-                    ty = ty.inner(&ir.ir);
-                    let inner_ty = ir.insert_type(Type::Pointer(ty));
-                    let inner = ir.next_reg(inner_ty);
-                    block
-                        .instructions
-                        .push(Instruction::ElementPtr(inner, ptr, idx));
-                    ptr = inner
-                }
-
-                let reg = ir.next_reg(ty);
-                block.instructions.push(Instruction::Load(reg, ptr));
-                reg
-            }
             Value::Reference(ptr) => {
                 let reg = ir.next_reg(self.get_type(&ir.ir));
                 block.instructions.push(Instruction::Load(reg, ptr));
@@ -116,20 +85,6 @@ impl Value {
                 block.instructions.push(Instruction::Reference(ptr, reg));
                 if let Some(val) = val {
                     scope.insert(val, Value::Reference(ptr));
-                }
-                ptr
-            }
-            Value::ValueIndex(reg, val, ref idx) => {
-                let mut ty = ir.ir.regs[reg];
-                let mut ptr = Value::Value(reg, val).reference(ir, scope, block);
-                for idx in idx.iter().copied() {
-                    ty = ty.inner(&ir.ir);
-                    let inner_ty = ir.insert_type(Type::Pointer(ty));
-                    let inner = ir.next_reg(inner_ty);
-                    block
-                        .instructions
-                        .push(Instruction::ElementPtr(inner, ptr, idx));
-                    ptr = inner
                 }
                 ptr
             }
@@ -253,7 +208,7 @@ impl TypeIdx {
             T::Bool => ir.insert_type(Type::Bool),
             T::None => ir.insert_type(Type::None),
             T::Never => ir.insert_type(Type::Never),
-            T::Pointer(ty) | T::MultiPointer(ty) => {
+            T::Pointer(ty) => {
                 let inner = TypeIdx::from_type(ir, ty);
                 ir.insert_type(Type::Pointer(inner))
             }
@@ -354,7 +309,9 @@ pub struct Block {
 pub enum Instruction {
     Init(Reg, u64),
     InitString(Reg, String),
+    Copy(Reg, Reg),
     Uninit(Reg),
+    Zeroinit(Reg),
     Cast(Reg, Reg),
 
     // globals
@@ -588,8 +545,10 @@ impl Display for IR {
                     match *instr {
                         Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
+                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::Cast(r, v) => writeln!(f, "{} <- cast {}", r, v)?,
                         Instruction::Uninit(r) => writeln!(f, "{} <- ---", r)?,
+                        Instruction::Zeroinit(r) => writeln!(f, "{} <- {0}", r)?,
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
                         }
@@ -884,7 +843,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
     define_function(
         &mut ir,
         Either::Right((debug, EffFunIdx(0))),
-        "putstr".into(),
+        "putint".into(),
         vec![input],
         TYPE_NONE,
         vec![Instruction::PrintNum(input), Instruction::Return(None)],
@@ -894,7 +853,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
     define_function(
         &mut ir,
         Either::Right((debug, EffFunIdx(1))),
-        "putint".into(),
+        "putstr".into(),
         vec![input],
         TYPE_NONE,
         vec![Instruction::PrintStr(input), Instruction::Return(None)],
@@ -1985,31 +1944,90 @@ fn generate_expr(
             let loop_start = blocks.push(BlockIdx, Block::default());
             let mut loop_end = loop_start;
 
-            let (loop_changed, _) = ctx.child(expr, |child| {
-                generate_expr(ir, child, blocks, &mut loop_end, proc_todo)
-            });
+            let mut phis = HashMap::new();
+            let mut values = HashMap::new();
+            let mut optscope = Some(&ctx.scope);
+            while let Some(scope) = optscope {
+                values.extend(
+                    scope
+                        .values
+                        .iter()
+                        .filter_map(|(&val, value)| match *value {
+                            Value::Value(r, o) => {
+                                let copy = ir.copy_reg(r);
+                                phis.insert(val, (r, Value::Value(copy, o)));
+                                Some((val, Value::Value(copy, o)))
+                            }
+                            Value::Reference(r) => {
+                                let copy = ir.copy_reg(r);
+                                phis.insert(val, (r, Value::Reference(copy)));
+                                Some((val, Value::Reference(copy)))
+                            }
+                            Value::Global(_) => None,
+                        }),
+                );
+                optscope = scope.parent;
+            }
+
+            let mut parent = Scope {
+                parent: Some(&ctx.scope),
+                values,
+            };
+            let mut child = ProcCtx {
+                proc_idx: ctx.proc_idx,
+                expr,
+                inside_handler: ctx.inside_handler,
+                scope: Scope {
+                    parent: Some(&parent),
+                    values: HashMap::new(),
+                },
+                handler_defs: Rc::clone(&ctx.handler_defs),
+            };
+            let _ = generate_expr(ir, &mut child, blocks, &mut loop_end, proc_todo);
 
             blocks[*block].next = Some(loop_init);
             blocks[loop_init].next = Some(loop_start);
             blocks[loop_end].next = Some(loop_init);
 
             // add phi instructions for changed values
-            generate_phi(
-                ir,
-                blocks,
-                loop_init,
-                &mut ctx.scope,
-                &[
-                    Path {
-                        changed: loop_changed,
-                        block_end: loop_end,
-                    },
-                    Path {
-                        changed: HashMap::new(),
-                        block_end: *block,
-                    },
-                ],
-            );
+            for (r, value) in child.scope.values.into_iter() {
+                if let Some((original, copy)) = phis.remove(&r) {
+                    match copy {
+                        Value::Value(copy, _) => {
+                            let new = value.value(ir, &mut blocks[loop_end]);
+                            blocks[loop_init].instructions.push(Instruction::Phi(
+                                copy,
+                                vec![(original, *block), (new, loop_end)],
+                            ));
+                        }
+                        Value::Reference(copy) => {
+                            let new = value.reference(ir, &mut parent, &mut blocks[loop_end]);
+                            blocks[loop_init].instructions.push(Instruction::Phi(
+                                copy,
+                                vec![(original, *block), (new, loop_end)],
+                            ));
+                        }
+                        Value::Global(_) => unreachable!(),
+                    }
+                }
+            }
+
+            // remaining are just copies
+            for (original, copy) in phis.into_values() {
+                match copy {
+                    Value::Value(copy, _) => {
+                        blocks[loop_init]
+                            .instructions
+                            .push(Instruction::Copy(copy, original));
+                    }
+                    Value::Reference(copy) => {
+                        blocks[loop_init]
+                            .instructions
+                            .push(Instruction::Copy(copy, original));
+                    }
+                    Value::Global(_) => unreachable!(),
+                }
+            }
 
             Err(Never)
         }
@@ -2143,12 +2161,6 @@ fn generate_expr(
                             Value::Value(incremented, val),
                         );
                     }
-                    Value::ValueIndex(_, _, _) => {
-                        let ptr = left.reference(ir, &mut ctx.scope, &mut blocks[*block]);
-                        blocks[*block]
-                            .instructions
-                            .push(Instruction::Store(ptr, incremented));
-                    }
                     Value::Reference(ptr) => {
                         blocks[*block]
                             .instructions
@@ -2196,12 +2208,6 @@ fn generate_expr(
                             val.expect("left operand not tied to variable"),
                             Value::Value(right, val),
                         );
-                    }
-                    Value::ValueIndex(_, _, _) => {
-                        let ptr = left.reference(ir, &mut ctx.scope, &mut blocks[*block]);
-                        blocks[*block]
-                            .instructions
-                            .push(Instruction::Store(ptr, right));
                     }
                     Value::Reference(ptr) => {
                         blocks[*block]
@@ -2296,25 +2302,15 @@ fn generate_expr(
                                     .push(Instruction::AdjacentPtr(adjacent, ptr, right));
                                 Ok(Some(Value::Reference(adjacent)))
                             }
-                            Type::ConstArray(_, elem_ty) => match array {
-                                Value::Value(reg, val) => {
-                                    Ok(Some(Value::ValueIndex(reg, val, Rc::new([right]))))
-                                }
-                                Value::ValueIndex(reg, val, idx) => Ok(Some(Value::ValueIndex(
-                                    reg,
-                                    val,
-                                    idx.iter().copied().chain(std::iter::once(right)).collect(),
-                                ))),
-                                Value::Reference(ptr) => {
-                                    let elem_ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
-                                    let elem_ptr = ir.next_reg(elem_ptr_ty);
-                                    blocks[*block]
-                                        .instructions
-                                        .push(Instruction::ElementPtr(elem_ptr, ptr, right));
-                                    Ok(Some(Value::Reference(elem_ptr)))
-                                }
-                                Value::Global(_) => unreachable!(),
-                            },
+                            Type::ConstArray(_, elem_ty) => {
+                                let ptr = array.reference(ir, &mut ctx.scope, &mut blocks[*block]);
+                                let elem_ptr_ty = ir.insert_type(Type::Pointer(elem_ty));
+                                let elem_ptr = ir.next_reg(elem_ptr_ty);
+                                blocks[*block]
+                                    .instructions
+                                    .push(Instruction::ElementPtr(elem_ptr, ptr, right));
+                                Ok(Some(Value::Reference(elem_ptr)))
+                            }
                             Type::Slice(elem_ty) => {
                                 let slice = array.value(ir, &mut blocks[*block]);
 
@@ -2585,14 +2581,24 @@ fn generate_expr(
 
         E::Int(i) => {
             let ty = TypeIdx::from_expr(ir, ctx.expr);
-            let ty = TypeIdx::from_type(ir, ty);
-            let reg = ir.next_reg(ty);
+            if ir.asys.types[ty].is_int() {
+                let ty = TypeIdx::from_type(ir, ty);
+                let reg = ir.next_reg(ty);
 
-            blocks[*block]
-                .instructions
-                .push(Instruction::Init(reg, i as u64));
+                blocks[*block]
+                    .instructions
+                    .push(Instruction::Init(reg, i as u64));
 
-            Ok(Some(Value::Value(reg, None)))
+                Ok(Some(Value::Value(reg, None)))
+            } else {
+                // zero init
+                let ty = TypeIdx::from_type(ir, ty);
+                let reg = ir.next_reg(ty);
+
+                blocks[*block].instructions.push(Instruction::Zeroinit(reg));
+
+                Ok(Some(Value::Value(reg, None)))
+            }
         }
 
         E::Ident(id) => {

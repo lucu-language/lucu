@@ -67,7 +67,6 @@ impl TypeIdx {
             Type::Never => "!".into(),
             Type::Unknown => "<unknown>".into(),
             Type::Pointer(ty) => format!("^{}", ty.display_inner(ctx)),
-            Type::MultiPointer(ty) => format!("[^]{}", ty.display_inner(ctx)),
             Type::Slice(ty) => format!("[]{}", ty.display_inner(ctx)),
             Type::ConstArray(size, ty) => format!("[{}]{}", size, ty.display_inner(ctx)),
         }
@@ -146,7 +145,6 @@ pub enum Type {
     Handler(Val, TypeIdx, Option<HandlerIdx>),
 
     Pointer(TypeIdx),
-    MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
 
@@ -163,14 +161,14 @@ pub enum Type {
 }
 
 impl Type {
-    fn is_int(&self) -> bool {
+    pub fn is_int(&self) -> bool {
         matches!(self, Type::Int | Type::USize | Type::UPtr | Type::U8)
     }
-    fn is_ptr(&self) -> bool {
-        matches!(self, Type::Pointer(_) | Type::MultiPointer(_))
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, Type::Pointer(_))
     }
-    fn is_view(&self) -> bool {
-        self.is_ptr() || matches!(self, Type::Slice(_))
+    pub fn is_view(&self) -> bool {
+        matches!(self, Type::Pointer(_) | Type::Slice(_))
     }
 }
 
@@ -296,7 +294,6 @@ fn analyze_assignable(
 
             let ty = match ctx.asys.types[array.0] {
                 Type::ConstArray(_, ty) => ty,
-                Type::MultiPointer(ty) => ty,
                 Type::Slice(ty) => ty,
                 Type::Unknown => TYPE_UNKNOWN,
                 _ => {
@@ -924,7 +921,6 @@ fn analyze_expr(
 
                         match ctx.asys.types[array.0] {
                             Type::ConstArray(_, ty) => ctx.asys.insert_type(Type::Slice(ty)),
-                            Type::MultiPointer(ty) => ctx.asys.insert_type(Type::Slice(ty)),
                             Type::Slice(ty) => ctx.asys.insert_type(Type::Slice(ty)),
                             Type::Unknown => TYPE_UNKNOWN,
                             _ => {
@@ -938,7 +934,6 @@ fn analyze_expr(
 
                         match ctx.asys.types[array.0] {
                             Type::ConstArray(_, ty) => ty,
-                            Type::MultiPointer(ty) => ty,
                             Type::Slice(ty) => ty,
                             Type::Unknown => TYPE_UNKNOWN,
                             _ => {
@@ -980,10 +975,6 @@ fn analyze_expr(
                 let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, errors);
                 let ptr = match ctx.asys.types[expected_ty] {
                     Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty.0)),
-                    Type::MultiPointer(_) => {
-                        // TODO: make sure only arrays may implicitly convert to multi pointer
-                        ctx.asys.insert_type(Type::MultiPointer(ty.0))
-                    }
                     _ => ctx.asys.insert_type(Type::Pointer(ty.0)),
                 };
                 (ptr, ty.1)
@@ -1046,22 +1037,30 @@ fn analyze_expr(
             },
             false,
         ),
-        Expression::Int(_) => (
-            match ctx.asys.types[expected_ty] {
-                // TODO: check if fits
-                Type::Int => TYPE_INT,
-                Type::USize => TYPE_USIZE,
-                Type::UPtr => TYPE_UPTR,
-                Type::U8 => TYPE_U8,
+        Expression::Int(n) => {
+            if n == 0 && expected_ty != TYPE_UNKNOWN && !ctx.asys.types[expected_ty].is_view() {
+                // zero init
+                (expected_ty, true)
+            } else {
+                (
+                    match ctx.asys.types[expected_ty] {
+                        // TODO: check if fits
+                        Type::Int => TYPE_INT,
+                        Type::USize => TYPE_USIZE,
+                        Type::UPtr => TYPE_UPTR,
+                        Type::U8 => TYPE_U8,
 
-                // default type for literal
-                _ => TYPE_INT,
-            },
-            false,
-        ),
+                        // default type for literal
+                        _ => TYPE_INT,
+                    },
+                    false,
+                )
+            }
+        }
         Expression::Uninit => {
             // TODO: error if expected_type is undefined
-            (expected_ty, false)
+            // TODO: error if view type
+            (expected_ty, true)
         }
         Expression::Error => (TYPE_UNKNOWN, false),
     };
@@ -1149,10 +1148,6 @@ fn analyze_type(
         T::Pointer(ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
             return ctx.asys.insert_type(Type::Pointer(inner));
-        }
-        T::MultiPointer(ty) => {
-            let inner = analyze_type(ctx, scope, ty, errors);
-            return ctx.asys.insert_type(Type::MultiPointer(inner));
         }
         T::ConstArray(size, ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
@@ -1299,6 +1294,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     let usize = asys.defs.push(Val, Definition::BuiltinType(TYPE_USIZE));
     let uptr = asys.defs.push(Val, Definition::BuiltinType(TYPE_UPTR));
     let u8 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U8));
+    let bool = asys.defs.push(Val, Definition::BuiltinType(TYPE_BOOL));
 
     let mut packages = VecMap::filled(parsed.packages.len(), Package::default());
     let vals = &mut packages[parsed.preamble].values;
@@ -1307,6 +1303,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
     vals.insert("usize".into(), usize);
     vals.insert("uptr".into(), uptr);
     vals.insert("u8".into(), u8);
+    vals.insert("bool".into(), bool);
 
     // TODO: determine best order for analysing packages
     // and error on import cycles

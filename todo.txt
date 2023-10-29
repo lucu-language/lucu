@@ -9,11 +9,11 @@ typechecking todo:
 parser todo:
 - operator precedence
 
-llvm todo:
-- phi nodes that reference early registers do not work
-
 todo:
 - separate generation code from data types
+- for loops
+- array literals
+- unbounded ranges
 
 would be nice:
 - tokenizer matches brackets

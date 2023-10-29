@@ -114,7 +114,6 @@ pub enum Type {
     Handler(Ident, FailType),
 
     Pointer(TypeIdx),
-    MultiPointer(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
 
@@ -728,16 +727,13 @@ impl Parse for Type {
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 enum ArrType {
                     Const(u64),
-                    Pointer,
                     Slice,
                 }
 
                 let num = tk
                     .group_single(Group::Bracket, |tk| {
                         // TODO: custom expected message
-                        if tk.check(Token::Caret).is_some() {
-                            Some(ArrType::Pointer)
-                        } else if tk.peek_check(Token::Close(Group::Bracket)) {
+                        if tk.peek_check(Token::Close(Group::Bracket)) {
                             Some(ArrType::Slice)
                         } else {
                             let n = tk.int()?.0;
@@ -752,7 +748,6 @@ impl Parse for Type {
 
                 match num {
                     ArrType::Const(num) => Some(Type::ConstArray(num, ty)),
-                    ArrType::Pointer => Some(Type::MultiPointer(ty)),
                     ArrType::Slice => Some(Type::Slice(ty)),
                 }
             }

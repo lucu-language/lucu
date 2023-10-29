@@ -5,9 +5,9 @@ fun main() / unix.sys {
 		mut buf [255]u8 = ---
 
 		# get line
-		let line = unix.read_line(buf[0..255])
+		let count = unix.read_line(buf[0..255])
 
 		# write back
-		unix.write(line)
+		unix.write(buf[0..count])
 	}
 }

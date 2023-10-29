@@ -21,7 +21,7 @@ fun read(mut buf []u8) usize / sys {
 	cast syscall3(0, 0, cast &buf[0], cast len(buf))
 }
 
-fun read_line(mut buf []u8) []u8 / sys {
+fun read_line(mut buf []u8) usize / sys {
 	mut current usize = 0
 
 	try loop {
@@ -35,7 +35,7 @@ fun read_line(mut buf []u8) []u8 / sys {
 		}
 	}
 
-	buf[0..current]
+	current
 }
 
 fun write(buf []u8) usize / sys {

@@ -33,6 +33,16 @@ fun panic(s str) ! {
 }
 
 ##
+# panics with message if the assertion is not met
+##
+fun assert(b bool, s str) {
+	if b {
+	} else {
+		panic(s)
+	}
+}
+
+##
 # returns the length of a slice
 ##
 fun len(s []u8) usize {

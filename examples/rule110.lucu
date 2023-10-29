@@ -1,0 +1,77 @@
+import "core:sys/unix"
+
+fun main() / debug unix.sys {
+	mut state [256]u8 = 0
+	state[255] = 1
+
+	loop {
+		print_state(state[0..256])
+
+		mut buf [1]u8 = ---
+		unix.read(buf[0..1])
+
+		mut next [256]u8 = ---
+		next_state(state[0..256], next[0..256])
+		state = next
+	}
+}
+
+fun rule(l u8, m u8, r u8) u8 {
+	mut rules [8]u8 = ---
+	rules[0] = 0
+	rules[1] = 1
+	rules[2] = 1
+	rules[3] = 1
+	rules[4] = 0
+	rules[5] = 1
+	rules[6] = 1
+	rules[7] = 0
+
+	let num = (l * 4) + (m * 2) + (r * 1)
+	rules[cast num]
+}
+
+fun next_state(original []u8, mut next []u8) {
+	assert(len(original) == len(next), "states do not have the same length")
+
+	let len = len(next)
+	if len == 0 {
+		break()
+	}
+	if len == 1 {
+		let cell = original[0]
+		next[0] = rule(cell, cell, cell)
+		break()
+	}
+
+	# first index
+	next[0] = rule(original[len - 1], original[0], original[1])
+
+	# middle indices
+	mut cur usize = 1
+	try loop {
+		if cur == len - 1 {
+			break()
+		}
+		next[cur] = rule(original[cur - 1], original[cur], original[cur + 1])
+		cur++
+	}
+
+	# last index
+	next[len - 1] = rule(original[len - 2], original[len - 1], original[0])
+}
+
+fun print_state(state []u8) / debug {
+	mut current usize = 0
+	loop {
+		if current == len(state) {
+			break()
+		}
+
+		if state[current++] == 0 {
+			putstr(" ")
+		} else {
+			putstr("X")
+		}
+	}
+}

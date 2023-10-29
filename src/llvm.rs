@@ -16,15 +16,15 @@ use inkwell::{
     },
     values::{
         BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
-        GlobalValue, IntValue, PointerValue,
+        GlobalValue, IntValue, PhiValue, PointerValue,
     },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
 
 use crate::{
     ir::{
-        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Type,
-        TypeIdx, Value, IR,
+        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Reg,
+        Type, TypeIdx, Value, IR,
     },
     vecmap::VecMap,
 };
@@ -376,23 +376,22 @@ impl<'ctx> CodeGen<'ctx> {
             })
             .collect();
 
-        let mut valmap = HashMap::new();
+        let mut regmap = HashMap::new();
         for (n, &reg) in proc
             .inputs
             .iter()
             .filter(|&&r| !self.get_type(ir, ir.regs[r]).is_void_type())
             .enumerate()
         {
-            valmap.insert(reg, function.get_nth_param(n as u32).unwrap());
+            regmap.insert(reg, function.get_nth_param(n as u32).unwrap());
         }
 
         if let Some(captures) = &proc.captures {
             self.builder.position_at_end(blocks[0]);
 
             let struc = match captures.input {
-                Value::Value(r, _) => valmap.get(&r).map(|b| b.into_struct_value()),
-                Value::ValueIndex(_, _, _) => todo!(),
-                Value::Reference(ptr) => valmap.get(&ptr).map(|val| {
+                Value::Value(r, _) => regmap.get(&r).map(|b| b.into_struct_value()),
+                Value::Reference(ptr) => regmap.get(&ptr).map(|val| {
                     let ty =
                         BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
                             .unwrap();
@@ -416,23 +415,41 @@ impl<'ctx> CodeGen<'ctx> {
                     let mem_ty = self.get_type(ir, ir.regs[reg]);
                     if BasicTypeEnum::try_from(mem_ty).is_ok() {
                         let val = self.builder.build_extract_value(struc, member, "").unwrap();
-                        valmap.insert(reg, val.into());
+                        regmap.insert(reg, val.into());
                         member += 1;
                     }
                 }
             }
         }
 
+        let mut phimap = HashMap::<Reg, (PhiValue<'ctx>, BasicBlock<'ctx>)>::new();
+
         'outer: for (idx, block) in imp.blocks.values().enumerate() {
             let basic_block = blocks[idx];
             self.builder.position_at_end(basic_block);
+
+            macro_rules! insert {
+                ($reg:expr, $value:expr) => {
+                    let reg = $reg;
+                    let value = $value;
+                    regmap.insert(reg, value);
+                    if let Some((phi, block)) = phimap.remove(&reg) {
+                        phi.add_incoming(&[(&value, block)]);
+                    }
+                };
+            }
 
             for instr in block.instructions.iter() {
                 use Instruction as I;
                 match *instr {
                     I::Init(r, v) => {
                         let ty = self.get_type(ir, ir.regs[r]).into_int_type();
-                        valmap.insert(r, ty.const_int(v, false).into());
+                        insert!(r, ty.const_int(v, false).into());
+                    }
+                    I::Copy(r, v) => {
+                        if let Some(v) = regmap.get(&v).copied() {
+                            insert!(r, v);
+                        }
                     }
                     I::InitString(r, ref v) => {
                         let slice_type = self.get_type(ir, ir.regs[r]).into_struct_type();
@@ -453,12 +470,12 @@ impl<'ctx> CodeGen<'ctx> {
                                 .into(),
                         ]);
 
-                        valmap.insert(r, const_str_slice.into());
+                        insert!(r, const_str_slice.into());
                     }
                     I::Branch(r, yes, no) => {
                         self.builder
                             .build_conditional_branch(
-                                valmap[&r].into_int_value(),
+                                regmap[&r].into_int_value(),
                                 blocks[usize::from(yes)],
                                 blocks[usize::from(no)],
                             )
@@ -471,71 +488,71 @@ impl<'ctx> CodeGen<'ctx> {
                         if let Some(typ) = typ {
                             let phi = self.builder.build_phi(typ, "").unwrap();
                             for (r, b) in v.iter().copied() {
-                                if let Some(v) = valmap.get(&r).copied() {
+                                if let Some(v) = regmap.get(&r).copied() {
                                     phi.add_incoming(&[(&v, blocks[usize::from(b)])]);
+                                } else {
+                                    phimap.insert(r, (phi, blocks[usize::from(b)]));
                                 }
                             }
-                            if phi.count_incoming() > 0 {
-                                valmap.insert(r, phi.as_basic_value());
-                            }
+                            insert!(r, phi.as_basic_value());
                         }
                     }
                     I::Equals(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self
                             .builder
                             .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
                             .unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Div(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self.builder.build_int_signed_div(lhs, rhs, "div").unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Mul(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self.builder.build_int_mul(lhs, rhs, "mul").unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Add(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self.builder.build_int_add(lhs, rhs, "add").unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Sub(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self.builder.build_int_sub(lhs, rhs, "sub").unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Greater(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self
                             .builder
                             .build_int_compare(IntPredicate::UGT, lhs, rhs, "gt")
                             .unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Less(r, a, b) => {
-                        let lhs = valmap[&a].into_int_value();
-                        let rhs = valmap[&b].into_int_value();
+                        let lhs = regmap[&a].into_int_value();
+                        let rhs = regmap[&b].into_int_value();
                         let res = self
                             .builder
                             .build_int_compare(IntPredicate::ULT, lhs, rhs, "lt")
                             .unwrap();
-                        valmap.insert(r, res.into());
+                        insert!(r, res.into());
                     }
                     I::Call(p, r, ref rs) => {
                         let func = self.procs[p];
                         let args: Vec<_> = rs
                             .iter()
-                            .filter_map(|r| valmap.get(r).map(|&v| v.into()))
+                            .filter_map(|r| regmap.get(r).map(|&v| v.into()))
                             .collect();
 
                         let ret = self.builder.build_call(func, &args, "").unwrap();
@@ -571,13 +588,13 @@ impl<'ctx> CodeGen<'ctx> {
                                     ir.proc_sign[p].debug_name
                                 ));
                                 let cast = self.build_union_cast(val, typ);
-                                valmap.insert(r, cast);
+                                insert!(r, cast);
                             }
                         }
                     }
                     I::Yeet(r, h) => {
                         let frame = self.frame_type().const_int(usize::from(h) as u64, false);
-                        let val = r.and_then(|r| valmap.get(&r)).copied();
+                        let val = r.and_then(|r| regmap.get(&r)).copied();
 
                         let ret_type = function
                             .get_type()
@@ -602,7 +619,7 @@ impl<'ctx> CodeGen<'ctx> {
                         continue 'outer;
                     }
                     I::Return(r) => {
-                        let val = r.and_then(|r| valmap.get(&r)).copied();
+                        let val = r.and_then(|r| regmap.get(&r)).copied();
                         if !proc.unhandled.is_empty() {
                             let ret_typ = function
                                 .get_type()
@@ -642,7 +659,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::PrintNum(r) => {
                         // setup
-                        let val = valmap[&r];
+                        let val = regmap[&r];
                         let bufty = self.context.i8_type().array_type(21);
                         let buf = self.builder.build_alloca(bufty, "buf").unwrap();
                         let buf_last = unsafe {
@@ -786,7 +803,7 @@ impl<'ctx> CodeGen<'ctx> {
                         blocks[idx] = block_write;
                     }
                     I::PrintStr(r) => {
-                        let val = valmap[&r].into_struct_value();
+                        let val = regmap[&r].into_struct_value();
                         let ptr = self
                             .builder
                             .build_extract_value(val, 0, "ptr")
@@ -819,7 +836,7 @@ impl<'ctx> CodeGen<'ctx> {
                             let aggr_ty = aggr_ty.into_struct_type();
 
                             let mut aggr = aggr_ty.get_poison();
-                            for (n, &member) in rs.iter().filter_map(|r| valmap.get(r)).enumerate()
+                            for (n, &member) in rs.iter().filter_map(|r| regmap.get(r)).enumerate()
                             {
                                 aggr = self
                                     .builder
@@ -828,7 +845,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     .into_struct_value();
                             }
 
-                            valmap.insert(r, aggr.into());
+                            insert!(r, aggr.into());
                         }
                     }
                     I::Member(r, a, n) => {
@@ -845,14 +862,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     );
                                     let n = mem[0];
 
-                                    let aggr = valmap[&a].into_struct_value();
+                                    let aggr = regmap[&a].into_struct_value();
 
                                     let member = self
                                         .builder
                                         .build_extract_value(aggr, n as u32, "member")
                                         .unwrap();
 
-                                    valmap.insert(r, member);
+                                    insert!(r, member);
                                 }
                             }
                             Type::Slice(_) => {
@@ -862,24 +879,24 @@ impl<'ctx> CodeGen<'ctx> {
                                     0 => {
                                         // ptr
                                         if slice.count_fields() > 1 {
-                                            let aggr = valmap[&a].into_struct_value();
+                                            let aggr = regmap[&a].into_struct_value();
                                             let member = self
                                                 .builder
                                                 .build_extract_value(aggr, 0, "member")
                                                 .unwrap();
-                                            valmap.insert(r, member);
+                                            insert!(r, member);
                                         }
                                     }
                                     1 => {
                                         // len
                                         let idx = slice.count_fields() - 1;
 
-                                        let aggr = valmap[&a].into_struct_value();
+                                        let aggr = regmap[&a].into_struct_value();
                                         let member = self
                                             .builder
                                             .build_extract_value(aggr, idx, "member")
                                             .unwrap();
-                                        valmap.insert(r, member);
+                                        insert!(r, member);
                                     }
                                     _ => unreachable!(),
                                 }
@@ -893,7 +910,7 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::SetScopedGlobal(g, r, next) => {
                         if let Some(glob) = self.globals[g] {
-                            let val = valmap[&r];
+                            let val = regmap[&r];
 
                             let tmp = self
                                 .builder
@@ -919,42 +936,42 @@ impl<'ctx> CodeGen<'ctx> {
                                 .builder
                                 .build_load(typ, glob.as_pointer_value(), "")
                                 .unwrap();
-                            valmap.insert(r, val);
+                            insert!(r, val);
                         }
                     }
                     I::GetGlobalPtr(r, g) => {
                         if let Some(glob) = self.globals[g] {
-                            valmap.insert(r, glob.as_pointer_value().into());
+                            insert!(r, glob.as_pointer_value().into());
                         }
                     }
                     I::Reference(ptrr, r) => {
-                        if let Some(val) = valmap.get(&r).copied() {
+                        if let Some(val) = regmap.get(&r).copied() {
                             let ptr = self.builder.build_alloca(val.get_type(), "").unwrap();
                             self.builder.build_store(ptr, val).unwrap();
-                            valmap.insert(ptrr, ptr.into());
+                            insert!(ptrr, ptr.into());
                         }
                     }
                     I::Load(r, ptrr) => {
-                        if let Some(val) = valmap.get(&ptrr).copied() {
+                        if let Some(val) = regmap.get(&ptrr).copied() {
                             let ty =
                                 BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
                             let v = self
                                 .builder
                                 .build_load(ty, val.into_pointer_value(), "")
                                 .unwrap();
-                            valmap.insert(r, v);
+                            insert!(r, v);
                         }
                     }
                     I::Store(ptrr, r) => {
-                        if let Some(val) = valmap.get(&r).copied() {
-                            let ptr = valmap[&ptrr];
+                        if let Some(val) = regmap.get(&r).copied() {
+                            let ptr = regmap[&ptrr];
                             self.builder
                                 .build_store(ptr.into_pointer_value(), val)
                                 .unwrap();
                         }
                     }
                     I::RawHandler(r, h) => {
-                        if let Some(&v) = valmap.get(&h) {
+                        if let Some(&v) = regmap.get(&h) {
                             let unraw = v.into_struct_value();
                             let mems = match ir.types[ir.regs[r]] {
                                 Type::RawHandler(handler, ref mems) => {
@@ -991,11 +1008,11 @@ impl<'ctx> CodeGen<'ctx> {
                                     .into_struct_value();
                             }
 
-                            valmap.insert(r, struc.into());
+                            insert!(r, struc.into());
                         }
                     }
                     I::UnrawHandler(r, h) => {
-                        if let Some(&v) = valmap.get(&h) {
+                        if let Some(&v) = regmap.get(&h) {
                             let raw = v.into_struct_value();
                             let mems = match ir.types[ir.regs[h]] {
                                 Type::RawHandler(handler, ref mems) => {
@@ -1029,11 +1046,11 @@ impl<'ctx> CodeGen<'ctx> {
                                     .into_struct_value();
                             }
 
-                            valmap.insert(r, struc.into());
+                            insert!(r, struc.into());
                         }
                     }
                     I::Cast(r, h) => {
-                        if let Some(&v) = valmap.get(&h) {
+                        if let Some(&v) = regmap.get(&h) {
                             let ty =
                                 BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).unwrap();
 
@@ -1065,12 +1082,12 @@ impl<'ctx> CodeGen<'ctx> {
                                 self.builder.build_bitcast(v, ty, "").unwrap()
                             };
 
-                            valmap.insert(r, cast);
+                            insert!(r, cast);
                         }
                     }
                     I::Uninit(r) => {
                         if let Ok(ty) = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])) {
-                            valmap.insert(
+                            insert!(
                                 r,
                                 match ty {
                                     BasicTypeEnum::ArrayType(t) => t.get_undef().into(),
@@ -1079,18 +1096,18 @@ impl<'ctx> CodeGen<'ctx> {
                                     BasicTypeEnum::PointerType(t) => t.get_undef().into(),
                                     BasicTypeEnum::StructType(t) => t.get_undef().into(),
                                     BasicTypeEnum::VectorType(t) => t.get_undef().into(),
-                                },
+                                }
                             );
                         }
                     }
                     I::ElementPtr(r, a, m) => {
-                        if let Some(&ptr) = valmap.get(&a) {
+                        if let Some(&ptr) = regmap.get(&a) {
                             let array_ty =
                                 BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
                                     .unwrap();
                             let ptr = ptr.into_pointer_value();
 
-                            let mem = valmap[&m].into_int_value();
+                            let mem = regmap[&m].into_int_value();
                             let elem_ptr = unsafe {
                                 self.builder
                                     .build_in_bounds_gep(
@@ -1102,29 +1119,29 @@ impl<'ctx> CodeGen<'ctx> {
                                     .unwrap()
                             };
 
-                            valmap.insert(r, elem_ptr.into());
+                            insert!(r, elem_ptr.into());
                         }
                     }
                     I::AdjacentPtr(r, a, m) => {
-                        if let Some(&ptr) = valmap.get(&a) {
+                        if let Some(&ptr) = regmap.get(&a) {
                             let pointee_ty =
                                 BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
                                     .unwrap();
                             let ptr = ptr.into_pointer_value();
 
-                            let mem = valmap[&m].into_int_value();
+                            let mem = regmap[&m].into_int_value();
                             let elem_ptr = unsafe {
                                 self.builder
                                     .build_in_bounds_gep(pointee_ty, ptr, &[mem], "")
                                     .unwrap()
                             };
 
-                            valmap.insert(r, elem_ptr.into());
+                            insert!(r, elem_ptr.into());
                         }
                     }
                     I::Syscall(ret, nr, ref args) => {
-                        let fargs = std::iter::once(valmap[&nr])
-                            .chain(args.iter().map(|r| valmap[r]))
+                        let fargs = std::iter::once(regmap[&nr])
+                            .chain(args.iter().map(|r| regmap[r]))
                             .map(|v| BasicMetadataValueEnum::from(v))
                             .collect::<Vec<_>>();
 
@@ -1141,7 +1158,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap_left();
 
                         if let Some(ret) = ret {
-                            valmap.insert(ret, val);
+                            insert!(ret, val);
                         }
                     }
                     I::Exit(code) => {
@@ -1158,6 +1175,21 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap();
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
+                    }
+                    I::Zeroinit(r) => {
+                        if let Ok(ty) = BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])) {
+                            insert!(
+                                r,
+                                match ty {
+                                    BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+                                    BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+                                    BasicTypeEnum::IntType(t) => t.const_zero().into(),
+                                    BasicTypeEnum::PointerType(t) => t.const_null().into(),
+                                    BasicTypeEnum::StructType(t) => t.const_zero().into(),
+                                    BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+                                }
+                            );
+                        }
                     }
                 }
             }

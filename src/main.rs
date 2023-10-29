@@ -1,18 +1,15 @@
-#![feature(test)]
-
-extern crate test;
-
 use std::{
     collections::HashMap,
     env,
     ffi::OsStr,
     fs::{read_dir, read_to_string},
-    path::Path,
+    path::{Path, PathBuf},
     println,
     process::Command,
 };
 
 use analyzer::{analyze, Analysis};
+use clap::Parser;
 use error::{Errors, File, FileIdx};
 use lexer::Tokenizer;
 use parser::{parse_ast, Parsed};
@@ -102,13 +99,34 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
     }
 }
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(help = ".lucu file with entry point")]
+    main: PathBuf,
+    #[arg(short, long, help = "Set the file name of the outputted executable")]
+    out: Option<PathBuf>,
+
+    #[arg(long, help = "Set the location of the core library")]
+    core: Option<PathBuf>,
+    #[arg(long, help = "Print compiler output in plaintext, without color")]
+    plaintext: bool,
+    #[arg(long, help = "Print compiler debug info")]
+    debug: bool,
+}
+
 fn main() {
-    let debug = true;
-    let color = true;
-    let args: Vec<String> = env::args().collect();
+    let args = Args::parse();
+    let core = args
+        .core
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("core"));
+
+    let debug = args.debug;
+    let color = !args.plaintext;
+    let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
 
     // analyze
-    match parse_from_filename(Path::new(&args[1]), Path::new("core")) {
+    match parse_from_filename(&args.main, &core) {
         Ok((parsed, asys)) => {
             // generate ir
             let ir = ir::generate_ir(&parsed, &asys);
@@ -119,15 +137,21 @@ fn main() {
             }
 
             // generate llvm
-            llvm::generate_ir(&ir, &Path::new("out.o"), debug);
+            llvm::generate_ir(&ir, &output.with_extension("o"), debug);
 
             // output
             if debug {
                 println!("\n--- OUTPUT ---");
             }
 
-            Command::new("./link.sh").arg("out").status().unwrap();
-            Command::new("./out").status().unwrap();
+            Command::new("ld")
+                .arg(&output.with_extension("o"))
+                .arg("-o")
+                .arg(&output)
+                .status()
+                .unwrap();
+
+            Command::new(output).status().unwrap();
         }
         Err(errors) => {
             errors.print(color);
@@ -141,13 +165,20 @@ mod tests {
 
     use super::*;
 
-    fn execute(filename: &str, output: &str) -> String {
-        match parse_from_filename(Path::new(filename), Path::new("core")) {
+    fn execute(filename: &Path, output: &Path) -> String {
+        let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("core");
+
+        match parse_from_filename(Path::new(filename), &core) {
             Ok((parsed, asys)) => {
                 let ir = ir::generate_ir(&parsed, &asys);
-                llvm::generate_ir(&ir, &Path::new(&format!("{}.o", output)), false);
+                llvm::generate_ir(&ir, &output.with_extension("o"), false);
 
-                Command::new("./link.sh").arg(output).status().unwrap();
+                Command::new("ld")
+                    .arg(&output.with_extension("o"))
+                    .arg("-o")
+                    .arg(output)
+                    .status()
+                    .unwrap();
 
                 let vec = Command::new(output).output().unwrap().stdout;
                 String::from_utf8(vec).unwrap()
@@ -160,10 +191,13 @@ mod tests {
     }
 
     fn test_file(filename: &str, expected: &str) {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+
+        let dir = std::env::temp_dir();
         assert_eq!(
             execute(
-                &format!("./examples/{}.lucu", filename),
-                &format!("./examples/{}", filename)
+                &examples.join(filename).with_extension("lucu"),
+                &dir.join(filename)
             ),
             expected
         )

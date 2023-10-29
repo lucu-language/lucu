@@ -1,59 +1,39 @@
 {
-  # inputs.astapkgs.url = "github:Astavie/astapkgs";
+  inputs.astapkgs.url = "github:Astavie/astapkgs";
 
-  # outputs = { self, astapkgs }: astapkgs.lib.package {
+  outputs = { self, astapkgs }: astapkgs.lib.package rec {
 
-  #   package = pkgs: with pkgs; rustPlatform.buildRustPackage rec {
-  #     src = ./.;
-  #     pname = "lucu";
-  #     version = "unstable";
-  #     cargoLock = {
-  #       lockFile = (src + "/Cargo.lock");
-  #       allowBuiltinFetchGit = true;
-  #     };
-  #     buildInputs = [
-  #       libffi
-  #       libxml2
-  #       zlib
-  #       ncurses
-  #     ];
-  #     LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
-  #   };
+    name = "lucu";
 
-  #   devShell = pkgs: with pkgs; mkShell {
-
-  #     buildInputs = [
-  #       dev.rust-nightly
-  #       libffi
-  #       libxml2
-  #       zlib
-  #       ncurses
-  #     ];
-
-  #     LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
-      
-  #   };
-    
-  # } [ "x86_64-linux" ];
-
-  outputs = { self }: {
-    overlays.default = final: prev: {
-      lucu = with prev; rustPlatform.buildRustPackage rec {
-        src = ./.;
-        pname = "lucu";
-        version = "unstable";
-        cargoLock = {
-          lockFile = (src + "/Cargo.lock");
-          allowBuiltinFetchGit = true;
-        };
-        buildInputs = [
-          libffi
-          libxml2
-          zlib
-          ncurses
-        ];
-        LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
+    package = pkgs: with pkgs; rustPlatform.buildRustPackage rec {
+      inherit name;
+      src = ./.;
+      cargoLock = {
+        lockFile = (src + "/Cargo.lock");
+        allowBuiltinFetchGit = true;
       };
+      buildInputs = [
+        libffi
+        libxml2
+        zlib
+        ncurses
+      ];
+      LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
     };
-  };
+
+    devShell = pkgs: with pkgs; mkShell {
+
+      buildInputs = [
+        dev.rust-nightly
+        libffi
+        libxml2
+        zlib
+        ncurses
+      ];
+
+      LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
+      
+    };
+    
+  } [ "x86_64-linux" ];
 }

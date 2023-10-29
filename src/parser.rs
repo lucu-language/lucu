@@ -74,6 +74,7 @@ pub enum Expression {
     TryWith(ExprIdx, Option<TypeIdx>, Option<ExprIdx>),
     Handler(Handler),
 
+    Array(Vec<ExprIdx>),
     String(String),
     Character(String),
     Int(i128),
@@ -235,6 +236,11 @@ impl Parsed {
             Expression::Call(expr, ref args) => {
                 self.for_each(expr, do_try, do_handler, f);
                 for expr in args.iter().copied() {
+                    self.for_each(expr, do_try, do_handler, f);
+                }
+            }
+            Expression::Array(ref elems) => {
+                for expr in elems.iter().copied() {
                     self.for_each(expr, do_try, do_handler, f);
                 }
             }
@@ -1139,6 +1145,17 @@ impl Parse for Expression {
 
             // block
             Some(Ranged(Token::Open(Group::Brace), ..)) => Some(Body::parse_or_default(tk).0),
+
+            // array
+            Some(Ranged(Token::Open(Group::Bracket), ..)) => {
+                let mut elems = Vec::new();
+                tk.group(Group::Bracket, true, |tk| {
+                    let expr = Expression::parse_or_default(tk);
+                    elems.push(tk.push_expr(expr));
+                    Some(())
+                })?;
+                Some(Expression::Array(elems))
+            }
 
             // paren
             Some(Ranged(Token::Open(Group::Paren), ..)) => {

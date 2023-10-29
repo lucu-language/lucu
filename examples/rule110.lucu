@@ -1,34 +1,37 @@
 import "core:sys/unix"
 
 fun main() / debug unix.sys {
+	# create buffers
 	mut state [256]u8 = 0
+	mut state = state[0..256]
+
+	mut next [256]u8 = ---
+	mut next = next[0..256]
+
+	# init state
 	state[255] = 1
 
 	loop {
-		print_state(state[0..256])
+		# print state
+		print_state(state)
 
-		mut buf [1]u8 = ---
-		unix.read(buf[0..1])
+		# wait for stdin
+		unix.read([---])
 
-		mut next [256]u8 = ---
-		next_state(state[0..256], next[0..256])
+		# get next state
+		next_state(state, next)
+
+		# swap buffers
+		mut tmp = state
 		state = next
+		next = tmp
 	}
 }
 
 fun rule(l u8, m u8, r u8) u8 {
-	mut rules [8]u8 = ---
-	rules[0] = 0
-	rules[1] = 1
-	rules[2] = 1
-	rules[3] = 1
-	rules[4] = 0
-	rules[5] = 1
-	rules[6] = 1
-	rules[7] = 0
-
+	let rule [8]u8 = [0, 1, 1, 1, 0, 1, 1, 0]
 	let num = (l * 4) + (m * 2) + (r * 1)
-	rules[cast num]
+	rule[cast num]
 }
 
 fun next_state(original []u8, mut next []u8) {

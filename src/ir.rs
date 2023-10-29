@@ -2601,6 +2601,66 @@ fn generate_expr(
             }
         }
 
+        E::Array(ref exprs) => {
+            let ty = TypeIdx::from_expr(ir, ctx.expr);
+            let ty = TypeIdx::from_type(ir, ty);
+
+            let regs = exprs
+                .iter()
+                .copied()
+                .map(|expr| {
+                    let opt = generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo)?;
+                    match opt {
+                        Some(val) => Ok(val.value(ir, &mut blocks[*block])),
+                        None => {
+                            let reg = ir.next_reg(TYPE_NONE);
+                            blocks[*block].instructions.push(Instruction::Uninit(reg));
+                            Ok(reg)
+                        }
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            match ir.ir.types[ty] {
+                Type::ConstArray(_, _) => {
+                    let array = ir.next_reg(ty);
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::Aggregate(array, regs));
+
+                    Ok(Some(Value::Value(array, None)))
+                }
+                Type::Slice(elem_ty) => {
+                    let array_len = regs.len() as u64;
+                    let array_ty = ir.insert_type(Type::ConstArray(array_len, elem_ty));
+                    let array = ir.next_reg(array_ty);
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::Aggregate(array, regs));
+
+                    let ptr = Value::Value(array, None).reference(
+                        ir,
+                        &mut ctx.scope,
+                        &mut blocks[*block],
+                    );
+
+                    let len_ty = ir.insert_type(Type::IntSize);
+                    let len = ir.next_reg(len_ty);
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::Init(len, array_len));
+
+                    let slice = ir.next_reg(ty);
+                    blocks[*block]
+                        .instructions
+                        .push(Instruction::Aggregate(slice, vec![ptr, len]));
+
+                    Ok(Some(Value::Value(slice, None)))
+                }
+                _ => unreachable!(),
+            }
+        }
+
         E::Ident(id) => {
             let val = ir.asys.values[id];
             let mut reg = ir.get_in_scope(val, &ctx.scope);

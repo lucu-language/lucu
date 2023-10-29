@@ -15,8 +15,8 @@ use inkwell::{
         StructType,
     },
     values::{
-        BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
-        GlobalValue, IntValue, PhiValue, PointerValue,
+        AggregateValueEnum, BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue,
+        FunctionValue, GlobalValue, IntValue, PhiValue, PointerValue,
     },
     AddressSpace, IntPredicate, OptimizationLevel,
 };
@@ -833,19 +833,27 @@ impl<'ctx> CodeGen<'ctx> {
 
                         // do not aggregate void
                         if !aggr_ty.is_void_type() {
-                            let aggr_ty = aggr_ty.into_struct_type();
+                            let mut aggr: AggregateValueEnum = match aggr_ty {
+                                AnyTypeEnum::ArrayType(ty) => ty.get_poison().into(),
+                                AnyTypeEnum::StructType(ty) => ty.get_poison().into(),
+                                _ => unreachable!(),
+                            };
 
-                            let mut aggr = aggr_ty.get_poison();
                             for (n, &member) in rs.iter().filter_map(|r| regmap.get(r)).enumerate()
                             {
                                 aggr = self
                                     .builder
                                     .build_insert_value(aggr, member, n as u32, "")
                                     .unwrap()
-                                    .into_struct_value();
                             }
 
-                            insert!(r, aggr.into());
+                            insert!(
+                                r,
+                                match aggr {
+                                    AggregateValueEnum::ArrayValue(ty) => ty.into(),
+                                    AggregateValueEnum::StructValue(ty) => ty.into(),
+                                }
+                            );
                         }
                     }
                     I::Member(r, a, n) => {

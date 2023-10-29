@@ -17,6 +17,13 @@ impl TypeIdx {
     fn matches(self, other: TypeIdx) -> bool {
         self == TYPE_UNKNOWN || other == TYPE_UNKNOWN || self == other
     }
+    fn is_view(self, ctx: &AsysContext) -> bool {
+        match ctx.asys.types[self] {
+            Type::Pointer(_) | Type::Slice(_) => true,
+            Type::ConstArray(_, ty) if ty.is_view(ctx) => true,
+            _ => false,
+        }
+    }
     fn join(self, other: TypeIdx) -> Option<TypeIdx> {
         if self == other {
             return Some(self);
@@ -166,9 +173,6 @@ impl Type {
     }
     pub fn is_ptr(&self) -> bool {
         matches!(self, Type::Pointer(_))
-    }
-    pub fn is_view(&self) -> bool {
-        matches!(self, Type::Pointer(_) | Type::Slice(_))
     }
 }
 
@@ -708,7 +712,7 @@ fn analyze_expr(
                 }
                 for (expr, (expected, mutable)) in exprs.iter().copied().zip(params.into_iter()) {
                     let param = analyze_expr(ctx, scope, expr, expected, errors);
-                    if mutable && !param.1 && ctx.asys.types[param.0].is_view() {
+                    if mutable && !param.1 && param.0.is_view(ctx) {
                         // TODO: custom error
                         errors.push(ctx.parsed.exprs[expr].with(Error::AssignImmutable(None)))
                     }
@@ -905,7 +909,7 @@ fn analyze_expr(
             BinOp::Assign => {
                 let left_type = analyze_assignable(ctx, scope, left, expr, errors).0;
                 let right_type = analyze_expr(ctx, scope, right, left_type, errors);
-                if !right_type.1 && ctx.asys.types[right_type.0].is_view() {
+                if !right_type.1 && right_type.0.is_view(ctx) {
                     // TODO: custom error
                     errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutable(None)));
                 }
@@ -1003,7 +1007,7 @@ fn analyze_expr(
                 None => TYPE_UNKNOWN,
             };
             let val_type = analyze_expr(ctx, scope, rexpr, val_type, errors);
-            if mutable && !val_type.1 && ctx.asys.types[val_type.0].is_view() {
+            if mutable && !val_type.1 && val_type.0.is_view(ctx) {
                 // TODO: custom error type
                 errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignImmutable(None)));
             }
@@ -1038,7 +1042,7 @@ fn analyze_expr(
             false,
         ),
         Expression::Int(n) => {
-            if n == 0 && expected_ty != TYPE_UNKNOWN && !ctx.asys.types[expected_ty].is_view() {
+            if n == 0 && expected_ty != TYPE_UNKNOWN && !expected_ty.is_view(ctx) {
                 // zero init
                 (expected_ty, true)
             } else {
@@ -1055,6 +1059,34 @@ fn analyze_expr(
                     },
                     false,
                 )
+            }
+        }
+        Expression::Array(ref elems) => {
+            match ctx.asys.types[expected_ty] {
+                Type::ConstArray(_, elem_ty) => {
+                    // TODO: error on wrong size
+
+                    let mut mutable = true;
+                    for expr in elems.iter().copied() {
+                        mutable &= analyze_expr(ctx, scope, expr, elem_ty, errors).1;
+                    }
+                    (expected_ty, mutable || !elem_ty.is_view(ctx))
+                }
+                Type::Slice(elem_ty) => {
+                    let mut mutable = true;
+                    for expr in elems.iter().copied() {
+                        mutable &= analyze_expr(ctx, scope, expr, elem_ty, errors).1;
+                    }
+                    (expected_ty, mutable || !elem_ty.is_view(ctx))
+                }
+                Type::Unknown => {
+                    // TODO: error
+                    panic!();
+                }
+                _ => {
+                    // TODO: error
+                    panic!();
+                }
             }
         }
         Expression::Uninit => {

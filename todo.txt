@@ -14,6 +14,7 @@ todo:
 - unbounded ranges
 - fail in try blocks
 - opaque types (they will be view types)
+- error if core library not found
 
 would be nice:
 - tokenizer matches brackets

@@ -43,7 +43,6 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
 
         match path.extension() == Some(OsStr::new("lucu")) {
             true => {
-                println!("{:?}", path);
                 let content = read_to_string(&path).unwrap().replace('\t', "  ");
                 let idx = errors.files.push(
                     FileIdx,

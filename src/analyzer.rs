@@ -739,7 +739,7 @@ fn analyze_expr(
                     }
                 }
             }
-            (return_type, false)
+            (return_type, !return_type.is_view(ctx))
         }
         Expression::TryWith(expr, return_type, handler) => {
             let return_type = analyze_return(ctx, scope, return_type, errors);
@@ -1066,7 +1066,7 @@ fn analyze_expr(
             false,
         ),
         Expression::Int(n) => {
-            if n == 0 {
+            if n == 0 && expected_ty != TYPE_UNKNOWN {
                 // zero init
                 if expected_ty.is_zero_view(ctx) {
                     errors.push(
@@ -1075,9 +1075,6 @@ fn analyze_expr(
                     (TYPE_UNKNOWN, false)
                 } else if expected_ty == TYPE_NEVER {
                     errors.push(ctx.parsed.exprs[expr].with(Error::NeverValue));
-                    (TYPE_UNKNOWN, false)
-                } else if expected_ty == TYPE_UNKNOWN {
-                    errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
                     (TYPE_UNKNOWN, false)
                 } else {
                     (expected_ty, true)

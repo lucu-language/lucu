@@ -35,9 +35,9 @@ fun panic(s str) ! {
 # panics with message if the assertion is not met
 # preferred to be used only for debugging
 ##
-fun assert(b bool, s str) {
-	if b {
-	} else {
+fun assert(all bool, s str) {
+	if all {
+	} else { # fails
 		panic(s)
 	}
 }

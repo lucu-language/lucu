@@ -43,6 +43,7 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, An
 
         match path.extension() == Some(OsStr::new("lucu")) {
             true => {
+                println!("{:?}", path);
                 let content = read_to_string(&path).unwrap().replace('\t', "  ");
                 let idx = errors.files.push(
                     FileIdx,
@@ -117,9 +118,11 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let core = args
-        .core
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("core"));
+    let core = args.core.unwrap_or_else(|| {
+        option_env!("LUCU_CORE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("core"))
+    });
 
     let debug = args.debug;
     let color = !args.plaintext;
@@ -151,7 +154,9 @@ fn main() {
                 .status()
                 .unwrap();
 
-            Command::new(output).status().unwrap();
+            Command::new(Path::new("./").join(&output))
+                .status()
+                .unwrap();
         }
         Err(errors) => {
             errors.print(color);

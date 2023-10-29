@@ -19,6 +19,7 @@
         ncurses
       ];
       LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
+      LUCU_CORE = ./core;
     };
 
     devShell = pkgs: with pkgs; mkShell {

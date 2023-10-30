@@ -1,0 +1,25 @@
+fun putstr(s str) / sys {
+	write(cast s);
+}
+
+fun putint(n int) / sys {
+	mut buf [21]u8 = ---
+	buf[20] = '\n'
+
+	mut current usize = 20
+	mut remaining = n
+
+	try loop {
+		let digit = '0' + cast mod(remaining, 10)
+		remaining = remaining / 10
+
+		current = current - 1
+		buf[current] = digit
+
+		if remaining == 0 {
+			break()
+		}
+	}
+
+	write(buf[current..21]);
+}

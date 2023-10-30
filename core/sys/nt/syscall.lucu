@@ -1,0 +1,52 @@
+##
+# system effect for Windows NT
+# note: windows does not have stable syscall numbers
+# so linking with ntdll.dll is much more preferred
+##
+effect sys {
+	fun syscall2(nr uptr, a0 uptr, a1 uptr) uptr
+	fun syscall9(nr uptr, a0 uptr, a1 uptr, a2 uptr, a3 uptr, a4 uptr, a5 uptr, a6 uptr, a7 uptr, a8 uptr) uptr
+
+	# stdin, stdout, stderr
+	# read from RTL_USER_PROCESS_PARAMETERS from PEB
+	fun stdio() [3]uptr
+}
+
+fun exit(code uptr) ! / sys {
+	let process uptr = 18446744073709551615 # process -1
+	syscall2(44, process, code)
+	unreachable()
+}
+
+fun read(mut buf []u8) usize / sys {
+	let stdin = stdio()[0]
+
+	mut io_status_block [2]uptr = ---
+	syscall9(6, stdin, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+	cast io_status_block[1]
+}
+
+fun read_line(mut buf []u8) usize / sys {
+	mut len usize = 0
+
+	try loop {
+		let read = read(buf[len..len + 1])
+		if read == 0 {
+			break()
+		}
+
+		if buf[len++] == '\n' {
+			break()
+		}
+	}
+
+	len
+}
+
+fun write(buf []u8) usize / sys {
+	let stdout = stdio()[1]
+
+	mut io_status_block [2]uptr = ---
+	syscall9(8, stdout, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+	cast io_status_block[1]
+}

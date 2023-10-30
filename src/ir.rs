@@ -143,6 +143,12 @@ impl ProcImpl {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Target {
+    Unix64,
+    NT64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
@@ -340,10 +346,6 @@ pub enum Instruction {
     Return(Option<Reg>),           // return with optional value
     Unreachable,
 
-    // print
-    PrintNum(Reg), // print number in register
-    PrintStr(Reg), // dereference register and print string
-
     // pointers
     Reference(Reg, Reg),
     Load(Reg, Reg),
@@ -363,6 +365,7 @@ pub enum Instruction {
     // kernel operations
     Exit(u64),
     Syscall(Option<Reg>, Reg, Vec<Reg>),
+    GS(Reg, u64), // read value at GS register with offset into reg
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -618,8 +621,6 @@ impl Display for IR {
                                 None => "".into(),
                             },
                         )?,
-                        Instruction::PrintNum(r) => writeln!(f, "       putint {}", r)?,
-                        Instruction::PrintStr(r) => writeln!(f, "       putstr {}", r)?,
                         Instruction::Aggregate(r, ref v) | Instruction::Handler(r, ref v) => {
                             writeln!(
                                 f,
@@ -669,6 +670,7 @@ impl Display for IR {
                                 a => format!(" ( {} )", a),
                             },
                         )?,
+                        Instruction::GS(reg, offset) => writeln!(f, "{} <- GS:{}", reg, offset)?,
                     }
                 }
 
@@ -758,7 +760,7 @@ fn define_function(
     inputs: Vec<Reg>,
     output: TypeIdx,
     instructions: Vec<Instruction>,
-) {
+) -> ProcIdx {
     let proc = ir.ir.proc_sign.push(
         ProcIdx,
         ProcSign {
@@ -786,9 +788,10 @@ fn define_function(
         },
         proc,
     );
+    proc
 }
 
-pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
+pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
@@ -823,42 +826,6 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
     ir.insert_type(Type::Int);
     ir.insert_type(Type::Bool);
 
-    // define debug
-    let debug_effect = get_effect(ctx, ctx.preamble, "debug");
-    let debug = ir.handlers.push(
-        HandlerIdx,
-        HandlerCtx {
-            effect: asys.values[debug_effect.name],
-            global: None,
-            definition: None,
-            captures: Vec::new(),
-        },
-    );
-    ir.ir.handler_type.push_value(HandlerType {
-        captures: Vec::new(),
-        break_ty: TYPE_NEVER,
-    });
-
-    let input = ir.next_reg(TYPE_INT);
-    define_function(
-        &mut ir,
-        Either::Right((debug, EffFunIdx(0))),
-        "putint".into(),
-        vec![input],
-        TYPE_NONE,
-        vec![Instruction::PrintNum(input), Instruction::Return(None)],
-    );
-
-    let input = ir.next_reg(TYPE_STR_SLICE);
-    define_function(
-        &mut ir,
-        Either::Right((debug, EffFunIdx(1))),
-        "putstr".into(),
-        vec![input],
-        TYPE_NONE,
-        vec![Instruction::PrintStr(input), Instruction::Return(None)],
-    );
-
     // define system effect
     let sys_effect = get_effect(ctx, ctx.system, "sys");
     let sys = ir.handlers.push(
@@ -875,24 +842,124 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
         break_ty: TYPE_NEVER,
     });
 
-    // TODO: this is only for unix
-    for n in 0..=6 {
-        let nr = ir.next_reg(TYPE_INT);
-        let inputs = (0..n).map(|_| ir.next_reg(TYPE_INT)).collect::<Vec<_>>();
-        let output = ir.next_reg(TYPE_INT);
+    let intptr = ir.insert_type(Type::IntPtr);
+    match target {
+        Target::Unix64 => {
+            for n in 0..=6 {
+                let nr = ir.next_reg(intptr);
+                let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
+                let output = ir.next_reg(intptr);
 
-        define_function(
-            &mut ir,
-            Either::Right((sys, EffFunIdx(n))),
-            format!("syscall{}", n),
-            std::iter::once(nr).chain(inputs.iter().copied()).collect(),
-            TYPE_INT,
-            vec![
-                Instruction::Syscall(Some(output), nr, inputs),
-                Instruction::Return(Some(output)),
-            ],
-        );
+                define_function(
+                    &mut ir,
+                    Either::Right((sys, EffFunIdx(n))),
+                    format!("syscall{}", n),
+                    std::iter::once(nr).chain(inputs.iter().copied()).collect(),
+                    intptr,
+                    vec![
+                        Instruction::Syscall(Some(output), nr, inputs),
+                        Instruction::Return(Some(output)),
+                    ],
+                );
+            }
+        }
+        Target::NT64 => {
+            for (i, n) in vec![2, 9].into_iter().enumerate() {
+                let nr = ir.next_reg(intptr);
+                let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
+                let output = ir.next_reg(intptr);
+
+                define_function(
+                    &mut ir,
+                    Either::Right((sys, EffFunIdx(i))),
+                    format!("syscall{}", n),
+                    std::iter::once(nr).chain(inputs.iter().copied()).collect(),
+                    intptr,
+                    vec![
+                        Instruction::Syscall(Some(output), nr, inputs),
+                        Instruction::Return(Some(output)),
+                    ],
+                );
+            }
+
+            let output_ty = ir.insert_type(Type::ConstArray(3, intptr));
+            let output = ir.next_reg(output_ty);
+
+            let intptr_ptr = ir.insert_type(Type::Pointer(intptr));
+            let peb_int = ir.next_reg(intptr);
+            let peb_ptr = ir.next_reg(intptr_ptr);
+
+            let params_int_ptr = ir.next_reg(intptr_ptr);
+            let params_int = ir.next_reg(intptr);
+            let params_ptr = ir.next_reg(intptr_ptr);
+
+            let stdio_ptr_ty = ir.insert_type(Type::Pointer(output_ty));
+            let stdio_int_ptr = ir.next_reg(intptr_ptr);
+            let stdio_ptr = ir.next_reg(stdio_ptr_ty);
+
+            let four = ir.next_reg(arrsize);
+
+            define_function(
+                &mut ir,
+                Either::Right((sys, EffFunIdx(2))),
+                "stdio".into(),
+                vec![],
+                output_ty,
+                vec![
+                    Instruction::Init(four, 4),
+                    // get PEB*
+                    Instruction::GS(peb_int, 0x60),
+                    Instruction::Cast(peb_ptr, peb_int),
+                    // get RTL_USER_PROCESS_PARAMETERS*
+                    Instruction::AdjacentPtr(params_int_ptr, peb_ptr, four),
+                    Instruction::Load(params_int, params_int_ptr),
+                    Instruction::Cast(params_ptr, params_int),
+                    // get HANDLE[3]*
+                    Instruction::AdjacentPtr(stdio_int_ptr, params_ptr, four),
+                    Instruction::Cast(stdio_ptr, stdio_int_ptr),
+                    // get HANDLE[3]
+                    Instruction::Load(output, stdio_ptr),
+                    Instruction::Return(Some(output)),
+                ],
+            );
+        }
     }
+
+    // define debug
+    let debug_effect = get_effect(ctx, ctx.preamble, "debug");
+    let debug = ir.handlers.push(
+        HandlerIdx,
+        HandlerCtx {
+            effect: asys.values[debug_effect.name],
+            global: None,
+            definition: None,
+            captures: Vec::new(),
+        },
+    );
+    ir.ir.handler_type.push_value(HandlerType {
+        captures: Vec::new(),
+        break_ty: TYPE_NEVER,
+    });
+
+    let putint_input = ir.next_reg(TYPE_INT);
+    let putint = define_function(
+        &mut ir,
+        Either::Right((debug, EffFunIdx(0))),
+        "putint".into(),
+        vec![putint_input],
+        TYPE_NONE,
+        vec![], // will be defined later
+    );
+
+    let putstr_input = ir.next_reg(TYPE_STR_SLICE);
+    let putstr = define_function(
+        &mut ir,
+        Either::Right((debug, EffFunIdx(1))),
+        "putstr".into(),
+        vec![putstr_input],
+        TYPE_NONE,
+        vec![], // will be defined later
+    );
 
     // define unreachable
     // TODO: differ depending on settings
@@ -922,9 +989,9 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
         vec![
             Instruction::InitString(prefix, "panic: ".into()),
             Instruction::InitString(suffix, "\n".into()),
-            Instruction::PrintStr(prefix),
-            Instruction::PrintStr(input),
-            Instruction::PrintStr(suffix),
+            Instruction::Call(putstr, None, vec![prefix]),
+            Instruction::Call(putstr, None, vec![input]),
+            Instruction::Call(putstr, None, vec![suffix]),
             Instruction::Exit(1),
             Instruction::Unreachable,
         ],
@@ -946,11 +1013,47 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis) -> IR {
         ],
     );
 
+    // generate system debug signature
+    let mut proc_todo = Vec::new();
+
+    let sys_putstr_fun = get_function(ctx, ctx.system, "putstr");
+    let sys_putstr = gen_proc(
+        &mut ir,
+        ProcIdent {
+            fun: Either::Left(asys.values[sys_putstr_fun.decl.name]),
+            handlers: vec![sys],
+            handler_params: Vec::new(),
+        },
+        sys_putstr_fun,
+        vec![TYPE_STR_SLICE].into(),
+        &mut proc_todo,
+    );
+    ir.ir.proc_impl[putstr].blocks[BlockIdx(0)].instructions = vec![
+        Instruction::Call(sys_putstr, None, vec![putstr_input]),
+        Instruction::Return(None),
+    ];
+
+    let sys_putint_fun = get_function(ctx, ctx.system, "putint");
+    let sys_putint = gen_proc(
+        &mut ir,
+        ProcIdent {
+            fun: Either::Left(asys.values[sys_putint_fun.decl.name]),
+            handlers: vec![sys],
+            handler_params: Vec::new(),
+        },
+        sys_putint_fun,
+        vec![TYPE_INT].into(),
+        &mut proc_todo,
+    );
+    ir.ir.proc_impl[putint].blocks[BlockIdx(0)].instructions = vec![
+        Instruction::Call(sys_putint, None, vec![putint_input]),
+        Instruction::Return(None),
+    ];
+
     // generate main signature
     let main = asys.main.expect("no main function");
     let fun = &ir.parsed.functions[main];
     let val = ir.asys.values[fun.decl.name];
-    let mut proc_todo = Vec::new();
 
     ir.ir.main = generate_proc_sign(
         &mut ir,
@@ -1153,65 +1256,76 @@ fn get_proc(
 
             // get proc
             if !ir.proc_map.contains_key(&procident) {
-                let handlers = &procident.handlers;
-
-                // get params
-                let params = fun
-                    .decl
-                    .sign
-                    .inputs
-                    .values()
-                    .map(|param| ir.asys.values[param.name])
-                    .zip(param_types.iter().copied())
-                    .map(|(a, b)| (a, b, false))
-                    .collect::<Vec<_>>();
-
-                let output = TypeIdx::from_function(ir, val);
-
-                // generate debug name
-                let mut debug_name = ir.parsed.idents[fun.decl.name].0.clone();
-
-                if handlers.len() > 0 {
-                    debug_name += ".";
-
-                    for &handler in handlers.iter() {
-                        let eff_val = ir.handlers[handler].effect;
-                        let eff_name = ir
-                            .parsed
-                            .effects
-                            .values()
-                            .find(|e| ir.asys.values[e.name] == eff_val)
-                            .map(|e| ir.parsed.idents[e.name].0.as_str())
-                            .unwrap_or("debug");
-
-                        debug_name += eff_name;
-                        debug_name += ".";
-                        debug_name += usize::from(handler).to_string().as_str();
-                        debug_name += ".";
-                    }
-
-                    debug_name.pop();
-                }
-
-                // generate func
-                generate_proc_sign(
-                    ir,
-                    Some(procident.fun),
-                    Cow::Owned(procident.handlers),
-                    &[],
-                    &params,
-                    output,
-                    debug_name,
-                    fun.body,
-                    None,
-                    proc_todo,
-                )
+                gen_proc(ir, procident, fun, param_types, proc_todo)
             } else {
                 ir.proc_map[&procident]
             }
         }
         _ => todo!(),
     }
+}
+
+fn gen_proc(
+    ir: &mut IRContext,
+    procident: ProcIdent,
+    fun: &parser::Function,
+    param_types: Box<[TypeIdx]>,
+    proc_todo: &mut ProcTodo,
+) -> ProcIdx {
+    let val = ir.asys.values[fun.decl.name];
+    let handlers = &procident.handlers;
+
+    // get params
+    let params = fun
+        .decl
+        .sign
+        .inputs
+        .values()
+        .map(|param| ir.asys.values[param.name])
+        .zip(param_types.iter().copied())
+        .map(|(a, b)| (a, b, false))
+        .collect::<Vec<_>>();
+
+    let output = TypeIdx::from_function(ir, val);
+
+    // generate debug name
+    let mut debug_name = ir.parsed.idents[fun.decl.name].0.clone();
+
+    if handlers.len() > 0 {
+        debug_name += ".";
+
+        for &handler in handlers.iter() {
+            let eff_val = ir.handlers[handler].effect;
+            let eff_name = ir
+                .parsed
+                .effects
+                .values()
+                .find(|e| ir.asys.values[e.name] == eff_val)
+                .map(|e| ir.parsed.idents[e.name].0.as_str())
+                .unwrap_or("debug");
+
+            debug_name += eff_name;
+            debug_name += ".";
+            debug_name += usize::from(handler).to_string().as_str();
+            debug_name += ".";
+        }
+
+        debug_name.pop();
+    }
+
+    // generate func
+    generate_proc_sign(
+        ir,
+        Some(procident.fun),
+        Cow::Owned(procident.handlers),
+        &[],
+        &params,
+        output,
+        debug_name,
+        fun.body,
+        None,
+        proc_todo,
+    )
 }
 
 fn get_handler_proc(

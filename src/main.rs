@@ -11,6 +11,7 @@ use std::{
 use analyzer::{analyze, Analysis};
 use clap::Parser;
 use error::{Errors, File, FileIdx};
+use ir::Target;
 use lexer::Tokenizer;
 use parser::{parse_ast, Parsed};
 
@@ -22,12 +23,19 @@ mod llvm;
 mod parser;
 mod vecmap;
 
-fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<(Parsed, Analysis), Errors> {
+fn parse_from_filename(
+    main_file: &Path,
+    core_path: &Path,
+    target: Target,
+) -> Result<(Parsed, Analysis), Errors> {
     let mut parsed = Parsed::default();
     let mut errors = Errors::new();
 
     let preamble = core_path.join("preamble.lucu");
-    let system = core_path.join("sys/unix"); // TODO: get current system
+    let system = core_path.join(match target {
+        Target::Unix64 => "sys/unix",
+        Target::NT64 => "sys/nt",
+    });
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
         (preamble, parsed.preamble),
@@ -127,11 +135,13 @@ fn main() {
     let color = !args.plaintext;
     let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
 
+    let target = Target::NT64;
+
     // analyze
-    match parse_from_filename(&args.main, &core) {
+    match parse_from_filename(&args.main, &core, target) {
         Ok((parsed, asys)) => {
             // generate ir
-            let ir = ir::generate_ir(&parsed, &asys);
+            let ir = ir::generate_ir(&parsed, &asys, target);
             if debug {
                 println!("\n--- IR ---");
                 println!("{}", ir);
@@ -139,23 +149,33 @@ fn main() {
             }
 
             // generate llvm
-            llvm::generate_ir(&ir, &output.with_extension("o"), debug);
+            llvm::generate_ir(&ir, &output.with_extension("o"), debug, target);
 
             // output
             if debug {
                 println!("\n--- OUTPUT ---");
             }
 
-            Command::new("ld")
-                .arg(&output.with_extension("o"))
-                .arg("-o")
-                .arg(&output)
-                .status()
-                .unwrap();
-
-            Command::new(Path::new("./").join(&output))
-                .status()
-                .unwrap();
+            match target {
+                Target::Unix64 => {
+                    Command::new("ld")
+                        .arg(&output.with_extension("o"))
+                        .arg("-o")
+                        .arg(&output)
+                        .status()
+                        .unwrap();
+                }
+                Target::NT64 => {
+                    Command::new("x86_64-w64-mingw32-gcc")
+                        .arg("-o")
+                        .arg(&output.with_extension("exe"))
+                        .arg(&output.with_extension("o"))
+                        .arg("-nostdlib")
+                        .arg("-Wl,-e_start")
+                        .status()
+                        .unwrap();
+                }
+            }
         }
         Err(errors) => {
             errors.print(color);
@@ -172,10 +192,10 @@ mod tests {
     fn execute(filename: &Path, output: &Path) -> String {
         let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("core");
 
-        match parse_from_filename(Path::new(filename), &core) {
+        match parse_from_filename(Path::new(filename), &core, Target::Unix64) {
             Ok((parsed, asys)) => {
-                let ir = ir::generate_ir(&parsed, &asys);
-                llvm::generate_ir(&ir, &output.with_extension("o"), false);
+                let ir = ir::generate_ir(&parsed, &asys, Target::Unix64);
+                llvm::generate_ir(&ir, &output.with_extension("o"), false, Target::Unix64);
 
                 Command::new("ld")
                     .arg(&output.with_extension("o"))

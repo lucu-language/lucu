@@ -4,3 +4,5 @@
 
 out
 out.o
+out.asm
+out.exe

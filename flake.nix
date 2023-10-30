@@ -26,6 +26,7 @@
 
       buildInputs = [
         dev.rust-nightly
+        pkgsCross.mingwW64.buildPackages.gcc
         libffi
         libxml2
         zlib

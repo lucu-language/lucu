@@ -9,6 +9,7 @@ use inkwell::{
     passes::{PassManager, PassManagerBuilder},
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
+        TargetTriple,
     },
     types::{
         AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, IntType, StringRadix,
@@ -23,8 +24,8 @@ use inkwell::{
 
 use crate::{
     ir::{
-        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Reg,
-        Type, TypeIdx, Value, IR,
+        self, AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign,
+        Reg, Type, TypeIdx, Value, IR,
     },
     vecmap::VecMap,
 };
@@ -40,81 +41,177 @@ struct CodeGen<'ctx> {
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
-    syscalls: Vec<(FunctionType<'ctx>, PointerValue<'ctx>)>,
+    syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
+    exit: FunctionValue<'ctx>,
 }
 
-pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
+pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
     Target::initialize_x86(&InitializationConfig::default());
 
     let context = Context::create();
     let module = context.create_module("main");
-    let target = Target::from_triple(&TargetMachine::get_default_triple()).unwrap();
-    let target_machine = target
-        .create_target_machine(
-            &TargetMachine::get_default_triple(),
-            &TargetMachine::get_host_cpu_name().to_string(),
-            &TargetMachine::get_host_cpu_features().to_string(),
-            OptimizationLevel::Aggressive,
-            RelocMode::Default,
-            CodeModel::Default,
-        )
-        .unwrap();
-    let target_data = target_machine.get_target_data();
 
+    let target_machine = match irtarget {
+        ir::Target::Unix64 => {
+            // TODO: specify unix
+            let target = Target::from_triple(&TargetMachine::get_default_triple()).unwrap();
+            target
+                .create_target_machine(
+                    &TargetMachine::get_default_triple(),
+                    &TargetMachine::get_host_cpu_name().to_string(),
+                    &TargetMachine::get_host_cpu_features().to_string(),
+                    OptimizationLevel::Aggressive,
+                    RelocMode::Default,
+                    CodeModel::Default,
+                )
+                .unwrap()
+        }
+        ir::Target::NT64 => {
+            let target = Target::from_name("x86-64").unwrap();
+            target
+                .create_target_machine(
+                    &TargetTriple::create("x86_64-pc-windows-msvc"),
+                    &TargetMachine::get_host_cpu_name().to_string(),
+                    &TargetMachine::get_host_cpu_features().to_string(),
+                    OptimizationLevel::Aggressive,
+                    RelocMode::Default,
+                    CodeModel::Default,
+                )
+                .unwrap()
+        }
+    };
+    let target_data = target_machine.get_target_data();
     let uintptr = context.ptr_sized_int_type(&target_data, None);
 
-    // TODO: this is x86_64 only
-    const SYS_RET: &'static str = "rax";
-    const SYS_NR: &'static str = "rax";
-    const SYS_ARGS: [&'static str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
-    const SYS_CLOBBER: [&'static str; 2] = ["rcx", "r11"];
+    let syscalls = match irtarget {
+        ir::Target::Unix64 => (0..=6)
+            .map(|n| {
+                const SYS_RET: &'static str = "rax";
+                const SYS_NR: &'static str = "rax";
+                const SYS_ARGS: [&'static str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+                const SYS_CLOBBER: [&'static str; 2] = ["rcx", "r11"];
 
-    let syscalls = (0..=6)
-        .map(|n| {
-            let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
-                .take(n + 1)
-                .collect::<Vec<_>>();
-            let ty = uintptr.fn_type(&inputs, false);
+                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
+                    .take(n + 1)
+                    .collect::<Vec<_>>();
+                let ty = uintptr.fn_type(&inputs, false);
 
-            let constrains = format!(
-                "={{{}}},{{{}}},{},{}",
-                SYS_RET,
-                SYS_NR,
-                SYS_ARGS
-                    .iter()
-                    .take(n)
-                    .map(|r| format!("{{{}}}", r))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                SYS_CLOBBER
-                    .iter()
-                    .map(|r| format!("~{{{}}}", r))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            let asm = context.create_inline_asm(
-                ty,
-                "syscall".into(),
-                constrains,
-                true,
-                false,
-                None,
-                false,
-            );
+                let constrains = format!(
+                    "={{{}}},{{{}}},{},{}",
+                    SYS_RET,
+                    SYS_NR,
+                    SYS_ARGS
+                        .iter()
+                        .take(n)
+                        .map(|r| format!("{{{}}}", r))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    SYS_CLOBBER
+                        .iter()
+                        .map(|r| format!("~{{{}}}", r))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                let asm = context.create_inline_asm(
+                    ty,
+                    "syscall".into(),
+                    constrains,
+                    true,
+                    false,
+                    None,
+                    false,
+                );
 
-            (ty, asm)
-        })
-        .collect();
+                Some((ty, asm))
+            })
+            .collect::<Vec<_>>(),
+        ir::Target::NT64 => (0..=9)
+            .map(|n| {
+                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
+                    .take(n + 1)
+                    .collect::<Vec<_>>();
+                let ty = uintptr.fn_type(&inputs, false);
+
+                match n {
+                    2 => {
+                        let asm = context.create_inline_asm(
+                            ty,
+                            "syscall".into(),
+                            "={rax},{rax},{r10},{rdx},~{rcx},~{r11}".into(),
+                            true,
+                            false,
+                            None,
+                            false,
+                        );
+                        Some((ty, asm))
+                    }
+                    9 => {
+                        let asm = context.create_inline_asm(
+                            ty,
+                            "subq $$80, %rsp\nmovq $6, 40(%rsp)\nmovq $7, 48(%rsp)\nmovq $8, 56(%rsp)\nmovq $9, 64(%rsp)\nmovq $10, 72(%rsp)\nsyscall\naddq $$80, %rsp".into(),
+                            "={rax},{rax},{r10},{rdx},{r8},{r9},r,r,r,r,r,~{rcx},~{r11}".into(),
+                            true,
+                            false,
+                            None,
+                            false,
+                        );
+                        Some((ty, asm))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>(),
+    };
+
+    let exit_ty = context.void_type().fn_type(&[uintptr.into()], false);
+    let exit = module.add_function("exit", exit_ty, Some(Linkage::Internal));
+    let exit_block = context.append_basic_block(exit, "");
+    let exit_code = exit.get_nth_param(0).unwrap();
+
+    let builder = context.create_builder();
+    builder.position_at_end(exit_block);
+    match irtarget {
+        ir::Target::Unix64 => {
+            builder
+                .build_indirect_call(
+                    syscalls[1].unwrap().0,
+                    syscalls[1].unwrap().1,
+                    &[uintptr.const_int(60, true).into(), exit_code.into()],
+                    "",
+                )
+                .unwrap();
+            builder.build_unreachable().unwrap();
+        }
+        ir::Target::NT64 => {
+            builder
+                .build_indirect_call(
+                    syscalls[2].unwrap().0,
+                    syscalls[2].unwrap().1,
+                    &[
+                        uintptr.const_int(44, true).into(),
+                        uintptr
+                            .const_int_from_string("-1", StringRadix::Decimal)
+                            .unwrap()
+                            .into(),
+                        exit_code.into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            builder.build_unreachable().unwrap();
+        }
+    }
 
     let mut codegen = CodeGen {
         context: &context,
         module,
-        builder: context.create_builder(),
+        builder,
         target_data,
         structs: VecMap::new(),
         procs: VecMap::new(),
         globals: VecMap::new(),
         syscalls,
+        exit,
     };
 
     for typ in ir.aggregates.values() {
@@ -184,13 +281,9 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         .unwrap();
     codegen
         .builder
-        .build_indirect_call(
-            codegen.syscalls[1].0,
-            codegen.syscalls[1].1,
-            &[
-                codegen.iptr_type().const_int(60, true).into(),
-                codegen.iptr_type().const_int(0, true).into(),
-            ],
+        .build_call(
+            codegen.exit,
+            &[codegen.iptr_type().const_int(0, true).into()],
             "",
         )
         .unwrap();
@@ -217,6 +310,14 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool) {
         println!("--- OPTIMIZED LLVM ---");
         codegen.module.print_to_stderr();
     }
+
+    target_machine
+        .write_to_file(
+            &codegen.module,
+            FileType::Assembly,
+            &path.with_extension("asm"),
+        )
+        .unwrap();
 
     target_machine
         .write_to_file(&codegen.module, FileType::Object, path)
@@ -369,6 +470,14 @@ impl<'ctx> CodeGen<'ctx> {
         imp: &ProcImpl,
         function: FunctionValue<'ctx>,
     ) {
+        // do not probe the stack
+        // TODO: link with a library on windows that has a stack prober
+        function.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("no-stack-arg-probe", ""),
+        );
+
         let mut blocks: Vec<_> = (0..imp.blocks.len())
             .map(|idx| {
                 self.context
@@ -656,177 +765,6 @@ impl<'ctx> CodeGen<'ctx> {
                                 .unwrap();
                         }
                         continue 'outer;
-                    }
-                    I::PrintNum(r) => {
-                        // setup
-                        let val = regmap[&r];
-                        let bufty = self.context.i8_type().array_type(21);
-                        let buf = self.builder.build_alloca(bufty, "buf").unwrap();
-                        let buf_last = unsafe {
-                            self.builder
-                                .build_gep(
-                                    bufty,
-                                    buf,
-                                    &[
-                                        self.isize_type().const_int(0, false),
-                                        self.isize_type().const_int(20, false),
-                                    ],
-                                    "last",
-                                )
-                                .unwrap()
-                        };
-                        self.builder
-                            .build_store(
-                                buf_last,
-                                self.context.i8_type().const_int('\n'.into(), false),
-                            )
-                            .unwrap();
-
-                        // loop
-                        let block_loop = self.context.append_basic_block(function, "loop");
-                        self.builder.build_unconditional_branch(block_loop).unwrap();
-                        self.builder.position_at_end(block_loop);
-
-                        let number = self.builder.build_phi(self.int_type(), "d").unwrap();
-                        let last = self
-                            .builder
-                            .build_phi(
-                                self.context.i8_type().ptr_type(AddressSpace::default()),
-                                "prev",
-                            )
-                            .unwrap();
-
-                        let rem = self
-                            .builder
-                            .build_int_unsigned_rem(
-                                number.as_basic_value().into_int_value(),
-                                self.int_type().const_int(10, false),
-                                "rem",
-                            )
-                            .unwrap();
-                        let rem = self
-                            .builder
-                            .build_int_truncate(rem, self.context.i8_type(), "rem")
-                            .unwrap();
-                        let digit = self
-                            .builder
-                            .build_or(
-                                rem,
-                                self.context.i8_type().const_int('0'.into(), false),
-                                "digit",
-                            )
-                            .unwrap();
-
-                        let cur = unsafe {
-                            self.builder
-                                .build_gep(
-                                    self.context.i8_type(),
-                                    last.as_basic_value().into_pointer_value(),
-                                    &[self
-                                        .isize_type()
-                                        .const_int_from_string("-1", StringRadix::Decimal)
-                                        .unwrap()],
-                                    "cur",
-                                )
-                                .unwrap()
-                        };
-                        self.builder.build_store(cur, digit).unwrap();
-
-                        let div = self
-                            .builder
-                            .build_int_unsigned_div(
-                                number.as_basic_value().into_int_value(),
-                                self.int_type().const_int(10, false),
-                                "div",
-                            )
-                            .unwrap();
-
-                        number.add_incoming(&[(&val, blocks[idx]), (&div, block_loop)]);
-                        last.add_incoming(&[(&buf_last, blocks[idx]), (&cur, block_loop)]);
-
-                        // write
-                        let block_write = self.context.append_basic_block(function, "write");
-                        let cmp = self
-                            .builder
-                            .build_int_compare(
-                                IntPredicate::ULT,
-                                number.as_basic_value().into_int_value(),
-                                self.int_type().const_int(10, false),
-                                "cmp",
-                            )
-                            .unwrap();
-                        self.builder
-                            .build_conditional_branch(cmp, block_write, block_loop)
-                            .unwrap();
-                        self.builder.position_at_end(block_write);
-
-                        let buf_end = unsafe {
-                            self.builder
-                                .build_gep(
-                                    bufty,
-                                    buf,
-                                    &[
-                                        self.isize_type().const_int(0, false),
-                                        self.isize_type().const_int(21, false),
-                                    ],
-                                    "ptr",
-                                )
-                                .unwrap()
-                        };
-                        let buf_end = self
-                            .builder
-                            .build_ptr_to_int(buf_end, self.iptr_type(), "end")
-                            .unwrap();
-                        let buf_start = self
-                            .builder
-                            .build_ptr_to_int(cur, self.iptr_type(), "start")
-                            .unwrap();
-                        let buf_len = self
-                            .builder
-                            .build_int_sub(buf_end, buf_start, "len")
-                            .unwrap();
-
-                        self.builder
-                            .build_indirect_call(
-                                self.syscalls[3].0,
-                                self.syscalls[3].1,
-                                &[
-                                    self.iptr_type().const_int(1, false).into(),
-                                    self.iptr_type().const_int(1, false).into(),
-                                    buf_start.into(),
-                                    buf_len.into(),
-                                ],
-                                "",
-                            )
-                            .unwrap();
-
-                        blocks[idx] = block_write;
-                    }
-                    I::PrintStr(r) => {
-                        let val = regmap[&r].into_struct_value();
-                        let ptr = self
-                            .builder
-                            .build_extract_value(val, 0, "ptr")
-                            .unwrap()
-                            .into_pointer_value();
-                        let buf = self
-                            .builder
-                            .build_ptr_to_int(ptr, self.iptr_type(), "buf")
-                            .unwrap();
-                        let len = self.builder.build_extract_value(val, 1, "len").unwrap();
-                        self.builder
-                            .build_indirect_call(
-                                self.syscalls[3].0,
-                                self.syscalls[3].1,
-                                &[
-                                    self.iptr_type().const_int(1, false).into(),
-                                    self.iptr_type().const_int(1, false).into(),
-                                    buf.into(),
-                                    len.into(),
-                                ],
-                                "",
-                            )
-                            .unwrap();
                     }
                     I::Aggregate(r, ref rs) | I::Handler(r, ref rs) => {
                         let aggr_ty = self.get_type(ir, ir.regs[r]);
@@ -1156,8 +1094,8 @@ impl<'ctx> CodeGen<'ctx> {
                         let val = self
                             .builder
                             .build_indirect_call(
-                                self.syscalls[args.len()].0,
-                                self.syscalls[args.len()].1,
+                                self.syscalls[args.len()].unwrap().0,
+                                self.syscalls[args.len()].unwrap().1,
                                 &fargs,
                                 "",
                             )
@@ -1171,13 +1109,9 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                     I::Exit(code) => {
                         self.builder
-                            .build_indirect_call(
-                                self.syscalls[1].0,
-                                self.syscalls[1].1,
-                                &[
-                                    self.iptr_type().const_int(60, true).into(),
-                                    self.iptr_type().const_int(code, true).into(),
-                                ],
+                            .build_call(
+                                self.exit,
+                                &[self.iptr_type().const_int(code, true).into()],
                                 "",
                             )
                             .unwrap();
@@ -1198,6 +1132,25 @@ impl<'ctx> CodeGen<'ctx> {
                                 }
                             );
                         }
+                    }
+                    I::GS(r, offset) => {
+                        let asm_ty = self.iptr_type().fn_type(&[], false);
+                        let asm = self.context.create_inline_asm(
+                            asm_ty,
+                            format!("movq %gs:{}, $0", offset),
+                            "=r".into(),
+                            false,
+                            false,
+                            None,
+                            false,
+                        );
+                        let val = self
+                            .builder
+                            .build_indirect_call(asm_ty, asm, &[], "")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_left();
+                        insert!(r, val);
                     }
                 }
             }

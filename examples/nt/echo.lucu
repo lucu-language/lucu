@@ -1,0 +1,13 @@
+import "core:sys/nt"
+
+fun main() / debug nt.sys {
+	loop {
+		mut buf [256]u8 = ---
+
+		# get line
+		let count = nt.read_line(buf[0..256])
+
+		# write back
+		nt.write(buf[0..count])
+	}
+}

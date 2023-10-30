@@ -10,6 +10,7 @@
 effect debug {
 	fun putint(n int)
 	fun putstr(s str)
+	fun wait()
 }
 
 ##

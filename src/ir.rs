@@ -430,15 +430,17 @@ impl<'a> IRContext<'a> {
     fn insert_type(&mut self, ty: Type) -> TypeIdx {
         self.ir.types.insert(TypeIdx, ty).clone()
     }
-    fn get_in_scope(&mut self, val: Val, scope: &Scope) -> Value {
+    fn get_in_scope(&mut self, val: Val, scope: &Scope) -> Option<Value> {
         match scope.get(val) {
-            Some(r) => r.clone(),
-            None => {
-                let idx = self.implied_handlers[&val];
-                let ty = self.insert_type(Type::NakedHandler(idx));
-                let reg = self.next_reg(ty);
-                Value::Value(reg, None)
-            }
+            Some(r) => Some(r.clone()),
+            None => match self.implied_handlers.get(&val).copied() {
+                Some(idx) => {
+                    let ty = self.insert_type(Type::NakedHandler(idx));
+                    let reg = self.next_reg(ty);
+                    Some(Value::Value(reg, None))
+                }
+                None => None,
+            },
         }
     }
     fn new_handler(
@@ -961,6 +963,15 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         vec![], // will be defined later
     );
 
+    let wait = define_function(
+        &mut ir,
+        Either::Right((debug, EffFunIdx(2))),
+        "wait".into(),
+        vec![],
+        TYPE_NONE,
+        vec![], // will be defined later
+    );
+
     // define unreachable
     // TODO: differ depending on settings
     let unreachable_fun = get_function(ctx, ctx.preamble, "unreachable");
@@ -1047,6 +1058,23 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
     );
     ir.ir.proc_impl[putint].blocks[BlockIdx(0)].instructions = vec![
         Instruction::Call(sys_putint, None, vec![putint_input]),
+        Instruction::Return(None),
+    ];
+
+    let sys_wait_fun = get_function(ctx, ctx.system, "wait");
+    let sys_wait = gen_proc(
+        &mut ir,
+        ProcIdent {
+            fun: Either::Left(asys.values[sys_wait_fun.decl.name]),
+            handlers: vec![sys],
+            handler_params: Vec::new(),
+        },
+        sys_wait_fun,
+        vec![].into(),
+        &mut proc_todo,
+    );
+    ir.ir.proc_impl[wait].blocks[BlockIdx(0)].instructions = vec![
+        Instruction::Call(sys_wait, None, vec![]),
         Instruction::Return(None),
     ];
 
@@ -1166,7 +1194,10 @@ fn get_proc(
         Definition::EffectFunction(eff_idx, eff_fun_idx, _) => {
             // get handler
             let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
-            let handler_val = ir.get_in_scope(eff_val, scope);
+            let handler_val = ir.get_in_scope(eff_val, scope).expect(&format!(
+                "effect {:?} not in scope when finding effect function in {}. scope: {:?}",
+                eff_val, ir.ir.proc_sign[proc_idx].debug_name, scope
+            ));
             let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                 Type::NakedHandler(handler_idx) => {
                     let proc = &mut ir.ir.proc_sign[proc_idx];
@@ -1218,7 +1249,10 @@ fn get_proc(
                 .iter()
                 .map(|&e| {
                     let effect = ir.asys.values[e.effect];
-                    let handler_val = ir.get_in_scope(effect, scope);
+                    let handler_val = ir.get_in_scope(effect, scope).expect(&format!(
+                        "effect not in scope when finding call handlers for '{}' in {}",
+                        ir.parsed.idents[fun.decl.name].0, ir.ir.proc_sign[proc_idx].debug_name
+                    ));
                     let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                         Type::NakedHandler(handler_idx) => {
                             let proc = &mut ir.ir.proc_sign[proc_idx];
@@ -1349,7 +1383,9 @@ fn get_handler_proc(
                 .iter()
                 .map(|&e| {
                     let effect = ir.asys.values[e.effect];
-                    let handler_val = ir.get_in_scope(effect, scope);
+                    let handler_val = ir
+                        .get_in_scope(effect, scope)
+                        .expect("effect not in scope when finding effect function call handlers");
                     let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                         Type::NakedHandler(handler_idx) => {
                             let proc = &mut ir.ir.proc_sign[proc_idx];
@@ -1626,7 +1662,7 @@ fn generate_proc_sign(
     });
 
     // get output
-    if let analyzer::Type::Handler(effect, _, def) = ir.asys.types[output] {
+    if let analyzer::Type::Handler(effect, _, def) = ir.asys.types[ir.asys.exprs[body]] {
         let handler = handler_type(ir, effect, def, proc_idx, &handler_defs, &scope, proc_todo);
         ir.ir.proc_sign[proc_idx].output = handler;
     }
@@ -1648,7 +1684,10 @@ fn handler_type(
             let handler_idx = defs
                 .iter()
                 .find(|&&(e, _)| expr == e)
-                .expect("function returns handler not defined by self")
+                .expect(&format!(
+                    "function {} returns handler not defined by self",
+                    ir.ir.proc_sign[proc_idx].debug_name
+                ))
                 .1;
             let mems = ir.handlers[handler_idx]
                 .captures
@@ -1690,7 +1729,10 @@ fn handler_type(
         analyzer::HandlerDef::Param(p) => {
             ir.ir.regs[ir.ir.proc_sign[proc_idx].inputs[usize::from(p)]]
         }
-        analyzer::HandlerDef::Signature => ir.get_in_scope(effect, scope).get_type(&ir.ir),
+        analyzer::HandlerDef::Signature => ir
+            .get_in_scope(effect, scope)
+            .expect("effect not in scope when finding naked handler")
+            .get_type(&ir.ir),
         analyzer::HandlerDef::Error => unreachable!(),
     }
 }
@@ -1743,7 +1785,7 @@ fn get_captures(
 ) -> Vec<(Val, Reg, bool)> {
     let mut captures = Vec::new();
     ir.parsed.for_each(expr, true, false, &mut |expr| {
-        if let Expression::Ident(i) = ir.parsed.exprs[expr].0 {
+        if let Expression::Ident(i) | Expression::Member(_, i) = ir.parsed.exprs[expr].0 {
             let val = ir.asys.values[i];
 
             // capture effects from (effect) functions
@@ -2516,7 +2558,9 @@ fn generate_expr(
                         Some(analyzer::HandlerDef::Handler(_, captures)) => captures
                             .iter()
                             .map(|c| {
-                                let reg = ir.get_in_scope(c.val, &ctx.scope);
+                                let reg = ir
+                                    .get_in_scope(c.val, &ctx.scope)
+                                    .expect("handler capture not in scope");
                                 if c.mutable {
                                     reg.reference(ir, &mut ctx.scope, &mut blocks[*block])
                                 } else {
@@ -2540,7 +2584,7 @@ fn generate_expr(
 
             Ok(Some(Value::Value(closure_reg, None)))
         }
-        E::TryWith(body, _, handler) => {
+        E::TryWith(body, handler) => {
             if let Some(handler) = handler {
                 // get handler
                 let closure_reg =
@@ -2783,7 +2827,9 @@ fn generate_expr(
 
         E::Ident(id) => {
             let val = ir.asys.values[id];
-            let mut reg = ir.get_in_scope(val, &ctx.scope);
+            let mut reg = ir
+                .get_in_scope(val, &ctx.scope)
+                .expect("value not in scope");
             if let Type::Handler(idx) = ir.ir.types[reg.get_type(&ir.ir)] {
                 if let analyzer::Type::Handler(_, _, def) = ir.asys.types[ir.asys.exprs[ctx.expr]] {
                     if let Some(def) = def {

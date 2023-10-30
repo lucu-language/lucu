@@ -18,35 +18,14 @@ fun exit(code uptr) ! / sys {
 	unreachable()
 }
 
-fun read(mut buf []u8) usize / sys {
-	let stdin = stdio()[0]
-
+fun read(fd uptr, mut buf []u8) usize / sys {
 	mut io_status_block [2]uptr = ---
-	syscall9(6, stdin, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+	syscall9(6, fd, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
 	cast io_status_block[1]
 }
 
-fun read_line(mut buf []u8) usize / sys {
-	mut len usize = 0
-
-	try loop {
-		let read = read(buf[len..len + 1])
-		if read == 0 {
-			break()
-		}
-
-		if buf[len++] == '\n' {
-			break()
-		}
-	}
-
-	len
-}
-
-fun write(buf []u8) usize / sys {
-	let stdout = stdio()[1]
-
+fun write(fd uptr, buf []u8) usize / sys {
 	mut io_status_block [2]uptr = ---
-	syscall9(8, stdout, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+	syscall9(8, fd, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
 	cast io_status_block[1]
 }

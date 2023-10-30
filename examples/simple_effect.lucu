@@ -25,9 +25,9 @@ fun ident(h get) get {
 fun puttwice(n int) / debug {
 	with getter_indirect(n) {
 		let handler = gimme_get()
-		putint(handler.get())
+		try putint(get()) with handler
 		let handler = ident(handler)
-		putint(handler.get())
+		try putint(get()) with handler
 	}
 }
 

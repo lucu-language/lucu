@@ -46,7 +46,7 @@ fun main() / debug {
 		println_buffered(a)
 		println_buffered(b)
 
-		with strbuf.iter() {
+		with iter() {
 			loop {
 				putstr(next())
 				putstr("\n")

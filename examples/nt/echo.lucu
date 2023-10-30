@@ -1,13 +1,21 @@
 import "core:sys/nt"
+import "core:io"
 
-fun main() / debug nt.sys {
-	loop {
+fun main() / nt.sys {
+	with io.nt(), io.stdin(), io.stdout() loop {
 		mut buf [256]u8 = ---
 
 		# get line
-		let count = nt.read_line(buf[0..256])
+		let count = io.read_line(buf[0..256])
+
+		# print character count
+		io.write("  size: ")
+		io.write_int(cast count)
+		io.write("\n")
 
 		# write back
-		nt.write(buf[0..count])
+		io.write("  text: ")
+		io.write(buf[0..count])
+		io.write("\n")
 	}
 }

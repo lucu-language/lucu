@@ -17,27 +17,10 @@ fun exit(code uptr) ! / sys {
 	unreachable()
 }
 
-fun read(mut buf []u8) usize / sys {
-	cast syscall3(0, 0, cast &buf[0], cast len(buf))
+fun read(fd uptr, mut buf []u8) usize / sys {
+	cast syscall3(0, fd, cast &buf[0], cast len(buf))
 }
 
-fun read_line(mut buf []u8) usize / sys {
-	mut len usize = 0
-
-	try loop {
-		let read = read(buf[len..len + 1])
-		if read == 0 {
-			break()
-		}
-
-		if buf[len++] == '\n' {
-			break()
-		}
-	}
-
-	len
-}
-
-fun write(buf []u8) usize / sys {
-	cast syscall3(1, 1, cast &buf[0], cast len(buf))
+fun write(fd uptr, buf []u8) usize / sys {
+	cast syscall3(1, fd, cast &buf[0], cast len(buf))
 }

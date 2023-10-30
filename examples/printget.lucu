@@ -17,11 +17,11 @@ fun getter(s str) get {
 fun main() / debug {
 	try {
 
-		with getter("one") { print() }
-		with getter("two") { print() }
-		with getter("tea") { print() }
+		try print() with getter("one")
+		try print() with getter("two")
+		try print() with getter("tea")
 		
-	} with printget {
+	} with handle printget {
 
 		fun print() / get {
 			putstr(get())

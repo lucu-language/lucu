@@ -71,7 +71,7 @@ pub enum Expression {
     Yeet(Option<ExprIdx>),
     Let(bool, Ident, Option<TypeIdx>, ExprIdx),
 
-    TryWith(ExprIdx, Option<TypeIdx>, Option<ExprIdx>),
+    TryWith(ExprIdx, Option<ExprIdx>),
     Handler(Handler),
 
     Array(Vec<ExprIdx>),
@@ -263,7 +263,7 @@ impl Parsed {
                     self.for_each(expr, do_try, do_handler, f);
                 }
             }
-            Expression::TryWith(expr, _, handler) => {
+            Expression::TryWith(expr, handler) => {
                 if do_try {
                     self.for_each(expr, do_try, do_handler, f);
                 }
@@ -641,6 +641,7 @@ pub fn parse_ast<'a>(
                     }
 
                     let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                    let path = std::fs::canonicalize(path).unwrap();
 
                     // get or create package
                     let existing = todo_packages.iter().find(|(other, _)| other.eq(&path));
@@ -945,49 +946,69 @@ impl Parse for Expression {
                 Some(Expression::Loop(body))
             }
 
-            // try-with
+            // try-with expression
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
 
-                let return_type = Option::<TypeIdx>::parse_or_default(tk).0;
+                let inner = Expression::parse_or_default(tk);
 
-                // allow for try-loop
-                let body = if tk.peek_check(Token::Loop) {
-                    Expression::parse_or_default(tk)
+                if tk.check(Token::With).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    let mut handlers = vec![handler];
+
+                    while tk.check(Token::Comma).is_some() {
+                        let handler = Expression::parse_or_skip(tk)?;
+                        let handler = tk.push_expr(handler);
+                        handlers.push(handler)
+                    }
+
+                    let mut expr = inner;
+                    for handler in handlers.into_iter().rev() {
+                        expr = Ranged(
+                            Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                            start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        );
+                    }
+                    Some(expr.0)
                 } else {
-                    Body::parse_or_default(tk)
-                };
-
-                let handler = if tk.check(Token::With).is_some() {
-                    let handler = Handler::parse_or_skip(tk)?;
-                    let handler = tk.push_expr(handler.map(Expression::Handler));
-                    Some(handler)
-                } else {
-                    None
-                };
-
-                Some(Expression::TryWith(
-                    tk.push_expr(body),
-                    return_type,
-                    handler,
-                ))
+                    Some(Expression::TryWith(tk.push_expr(inner), None))
+                }
             }
 
-            // short try-with
+            // with block
             Some(Ranged(Token::With, ..)) => {
                 tk.next();
 
                 let handler = Expression::parse_or_skip(tk)?;
                 let handler = tk.push_expr(handler);
+                let mut handlers = vec![handler];
+
+                while tk.check(Token::Comma).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    handlers.push(handler)
+                }
 
                 // allow for with-loop
-                let body = if tk.peek_check(Token::Loop) {
+                let inner = if tk.peek_check(Token::Loop) {
                     Expression::parse_or_default(tk)
                 } else {
                     Body::parse_or_default(tk)
                 };
 
-                Some(Expression::TryWith(tk.push_expr(body), None, Some(handler)))
+                let mut expr = inner;
+                for handler in handlers.into_iter().rev() {
+                    expr = Ranged(
+                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
+                }
+                Some(expr.0)
             }
 
             // if-(else)

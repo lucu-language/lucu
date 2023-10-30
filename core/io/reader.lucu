@@ -1,0 +1,23 @@
+effect reader {
+	fun read(mut buf []u8) usize
+}
+
+fun read_line(mut buf []u8) usize / reader {
+	mut total usize = 0
+
+	try loop {
+		let read = read(buf[total..total + 1])
+		if read == 0 {
+			break()
+		}
+
+		if buf[total++] == '\n' {
+			break()
+		}
+		if total == len(buf) {
+			break()
+		}
+	}
+
+	total
+}

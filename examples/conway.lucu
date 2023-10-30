@@ -107,7 +107,7 @@ fun next_state(old []u8, mut new []u8) {
 	}
 }
 
-fun main() / debug unix.sys {
+fun main() / debug {
 	# create buffers
 	mut state = init_board()[0..256]
 	mut next = init_board()[0..256]
@@ -124,7 +124,7 @@ fun main() / debug unix.sys {
 		print_state(state)
 
 		# wait for stdin
-		unix.read([---])
+		wait()
 
 		# get next state
 		next_state(state, next)

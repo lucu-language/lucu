@@ -1,6 +1,4 @@
-import "core:sys/unix"
-
-fun main() / debug unix.sys {
+fun main() / debug {
 	# create buffers
 	mut state [64]u8 = 0
 	mut state = state[0..64]
@@ -16,7 +14,7 @@ fun main() / debug unix.sys {
 		print_state(state)
 
 		# wait for stdin
-		unix.read([---])
+		wait()
 
 		# get next state
 		next_state(state, next)

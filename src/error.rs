@@ -51,7 +51,9 @@ pub enum Error {
     UnknownField(Option<Ranged<()>>, Option<Ranged<()>>),
     UnknownPackageValue(Range),
     UnknownPackageEffect(Range),
+    UnknownPackageFunction(Range),
     UnknownValue,
+    UnknownFunction,
     UnknownValueOrPackage,
     UnknownEffect,
     UnknownPackage,
@@ -485,6 +487,10 @@ impl Errors {
                         "value {} not found in scope",
                         highlight(0, str, color, true)
                     ),
+                    Error::UnknownFunction => format!(
+                        "function {} not found in scope",
+                        highlight(0, str, color, true)
+                    ),
                     Error::UnknownValueOrPackage => format!(
                         "value or package {} not found in scope",
                         highlight(0, str, color, true)
@@ -510,6 +516,11 @@ impl Errors {
                     ),
                     Error::UnknownPackageValue(pkg) => format!(
                         "package {} has no value {}",
+                        highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
+                        highlight(0, str, color, true)
+                    ),
+                    Error::UnknownPackageFunction(pkg) => format!(
+                        "package {} has no function {}",
                         highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
                         highlight(0, str, color, true)
                     ),

@@ -1,13 +1,21 @@
 import "core:sys/unix"
+import "core:io"
 
 fun main() / unix.sys {
-	loop {
+	with io.unix(), io.stdin(), io.stdout() loop {
 		mut buf [256]u8 = ---
 
 		# get line
-		let count = unix.read_line(buf[0..256])
+		let count = io.read_line(buf[0..256])
+
+		# print character count
+		io.write("  size: ")
+		io.write_int(cast count)
+		io.write("\n")
 
 		# write back
-		unix.write(buf[0..count])
+		io.write("  text: ")
+		io.write(buf[0..count])
+		io.write("\n")
 	}
 }

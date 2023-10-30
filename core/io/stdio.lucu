@@ -1,0 +1,63 @@
+import "../sys/unix"
+import "../sys/nt"
+
+effect stdio {
+	fun stdin () reader
+	fun stdout() writer
+	fun stderr() writer
+}
+
+fun unix() stdio / unix.sys {
+	handle stdio {
+		fun stdin() reader {
+			handle reader {
+				fun read(mut buf []u8) usize {
+					unix.read(0, buf)
+				}
+			}
+		}
+		fun stdout() writer {
+			handle writer {
+				fun write(buf []u8) usize {
+					unix.write(1, buf)
+				}
+			}
+		}
+		fun stderr() writer {
+			handle writer {
+				fun write(buf []u8) usize {
+					unix.write(2, buf)
+				}
+			}
+		}
+	}
+}
+
+fun nt() stdio / nt.sys {
+	handle stdio {
+		fun stdin() reader {
+			let stdin = nt.stdio()[0]
+			handle reader {
+				fun read(mut buf []u8) usize {
+					nt.read(stdin, buf)
+				}
+			}
+		}
+		fun stdout() writer {
+			let stdout = nt.stdio()[1]
+			handle writer {
+				fun write(buf []u8) usize {
+					nt.write(stdout, buf)
+				}
+			}
+		}
+		fun stderr() writer {
+			let stderr = nt.stdio()[2]
+			handle writer {
+				fun write(buf []u8) usize {
+					nt.write(stderr, buf)
+				}
+			}
+		}
+	}
+}

@@ -80,17 +80,19 @@ fn parse_from_filename(
                             None
                         }
                     });
-                    for path in iter {
-                        let content = read_to_string(&path).unwrap().replace('\t', "  ");
+
+                    let path = path.clone();
+                    for file in iter {
+                        let content = read_to_string(&file).unwrap().replace('\t', "  ");
                         let idx = errors.files.push(
                             FileIdx,
                             File {
                                 content: content.clone(),
-                                name: path.to_string_lossy().into_owned(),
+                                name: file.to_string_lossy().into_owned(),
                             },
                         );
                         let tok = Tokenizer::new(&content, idx, &mut errors);
-                        parse_ast(tok, pkg, &mut parsed, &path.clone(), &libs, &mut files_todo);
+                        parse_ast(tok, pkg, &mut parsed, &path, &libs, &mut files_todo);
                     }
                 }
                 Err(_) => {}
@@ -135,7 +137,7 @@ fn main() {
     let color = !args.plaintext;
     let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
 
-    let target = Target::NT64;
+    let target = Target::Unix64;
 
     // analyze
     match parse_from_filename(&args.main, &core, target) {
@@ -164,6 +166,9 @@ fn main() {
                         .arg(&output)
                         .status()
                         .unwrap();
+                    Command::new(Path::new("./").join(&output))
+                        .status()
+                        .unwrap();
                 }
                 Target::NT64 => {
                     Command::new("x86_64-w64-mingw32-gcc")
@@ -172,6 +177,9 @@ fn main() {
                         .arg(&output.with_extension("o"))
                         .arg("-nostdlib")
                         .arg("-Wl,-e_start")
+                        .status()
+                        .unwrap();
+                    Command::new(Path::new("./").join(&output).with_extension("exe"))
                         .status()
                         .unwrap();
                 }

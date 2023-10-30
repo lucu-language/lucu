@@ -1,8 +1,7 @@
 import "core:sys/unix"
 
 fun main() / unix.sys {
-	unix.putint(69)
-	unix.putstr("reachable\n")
+	unix.write(1, "reachable\n")
 	unix.exit(0)
-	unix.putstr("unreachable\n")
+	unix.write(2, "unreachable\n");
 }

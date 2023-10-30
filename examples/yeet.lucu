@@ -1,47 +1,47 @@
 effect throwint {
-	fun throw() !
+	fun throwint() !
 }
 
 effect throwstr {
-	fun throw() !
+	fun throwstr() !
 }
 
 fun main() / debug {
-	putint(try int {
-		try str {
-			throwint.throw()
+	putint(try {
+		try {
+			throwint()
 			"unexpected"
-		} with throwstr yeets str {
+		} with handle throwstr yeets str {
 
-			fun throw() ! {
+			fun throwstr() ! {
 				yeet "Hello, World!\n"
 			}
 
 		}
 		69
-	} with throwint yeets int {
+	} with handle throwint yeets int {
 
-		fun throw() ! {
+		fun throwint() ! {
 			yeet 42
 		}
 		
 	})
 
-	putstr(try str {
-		try int {
-			throwstr.throw()
+	putstr(try {
+		try {
+			throwstr()
 			69
-		} with throwint yeets int {
+		} with handle throwint yeets int {
 
-			fun throw() ! {
+			fun throwint() ! {
 				yeet 42
 			}
 	
 		}
 		"unexpected"
-	} with throwstr yeets str {
+	} with handle throwstr yeets str {
 
-		fun throw() ! {
+		fun throwstr() ! {
 			yeet "Hello, World!\n"
 		}
 

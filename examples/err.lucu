@@ -16,7 +16,7 @@ fun main() test fails test / q {
 		let q ["hello"]u8 = 51294129847198246918246981264981624
 		q = 8
 		test
-	} with test {
+	} with handle test {
 
 		fun undefined() {
 			debug.x()

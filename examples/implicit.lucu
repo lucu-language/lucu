@@ -19,11 +19,11 @@ handle return yeets int {
 }
 
 fun main() / debug {
-	putint(try int {
+	putint(try {
 		putint(get())
 		try {
 			putint(get())
-		} with get {
+		} with handle get {
 			fun get() int {
 				420
 			}

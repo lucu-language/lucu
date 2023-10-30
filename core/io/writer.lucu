@@ -1,0 +1,24 @@
+effect writer {
+	fun write(buf []u8) usize
+}
+
+fun write_int(n int) / writer {
+	mut buf [20]u8 = ---
+
+	mut current usize = 20
+	mut remaining = n
+
+	try loop {
+		let digit = '0' + cast mod(remaining, 10)
+		remaining = remaining / 10
+
+		current = current - 1
+		buf[current] = digit
+
+		if remaining == 0 {
+			break()
+		}
+	}
+
+	write(buf[current..20]);
+}

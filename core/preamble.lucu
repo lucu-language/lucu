@@ -1,6 +1,5 @@
 ##
 # everything in this file is always in scope
-# many functions are defined internally and will be annotated as such
 ##
 
 ##
@@ -14,25 +13,6 @@ effect debug {
 }
 
 ##
-# marks that a code path is unreachable
-# this function should NEVER actually be called
-# for displaying an error, &panic is preferred
-##
-fun unreachable() ! {
-	# internally defined
-	loop {}
-}
-
-##
-# exits the program and displays an error
-# preferred to be used only for debugging
-##
-fun panic(msg str) ! {
-	# internally defined
-	loop {}
-}
-
-##
 # panics with message if the assertion is not met
 # preferred to be used only for debugging
 ##
@@ -41,14 +21,6 @@ fun assert(all bool, msg str) {
 	} else { # fails
 		panic(msg)
 	}
-}
-
-##
-# returns the length of a slice
-##
-fun len(slice []u8) usize {
-	# internally defined
-	---
 }
 
 ##
@@ -70,4 +42,51 @@ handle break fails {
 	fun break() ! {
 		fail
 	}
+}
+
+##
+# the following functions have internal definitions
+# these are not based on a specific target
+##
+
+##
+# marks that a code path is unreachable
+# this function should NEVER actually be called
+# for displaying an error, &panic is preferred
+##
+fun unreachable() ! {
+	# internally defined
+	loop {}
+}
+
+##
+# returns the length of a slice
+##
+fun len(slice []u8) usize {
+	# internally defined
+	---
+}
+
+##
+# the following functions may have an internal definition based on the target
+# they also have default implementations for unknown targets
+##
+
+##
+# function that ends execution of the entire program
+# for most targets this should end the process
+# for virtual machines this should halt or spin forever
+##
+fun trap() ! {
+	# internally defined based on target
+	loop {}
+}
+
+##
+# exits the program and displays an error
+# preferred to be used only for debugging
+##
+fun panic(msg str) ! {
+	# internally defined based on target
+	trap()
 }

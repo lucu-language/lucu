@@ -25,7 +25,10 @@
     devShell = pkgs: with pkgs; mkShell {
 
       buildInputs = [
-        dev.rust-nightly
+        rustc
+        cargo
+        bacon
+
         pkgsCross.mingwW64.buildPackages.gcc
         libffi
         libxml2

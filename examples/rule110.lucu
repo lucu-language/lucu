@@ -1,13 +1,13 @@
 fun main() / debug {
 	# create buffers
-	mut state [64]u8 = 0
-	mut state = state[0..64]
+	mut state [128]u8 = 0
+	mut state = state[0..128]
 
-	mut next [64]u8 = ---
-	mut next = next[0..64]
+	mut next [128]u8 = ---
+	mut next = next[0..128]
 
 	# init state
-	state[63] = 1
+	state[127] = 1
 
 	loop {
 		# print state

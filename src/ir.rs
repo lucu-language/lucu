@@ -984,6 +984,21 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         vec![Instruction::Unreachable],
     );
 
+    // define trap
+    // TODO: location
+    let trap_fun = get_function(ctx, ctx.preamble, "trap");
+    define_function(
+        &mut ir,
+        Either::Left(asys.values[trap_fun.decl.name]),
+        "trap".into(),
+        vec![],
+        TYPE_NEVER,
+        vec![
+            Instruction::Exit(1),
+            Instruction::Unreachable,
+        ],
+    );
+
     // define panic
     // TODO: location
     let panic_fun = get_function(ctx, ctx.preamble, "panic");

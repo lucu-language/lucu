@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    env,
     ffi::OsStr,
     fs::{read_dir, read_to_string},
     path::{Path, PathBuf},
@@ -11,7 +10,7 @@ use std::{
 use analyzer::{analyze, Analysis};
 use clap::Parser;
 use error::{Errors, File, FileIdx};
-use ir::Target;
+use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
 use parser::{parse_ast, Parsed};
 
@@ -23,24 +22,163 @@ mod llvm;
 mod parser;
 mod vecmap;
 
+#[derive(Debug)]
+pub struct Target {
+    pub triple: String,
+    pub cpu: Option<String>,
+    pub features: Option<String>,
+}
+
+pub enum LucuOS {
+    Linux,
+    Windows,
+    Unknown,
+}
+
+pub enum LucuArch {
+    I386,
+    Amd64,
+    Arm32,
+    Arm64,
+    Wasm32,
+    Wasm64,
+}
+
+impl LucuArch {
+    pub fn as_str(&self) -> &str {
+        match self {
+            LucuArch::I386 => "i386",
+            LucuArch::Amd64 => "amd64",
+            LucuArch::Arm32 => "arm32",
+            LucuArch::Arm64 => "arm64",
+            LucuArch::Wasm32 => "wasm32",
+            LucuArch::Wasm64 => "wasm64",
+        }
+    }
+    pub fn register_size(&self) -> u32 {
+        match self {
+            LucuArch::I386 => 32,
+            LucuArch::Amd64 => 64,
+            LucuArch::Arm32 => 32,
+            LucuArch::Arm64 => 64,
+
+            // wasm doesn't really have "registers"
+            // but it fully supports 32 and 64 bits integers, regardless of ptr size
+            // so we decide that the wasm register size is always 64 bits
+            LucuArch::Wasm32 => 64,
+            LucuArch::Wasm64 => 64,
+        }
+    }
+    pub fn ptr_size(&self) -> u32 {
+        match self {
+            LucuArch::I386 => 32,
+            LucuArch::Amd64 => 64,
+            LucuArch::Arm32 => 32,
+            LucuArch::Arm64 => 64,
+            LucuArch::Wasm32 => 32,
+            LucuArch::Wasm64 => 64,
+        }
+    }
+    pub fn array_len_size(&self) -> u32 {
+        match self {
+            LucuArch::I386 => 32,
+            LucuArch::Amd64 => 64,
+            LucuArch::Arm32 => 32,
+            LucuArch::Arm64 => 64,
+            LucuArch::Wasm32 => 32,
+            LucuArch::Wasm64 => 64,
+        }
+    }
+}
+
+impl LucuOS {
+    pub fn as_str(&self) -> &str {
+        match self {
+            LucuOS::Linux => "linux",
+            LucuOS::Windows => "windows",
+            LucuOS::Unknown => "unknown",
+        }
+    }
+}
+
+impl Target {
+    pub fn lucu_os(&self) -> LucuOS {
+        let mut split = self.triple.split('-');
+        let _arch = split.next();
+        let _vendor = split.next();
+        let sys = split.next();
+        let env = split.next();
+
+        match (sys, env) {
+            (Some("linux"), _) => LucuOS::Linux,
+            (Some("windows"), _) => LucuOS::Windows,
+            _ => LucuOS::Unknown,
+        }
+    }
+    pub fn lucu_arch(&self) -> LucuArch {
+        if self.triple.starts_with("amd64")
+            || self.triple.starts_with("x86_64")
+            || self.triple.starts_with("x64")
+        {
+            LucuArch::Amd64
+        } else if self.triple.starts_with("i386") || self.triple.starts_with("x86") {
+            LucuArch::I386
+        } else if self.triple.starts_with("arm64") || self.triple.starts_with("aarch64") {
+            LucuArch::Amd64
+        } else if self.triple.starts_with("arm") {
+            LucuArch::Arm32
+        } else if self.triple.starts_with("wasm64") {
+            LucuArch::Wasm64
+        } else if self.triple.starts_with("wasm") {
+            LucuArch::Wasm32
+        } else {
+            panic!(
+                "unknown architecture {}",
+                match self.triple.split_once('-') {
+                    Some((arch, _)) => arch,
+                    None => &self.triple,
+                }
+            )
+        }
+    }
+    pub fn host(cpu: Option<String>, features: Option<String>) -> Self {
+        Self {
+            triple: TargetMachine::get_default_triple()
+                .as_str()
+                .to_owned()
+                .into_string()
+                .unwrap(),
+
+            // TODO: get common denominator
+            cpu: Some(cpu.unwrap_or_else(|| TargetMachine::get_host_cpu_name().to_string())),
+            features: Some(
+                features.unwrap_or_else(|| TargetMachine::get_host_cpu_features().to_string()),
+            ),
+        }
+    }
+}
+
 fn parse_from_filename(
     main_file: &Path,
     core_path: &Path,
-    target: Target,
+    target: &Target,
 ) -> Result<(Parsed, Analysis), Errors> {
     let mut parsed = Parsed::default();
     let mut errors = Errors::new();
 
     let preamble = core_path.join("preamble.lucu");
-    let system = core_path.join(match target {
-        Target::Unix64 => "sys/unix",
-        Target::NT64 => "sys/nt",
-    });
+    let system = match target.lucu_os() {
+        LucuOS::Linux => Some(core_path.join("sys/unix")),
+        LucuOS::Windows => Some(core_path.join("sys/nt")),
+        _ => None,
+    };
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
         (preamble, parsed.preamble),
-        (system, parsed.system),
     ];
+    if let Some(system) = system {
+        files_todo.push((system, parsed.system));
+    }
 
     let mut libs = HashMap::new();
     libs.insert("core", core_path);
@@ -100,7 +238,7 @@ fn parse_from_filename(
         }
     }
 
-    let asys = analyze(&parsed, &mut errors);
+    let asys = analyze(&parsed, &mut errors, &target);
 
     if errors.is_empty() {
         Ok((parsed, asys))
@@ -114,8 +252,28 @@ fn parse_from_filename(
 struct Args {
     #[arg(help = ".lucu file with entry point")]
     main: PathBuf,
-    #[arg(short, long, help = "Set the file name of the outputted executable")]
+    #[arg(
+        short,
+        long,
+        help = "Set the file name of the outputted executable\n  defaults to 'out(.exe)'"
+    )]
     out: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Target architecture triple\n  defaults to the host architecture"
+    )]
+    target: Option<String>,
+    #[arg(
+        long,
+        help = "Target cpu name\n  defaults to the common denominator for the target architecture"
+    )]
+    cpu: Option<String>,
+    #[arg(
+        long,
+        help = "Target cpu features\n  defaults to the common denominator for the target architecture"
+    )]
+    features: Option<String>,
 
     #[arg(long, help = "Set the location of the core library")]
     core: Option<PathBuf>,
@@ -137,13 +295,26 @@ fn main() {
     let color = !args.plaintext;
     let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
 
-    let target = Target::Unix64;
+    let target = match args.target {
+        Some(t) => {
+            let triple = TargetTriple::create(&t);
+            let triple = TargetMachine::normalize_triple(&triple);
+            Target {
+                triple: triple.as_str().to_owned().into_string().unwrap(),
+
+                // TODO: get common denominator
+                cpu: args.cpu,
+                features: args.features,
+            }
+        }
+        None => Target::host(args.cpu, args.features),
+    };
 
     // analyze
-    match parse_from_filename(&args.main, &core, target) {
+    match parse_from_filename(&args.main, &core, &target) {
         Ok((parsed, asys)) => {
             // generate ir
-            let ir = ir::generate_ir(&parsed, &asys, target);
+            let ir = ir::generate_ir(&parsed, &asys, &target);
             if debug {
                 println!("\n--- IR ---");
                 println!("{}", ir);
@@ -151,38 +322,40 @@ fn main() {
             }
 
             // generate llvm
-            llvm::generate_ir(&ir, &output.with_extension("o"), debug, target);
+            llvm::generate_ir(&ir, &output.with_extension("o"), debug, &target);
 
             // output
             if debug {
                 println!("\n--- OUTPUT ---");
             }
 
-            match target {
-                Target::Unix64 => {
+            // TODO: config for linker and runner
+            match target.lucu_os() {
+                LucuOS::Linux => {
                     Command::new("ld")
                         .arg(&output.with_extension("o"))
                         .arg("-o")
                         .arg(&output)
+                        .arg("-e_start")
                         .status()
                         .unwrap();
                     Command::new(Path::new("./").join(&output))
                         .status()
                         .unwrap();
                 }
-                Target::NT64 => {
-                    Command::new("x86_64-w64-mingw32-gcc")
+                LucuOS::Windows => {
+                    Command::new("x86_64-w64-mingw32-ld")
+                        .arg(&output.with_extension("o"))
                         .arg("-o")
                         .arg(&output.with_extension("exe"))
-                        .arg(&output.with_extension("o"))
-                        .arg("-nostdlib")
-                        .arg("-Wl,-e_start")
+                        .arg("-e_start")
                         .status()
                         .unwrap();
                     Command::new(Path::new("./").join(&output).with_extension("exe"))
                         .status()
                         .unwrap();
                 }
+                _ => {}
             }
         }
         Err(errors) => {
@@ -199,18 +372,30 @@ mod tests {
 
     fn execute(filename: &Path, output: &Path) -> String {
         let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("core");
+        let target = Target::host(None, None);
 
-        match parse_from_filename(Path::new(filename), &core, Target::Unix64) {
+        match parse_from_filename(Path::new(filename), &core, &target) {
             Ok((parsed, asys)) => {
-                let ir = ir::generate_ir(&parsed, &asys, Target::Unix64);
-                llvm::generate_ir(&ir, &output.with_extension("o"), false, Target::Unix64);
+                let ir = ir::generate_ir(&parsed, &asys, &target);
+                llvm::generate_ir(&ir, &output.with_extension("o"), false, &target);
 
-                Command::new("ld")
-                    .arg(&output.with_extension("o"))
-                    .arg("-o")
-                    .arg(output)
-                    .status()
-                    .unwrap();
+                match target.lucu_os() {
+                    LucuOS::Linux => {
+                        Command::new("ld")
+                            .arg(&output.with_extension("o"))
+                            .arg("-o")
+                            .arg(&output)
+                            .status()
+                            .unwrap();
+                        Command::new(Path::new("./").join(&output))
+                            .status()
+                            .unwrap();
+                    }
+                    LucuOS::Unknown => {
+                        panic!("unknown os for triple: {}", target.triple);
+                    }
+                    other => panic!("no test environment defined for os: {}", other.as_str()),
+                }
 
                 let vec = Command::new(output).output().unwrap().stdout;
                 String::from_utf8(vec).unwrap()

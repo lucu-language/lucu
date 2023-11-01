@@ -1,8 +1,7 @@
-import "core:sys/unix"
 import "core:io"
 
-fun main() / unix.sys {
-	with io.unix(), io.stdin(), io.stdout() loop {
+fun main() / io.stdio {
+	with io.stdin(), io.stdout() loop {
 		mut buf [256]u8 = ---
 
 		# get line

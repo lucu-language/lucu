@@ -12,6 +12,7 @@ use crate::{
     analyzer::{self, Analysis, Definition, Val},
     parser::{self, BinOp, EffFunIdx, ExprIdx, Expression, PackageIdx, Parsed, UnOp},
     vecmap::{vecmap_index, VecMap, VecSet},
+    LucuOS, Target,
 };
 
 #[derive(Debug, Clone)]
@@ -143,12 +144,6 @@ impl ProcImpl {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum Target {
-    Unix64,
-    NT64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
@@ -241,10 +236,30 @@ impl TypeIdx {
             _ => TypeIdx::from_type(ir, typ),
         }
     }
-    fn from_val(ir: &mut IRContext, val: Val) -> TypeIdx {
+    fn from_capture(
+        ir: &mut IRContext,
+        typ: analyzer::TypeIdx,
+        defs: &[(ExprIdx, HandlerIdx)],
+    ) -> TypeIdx {
+        use analyzer::Type as T;
+        match ir.asys.types[typ] {
+            T::Handler(_, _, Some(idx)) => match ir.asys.handlers[idx] {
+                analyzer::HandlerDef::Handler(def, _) | analyzer::HandlerDef::Call(def) => {
+                    let idx = defs.iter().find(|&&(expr, _)| expr == def).unwrap().1;
+                    ir.insert_type(Type::NakedHandler(idx))
+                }
+                analyzer::HandlerDef::Signature => todo!(),
+                analyzer::HandlerDef::Param(_) => unreachable!(),
+                analyzer::HandlerDef::Error => unreachable!(),
+            },
+
+            _ => TypeIdx::from_type(ir, typ),
+        }
+    }
+    fn from_capture_val(ir: &mut IRContext, val: Val, defs: &[(ExprIdx, HandlerIdx)]) -> TypeIdx {
         match ir.asys.defs[val] {
-            Definition::Parameter(_, _, _, t) => TypeIdx::from_type(ir, t),
-            Definition::Variable(_, _, t) => TypeIdx::from_type(ir, t),
+            Definition::Parameter(_, _, _, t) => TypeIdx::from_capture(ir, t, defs),
+            Definition::Variable(_, _, t) => TypeIdx::from_capture(ir, t, defs),
             Definition::EffectFunction(_, _, _) => todo!(),
             Definition::Function(_, _) => todo!(),
 
@@ -363,7 +378,7 @@ pub enum Instruction {
     AdjacentPtr(Reg, Reg, Reg),
 
     // kernel operations
-    Exit(u64),
+    Trap,
     Syscall(Option<Reg>, Reg, Vec<Reg>),
     GS(Reg, u64), // read value at GS register with offset into reg
 }
@@ -424,6 +439,10 @@ impl<'a> IRContext<'a> {
         let typ = self.ir.regs[reg];
         self.next_reg(typ)
     }
+    fn next_handler_reg(&mut self, handler: HandlerIdx) -> Reg {
+        let ty = self.insert_type(Type::NakedHandler(handler));
+        self.next_reg(ty)
+    }
     fn next_reg(&mut self, typ: TypeIdx) -> Reg {
         self.ir.regs.push(Reg, typ)
     }
@@ -445,6 +464,7 @@ impl<'a> IRContext<'a> {
     }
     fn new_handler(
         &mut self,
+        handler_defs: &[(ExprIdx, HandlerIdx)],
         eff_val: Val,
         global: bool,
         break_type: TypeIdx,
@@ -458,7 +478,7 @@ impl<'a> IRContext<'a> {
                     .map(|c| {
                         let ty = match scope.get(c.val) {
                             Some(reg) => reg.get_type(&self.ir),
-                            None => TypeIdx::from_val(self, c.val),
+                            None => TypeIdx::from_capture_val(self, c.val, handler_defs),
                         };
                         let ty = match c.mutable {
                             true => self.insert_type(Type::Pointer(ty)),
@@ -506,7 +526,7 @@ impl<'a> IRContext<'a> {
 pub struct IR {
     pub proc_sign: VecMap<ProcIdx, ProcSign>,
     pub proc_impl: VecMap<ProcIdx, ProcImpl>,
-    pub main: ProcIdx,
+    pub entry: ProcIdx,
 
     pub handler_type: VecMap<HandlerIdx, HandlerType>,
 
@@ -672,7 +692,7 @@ impl Display for IR {
                         Instruction::AdjacentPtr(r, a, m) => {
                             writeln!(f, "{} <- gep {}, {}", r, a, m)?
                         }
-                        Instruction::Exit(code) => writeln!(f, "       exit {}", code)?,
+                        Instruction::Trap => writeln!(f, "       trap")?,
                         Instruction::Syscall(out, nr, ref args) => writeln!(
                             f,
                             "{}syscall {}{}",
@@ -715,7 +735,6 @@ const TYPE_NEVER: TypeIdx = TypeIdx(0);
 const TYPE_NONE: TypeIdx = TypeIdx(1);
 
 const TYPE_STR_SLICE: TypeIdx = TypeIdx(5);
-const TYPE_INT: TypeIdx = TypeIdx(6);
 const TYPE_BOOL: TypeIdx = TypeIdx(7);
 
 #[derive(Debug, Default)]
@@ -763,7 +782,7 @@ impl<'a> ProcCtx<'a> {
                 parent: Some(&self.scope),
                 values: HashMap::new(),
             },
-            handler_defs: self.handler_defs.clone(),
+            handler_defs: Rc::clone(&self.handler_defs),
         };
 
         let t = f(&mut child);
@@ -813,7 +832,7 @@ fn define_function(
     proc
 }
 
-pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
+pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
@@ -823,7 +842,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         ir: IR {
             proc_sign: VecMap::new(),
             proc_impl: VecMap::new(),
-            main: ProcIdx(0),
+            entry: ProcIdx(0),
 
             regs: VecMap::new(),
             globals: VecMap::new(),
@@ -848,6 +867,10 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
     ir.insert_type(Type::Int);
     ir.insert_type(Type::Bool);
 
+    // capabilities
+    let mut capabilities: HashMap<Val, Reg> = HashMap::new();
+    let mut start_instructions = Vec::new();
+
     // define system effect
     let sys_effect = get_effect(ctx, ctx.system, "sys");
     let sys = ir.handlers.push(
@@ -863,10 +886,13 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         captures: Vec::new(),
         break_ty: TYPE_NEVER,
     });
+    let sys_reg = ir.next_handler_reg(sys);
+    start_instructions.push(Instruction::Handler(sys_reg, vec![]));
+    capabilities.insert(asys.values[sys_effect.name], sys_reg);
 
     let intptr = ir.insert_type(Type::IntPtr);
-    match target {
-        Target::Unix64 => {
+    match target.lucu_os() {
+        LucuOS::Linux => {
             for n in 0..=6 {
                 let nr = ir.next_reg(intptr);
                 let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
@@ -885,7 +911,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
                 );
             }
         }
-        Target::NT64 => {
+        LucuOS::Windows => {
             for (i, n) in vec![2, 9].into_iter().enumerate() {
                 let nr = ir.next_reg(intptr);
                 let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
@@ -945,55 +971,11 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
                 ],
             );
         }
+        _ => {}
     }
 
-    // define debug
-    let debug_effect = get_effect(ctx, ctx.preamble, "debug");
-    let debug = ir.handlers.push(
-        HandlerIdx,
-        HandlerCtx {
-            effect: asys.values[debug_effect.name],
-            global: None,
-            definition: None,
-            captures: Vec::new(),
-        },
-    );
-    ir.ir.handler_type.push_value(HandlerType {
-        captures: Vec::new(),
-        break_ty: TYPE_NEVER,
-    });
-
-    let putint_input = ir.next_reg(TYPE_INT);
-    let putint = define_function(
-        &mut ir,
-        Either::Right((debug, EffFunIdx(0))),
-        "putint".into(),
-        vec![putint_input],
-        TYPE_NONE,
-        vec![], // will be defined later
-    );
-
-    let putstr_input = ir.next_reg(TYPE_STR_SLICE);
-    let putstr = define_function(
-        &mut ir,
-        Either::Right((debug, EffFunIdx(1))),
-        "putstr".into(),
-        vec![putstr_input],
-        TYPE_NONE,
-        vec![], // will be defined later
-    );
-
-    let wait = define_function(
-        &mut ir,
-        Either::Right((debug, EffFunIdx(2))),
-        "wait".into(),
-        vec![],
-        TYPE_NONE,
-        vec![], // will be defined later
-    );
-
     // define unreachable
-    // TODO: differ depending on settings
+    // TODO: differ depending on settings (debug/release)
     let unreachable_fun = get_function(ctx, ctx.preamble, "unreachable");
     define_function(
         &mut ir,
@@ -1007,16 +989,13 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
     // define trap
     // TODO: location
     let trap_fun = get_function(ctx, ctx.preamble, "trap");
-    define_function(
+    let trap = define_function(
         &mut ir,
         Either::Left(asys.values[trap_fun.decl.name]),
         "trap".into(),
         vec![],
         TYPE_NEVER,
-        vec![
-            Instruction::Exit(1),
-            Instruction::Unreachable,
-        ],
+        vec![Instruction::Trap, Instruction::Unreachable],
     );
 
     // define panic
@@ -1035,10 +1014,10 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         vec![
             Instruction::InitString(prefix, "panic: ".into()),
             Instruction::InitString(suffix, "\n".into()),
-            Instruction::Call(putstr, None, vec![prefix]),
-            Instruction::Call(putstr, None, vec![input]),
-            Instruction::Call(putstr, None, vec![suffix]),
-            Instruction::Exit(1),
+            // Instruction::Call(putstr, None, vec![prefix]),
+            // Instruction::Call(putstr, None, vec![input]),
+            // Instruction::Call(putstr, None, vec![suffix]),
+            Instruction::Call(trap, None, Vec::new()),
             Instruction::Unreachable,
         ],
     );
@@ -1059,69 +1038,185 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         ],
     );
 
-    // generate system debug signature
+    // find main function
     let mut proc_todo = Vec::new();
-
-    let sys_putstr_fun = get_function(ctx, ctx.system, "putstr");
-    let sys_putstr = gen_proc(
-        &mut ir,
-        ProcIdent {
-            fun: Either::Left(asys.values[sys_putstr_fun.decl.name]),
-            handlers: vec![sys],
-            handler_params: Vec::new(),
-        },
-        sys_putstr_fun,
-        vec![TYPE_STR_SLICE].into(),
-        &mut proc_todo,
-    );
-    ir.ir.proc_impl[putstr].blocks[BlockIdx(0)].instructions = vec![
-        Instruction::Call(sys_putstr, None, vec![putstr_input]),
-        Instruction::Return(None),
-    ];
-
-    let sys_putint_fun = get_function(ctx, ctx.system, "putint");
-    let sys_putint = gen_proc(
-        &mut ir,
-        ProcIdent {
-            fun: Either::Left(asys.values[sys_putint_fun.decl.name]),
-            handlers: vec![sys],
-            handler_params: Vec::new(),
-        },
-        sys_putint_fun,
-        vec![TYPE_INT].into(),
-        &mut proc_todo,
-    );
-    ir.ir.proc_impl[putint].blocks[BlockIdx(0)].instructions = vec![
-        Instruction::Call(sys_putint, None, vec![putint_input]),
-        Instruction::Return(None),
-    ];
-
-    let sys_wait_fun = get_function(ctx, ctx.system, "wait");
-    let sys_wait = gen_proc(
-        &mut ir,
-        ProcIdent {
-            fun: Either::Left(asys.values[sys_wait_fun.decl.name]),
-            handlers: vec![sys],
-            handler_params: Vec::new(),
-        },
-        sys_wait_fun,
-        vec![].into(),
-        &mut proc_todo,
-    );
-    ir.ir.proc_impl[wait].blocks[BlockIdx(0)].instructions = vec![
-        Instruction::Call(sys_wait, None, vec![]),
-        Instruction::Return(None),
-    ];
-
-    // generate main signature
     let main = asys.main.expect("no main function");
     let fun = &ir.parsed.functions[main];
-    let val = ir.asys.values[fun.decl.name];
 
-    ir.ir.main = generate_proc_sign(
+    // generate all capabilities
+    let mut capabilities_todo = HashMap::new();
+
+    let mut effects = fun
+        .decl
+        .sign
+        .effects
+        .iter()
+        .map(|i| asys.values[i.effect])
+        .collect::<Vec<_>>();
+    while let Some(val) = effects.pop() {
+        // we already have this capability defined
+        if capabilities.contains_key(&val) || capabilities_todo.contains_key(&val) {
+            continue;
+        }
+
+        // this has a capability definition
+        match asys.capabilities.get(&val).copied() {
+            Some(fun) => {
+                // add function effects to used capabilities
+                match asys.defs[fun] {
+                    Definition::EffectFunction(idx, fun, _) => {
+                        effects.extend(
+                            ctx.effects[idx].functions[fun]
+                                .sign
+                                .effects
+                                .iter()
+                                .map(|i| asys.values[i.effect]),
+                        );
+                    }
+                    Definition::Function(fun, _) => {
+                        effects.extend(
+                            ctx.functions[fun]
+                                .decl
+                                .sign
+                                .effects
+                                .iter()
+                                .map(|i| asys.values[i.effect]),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                // add function to capabilities todo
+                capabilities_todo.insert(val, fun);
+            }
+            None => unreachable!(),
+        }
+    }
+
+    while !capabilities_todo.is_empty() {
+        let len = capabilities_todo.len();
+        capabilities_todo.retain(|&effect, &mut fun| {
+            // get function signature
+            let (sign, handler) = match asys.defs[fun] {
+                Definition::EffectFunction(eff, fun, _) => {
+                    let eff_val = asys.values[ctx.effects[eff].name];
+                    let Some(handler) = capabilities.get(&eff_val).copied() else {
+                        return true;
+                    };
+                    (&ctx.effects[eff].functions[fun].sign, Some(handler))
+                }
+                Definition::Function(fun, _) => (&ctx.functions[fun].decl.sign, None),
+                _ => unreachable!(),
+            };
+
+            // get function handlers
+            let Some(mut handlers) = sign
+                .effects
+                .iter()
+                .copied()
+                .map(|e| {
+                    let effect = ir.asys.values[e.effect];
+                    capabilities.get(&effect).copied().map(|handler| handler)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return true;
+            };
+            if let Some(handler) = handler {
+                handlers.push(handler);
+            }
+
+            // get function
+            let mut handler_tys = handlers
+                .iter()
+                .copied()
+                .map(|r| match ir.ir.types[ir.ir.regs[r]] {
+                    Type::NakedHandler(ty) => ty,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+
+            let proc = match asys.defs[fun] {
+                Definition::EffectFunction(_, fun, _) => {
+                    let handler = handler_tys.pop().unwrap();
+                    let ast_handler = match ctx.exprs[ir.handlers[handler].definition.unwrap()].0 {
+                        Expression::Handler(ref h) => h,
+                        _ => unreachable!(),
+                    };
+                    gen_handler_proc(
+                        &mut ir,
+                        ProcIdent {
+                            fun: Either::Right((handler, fun)),
+                            handlers: handler_tys,
+                            handler_params: Vec::new(),
+                        },
+                        ast_handler,
+                        Box::new([]),
+                        &mut proc_todo,
+                    )
+                }
+                Definition::Function(fun, _) => {
+                    let val = asys.values[ctx.functions[fun].decl.name];
+                    gen_proc(
+                        &mut ir,
+                        ProcIdent {
+                            fun: Either::Left(val),
+                            handlers: handler_tys,
+                            handler_params: Vec::new(),
+                        },
+                        &ctx.functions[fun],
+                        Box::new([]),
+                        &mut proc_todo,
+                    )
+                }
+                _ => unreachable!(),
+            };
+
+            // call function
+            let out = ir.next_reg(ir.ir.proc_sign[proc].output);
+            start_instructions.push(Instruction::Call(proc, Some(out), handlers));
+
+            let out = match ir.ir.types[ir.ir.regs[out]] {
+                Type::NakedHandler(_) => out,
+                Type::RawHandler(h, _) => {
+                    let unraw = ir.next_handler_reg(h);
+                    Instruction::UnrawHandler(unraw, out);
+                    unraw
+                }
+                _ => unreachable!(),
+            };
+
+            capabilities.insert(effect, out);
+            false
+        });
+        if capabilities_todo.len() == len {
+            // TODO: error in analyzer
+            panic!("could not define capabilities: {:?}", capabilities_todo);
+        }
+    }
+
+    // generate main signature
+    let handlers = fun
+        .decl
+        .sign
+        .effects
+        .iter()
+        .copied()
+        .map(|i| capabilities[&asys.values[i.effect]])
+        .collect::<Vec<_>>();
+    let handler_tys = handlers
+        .iter()
+        .copied()
+        .map(|r| match ir.ir.types[ir.ir.regs[r]] {
+            Type::NakedHandler(ty) => ty,
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+
+    let val = ir.asys.values[fun.decl.name];
+    let main = generate_proc_sign(
         &mut ir,
         Some(Either::Left(val)),
-        Cow::Borrowed(&[debug, sys]),
+        Cow::Owned(handler_tys),
         &[],
         &Vec::new(),
         analyzer::TYPE_NONE,
@@ -1143,7 +1238,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
             _ => unreachable!(),
         };
 
-        let handler_idx = ir.new_handler(eff_val, false, break_type, expr, &Scope::default());
+        let handler_idx = ir.new_handler(&[], eff_val, false, break_type, expr, &Scope::default());
 
         // add handler to implied
         ir.implied_handlers.insert(eff_val, handler_idx);
@@ -1182,6 +1277,29 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
             }
         }
     }
+
+    // generate entry
+    start_instructions.push(Instruction::Call(main, None, handlers));
+    start_instructions.push(Instruction::Return(None));
+    ir.ir.entry = ir.ir.proc_sign.push(
+        ProcIdx,
+        ProcSign {
+            inputs: Vec::new(),
+            captures: None,
+            output: TYPE_NONE,
+            debug_name: "_entry".into(),
+            unhandled: Vec::new(),
+            handled: Vec::new(),
+            redirect: Vec::new(),
+        },
+    );
+    ir.ir.proc_impl.push_value(ProcImpl {
+        blocks: vec![Block {
+            instructions: start_instructions,
+            next: None,
+        }]
+        .into(),
+    });
 
     // return ir
     ir.ir
@@ -1452,79 +1570,91 @@ fn get_handler_proc(
 
     // get proc
     if !ir.proc_map.contains_key(&procident) {
-        let handlers = &procident.handlers;
-        let effect = match ir.asys.defs[eff_val] {
-            Definition::Effect(idx) => &ir.parsed.effects[idx],
-            _ => unreachable!(),
-        };
-        let val = ir.asys.values[effect.functions[eff_fun_idx].name];
         let ast_handler = match &ir.parsed.exprs[def.unwrap()].0 {
             Expression::Handler(handler) => handler,
             _ => unreachable!(),
         };
-
-        let (decl, body) = ast_handler
-            .functions(effect)
-            .find(|(decl, _)| ir.asys.values[decl.name] == val)
-            .unwrap();
-
-        // get params
-        let params = decl
-            .sign
-            .inputs
-            .values()
-            .map(|param| ir.asys.values[param.name])
-            .zip(param_types.iter().copied())
-            .map(|(a, b)| (a, b, false))
-            .collect::<Vec<_>>();
-
-        let output = TypeIdx::from_function(ir, val);
-
-        // generate debug name
-        let eff_name = ir.parsed.idents[effect.name].0.as_str();
-        let proc_name = ir.parsed.idents[effect.functions[eff_fun_idx].name]
-            .0
-            .as_str();
-        let mut debug_name = format!("{}.{}.{}", proc_name, eff_name, usize::from(handler_idx));
-
-        if handlers.len() > 0 {
-            debug_name += ".";
-
-            for &handler in handlers.iter() {
-                let eff_val = ir.handlers[handler].effect;
-                let eff_name = ir
-                    .parsed
-                    .effects
-                    .values()
-                    .find(|e| ir.asys.values[e.name] == eff_val)
-                    .map(|e| ir.parsed.idents[e.name].0.as_str())
-                    .unwrap_or("debug");
-
-                debug_name += eff_name;
-                debug_name += ".";
-                debug_name += usize::from(handler).to_string().as_str();
-                debug_name += ".";
-            }
-
-            debug_name.pop();
-        }
-
-        // generate handler proc
-        generate_proc_sign(
-            ir,
-            Some(procident.fun),
-            Cow::Owned(procident.handlers),
-            &[],
-            &params,
-            output,
-            debug_name,
-            body,
-            Some(handler_idx),
-            proc_todo,
-        )
+        gen_handler_proc(ir, procident, ast_handler, param_types, proc_todo)
     } else {
         ir.proc_map[&procident]
     }
+}
+
+fn gen_handler_proc(
+    ir: &mut IRContext<'_>,
+    procident: ProcIdent,
+    handler: &parser::Handler,
+    param_types: Box<[TypeIdx]>,
+    proc_todo: &mut ProcTodo,
+) -> ProcIdx {
+    let (handler_idx, eff_fun_idx) = procident.fun.unwrap_right();
+    let eff_val = ir.handlers[handler_idx].effect;
+    let effect = match ir.asys.defs[eff_val] {
+        Definition::Effect(idx) => &ir.parsed.effects[idx],
+        _ => unreachable!(),
+    };
+
+    let val = ir.asys.values[effect.functions[eff_fun_idx].name];
+    let (decl, body) = handler
+        .functions(effect)
+        .find(|(decl, _)| ir.asys.values[decl.name] == val)
+        .unwrap();
+
+    // get params
+    let params = decl
+        .sign
+        .inputs
+        .values()
+        .map(|param| ir.asys.values[param.name])
+        .zip(param_types.iter().copied())
+        .map(|(a, b)| (a, b, false))
+        .collect::<Vec<_>>();
+
+    let output = TypeIdx::from_function(ir, val);
+
+    // generate debug name
+    let eff_name = ir.parsed.idents[effect.name].0.as_str();
+    let proc_name = ir.parsed.idents[effect.functions[eff_fun_idx].name]
+        .0
+        .as_str();
+    let mut debug_name = format!("{}.{}.{}", proc_name, eff_name, usize::from(handler_idx));
+
+    let handlers = &procident.handlers;
+    if handlers.len() > 0 {
+        debug_name += ".";
+
+        for &handler in handlers.iter() {
+            let eff_val = ir.handlers[handler].effect;
+            let eff_name = ir
+                .parsed
+                .effects
+                .values()
+                .find(|e| ir.asys.values[e.name] == eff_val)
+                .map(|e| ir.parsed.idents[e.name].0.as_str())
+                .unwrap_or("debug");
+
+            debug_name += eff_name;
+            debug_name += ".";
+            debug_name += usize::from(handler).to_string().as_str();
+            debug_name += ".";
+        }
+
+        debug_name.pop();
+    }
+
+    // generate handler proc
+    generate_proc_sign(
+        ir,
+        Some(procident.fun),
+        Cow::Owned(procident.handlers),
+        &[],
+        &params,
+        output,
+        debug_name,
+        body,
+        Some(handler_idx),
+        proc_todo,
+    )
 }
 
 fn generate_proc_sign(
@@ -1611,23 +1741,6 @@ fn generate_proc_sign(
         None
     };
 
-    // create handlers
-    let mut handler_defs = Vec::new();
-    ir.parsed.for_each(body, false, false, &mut |expr| {
-        if let Expression::Handler(_) = &ir.parsed.exprs[expr].0 {
-            // get break type
-            let (eff_val, break_type) = match ir.asys.types[ir.asys.exprs[expr]] {
-                analyzer::Type::Handler(e, t, _) => (e, TypeIdx::from_type(ir, t)),
-                _ => unreachable!(),
-            };
-
-            // create handler
-            let handler = ir.new_handler(eff_val, false, break_type, expr, &scope);
-
-            handler_defs.push((expr, handler));
-        }
-    });
-
     // create signature
     let out = TypeIdx::from_return_type(ir, output);
     let proc_idx = ir.ir.proc_sign.push(
@@ -1650,6 +1763,17 @@ fn generate_proc_sign(
             redirect: Vec::new(),
         },
     );
+    let todo_idx = proc_todo.len();
+    proc_todo.push(ProcCtx {
+        proc_idx,
+        expr: body,
+        inside_handler,
+        scope: Scope {
+            parent: None,
+            values: scope.values.clone(),
+        },
+        handler_defs: Rc::new([]),
+    });
 
     // add procident if this is a function
     if let Some(fun) = ident {
@@ -1667,24 +1791,71 @@ fn generate_proc_sign(
         );
     }
 
-    let handler_defs = Rc::from(handler_defs);
-    proc_todo.push(ProcCtx {
-        proc_idx,
-        expr: body,
-        inside_handler,
-        scope: Scope {
-            parent: None,
-            values: scope.values.clone(),
-        },
-        handler_defs: Rc::clone(&handler_defs),
+    // create handlers
+    let mut handler_defs = Vec::new();
+    ir.parsed.for_each(body, false, false, &mut |expr| {
+        match ir.parsed.exprs[expr].0 {
+            Expression::Handler(_) => {
+                // get break type
+                let (eff_val, break_type) = match ir.asys.types[ir.asys.exprs[expr]] {
+                    analyzer::Type::Handler(e, t, _) => (e, TypeIdx::from_type(ir, t)),
+                    _ => unreachable!(),
+                };
+
+                // create handler
+                let handler =
+                    ir.new_handler(&handler_defs, eff_val, false, break_type, expr, &scope);
+
+                handler_defs.push((expr, handler));
+            }
+            Expression::Call(fun, ref exprs) => {
+                if !matches!(
+                    ir.asys.types[ir.asys.exprs[expr]],
+                    analyzer::Type::Handler(_, _, _)
+                ) {
+                    return;
+                }
+
+                // get function
+                let fun = match ir.asys.types[ir.asys.exprs[fun]] {
+                    analyzer::Type::FunctionLiteral(fun) => fun,
+                    _ => unreachable!(),
+                };
+
+                // get handler
+                let param_types = exprs
+                    .iter()
+                    .copied()
+                    .map(|expr| match ir.asys.types[ir.asys.exprs[expr]] {
+                        analyzer::Type::Handler(effect, _, def) => {
+                            // recursive call!
+                            handler_type(ir, effect, def, proc_idx, &handler_defs, &scope)
+                        }
+                        _ => TypeIdx::from_type(ir, ir.asys.exprs[expr]),
+                    })
+                    .collect();
+
+                // recursive call!
+                let proc = get_proc(ir, fun, proc_idx, &scope, param_types, None, proc_todo);
+                let handler = match ir.ir.types[ir.ir.proc_sign[proc].output] {
+                    Type::NakedHandler(idx) | Type::RawHandler(idx, _) | Type::Handler(idx) => idx,
+                    _ => unreachable!("{:?}", ir.ir.types[ir.ir.proc_sign[proc].output]),
+                };
+
+                handler_defs.push((expr, handler));
+            }
+            _ => (),
+        }
     });
 
-    // get output
+    // set handler information
     if let analyzer::Type::Handler(effect, _, def) = ir.asys.types[ir.asys.exprs[body]] {
-        let handler = handler_type(ir, effect, def, proc_idx, &handler_defs, &scope, proc_todo);
+        let handler = handler_type(ir, effect, def, proc_idx, &handler_defs, &scope);
         ir.ir.proc_sign[proc_idx].output = handler;
     }
+    proc_todo[todo_idx].handler_defs = handler_defs.into();
 
+    // output
     proc_idx
 }
 
@@ -1695,7 +1866,6 @@ fn handler_type(
     proc_idx: ProcIdx,
     defs: &[(ExprIdx, HandlerIdx)],
     scope: &Scope,
-    proc_todo: &mut ProcTodo,
 ) -> TypeIdx {
     match ir.asys.handlers[def.expect("function return handler type not filled in")] {
         analyzer::HandlerDef::Handler(expr, _) => {
@@ -1727,22 +1897,16 @@ fn handler_type(
                 ir.insert_type(Type::RawHandler(handler_idx, mems))
             }
         }
-        analyzer::HandlerDef::Call(fun, ref exprs) => {
-            let param_types = exprs
+        analyzer::HandlerDef::Call(expr) => {
+            let handler_idx = defs
                 .iter()
-                .copied()
-                .map(|expr| match ir.asys.types[ir.asys.exprs[expr]] {
-                    analyzer::Type::Handler(effect, _, def) => {
-                        // recursive call!
-                        handler_type(ir, effect, def, proc_idx, defs, scope, proc_todo)
-                    }
-                    _ => TypeIdx::from_type(ir, ir.asys.exprs[expr]),
-                })
-                .collect();
-
-            // recursive call!
-            let proc = get_proc(ir, fun, proc_idx, &scope, param_types, None, proc_todo);
-            ir.ir.proc_sign[proc].output
+                .find(|&&(e, _)| expr == e)
+                .expect(&format!(
+                    "function {} returns handler not defined by self",
+                    ir.ir.proc_sign[proc_idx].debug_name
+                ))
+                .1;
+            ir.insert_type(Type::NakedHandler(handler_idx))
         }
         analyzer::HandlerDef::Param(p) => {
             ir.ir.regs[ir.ir.proc_sign[proc_idx].inputs[usize::from(p)]]

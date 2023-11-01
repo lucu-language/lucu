@@ -8,8 +8,7 @@ use inkwell::{
     module::{Linkage, Module},
     passes::{PassManager, PassManagerBuilder},
     targets::{
-        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
-        TargetTriple,
+        CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetTriple,
     },
     types::{
         AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, IntType, StringRadix,
@@ -24,10 +23,11 @@ use inkwell::{
 
 use crate::{
     ir::{
-        self, AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign,
-        Reg, Type, TypeIdx, Value, IR,
+        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Reg,
+        Type, TypeIdx, Value, IR,
     },
     vecmap::VecMap,
+    LucuArch, LucuOS,
 };
 
 struct CodeGen<'ctx> {
@@ -43,58 +43,47 @@ struct CodeGen<'ctx> {
 
     syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
     exit: FunctionValue<'ctx>,
+
+    os: LucuOS,
+    arch: LucuArch,
 }
 
-pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
-    Target::initialize_x86(&InitializationConfig::default());
+pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
+    Target::initialize_native(&InitializationConfig::default()).unwrap();
 
     let context = Context::create();
     let module = context.create_module("main");
 
-    let target_machine = match irtarget {
-        ir::Target::Unix64 => {
-            // TODO: specify unix
-            let target = Target::from_triple(&TargetMachine::get_default_triple()).unwrap();
-            target
-                .create_target_machine(
-                    &TargetMachine::get_default_triple(),
-                    &TargetMachine::get_host_cpu_name().to_string(),
-                    &TargetMachine::get_host_cpu_features().to_string(),
-                    OptimizationLevel::Aggressive,
-                    RelocMode::Default,
-                    CodeModel::Default,
-                )
-                .unwrap()
-        }
-        ir::Target::NT64 => {
-            let target = Target::from_name("x86-64").unwrap();
-            target
-                .create_target_machine(
-                    &TargetTriple::create("x86_64-pc-windows-msvc"),
-                    &TargetMachine::get_host_cpu_name().to_string(),
-                    &TargetMachine::get_host_cpu_features().to_string(),
-                    OptimizationLevel::Aggressive,
-                    RelocMode::Default,
-                    CodeModel::Default,
-                )
-                .unwrap()
-        }
-    };
-    let target_data = target_machine.get_target_data();
-    let uintptr = context.ptr_sized_int_type(&target_data, None);
+    let os = target.lucu_os();
+    let arch = target.lucu_arch();
 
-    let syscalls = match irtarget {
-        ir::Target::Unix64 => (0..=6)
+    let triple = TargetTriple::create(&target.triple);
+    let target_machine = Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine(
+            &triple,
+            target.cpu.as_deref().unwrap_or(""),
+            target.features.as_deref().unwrap_or(""),
+            OptimizationLevel::Aggressive,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .unwrap();
+    let target_data = target_machine.get_target_data();
+    let reg_ty = context.custom_width_int_type(arch.register_size());
+
+    let syscalls = match os {
+        LucuOS::Linux => (0..=6)
             .map(|n| {
                 const SYS_RET: &'static str = "rax";
                 const SYS_NR: &'static str = "rax";
                 const SYS_ARGS: [&'static str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
                 const SYS_CLOBBER: [&'static str; 2] = ["rcx", "r11"];
 
-                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
+                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(reg_ty))
                     .take(n + 1)
                     .collect::<Vec<_>>();
-                let ty = uintptr.fn_type(&inputs, false);
+                let ty = reg_ty.fn_type(&inputs, false);
 
                 let constrains = format!(
                     "={{{}}},{{{}}},{},{}",
@@ -125,12 +114,12 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
                 Some((ty, asm))
             })
             .collect::<Vec<_>>(),
-        ir::Target::NT64 => (0..=9)
+        LucuOS::Windows => (0..=9)
             .map(|n| {
-                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(uintptr))
+                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(reg_ty))
                     .take(n + 1)
                     .collect::<Vec<_>>();
-                let ty = uintptr.fn_type(&inputs, false);
+                let ty = reg_ty.fn_type(&inputs, false);
 
                 match n {
                     2 => {
@@ -151,7 +140,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
                             "subq $$80, %rsp\nmovq $6, 40(%rsp)\nmovq $7, 48(%rsp)\nmovq $8, 56(%rsp)\nmovq $9, 64(%rsp)\nmovq $10, 72(%rsp)\nsyscall\naddq $$80, %rsp".into(),
                             "={rax},{rax},{r10},{rdx},{r8},{r9},r,r,r,r,r,~{rcx},~{r11}".into(),
                             true,
-                            false,
+                            true,
                             None,
                             false,
                         );
@@ -161,44 +150,51 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
                 }
             })
             .collect::<Vec<_>>(),
+        _ => vec![],
     };
 
-    let exit_ty = context.void_type().fn_type(&[uintptr.into()], false);
+    let exit_ty = context.void_type().fn_type(&[], false);
     let exit = module.add_function("exit", exit_ty, Some(Linkage::Internal));
     let exit_block = context.append_basic_block(exit, "");
-    let exit_code = exit.get_nth_param(0).unwrap();
 
     let builder = context.create_builder();
     builder.position_at_end(exit_block);
-    match irtarget {
-        ir::Target::Unix64 => {
+    match os {
+        LucuOS::Linux => {
             builder
                 .build_indirect_call(
                     syscalls[1].unwrap().0,
                     syscalls[1].unwrap().1,
-                    &[uintptr.const_int(60, true).into(), exit_code.into()],
-                    "",
-                )
-                .unwrap();
-            builder.build_unreachable().unwrap();
-        }
-        ir::Target::NT64 => {
-            builder
-                .build_indirect_call(
-                    syscalls[2].unwrap().0,
-                    syscalls[2].unwrap().1,
                     &[
-                        uintptr.const_int(44, true).into(),
-                        uintptr
-                            .const_int_from_string("-1", StringRadix::Decimal)
-                            .unwrap()
-                            .into(),
-                        exit_code.into(),
+                        reg_ty.const_int(60, false).into(),
+                        reg_ty.const_int(1, false).into(),
                     ],
                     "",
                 )
                 .unwrap();
             builder.build_unreachable().unwrap();
+        }
+        LucuOS::Windows => {
+            builder
+                .build_indirect_call(
+                    syscalls[2].unwrap().0,
+                    syscalls[2].unwrap().1,
+                    &[
+                        reg_ty.const_int(44, true).into(),
+                        reg_ty
+                            .const_int_from_string("-1", StringRadix::Decimal)
+                            .unwrap()
+                            .into(),
+                        reg_ty.const_int(1, false).into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            builder.build_unreachable().unwrap();
+        }
+        _ => {
+            // loop forever
+            builder.build_unconditional_branch(exit_block).unwrap();
         }
     }
 
@@ -212,6 +208,8 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
         globals: VecMap::new(),
         syscalls,
         exit,
+        os,
+        arch,
     };
 
     for typ in ir.aggregates.values() {
@@ -277,17 +275,48 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, irtarget: ir::Target) {
     codegen.builder.position_at_end(block);
     codegen
         .builder
-        .build_call(codegen.procs[ir.main], &[], "")
+        .build_call(codegen.procs[ir.entry], &[], "")
         .unwrap();
-    codegen
-        .builder
-        .build_call(
-            codegen.exit,
-            &[codegen.iptr_type().const_int(0, true).into()],
-            "",
-        )
-        .unwrap();
-    codegen.builder.build_unreachable().unwrap();
+    match codegen.os {
+        LucuOS::Linux => {
+            codegen
+                .builder
+                .build_indirect_call(
+                    codegen.syscalls[1].unwrap().0,
+                    codegen.syscalls[1].unwrap().1,
+                    &[
+                        reg_ty.const_int(60, true).into(),
+                        reg_ty.const_int(1, true).into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            codegen.builder.build_unreachable().unwrap();
+        }
+        LucuOS::Windows => {
+            codegen
+                .builder
+                .build_indirect_call(
+                    codegen.syscalls[2].unwrap().0,
+                    codegen.syscalls[2].unwrap().1,
+                    &[
+                        reg_ty.const_int(44, true).into(),
+                        reg_ty
+                            .const_int_from_string("-1", StringRadix::Decimal)
+                            .unwrap()
+                            .into(),
+                        reg_ty.const_int(1, true).into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+            codegen.builder.build_unreachable().unwrap();
+        }
+        _ => {
+            // just return
+            codegen.builder.build_return(None).unwrap();
+        }
+    }
 
     // assume valid
     if debug {
@@ -346,14 +375,15 @@ impl<'ctx> CodeGen<'ctx> {
         self.isize_type()
     }
     fn iptr_type(&self) -> IntType<'ctx> {
-        self.context.ptr_sized_int_type(&self.target_data, None)
+        self.context.custom_width_int_type(self.arch.ptr_size())
     }
     fn isize_type(&self) -> IntType<'ctx> {
-        self.context.ptr_sized_int_type(&self.target_data, None)
+        self.context
+            .custom_width_int_type(self.arch.array_len_size())
     }
     fn int_type(&self) -> IntType<'ctx> {
-        // TODO: other architectures
-        self.context.i64_type()
+        self.context
+            .custom_width_int_type(self.arch.register_size())
     }
     fn size(&self, t: BasicTypeEnum) -> u64 {
         self.target_data.get_store_size(&t)
@@ -1107,14 +1137,8 @@ impl<'ctx> CodeGen<'ctx> {
                             insert!(ret, val);
                         }
                     }
-                    I::Exit(code) => {
-                        self.builder
-                            .build_call(
-                                self.exit,
-                                &[self.iptr_type().const_int(code, true).into()],
-                                "",
-                            )
-                            .unwrap();
+                    I::Trap => {
+                        self.builder.build_call(self.exit, &[], "").unwrap();
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }

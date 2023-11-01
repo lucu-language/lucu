@@ -2,6 +2,8 @@
 # everything in this file is always in scope
 ##
 
+import "io"
+
 ##
 # crude way of reading and writing data
 # defined for the main function
@@ -10,6 +12,30 @@ effect debug {
 	fun putint(n int)
 	fun putstr(s str)
 	fun wait()
+}
+
+@capability
+fun debug() debug / io.stdio {
+	let in = io.stdin()
+	let out = io.stdout()
+	handle debug {
+		fun putint(n int) {
+			with out {
+				io.write_int(n)
+				io.write("\n");
+			}
+		}
+		fun putstr(s str) {
+			with out {
+				io.write(cast s);
+			}
+		}
+		fun wait() {
+			with in {
+				io.skip_line();
+			}
+		}
+	}
 }
 
 ##
@@ -92,8 +118,12 @@ fun len(slice []u8) usize {
 
 ##
 # function that ends execution of the entire program
-# for most targets this should end the process
-# for virtual machines this should halt or spin forever
+# the way it ends execution depends on the target
+# for instance, it could:
+#  - end the process
+#  - run a halt instruction
+#  - throw an exception / interrupt
+#  - spin forever
 ##
 fun trap() ! {
 	# internally defined based on target

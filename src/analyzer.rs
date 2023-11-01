@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
+use crate::Target;
 use crate::{
     error::{Error, Errors, Ranged},
     parser::{
@@ -151,7 +152,7 @@ pub fn add_capture(captures: &mut Vec<Capture>, capture: Capture) {
 #[derive(Debug, Default)]
 pub enum HandlerDef {
     Handler(ExprIdx, Vec<Capture>),
-    Call(Val, Vec<ExprIdx>),
+    Call(ExprIdx),
     Param(ParamIdx),
     Signature,
 
@@ -191,6 +192,7 @@ impl Type {
 }
 
 pub struct Analysis {
+    pub capabilities: HashMap<Val, Val>,
     pub values: VecMap<Ident, Val>,
     pub defs: VecMap<Val, Definition>,
     pub handlers: VecMap<HandlerIdx, HandlerDef>,
@@ -691,11 +693,7 @@ fn analyze_expr(
             // leading to a type mismatch
             let return_type = match ctx.asys.types[return_type] {
                 Type::Handler(val, yeet, _) => {
-                    let handler = ctx.asys.handlers.push(
-                        HandlerIdx,
-                        fun.map(|fun| HandlerDef::Call(fun, exprs.clone()))
-                            .unwrap_or_default(),
-                    );
+                    let handler = ctx.asys.handlers.push(HandlerIdx, HandlerDef::Call(expr));
                     ctx.asys
                         .insert_type(Type::Handler(val, yeet, Some(handler)))
                 }
@@ -1339,8 +1337,12 @@ const TYPE_USIZE: TypeIdx = TypeIdx(6);
 const TYPE_UPTR: TypeIdx = TypeIdx(7);
 const TYPE_U8: TypeIdx = TypeIdx(8);
 
-pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
+pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysis {
+    let os = target.lucu_os();
+    let os = os.as_str();
+
     let mut asys = Analysis {
+        capabilities: HashMap::new(),
         values: VecMap::filled(parsed.idents.len(), Val(usize::MAX)),
         exprs: VecMap::filled(parsed.exprs.len(), TYPE_UNKNOWN),
         defs: VecMap::new(),
@@ -1489,6 +1491,36 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                     .funs
                     .insert(parsed.idents[decl.name].0.clone(), val);
                 analyze_sign(&mut ctx, &scope, val, &decl.sign, errors);
+
+                // check capability
+                if let Some(attr) = decl
+                    .attributes
+                    .iter()
+                    .find(|a| ctx.parsed.idents[a.name].0.eq("capability"))
+                {
+                    let effect = match ctx.asys.types[return_type] {
+                        Type::Handler(effect, yeets, _) => {
+                            if yeets != TYPE_NEVER {
+                                // TODO: error
+                                todo!()
+                            }
+                            effect
+                        }
+                        _ => {
+                            // TODO: error
+                            todo!()
+                        }
+                    };
+
+                    let allowed = !attr
+                        .settings
+                        .iter()
+                        .any(|s| ctx.parsed.idents[s.0].0.eq("os") && !s.1 .0.eq(os));
+                    if allowed {
+                        // TODO: error on duplicates
+                        ctx.asys.capabilities.insert(effect, val);
+                    }
+                }
             }
         }
 
@@ -1519,6 +1551,37 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
             // check if main
             if parsed.idents[fun.decl.name].0 == "main" {
                 ctx.asys.main = Some(i);
+            }
+
+            // check capability
+            if let Some(attr) = fun
+                .decl
+                .attributes
+                .iter()
+                .find(|a| ctx.parsed.idents[a.name].0.eq("capability"))
+            {
+                let effect = match ctx.asys.types[return_type] {
+                    Type::Handler(effect, yeets, _) => {
+                        if yeets != TYPE_NEVER {
+                            // TODO: error
+                            todo!()
+                        }
+                        effect
+                    }
+                    _ => {
+                        // TODO: error
+                        todo!()
+                    }
+                };
+
+                let allowed = !attr
+                    .settings
+                    .iter()
+                    .any(|s| ctx.parsed.idents[s.0].0.eq("os") && !s.1 .0.eq(os));
+                if allowed {
+                    // TODO: error on duplicates
+                    ctx.asys.capabilities.insert(effect, val);
+                }
             }
         }
     }

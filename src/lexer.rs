@@ -39,6 +39,7 @@ pub enum Token {
     Less,
     Greater,
     Ampersand,
+    At,
     Open(Group),
     Close(Group),
 
@@ -90,6 +91,7 @@ impl fmt::Display for Token {
                 Token::Less => "'<'".into(),
                 Token::Greater => "'>'".into(),
                 Token::Ampersand => "'&'".into(),
+                Token::At => "'@'".into(),
                 Token::Open(Group::Brace) => "'{'".into(),
                 Token::Open(Group::Paren) => "'('".into(),
                 Token::Open(Group::Bracket) => "'['".into(),
@@ -138,6 +140,7 @@ impl Token {
                 | Token::Comma
                 | Token::Import
                 | Token::Ampersand
+                | Token::At
                 | Token::Loop
                 | Token::Cast
                 | Token::Open(_)
@@ -281,6 +284,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             '>' => Token::Greater,
             '^' => Token::Caret,
             '&' => Token::Ampersand,
+            '@' => Token::At,
             '.' => match self.next.peek() {
                 Some(&'.') => {
                     self.next_char();

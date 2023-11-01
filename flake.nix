@@ -28,6 +28,8 @@
         rustc
         cargo
         bacon
+        rust-analyzer
+        rustfmt
 
         pkgsCross.mingwW64.buildPackages.gcc
         libffi

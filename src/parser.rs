@@ -193,6 +193,13 @@ pub struct FunSign {
 pub struct FunDecl {
     pub name: Ident,
     pub sign: FunSign,
+    pub attributes: Vec<Attribute>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: Ident,
+    pub settings: Vec<(Ident, Ranged<String>)>,
 }
 
 #[derive(Debug)]
@@ -723,7 +730,7 @@ pub fn parse_ast<'a>(
             }
 
             // function
-            Some(Ranged(Token::Fun, ..)) => {
+            Some(Ranged(Token::Fun | Token::At, ..)) => {
                 if let Some(Ranged(function, ..)) = Function::parse_or_skip(&mut tk) {
                     let fun = tk.context.functions.push(FunIdx, function);
                     tk.context.packages[idx].functions.push(fun);
@@ -883,12 +890,36 @@ impl Parse for FunSign {
 
 impl Parse for FunDecl {
     fn parse(tk: &mut Tokens) -> Option<Self> {
+        let mut attrs = Vec::new();
+        while tk.check(Token::At).is_some() {
+            let name = tk.ident()?;
+            let name = tk.push_ident(name);
+            let mut settings = Vec::new();
+
+            if tk.peek_check(Token::Open(Group::Paren)) {
+                tk.group(Group::Paren, true, |tk| {
+                    let name = tk.ident()?;
+                    let name = tk.push_ident(name);
+
+                    tk.expect(Token::Equals)?;
+
+                    let val = tk.string()?;
+
+                    settings.push((name, val));
+                    Some(())
+                })?;
+            }
+
+            attrs.push(Attribute { name, settings })
+        }
+
         tk.expect(Token::Fun)?;
         let name = tk.ident()?;
 
         let decl = FunDecl {
             name: tk.push_ident(name),
             sign: FunSign::parse(tk)?,
+            attributes: attrs,
         };
 
         Some(decl)

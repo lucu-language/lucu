@@ -2,6 +2,25 @@ effect reader {
 	fun read(mut buf []u8) usize
 }
 
+fun skip_line() usize / reader {
+	mut total usize = 0
+
+	mut buf []u8 = [---]
+	try loop {
+		let read = read(buf)
+		if read == 0 {
+			break()
+		}
+
+		total++
+		if buf[0] == '\n' {
+			break()
+		}
+	}
+
+	total
+}
+
 fun read_line(mut buf []u8) usize / reader {
 	mut total usize = 0
 

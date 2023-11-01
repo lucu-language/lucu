@@ -7,6 +7,25 @@ effect stdio {
 	fun stderr() writer
 }
 
+fun wait() / stdio {
+	with stdin() {
+		skip_line();
+	}
+}
+
+fun print(s str) / stdio {
+	with stdout() {
+		write(cast s);
+	}
+}
+
+fun printerr(s str) / stdio {
+	with stderr() {
+		write(cast s);
+	}
+}
+
+@capability(os = "linux")
 fun unix() stdio / unix.sys {
 	handle stdio {
 		fun stdin() reader {
@@ -27,6 +46,7 @@ fun unix() stdio / unix.sys {
 	}
 }
 
+@capability(os = "windows")
 fun nt() stdio / nt.sys {
 	handle stdio {
 		fun stdin() reader {

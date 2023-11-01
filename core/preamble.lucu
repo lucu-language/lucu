@@ -45,6 +45,24 @@ handle break fails {
 }
 
 ##
+# basic ranged for loop
+##
+fun for(start usize, end usize, fn consume fails) {
+	mut n = start
+	with fn loop {
+		if n == end {
+			break()
+		} else {
+			consume(n++)
+		}
+	}
+}
+
+effect consume {
+	fun consume(n usize)
+}
+
+##
 # the following functions have internal definitions
 # these are not based on a specific target
 ##

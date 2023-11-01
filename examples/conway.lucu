@@ -1,29 +1,12 @@
-import "core:sys/unix"
-
-effect iter {
-	fun next() int
-}
-
-fun range(start int, end int) iter fails {
-	mut cur = start
-	fun {
-		if cur == end {
-			fail
-		} else {
-			cur++
-		}
-	}
-}
-
 fun init_board() [256]u8 {
 	0
 }
 
-fun index(x int, y int) usize {
-	cast x + y * 16
+fun index(x usize, y usize) usize {
+	x + y * 16
 }
 
-fun dec(n int) int {
+fun dec(n usize) usize {
 	if n == 0 {
 		15
 	} else {
@@ -31,7 +14,7 @@ fun dec(n int) int {
 	}
 }
 
-fun inc(n int) int {
+fun inc(n usize) usize {
 	if n == 15 {
 		0
 	} else {
@@ -40,27 +23,22 @@ fun inc(n int) int {
 }
 
 fun print_state(state []u8) / debug {
-	with range(0, 16) loop {
-		let y = next()
-		with range(0, 16) loop {
-			let x = next()
+	for(0, 16, fun y {
+		for(0, 16, fun x {
 			let cell = index(x, y)
 			if state[cell] == 0 {
 				putstr("😔")
 			} else {
 				putstr("🥺")
 			}
-		}
+		})
 		putstr("\n")
-	}
+	})
 }
 
 fun next_state(old []u8, mut new []u8) {
-	with range(0, 16) loop {
-		let y = next()
-		with range(0, 16) loop {
-			let x = next()
-
+	for(0, 16, fun y {
+		for(0, 16, fun x {
 			mut neighbors = 0
 			if old[index(dec(x), dec(y))] > 0 {
 				neighbors++
@@ -101,8 +79,8 @@ fun next_state(old []u8, mut new []u8) {
 			} else {
 				new[cell] = 0
 			}
-		}
-	}
+		})
+	})
 }
 
 fun main() / debug {

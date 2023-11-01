@@ -535,6 +535,26 @@ impl Display for IR {
                 write!(f, " )")?;
             }
 
+            if sign.unhandled.len() > 0 {
+                write!(f, " / ")?;
+                for handler in sign.unhandled.iter().copied() {
+                    if handler != sign.unhandled.first().copied().unwrap() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", usize::from(handler))?
+                }
+            }
+
+            if sign.handled.len() > 0 {
+                write!(f, " try ")?;
+                for handler in sign.handled.iter().copied() {
+                    if handler != sign.handled.first().copied().unwrap() {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", usize::from(handler))?
+                }
+            }
+
             write!(f, " {{\n")?;
 
             // write blocks

@@ -38,33 +38,35 @@ fun next_state(original []u8, mut next []u8) {
 	let len = len(next)
 
 	# first index
-	next[0] = rule(original[len - 1], original[0], original[1])
+	next[0] = rule(
+		original[len - 1],
+		original[0],
+		original[1],
+	)
 
 	# middle indices
-	mut cur usize = 1
-	try loop {
-		if cur == len - 1 {
-			break()
-		}
-		next[cur] = rule(original[cur - 1], original[cur], original[cur + 1])
-		cur++
-	}
+	for(1, len - 1, fun cell {
+		next[cell] = rule(
+			original[cell - 1],
+			original[cell],
+			original[cell + 1],
+		)
+	})
 
 	# last index
-	next[len - 1] = rule(original[len - 2], original[len - 1], original[0])
+	next[len - 1] = rule(
+		original[len - 2],
+		original[len - 1],
+		original[0],
+	)
 }
 
 fun print_state(state []u8) / debug {
-	mut current usize = 0
-	try loop {
-		if current == len(state) {
-			break()
-		}
-
-		if state[current++] == 0 {
+	for(0, len(state), fun cell {
+		if state[cell] == 0 {
 			putstr(" ")
 		} else {
 			putstr("X")
 		}
-	}
+	})
 }

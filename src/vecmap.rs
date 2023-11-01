@@ -122,9 +122,14 @@ where
             return None;
         }
         let (start, end) = if i < j { (i, j) } else { (j, i) };
-
         let (first, second) = self.vec.split_at_mut(start + 1);
-        Some((&mut first[start], &mut second[end - start - 1]))
+        let (first, second) = (&mut first[start], &mut second[end - start - 1]);
+
+        if i < j {
+            Some((first, second))
+        } else {
+            Some((second, first))
+        }
     }
 }
 

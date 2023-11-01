@@ -3,10 +3,8 @@ effect ident {
 }
 
 fun main() / debug {
-	let throw = handle ident fails int {
-		fun ident(n int) {
-			fail n
-		}
+	let throw ident fails int = fun {
+		fail n
 	}
 	putint(with throw {
 		let nonnaked = ident

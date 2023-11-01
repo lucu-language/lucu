@@ -6,13 +6,11 @@ effect iter {
 
 fun range(start int, end int) iter fails {
 	mut cur = start
-	handle iter fails {
-		fun next() int {
-			if cur == end {
-				fail
-			} else {
-				cur++
-			}
+	fun {
+		if cur == end {
+			fail
+		} else {
+			cur++
 		}
 	}
 }

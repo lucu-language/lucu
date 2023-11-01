@@ -19,7 +19,7 @@ macro_rules! vecmap_index {
 }
 pub(crate) use vecmap_index;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VecMap<K, V>
 where
     K: Into<usize>,
@@ -28,7 +28,7 @@ where
     key: PhantomData<fn(K) -> V>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VecSet<K, V>
 where
     K: Into<usize>,

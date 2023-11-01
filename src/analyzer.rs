@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
@@ -415,84 +416,127 @@ fn analyze_expr(
     let (found_ty, mutable) = match ctx.parsed.exprs[expr].0 {
         // analyze
         Expression::Handler(ref handler) => {
-            // resolve yeet
-            let yeet_type = match handler.fail_type {
-                parser::FailType::Never => TYPE_NEVER,
-                parser::FailType::None => TYPE_NONE,
-                parser::FailType::Some(t) => {
-                    let yeet_type = analyze_type(ctx, scope, t, errors);
+            // resolve effect
+            let (effect, ident, yeet_type) = match *handler {
+                parser::Handler::Full {
+                    effect, fail_type, ..
+                } => {
+                    let yeet_type = match fail_type {
+                        parser::FailType::Never => TYPE_NEVER,
+                        parser::FailType::None => TYPE_NONE,
+                        parser::FailType::Some(t) => {
+                            let yeet_type = analyze_type(ctx, scope, t, errors);
 
-                    if matches!(ctx.asys.types[yeet_type], Type::Handler(_, _, _)) {
-                        errors.push(ctx.parsed.types[t].with(Error::NestedHandlers));
-                    }
+                            if matches!(ctx.asys.types[yeet_type], Type::Handler(_, _, _)) {
+                                errors.push(ctx.parsed.types[t].with(Error::NestedHandlers));
+                            }
 
-                    yeet_type
+                            yeet_type
+                        }
+                    };
+                    (
+                        analyze_effect(ctx, effect, scope, errors),
+                        Some(effect),
+                        yeet_type,
+                    )
                 }
+                parser::Handler::Lambda(_) => match ctx.asys.types[expected_ty] {
+                    Type::Handler(effect, yeet_type, _) => {
+                        // TODO: check if matches (one fun, param count)
+                        (Some(effect), None, yeet_type)
+                    }
+                    _ => {
+                        errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
+                        (None, None, TYPE_UNKNOWN)
+                    }
+                },
             };
 
-            // put effect in scope
-            let ident = handler.effect;
-            let effect = analyze_effect(ctx, ident, scope, errors);
-
-            // match fun names to effect
-            if let Some(effect) = effect {
-                for fun in handler.functions.iter() {
-                    let name = &ctx.parsed.idents[fun.decl.name].0;
-                    let effectfun = match ctx.asys.defs[effect] {
-                        Definition::Effect(idx) => ctx.parsed.effects[idx]
-                            .functions
-                            .values()
-                            .find(|decl| ctx.parsed.idents[decl.name].0.eq(name))
-                            .map(|decl| ctx.asys.values[decl.name]),
-                        _ => None,
-                    };
-                    match effectfun {
-                        Some(val) => ctx.asys.values[fun.decl.name] = val,
-                        None => errors.push(ctx.parsed.idents[fun.decl.name].with(
-                            Error::UnknownEffectFun(
-                                effect.definition_range(ctx),
-                                Some(ctx.parsed.idents[ident.effect].empty()),
-                            ),
-                        )),
-                    }
-                }
-            }
-
-            // analyze functions
             let mut captures = Vec::new();
-            for fun in handler.functions.iter() {
-                let expected = analyze_return(ctx, scope, fun.decl.sign.output, errors);
+            if let Some(effect) = effect {
+                let ast_effect = match ctx.asys.defs[effect] {
+                    Definition::Effect(idx) => &ctx.parsed.effects[idx],
+                    _ => unreachable!(),
+                };
 
-                let mut child = scope.child();
-                let val = ctx.asys.values[fun.decl.name];
-                analyze_sign(ctx, &child, val, &fun.decl.sign, errors);
-                scope_sign(ctx, &mut child, &fun.decl.sign);
+                for (decl, body) in handler.functions(ast_effect) {
+                    // match fun name to effect
+                    let name = &ctx.parsed.idents[decl.name].0;
+                    let effectfun = ast_effect
+                        .functions
+                        .values()
+                        .find(|decl| ctx.parsed.idents[decl.name].0.eq(name))
+                        .map(|decl| ctx.asys.values[decl.name]);
+                    let Some(effectfun) = effectfun else {
+                        errors.push(ctx.parsed.idents[decl.name].with(Error::UnknownEffectFun(
+                            effect.definition_range(ctx),
+                            ident.map(|ident| ctx.parsed.idents[ident.effect].empty()),
+                        )));
+                        break;
+                    };
+                    ctx.asys.values[decl.name] = effectfun;
 
-                let mut scoped = scope.scoped_effects.clone();
-                scoped.extend(fun.decl.sign.effects.iter().copied().filter_map(|i| {
-                    let val = ctx.asys.values[i.effect];
-                    if val.0 == usize::MAX {
-                        None
-                    } else {
-                        Some(val)
-                    }
-                }));
-                child.scoped_effects = &scoped;
-
-                analyze_expr(ctx, &mut child, fun.body, expected, false, errors).0;
-
-                // add captures
-                ctx.parsed.for_each(
-                    fun.body,
-                    true,
-                    true,
-                    &mut |expr| match ctx.parsed.exprs[expr].0 {
-                        Expression::Ident(id) | Expression::Member(_, id) => {
-                            capture_ident(ctx, scope, id, effect, &mut captures);
+                    // analyze signature
+                    let (params, out) = match ctx.asys.defs[effectfun] {
+                        Definition::EffectFunction(eff, fun, out) => {
+                            let params = &ctx.parsed.effects[eff].functions[fun].sign.inputs;
+                            (params, out)
                         }
-                        _ => {}
-                    },
-                );
+                        _ => unreachable!(),
+                    };
+
+                    match decl {
+                        Cow::Borrowed(_) => {
+                            // TODO: check if this matches effectfun
+                            analyze_return(ctx, scope, decl.sign.output, errors);
+                            let val = ctx.asys.values[decl.name];
+                            analyze_sign(ctx, &scope, val, &decl.sign, errors);
+                        }
+                        Cow::Owned(_) => {
+                            // set param types
+                            for (i, param) in decl.sign.inputs.iter(ParamIdx) {
+                                let ty = match ctx.asys.defs[ctx.asys.values[params[i].name]] {
+                                    Definition::Parameter(_, _, _, ty) => ty,
+                                    _ => unreachable!(),
+                                };
+                                ctx.asys.push_val(
+                                    param.name,
+                                    Definition::Parameter(effectfun, param.mutable, i, ty),
+                                );
+                            }
+                        }
+                    };
+
+                    // analyze body
+                    let mut child = scope.child();
+                    scope_sign(ctx, &mut child, &decl.sign);
+
+                    let mut scoped = scope.scoped_effects.clone();
+                    scoped.extend(decl.sign.effects.iter().copied().filter_map(|i| {
+                        let val = ctx.asys.values[i.effect];
+                        if val.0 == usize::MAX {
+                            None
+                        } else {
+                            Some(val)
+                        }
+                    }));
+                    child.scoped_effects = &scoped;
+
+                    analyze_expr(ctx, &mut child, body, out, false, errors).0;
+
+                    // add captures
+                    ctx.parsed.for_each(
+                        body,
+                        true,
+                        true,
+                        &mut |expr| match ctx.parsed.exprs[expr].0 {
+                            Expression::Ident(id) | Expression::Member(_, id) => {
+                                capture_ident(ctx, scope, id, Some(effect), &mut captures);
+                            }
+                            _ => {}
+                        },
+                    );
+                }
             }
 
             // get handler type
@@ -1256,24 +1300,19 @@ fn analyze_sign(
     }
 
     // put args in scope
-    for (i, param) in func.inputs.values().enumerate() {
+    for (i, param) in func.inputs.iter(ParamIdx) {
         // resolve type
         let ty = analyze_type(ctx, scope, param.ty, errors);
         let ty = match ctx.asys.types[ty] {
             Type::Handler(effect, yeet, _) => {
-                let handler = ctx
-                    .asys
-                    .handlers
-                    .push(HandlerIdx, HandlerDef::Param(ParamIdx(i)));
+                let handler = ctx.asys.handlers.push(HandlerIdx, HandlerDef::Param(i));
                 ctx.asys
                     .insert_type(Type::Handler(effect, yeet, Some(handler)))
             }
             _ => ty,
         };
-        ctx.asys.push_val(
-            param.name,
-            Definition::Parameter(val, param.mutable, ParamIdx(i), ty),
-        );
+        ctx.asys
+            .push_val(param.name, Definition::Parameter(val, param.mutable, i, ty));
     }
 }
 
@@ -1359,11 +1398,11 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors) -> Analysis {
                 .insert(parsed.idents[effect.name].0.clone(), val);
         }
         for &implied in package.implied.iter() {
-            let handler = match &parsed.exprs[implied].0 {
-                Expression::Handler(handler) => handler,
+            let effect = match &parsed.exprs[implied].0 {
+                Expression::Handler(parser::Handler::Full { effect, .. }) => effect,
                 _ => panic!(),
             };
-            let name = &parsed.idents[handler.effect.effect].0;
+            let name = &parsed.idents[effect.effect].0;
             if let Some(effect) = ctx.packages[idx].effects.get(name).copied() {
                 ctx.packages[idx].implied.insert(effect);
             }

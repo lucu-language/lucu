@@ -26,13 +26,11 @@ fun array_buffer() strbuf {
 		}
 		fun iter() striter fails {
 			mut current usize = 0
-			handle striter fails {
-				fun next() str {
-					if current < size {
-						array[current++]
-					} else {
-						fail
-					}
+			fun {
+				if current < size {
+					array[current++]
+				} else {
+					fail
 				}
 			}
 		}

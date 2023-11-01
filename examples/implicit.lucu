@@ -21,9 +21,7 @@ handle return yeets int {
 fun main() / debug {
 	putint(try {
 		putint(get())
-		try {
-			putint(get())
-		} with handle get {
+		try putint(get()) with handle get {
 			fun get() int {
 				420
 			}

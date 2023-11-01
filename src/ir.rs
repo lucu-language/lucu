@@ -1103,19 +1103,10 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: Target) -> IR {
         .flat_map(|p| p.implied.iter())
         .copied()
     {
-        let ast_handler = match &ir.parsed.exprs[expr].0 {
-            Expression::Handler(ast_handler) => ast_handler,
+        let (eff_val, break_type) = match ir.asys.types[ir.asys.exprs[expr]] {
+            analyzer::Type::Handler(e, t, _) => (e, TypeIdx::from_type(&mut ir, t)),
             _ => unreachable!(),
         };
-
-        let break_type = match ir.asys.types[ir.asys.exprs[expr]] {
-            analyzer::Type::Handler(_, t, _) => TypeIdx::from_type(&mut ir, t),
-            _ => unreachable!(),
-        };
-
-        // get effect
-        let eff_ident = ast_handler.effect.effect;
-        let eff_val = ir.asys.values[eff_ident];
 
         let handler_idx = ir.new_handler(eff_val, false, break_type, expr, &Scope::default());
 
@@ -1437,15 +1428,13 @@ fn get_handler_proc(
             _ => unreachable!(),
         };
 
-        let fun = ast_handler
-            .functions
-            .iter()
-            .find(|f| ir.asys.values[f.decl.name] == val)
+        let (decl, body) = ast_handler
+            .functions(effect)
+            .find(|(decl, _)| ir.asys.values[decl.name] == val)
             .unwrap();
 
         // get params
-        let params = fun
-            .decl
+        let params = decl
             .sign
             .inputs
             .values()
@@ -1494,7 +1483,7 @@ fn get_handler_proc(
             &params,
             output,
             debug_name,
-            fun.body,
+            body,
             Some(handler_idx),
             proc_todo,
         )
@@ -1590,21 +1579,15 @@ fn generate_proc_sign(
     // create handlers
     let mut handler_defs = Vec::new();
     ir.parsed.for_each(body, false, false, &mut |expr| {
-        if let Expression::Handler(h) = &ir.parsed.exprs[expr].0 {
+        if let Expression::Handler(_) = &ir.parsed.exprs[expr].0 {
             // get break type
-            let break_type = match ir.asys.types[ir.asys.exprs[expr]] {
-                analyzer::Type::Handler(_, t, _) => TypeIdx::from_type(ir, t),
+            let (eff_val, break_type) = match ir.asys.types[ir.asys.exprs[expr]] {
+                analyzer::Type::Handler(e, t, _) => (e, TypeIdx::from_type(ir, t)),
                 _ => unreachable!(),
             };
 
             // create handler
-            let handler = ir.new_handler(
-                ir.asys.values[h.effect.effect],
-                false,
-                break_type,
-                expr,
-                &scope,
-            );
+            let handler = ir.new_handler(eff_val, false, break_type, expr, &scope);
 
             handler_defs.push((expr, handler));
         }
@@ -2827,9 +2810,10 @@ fn generate_expr(
 
         E::Ident(id) => {
             let val = ir.asys.values[id];
-            let mut reg = ir
-                .get_in_scope(val, &ctx.scope)
-                .expect("value not in scope");
+            let mut reg = ir.get_in_scope(val, &ctx.scope).expect(&format!(
+                "value '{}' not in scope in {}",
+                ir.parsed.idents[id].0, ir.ir.proc_sign[ctx.proc_idx].debug_name
+            ));
             if let Type::Handler(idx) = ir.ir.types[reg.get_type(&ir.ir)] {
                 if let analyzer::Type::Handler(_, _, def) = ir.asys.types[ir.asys.exprs[ctx.expr]] {
                     if let Some(def) = def {

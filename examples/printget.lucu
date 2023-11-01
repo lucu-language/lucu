@@ -7,11 +7,7 @@ effect get {
 }
 
 fun getter(s str) get {
-	handle get {
-		fun get() str{
-			s
-		}
-	}
+	fun { s }
 }
  
 fun main() / debug {

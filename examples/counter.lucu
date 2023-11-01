@@ -4,12 +4,10 @@ effect counter {
 
 fun init_counter(start int) counter {
 	mut n = start
-	handle counter {
-		fun count() int {
-			let last = n
-			n = n + 1
-			last
-		}
+	fun {
+		let last = n
+		n = n + 1
+		last
 	}
 }
 

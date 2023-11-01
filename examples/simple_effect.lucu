@@ -3,11 +3,7 @@ effect get {
 }
 
 fun getter(n int) get {
-	handle get {
-		fun get() int {
-			n
-		}
-	}
+	fun { n }
 }
 
 fun getter_indirect(n int) get {

@@ -9,8 +9,8 @@ effect strbuf {
 }
 
 fun array_buffer() strbuf {
-	mut array [255]str = ---
-	mut size  usize    = 0
+	mut array [16]const str = 0
+	mut size  usize         = 0
 	handle strbuf {
 		fun push(elem str) usize {
 			array[size] = elem

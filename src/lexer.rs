@@ -19,6 +19,7 @@ pub enum Token {
     Loop,
     Import,
     Cast,
+    Const,
 
     // Symbols
     Semicolon,
@@ -74,6 +75,7 @@ impl fmt::Display for Token {
                 Token::Loop => "'loop'".into(),
                 Token::Import => "'import'".into(),
                 Token::Cast => "'cast'".into(),
+                Token::Const => "'const'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Dot => "'.'".into(),
                 Token::DoubleDot => "'..'".into(),
@@ -427,6 +429,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "loop" => Token::Loop,
                     "import" => Token::Import,
                     "cast" => Token::Cast,
+                    "const" => Token::Const,
                     _ => Token::Ident(word),
                 }
             }

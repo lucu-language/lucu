@@ -89,6 +89,28 @@ effect consume {
 }
 
 ##
+# exits the program and displays an error message
+# preferred to be used only for debugging
+##
+fun panic(msg str) ! / srcloc {
+	trace("panic: ")
+	trace(msg)
+	trace("\n")
+	trap()
+}
+
+##
+# exits the program and displays an error message
+# marks code paths that aren't implemented yet
+##
+fun todo(msg str) ! / srcloc {
+	trace("todo: ")
+	trace(msg)
+	trace("\n")
+	trap()
+}
+
+##
 # the following functions have internal definitions
 # these are not based on a specific target
 ##
@@ -108,13 +130,38 @@ fun unreachable() ! {
 ##
 fun len(slice []u8) usize {
 	# internally defined
-	---
+	0
+}
+
+##
+# effect to get the location of the call in the source code
+# has a internally defined global handler
+# when used directly, it returns the location of the call to &source_location
+# when used as an effect parameter inside a function, it returns the location of the caller
+##
+effect srcloc {
+	fun source_location() str
+}
+
+handle srcloc {
+	fun source_location() str {
+		# internally defined
+		0
+	}
 }
 
 ##
 # the following functions may have an internal definition based on the target
 # they also have default implementations for unknown targets
 ##
+
+##
+# prints a debug message to the environment (usually the standard error)
+# the message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times
+##
+fun trace(s str) {
+	# internally defined based on target
+}
 
 ##
 # function that ends execution of the entire program
@@ -125,16 +172,10 @@ fun len(slice []u8) usize {
 #  - throw an exception / interrupt
 #  - spin forever
 ##
-fun trap() ! {
+fun trap() ! / srcloc {
 	# internally defined based on target
+	trace("trapped at ")
+	trace(source_location())
+	trace("\n")
 	loop {}
-}
-
-##
-# exits the program and displays an error
-# preferred to be used only for debugging
-##
-fun panic(msg str) ! {
-	# internally defined based on target
-	trap()
 }

@@ -32,6 +32,7 @@ impl<T> Ranged<T> {
 
 pub type Range = Ranged<()>;
 
+#[allow(dead_code)]
 pub enum Error {
     // lexer
     UnknownSymbol,
@@ -121,12 +122,12 @@ pub struct Errors {
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct LinePos {
-    line: usize,
-    column: usize,
+pub struct LinePos {
+    pub line: usize,
+    pub column: usize,
 }
 
-fn get_lines(file: &str, range: Ranged<()>) -> (LinePos, LinePos) {
+pub fn get_lines(file: &str, range: Ranged<()>) -> (LinePos, LinePos) {
     let start = file
         .chars()
         .take(range.1)

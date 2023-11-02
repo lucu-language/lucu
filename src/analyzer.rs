@@ -21,15 +21,15 @@ impl TypeIdx {
     }
     fn is_view(self, ctx: &AsysContext) -> bool {
         match ctx.asys.types[self] {
-            Type::Pointer(_) | Type::Slice(_) => true,
-            Type::ConstArray(_, ty) if ty.is_view(ctx) => true,
+            Type::Pointer(_) | Type::Slice(_) | Type::Str => true,
+            Type::ConstArray(_, ty) | Type::Const(ty) if ty.is_view(ctx) => true,
             _ => false,
         }
     }
     fn is_zero_view(self, ctx: &AsysContext) -> bool {
         match ctx.asys.types[self] {
-            Type::Pointer(_) | Type::Slice(_) => true,
-            Type::ConstArray(_, ty) if ty.is_view(ctx) => true,
+            Type::Pointer(_) => true,
+            Type::ConstArray(_, ty) | Type::Const(ty) if ty.is_zero_view(ctx) => true,
             _ => false,
         }
     }
@@ -90,6 +90,7 @@ impl TypeIdx {
             Type::Unknown => "<unknown>".into(),
             Type::Pointer(ty) => format!("^{}", ty.display_inner(ctx)),
             Type::Slice(ty) => format!("[]{}", ty.display_inner(ctx)),
+            Type::Const(ty) => format!("const {}", ty.display_inner(ctx)),
             Type::ConstArray(size, ty) => format!("[{}]{}", size, ty.display_inner(ctx)),
         }
     }
@@ -167,6 +168,7 @@ pub enum Type {
     Handler(Val, TypeIdx, Option<HandlerIdx>),
 
     Pointer(TypeIdx),
+    Const(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
 
@@ -316,7 +318,7 @@ fn analyze_assignable(
             let array = analyze_assignable(ctx, scope, left, expr, errors);
             analyze_expr(ctx, scope, right, TYPE_USIZE, false, errors);
 
-            let ty = match ctx.asys.types[array.0] {
+            let elem = match ctx.asys.types[array.0] {
                 Type::ConstArray(_, ty) => ty,
                 Type::Slice(ty) => ty,
                 Type::Unknown => TYPE_UNKNOWN,
@@ -327,7 +329,11 @@ fn analyze_assignable(
                     TYPE_UNKNOWN
                 }
             };
-            (ty, array.1)
+
+            match ctx.asys.types[elem] {
+                Type::Const(ty) => (ty, false),
+                _ => (elem, array.1),
+            }
         }
         Expression::Error => (TYPE_UNKNOWN, false),
         _ => {
@@ -923,9 +929,9 @@ fn analyze_expr(
         }
         Expression::BinOp(left, op, right) => match op {
             BinOp::Assign => {
-                let left_type = analyze_assignable(ctx, scope, left, expr, errors).0;
-                let right_type = analyze_expr(ctx, scope, right, left_type, false, errors);
-                if !right_type.1 && right_type.0.is_view(ctx) {
+                let left_type = analyze_assignable(ctx, scope, left, expr, errors);
+                let right_type = analyze_expr(ctx, scope, right, left_type.0, false, errors);
+                if left_type.1 && !right_type.1 && right_type.0.is_view(ctx) {
                     errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutableView(None)));
                 }
                 (TYPE_NONE, false)
@@ -968,7 +974,11 @@ fn analyze_expr(
                         }
                     }
                 };
-                (elem, array.1)
+
+                match ctx.asys.types[elem] {
+                    Type::Const(ty) => (ty, false),
+                    _ => (elem, array.1),
+                }
             }
             _ => {
                 let ret_ty = match op {
@@ -1229,6 +1239,10 @@ fn analyze_type(
         T::Slice(ty) => {
             let inner = analyze_type(ctx, scope, ty, errors);
             return ctx.asys.insert_type(Type::Slice(inner));
+        }
+        T::Const(ty) => {
+            let inner = analyze_type(ctx, scope, ty, errors);
+            return ctx.asys.insert_type(Type::Const(inner));
         }
     };
 

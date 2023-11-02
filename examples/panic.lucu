@@ -1,0 +1,7 @@
+fun main() / debug {
+	putstr(source_location())
+	putstr("\n")
+	putstr(source_location())
+	putstr("\n")
+	panic("oh no it's a panic")
+}

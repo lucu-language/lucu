@@ -3,7 +3,7 @@ effect set {
 }
 
 fun set_setter(n int, setter set) {
-	try set(n) with setter
+	set(n) with setter
 }
 
 fun set_setter_try(n int) / set {
@@ -16,12 +16,12 @@ fun main() / debug {
 
 	let setter set = fun { n -> num = n }
 
-	try set(420) with setter
+	set(420) with setter
 	putint(num)
 
 	set_setter(24, setter)
 	putint(num)
 
-	try set_setter_try(42) with setter
+	set_setter_try(42) with setter
 	putint(num)
 }

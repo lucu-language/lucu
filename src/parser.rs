@@ -161,6 +161,7 @@ pub enum Type {
     Handler(Ident, FailType),
 
     Pointer(TypeIdx),
+    Const(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
 
@@ -784,6 +785,14 @@ impl Parse for Type {
                 tk.next();
                 Some(Type::Never)
             }
+            Some(Ranged(Token::Const, ..)) => {
+                tk.next();
+
+                let ty = Type::parse_or_default(tk);
+                let ty = tk.push_type(ty);
+
+                Some(Type::Const(ty))
+            }
             Some(Ranged(Token::Caret, ..)) => {
                 tk.next();
 
@@ -1141,7 +1150,20 @@ impl Parse for Expression {
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
 
-                let inner = Expression::parse_or_default(tk);
+                // allow for try-loop
+                let loop_start = tk.pos_start();
+                let inner = if tk.check(Token::Loop).is_some() {
+                    let body = Body::parse_or_default(tk);
+                    let body = tk.push_expr(body);
+                    Ranged(
+                        Expression::Loop(body),
+                        loop_start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    )
+                } else {
+                    Body::parse_or_default(tk)
+                };
 
                 if tk.check(Token::With).is_some() {
                     let handler = Expression::parse_or_skip(tk)?;
@@ -1188,8 +1210,16 @@ impl Parse for Expression {
                 })?;
 
                 // allow for with-loop
-                let inner = if tk.peek_check(Token::Loop) {
-                    Expression::parse_or_default(tk)
+                let loop_start = tk.pos_start();
+                let inner = if tk.check(Token::Loop).is_some() {
+                    let body = Body::parse_or_default(tk);
+                    let body = tk.push_expr(body);
+                    Ranged(
+                        Expression::Loop(body),
+                        loop_start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    )
                 } else {
                     Body::parse_or_default(tk)
                 };
@@ -1406,6 +1436,29 @@ fn expression_post(
                     tk.pos_end(),
                     tk.iter.file,
                 );
+            }
+
+            // post try/with
+            Some(Ranged(Token::With, ..)) => {
+                tk.next();
+                let handler = Expression::parse_or_skip(tk)?;
+                let handler = tk.push_expr(handler);
+                let mut handlers = vec![handler];
+
+                while tk.check(Token::Comma).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    handlers.push(handler)
+                }
+
+                for handler in handlers.into_iter().rev() {
+                    expr = Ranged(
+                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
+                }
             }
 
             // call

@@ -13,9 +13,9 @@ fun getter(s str) get {
 fun main() / debug {
 	try {
 
-		try print() with getter("one")
-		try print() with getter("two")
-		try print() with getter("tea")
+		print() with getter("one")
+		print() with getter("two")
+		print() with getter("tea")
 		
 	} with handle printget {
 

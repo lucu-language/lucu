@@ -18,7 +18,7 @@ fun main() / debug {
 	putint(with throw {
 		let nonnaked = ident
 		with throw {
-			try putint(ident(5)) with nonnaked
+			putint(ident(5)) with nonnaked
 			420
 		}
 		putstr("unreachable\n")

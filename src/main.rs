@@ -13,6 +13,7 @@ use error::{Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
 use parser::{parse_ast, Parsed};
+use vecmap::VecMap;
 
 mod analyzer;
 mod error;
@@ -162,7 +163,7 @@ fn parse_from_filename(
     main_file: &Path,
     core_path: &Path,
     target: &Target,
-) -> Result<(Parsed, Analysis), Errors> {
+) -> Result<(Parsed, Analysis, VecMap<FileIdx, File>), Errors> {
     let mut parsed = Parsed::default();
     let mut errors = Errors::new();
 
@@ -241,7 +242,7 @@ fn parse_from_filename(
     let asys = analyze(&parsed, &mut errors, &target);
 
     if errors.is_empty() {
-        Ok((parsed, asys))
+        Ok((parsed, asys, errors.files))
     } else {
         Err(errors)
     }
@@ -312,9 +313,9 @@ fn main() {
 
     // analyze
     match parse_from_filename(&args.main, &core, &target) {
-        Ok((parsed, asys)) => {
+        Ok((parsed, asys, files)) => {
             // generate ir
-            let ir = ir::generate_ir(&parsed, &asys, &target);
+            let ir = ir::generate_ir(&parsed, &asys, &target, &files);
             if debug {
                 println!("\n--- IR ---");
                 println!("{}", ir);
@@ -375,8 +376,8 @@ mod tests {
         let target = Target::host(None, None);
 
         match parse_from_filename(Path::new(filename), &core, &target) {
-            Ok((parsed, asys)) => {
-                let ir = ir::generate_ir(&parsed, &asys, &target);
+            Ok((parsed, asys, files)) => {
+                let ir = ir::generate_ir(&parsed, &asys, &target, &files);
                 llvm::generate_ir(&ir, &output.with_extension("o"), false, &target);
 
                 match target.lucu_os() {

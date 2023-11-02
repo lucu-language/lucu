@@ -8,15 +8,11 @@ effect stdio {
 }
 
 fun print(s str) / stdio {
-	with stdout() {
-		write(cast s);
-	}
+	write(cast s) with stdout();
 }
 
 fun printerr(s str) / stdio {
-	with stderr() {
-		write(cast s);
-	}
+	write(cast s) with stderr();
 }
 
 @capability(os = "linux")

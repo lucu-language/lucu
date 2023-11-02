@@ -37,7 +37,7 @@ fun divide(a int, b int) int / div_by_zero {
 ##
 fun divide_default(a int, b int, default int) int {
 
-    try divide(a, b) with handle div_by_zero {
+    divide(a, b) with handle div_by_zero {
 
         fun div_by_zero(dividend int) int {
             default
@@ -54,7 +54,7 @@ fun divide_default(a int, b int, default int) int {
 ##
 fun divide_throw(a int, b int) int / catch {
 
-    try divide(a, b) with handle div_by_zero {
+    divide(a, b) with handle div_by_zero {
 
         fun div_by_zero(dividend int) int {
             throw()

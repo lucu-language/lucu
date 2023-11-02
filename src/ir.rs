@@ -10,6 +10,7 @@ use either::Either;
 
 use crate::{
     analyzer::{self, Analysis, Definition, Val},
+    error::{get_lines, File, FileIdx, Range, Ranged},
     parser::{self, BinOp, EffFunIdx, ExprIdx, Expression, PackageIdx, Parsed, UnOp},
     vecmap::{vecmap_index, VecMap, VecSet},
     LucuOS, Target,
@@ -221,6 +222,7 @@ impl TypeIdx {
                 let inner = TypeIdx::from_type(ir, ty);
                 ir.insert_type(Type::Slice(inner))
             }
+            T::Const(ty) => TypeIdx::from_type(ir, ty),
             T::FunctionLiteral(_) => todo!(),
             T::PackageLiteral(_) => todo!(),
 
@@ -266,7 +268,9 @@ impl TypeIdx {
             // TODO: type type
             Definition::BuiltinType(_) => todo!(),
             Definition::Package(_) => todo!(),
-            Definition::Effect(_) => todo!(),
+            Definition::Effect(idx) => {
+                todo!("{:?}", ir.parsed.idents[ir.parsed.effects[idx].name].0)
+            }
         }
     }
     fn from_function(ir: &IRContext, val: Val) -> analyzer::TypeIdx {
@@ -379,6 +383,7 @@ pub enum Instruction {
 
     // kernel operations
     Trap,
+    Trace(Reg),
     Syscall(Option<Reg>, Reg, Vec<Reg>),
     GS(Reg, u64), // read value at GS register with offset into reg
 }
@@ -427,11 +432,13 @@ struct IRContext<'a> {
 
     proc_map: HashMap<ProcIdent, ProcIdx>,
     implied_handlers: HashMap<Val, HandlerIdx>,
+    srcloc: Option<(Val, HandlerIdx)>,
 
     handlers: VecMap<HandlerIdx, HandlerCtx>,
 
     parsed: &'a Parsed,
     asys: &'a Analysis,
+    files: &'a VecMap<FileIdx, File>,
 }
 
 impl<'a> IRContext<'a> {
@@ -449,17 +456,46 @@ impl<'a> IRContext<'a> {
     fn insert_type(&mut self, ty: Type) -> TypeIdx {
         self.ir.types.insert(TypeIdx, ty).clone()
     }
-    fn get_in_scope(&mut self, val: Val, scope: &Scope) -> Option<Value> {
+    fn get_or_implicit(
+        &mut self,
+        val: Val,
+        scope: &Scope,
+        block: &mut Block,
+        loc: Range,
+    ) -> Option<Value> {
         match scope.get(val) {
             Some(r) => Some(r.clone()),
-            None => match self.implied_handlers.get(&val).copied() {
-                Some(idx) => {
-                    let ty = self.insert_type(Type::NakedHandler(idx));
-                    let reg = self.next_reg(ty);
-                    Some(Value::Value(reg, None))
+            None => {
+                match self.srcloc.and_then(|(v, idx)| {
+                    if v == val {
+                        let (start, _end) = get_lines(&self.files[loc.3].content, loc);
+
+                        let src = self.next_reg(TYPE_STR_SLICE);
+                        block.instructions.push(Instruction::InitString(
+                            src,
+                            format!("{}:{}:{}", self.files[loc.3].name, start.line, start.column),
+                        ));
+                        let handler_ty = self.insert_type(Type::NakedHandler(idx));
+                        let handler = self.next_reg(handler_ty);
+                        block
+                            .instructions
+                            .push(Instruction::Handler(handler, vec![src]));
+                        Some(Value::Value(handler, None))
+                    } else {
+                        None
+                    }
+                }) {
+                    Some(r) => Some(r),
+                    None => match self.implied_handlers.get(&val).copied() {
+                        Some(idx) => {
+                            let ty = self.insert_type(Type::NakedHandler(idx));
+                            let reg = self.next_reg(ty);
+                            Some(Value::Value(reg, None))
+                        }
+                        None => None,
+                    },
                 }
-                None => None,
-            },
+            }
         }
     }
     fn new_handler(
@@ -693,6 +729,7 @@ impl Display for IR {
                             writeln!(f, "{} <- gep {}, {}", r, a, m)?
                         }
                         Instruction::Trap => writeln!(f, "       trap")?,
+                        Instruction::Trace(r) => writeln!(f, "       trace {}", r)?,
                         Instruction::Syscall(out, nr, ref args) => writeln!(
                             f,
                             "{}syscall {}{}",
@@ -797,6 +834,7 @@ type ProcTodo = Vec<ProcCtx<'static>>;
 fn define_function(
     ir: &mut IRContext,
     fun: Either<Val, (HandlerIdx, EffFunIdx)>,
+    handlers: Vec<HandlerIdx>,
     debug_name: String,
     inputs: Vec<Reg>,
     output: TypeIdx,
@@ -824,7 +862,7 @@ fn define_function(
     ir.proc_map.insert(
         ProcIdent {
             fun,
-            handlers: Vec::new(),
+            handlers,
             handler_params: Vec::new(),
         },
         proc,
@@ -832,13 +870,20 @@ fn define_function(
     proc
 }
 
-pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
+pub fn generate_ir(
+    ctx: &Parsed,
+    asys: &Analysis,
+    target: &Target,
+    files: &VecMap<FileIdx, File>,
+) -> IR {
     let mut ir = IRContext {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
         implied_handlers: HashMap::new(),
         parsed: ctx,
         asys,
+        files,
+        srcloc: None,
         ir: IR {
             proc_sign: VecMap::new(),
             proc_impl: VecMap::new(),
@@ -901,6 +946,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
                 define_function(
                     &mut ir,
                     Either::Right((sys, EffFunIdx(n))),
+                    vec![],
                     format!("syscall{}", n),
                     std::iter::once(nr).chain(inputs.iter().copied()).collect(),
                     intptr,
@@ -920,6 +966,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
                 define_function(
                     &mut ir,
                     Either::Right((sys, EffFunIdx(i))),
+                    vec![],
                     format!("syscall{}", n),
                     std::iter::once(nr).chain(inputs.iter().copied()).collect(),
                     intptr,
@@ -950,6 +997,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
             define_function(
                 &mut ir,
                 Either::Right((sys, EffFunIdx(2))),
+                vec![],
                 "stdio".into(),
                 vec![],
                 output_ty,
@@ -974,12 +1022,46 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
         _ => {}
     }
 
+    // define srcloc
+    let srcloc_effect = get_effect(ctx, ctx.preamble, "srcloc");
+    let srcloc = ir.handlers.push(
+        HandlerIdx,
+        HandlerCtx {
+            effect: asys.values[srcloc_effect.name],
+            global: None,
+            definition: None,
+            captures: Vec::new(),
+        },
+    );
+    ir.ir.handler_type.push_value(HandlerType {
+        captures: vec![TYPE_STR_SLICE],
+        break_ty: TYPE_NEVER,
+    });
+    ir.srcloc = Some((asys.values[srcloc_effect.name], srcloc));
+
+    let srcloc_ty = ir.insert_type(Type::Handler(srcloc));
+    let input = ir.next_reg(srcloc_ty);
+    let output = ir.next_reg(TYPE_STR_SLICE);
+    let srcloc_proc = define_function(
+        &mut ir,
+        Either::Right((srcloc, EffFunIdx(0))),
+        vec![],
+        "source_location".into(),
+        vec![input],
+        TYPE_STR_SLICE,
+        vec![
+            Instruction::Member(output, input, 0),
+            Instruction::Return(Some(output)),
+        ],
+    );
+
     // define unreachable
     // TODO: differ depending on settings (debug/release)
     let unreachable_fun = get_function(ctx, ctx.preamble, "unreachable");
     define_function(
         &mut ir,
         Either::Left(asys.values[unreachable_fun.decl.name]),
+        vec![],
         "unreachable".into(),
         vec![],
         TYPE_NEVER,
@@ -987,39 +1069,41 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
     );
 
     // define trap
-    // TODO: location
     let trap_fun = get_function(ctx, ctx.preamble, "trap");
-    let trap = define_function(
-        &mut ir,
-        Either::Left(asys.values[trap_fun.decl.name]),
-        "trap".into(),
-        vec![],
-        TYPE_NEVER,
-        vec![Instruction::Trap, Instruction::Unreachable],
-    );
-
-    // define panic
-    // TODO: location
-    let panic_fun = get_function(ctx, ctx.preamble, "panic");
-    let input = ir.next_reg(TYPE_STR_SLICE);
-
-    let prefix = ir.next_reg(TYPE_STR_SLICE);
-    let suffix = ir.next_reg(TYPE_STR_SLICE);
+    let input = ir.next_reg(srcloc_ty);
+    let str1 = ir.next_reg(TYPE_STR_SLICE);
+    let str2 = ir.next_reg(TYPE_STR_SLICE);
+    let str3 = ir.next_reg(TYPE_STR_SLICE);
     define_function(
         &mut ir,
-        Either::Left(asys.values[panic_fun.decl.name]),
-        "panic".into(),
+        Either::Left(asys.values[trap_fun.decl.name]),
+        vec![srcloc],
+        "trap".into(),
         vec![input],
         TYPE_NEVER,
         vec![
-            Instruction::InitString(prefix, "panic: ".into()),
-            Instruction::InitString(suffix, "\n".into()),
-            // Instruction::Call(putstr, None, vec![prefix]),
-            // Instruction::Call(putstr, None, vec![input]),
-            // Instruction::Call(putstr, None, vec![suffix]),
-            Instruction::Call(trap, None, Vec::new()),
+            Instruction::InitString(str1, "trapped at ".into()),
+            Instruction::Call(srcloc_proc, Some(str2), vec![input]),
+            Instruction::InitString(str3, "\n".into()),
+            Instruction::Trace(str1),
+            Instruction::Trace(str2),
+            Instruction::Trace(str3),
+            Instruction::Trap,
             Instruction::Unreachable,
         ],
+    );
+
+    // define trace
+    let trace_fun = get_function(ctx, ctx.preamble, "trace");
+    let input = ir.next_reg(TYPE_STR_SLICE);
+    define_function(
+        &mut ir,
+        Either::Left(asys.values[trace_fun.decl.name]),
+        vec![],
+        "trace".into(),
+        vec![input],
+        TYPE_NONE,
+        vec![Instruction::Trace(input), Instruction::Return(None)],
     );
 
     // define len
@@ -1029,6 +1113,7 @@ pub fn generate_ir(ctx: &Parsed, asys: &Analysis, target: &Target) -> IR {
     define_function(
         &mut ir,
         Either::Left(asys.values[len_fun.decl.name]),
+        vec![],
         "len".into(),
         vec![input],
         arrsize,
@@ -1331,31 +1416,33 @@ fn get_proc(
     proc_idx: ProcIdx,
     scope: &Scope,
     param_types: Box<[TypeIdx]>,
-    reg_args: Option<&mut Vec<Value>>,
+    reg_args: Option<(&mut Vec<Value>, &mut Block, Range)>,
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     match ir.asys.defs[val] {
         Definition::EffectFunction(eff_idx, eff_fun_idx, _) => {
-            // get handler
-            let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
-            let handler_val = ir.get_in_scope(eff_val, scope).expect(&format!(
-                "effect {:?} not in scope when finding effect function in {}. scope: {:?}",
-                eff_val, ir.ir.proc_sign[proc_idx].debug_name, scope
-            ));
-            let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
-                Type::NakedHandler(handler_idx) => {
-                    let proc = &mut ir.ir.proc_sign[proc_idx];
-                    if !proc.handled.contains(&handler_idx) {
-                        proc.handled.push(handler_idx);
+            if let Some((reg_args, block, loc)) = reg_args {
+                // get handler
+                let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
+                let handler_val = ir
+                    .get_or_implicit(eff_val, scope, block, loc)
+                    .expect(&format!(
+                        "effect {:?} not in scope when finding effect function in {}. scope: {:?}",
+                        eff_val, ir.ir.proc_sign[proc_idx].debug_name, scope
+                    ));
+                let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
+                    Type::NakedHandler(handler_idx) => {
+                        let proc = &mut ir.ir.proc_sign[proc_idx];
+                        if !proc.handled.contains(&handler_idx) {
+                            proc.handled.push(handler_idx);
+                        }
+                        handler_idx
                     }
-                    handler_idx
-                }
-                Type::Handler(handler_idx) => handler_idx,
-                _ => panic!(),
-            };
+                    Type::Handler(handler_idx) => handler_idx,
+                    _ => panic!(),
+                };
 
-            // get closure
-            if let Some(reg_args) = reg_args {
+                // get closure
                 if let Some(reg) = handler_val.non_global().cloned() {
                     reg_args.push(reg);
                 }
@@ -1366,10 +1453,35 @@ fn get_proc(
                     proc_idx,
                     scope,
                     param_types,
-                    Some(reg_args),
+                    Some((reg_args, block, loc)),
                     proc_todo,
                 )
             } else {
+                // get handler
+                let eff_val = ir.asys.values[ir.parsed.effects[eff_idx].name];
+                let handler_val = ir
+                    .get_or_implicit(
+                        eff_val,
+                        scope,
+                        &mut Block::default(),
+                        Ranged((), 0, 0, FileIdx(0)),
+                    )
+                    .expect(&format!(
+                        "effect {:?} not in scope when finding effect function in {}. scope: {:?}",
+                        eff_val, ir.ir.proc_sign[proc_idx].debug_name, scope
+                    ));
+                let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
+                    Type::NakedHandler(handler_idx) => {
+                        let proc = &mut ir.ir.proc_sign[proc_idx];
+                        if !proc.handled.contains(&handler_idx) {
+                            proc.handled.push(handler_idx);
+                        }
+                        handler_idx
+                    }
+                    Type::Handler(handler_idx) => handler_idx,
+                    _ => panic!(),
+                };
+
                 get_handler_proc(
                     ir,
                     handler_idx,
@@ -1393,10 +1505,20 @@ fn get_proc(
                 .iter()
                 .map(|&e| {
                     let effect = ir.asys.values[e.effect];
-                    let handler_val = ir.get_in_scope(effect, scope).expect(&format!(
-                        "effect not in scope when finding call handlers for '{}' in {}",
-                        ir.parsed.idents[fun.decl.name].0, ir.ir.proc_sign[proc_idx].debug_name
-                    ));
+
+                    // TODO: this doesn't need block/loc info
+                    let handler_val = ir
+                        .get_or_implicit(
+                            effect,
+                            scope,
+                            &mut Block::default(),
+                            Ranged((), 0, 0, FileIdx(0)),
+                        )
+                        .expect(&format!(
+                            "effect not in scope when finding call handlers for '{}' in {}",
+                            ir.parsed.idents[fun.decl.name].0, ir.ir.proc_sign[proc_idx].debug_name
+                        ));
+
                     let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                         Type::NakedHandler(handler_idx) => {
                             let proc = &mut ir.ir.proc_sign[proc_idx];
@@ -1422,10 +1544,9 @@ fn get_proc(
                     .collect(),
             };
 
-            if let Some(reg_args) = reg_args {
+            if let Some((reg_args, block, loc)) = reg_args {
                 reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
-                    scope
-                        .get(ir.handlers[idx].effect)
+                    ir.get_or_implicit(ir.handlers[idx].effect, &scope, block, loc)
                         .unwrap()
                         .non_global()
                         .cloned()
@@ -1513,7 +1634,7 @@ fn get_handler_proc(
     proc_idx: ProcIdx,
     scope: &Scope,
     param_types: Box<[TypeIdx]>,
-    reg_args: Option<&mut Vec<Value>>,
+    reg_args: Option<(&mut Vec<Value>, &mut Block, Range)>,
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     let def = ir.handlers[handler_idx].definition;
@@ -1527,9 +1648,17 @@ fn get_handler_proc(
                 .iter()
                 .map(|&e| {
                     let effect = ir.asys.values[e.effect];
+
+                    // TODO: this doesn't need block/loc info
                     let handler_val = ir
-                        .get_in_scope(effect, scope)
+                        .get_or_implicit(
+                            effect,
+                            scope,
+                            &mut Block::default(),
+                            Ranged((), 0, 0, FileIdx(0)),
+                        )
                         .expect("effect not in scope when finding effect function call handlers");
+
                     let handler_idx = match ir.ir.types[handler_val.get_type(&ir.ir)] {
                         Type::NakedHandler(handler_idx) => {
                             let proc = &mut ir.ir.proc_sign[proc_idx];
@@ -1558,10 +1687,9 @@ fn get_handler_proc(
             .collect(),
     };
 
-    if let Some(reg_args) = reg_args {
+    if let Some((reg_args, block, loc)) = reg_args {
         reg_args.extend(procident.handlers.iter().filter_map(|&idx| {
-            scope
-                .get(ir.handlers[idx].effect)
+            ir.get_or_implicit(ir.handlers[idx].effect, &scope, block, loc)
                 .unwrap()
                 .non_global()
                 .cloned()
@@ -1912,7 +2040,12 @@ fn handler_type(
             ir.ir.regs[ir.ir.proc_sign[proc_idx].inputs[usize::from(p)]]
         }
         analyzer::HandlerDef::Signature => ir
-            .get_in_scope(effect, scope)
+            .get_or_implicit(
+                effect,
+                scope,
+                &mut Block::default(),
+                Ranged((), 0, 0, FileIdx(0)),
+            )
             .expect("effect not in scope when finding naked handler")
             .get_type(&ir.ir),
         analyzer::HandlerDef::Error => unreachable!(),
@@ -2084,6 +2217,8 @@ fn generate_expr(
             Ok(None)
         }
         E::Call(func, ref args) => {
+            let cexpr = ctx.expr;
+
             // get base registers
             let mut reg_args = args
                 .iter()
@@ -2106,7 +2241,11 @@ fn generate_expr(
                                 ctx.proc_idx,
                                 &ctx.scope,
                                 reg_args.iter().map(|r| r.get_type(&ir.ir)).collect(),
-                                Some(&mut reg_args),
+                                Some((
+                                    &mut reg_args,
+                                    &mut blocks[*block],
+                                    ir.parsed.exprs[cexpr].empty(),
+                                )),
                                 proc_todo,
                             );
 
@@ -2128,102 +2267,6 @@ fn generate_expr(
                             }
                             output
                         }
-                        analyzer::Type::Handler(_, _, _) => {
-                            // function of handler
-                            let handler_reg = generate_expr(
-                                ir,
-                                ctx.with_expr(handler),
-                                blocks,
-                                block,
-                                proc_todo,
-                            )?
-                            .expect("member parent does not return a value");
-
-                            let ty = &ir.ir.types[handler_reg.get_type(&ir.ir)];
-                            match ty {
-                                &Type::NakedHandler(handler_idx) | &Type::Handler(handler_idx) => {
-                                    // add naked handler to handled
-                                    if matches!(ty, Type::NakedHandler(_)) {
-                                        let proc = &mut ir.ir.proc_sign[ctx.proc_idx];
-                                        if !proc.handled.contains(&handler_idx) {
-                                            proc.handled.push(handler_idx);
-                                        }
-                                    }
-
-                                    let handler = &ir.handlers[handler_idx];
-                                    let global = handler.global;
-
-                                    // get output
-                                    let eff_fun_idx = match ir.asys.defs[val] {
-                                        Definition::EffectFunction(_, eff_fun_idx, _) => {
-                                            eff_fun_idx
-                                        }
-                                        _ => panic!(),
-                                    };
-                                    let proc_idx = get_handler_proc(
-                                        ir,
-                                        handler_idx,
-                                        eff_fun_idx,
-                                        ctx.proc_idx,
-                                        &ctx.scope,
-                                        reg_args.iter().map(|r| r.get_type(&ir.ir)).collect(),
-                                        Some(&mut reg_args),
-                                        proc_todo,
-                                    );
-                                    let output = ir.ir.proc_sign[proc_idx].output.into_result(ir);
-
-                                    // execute handler
-                                    match global {
-                                        Some(glob) => {
-                                            let next = blocks.push(BlockIdx, Block::default());
-
-                                            let v = handler_reg.value(ir, &mut blocks[*block]);
-                                            blocks[*block]
-                                                .instructions
-                                                .push(Instruction::SetScopedGlobal(glob, v, next));
-
-                                            let collect = reg_args
-                                                .into_iter()
-                                                .map(|r| r.value(ir, &mut blocks[*block]))
-                                                .collect();
-                                            blocks[*block].instructions.push(Instruction::Call(
-                                                proc_idx,
-                                                output
-                                                    .clone()
-                                                    .unwrap_or(None)
-                                                    .map(|v| v.register()),
-                                                collect,
-                                            ));
-
-                                            blocks[*block].next = Some(next);
-                                            *block = next;
-                                        }
-                                        None => {
-                                            reg_args.push(handler_reg);
-
-                                            let collect = reg_args
-                                                .into_iter()
-                                                .map(|r| r.value(ir, &mut blocks[*block]))
-                                                .collect();
-                                            blocks[*block].instructions.push(Instruction::Call(
-                                                proc_idx,
-                                                output
-                                                    .clone()
-                                                    .unwrap_or(None)
-                                                    .map(|v| v.register()),
-                                                collect,
-                                            ));
-                                        }
-                                    }
-
-                                    if ir.ir.proc_sign[proc_idx].output.is_never() {
-                                        blocks[*block].instructions.push(Instruction::Unreachable);
-                                    }
-                                    output
-                                }
-                                _ => todo!(),
-                            }
-                        }
                         _ => todo!(),
                     }
                 }
@@ -2236,7 +2279,11 @@ fn generate_expr(
                         ctx.proc_idx,
                         &ctx.scope,
                         reg_args.iter().map(|r| r.get_type(&ir.ir)).collect(),
-                        Some(&mut reg_args),
+                        Some((
+                            &mut reg_args,
+                            &mut blocks[*block],
+                            ir.parsed.exprs[cexpr].empty(),
+                        )),
                         proc_todo,
                     );
 
@@ -2740,9 +2787,11 @@ fn generate_expr(
                         Some(analyzer::HandlerDef::Handler(_, captures)) => captures
                             .iter()
                             .map(|c| {
-                                let reg = ir
-                                    .get_in_scope(c.val, &ctx.scope)
-                                    .expect("handler capture not in scope");
+                                let reg = ctx
+                                    .scope
+                                    .get(c.val)
+                                    .expect("handler capture not in scope")
+                                    .clone();
                                 if c.mutable {
                                     reg.reference(ir, &mut ctx.scope, &mut blocks[*block])
                                 } else {
@@ -3009,10 +3058,17 @@ fn generate_expr(
 
         E::Ident(id) => {
             let val = ir.asys.values[id];
-            let mut reg = ir.get_in_scope(val, &ctx.scope).expect(&format!(
-                "value '{}' not in scope in {}",
-                ir.parsed.idents[id].0, ir.ir.proc_sign[ctx.proc_idx].debug_name
-            ));
+            let mut reg = ir
+                .get_or_implicit(
+                    val,
+                    &ctx.scope,
+                    &mut blocks[*block],
+                    ir.parsed.exprs[ctx.expr].empty(),
+                )
+                .expect(&format!(
+                    "value '{}' not in scope in {}",
+                    ir.parsed.idents[id].0, ir.ir.proc_sign[ctx.proc_idx].debug_name
+                ));
             if let Type::Handler(idx) = ir.ir.types[reg.get_type(&ir.ir)] {
                 if let analyzer::Type::Handler(_, _, def) = ir.asys.types[ir.asys.exprs[ctx.expr]] {
                     if let Some(def) = def {

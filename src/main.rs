@@ -168,7 +168,7 @@ fn parse_from_filename(
 
     let preamble = core_path.join("preamble.lucu");
     let system = match target.lucu_os() {
-        LucuOS::Linux => Some(core_path.join("sys/unix")),
+        LucuOS::Linux => Some(core_path.join("sys/linux")),
         LucuOS::Windows => Some(core_path.join("sys/nt")),
         _ => None,
     };

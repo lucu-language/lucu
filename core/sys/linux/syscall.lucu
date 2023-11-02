@@ -1,5 +1,5 @@
 ##
-# system effect for unix-like targets
+# system effect for linux
 # defined for the main function
 ##
 effect sys {

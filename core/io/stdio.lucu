@@ -1,4 +1,4 @@
-import "../sys/unix"
+import "../sys/linux"
 import "../sys/nt"
 
 effect stdio {
@@ -20,16 +20,16 @@ fun printerr(s str) / stdio {
 }
 
 @capability(os = "linux")
-fun unix() stdio / unix.sys {
+fun linux() stdio / linux.sys {
 	handle stdio {
 		fun stdin() reader {
-			fun { buf -> unix.read(0, buf) }
+			fun { buf -> linux.read(0, buf) }
 		}
 		fun stdout() writer {
-			fun { buf -> unix.write(1, buf) }
+			fun { buf -> linux.write(1, buf) }
 		}
 		fun stderr() writer {
-			fun { buf -> unix.write(2, buf) }
+			fun { buf -> linux.write(2, buf) }
 		}
 	}
 }

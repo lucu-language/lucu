@@ -1,7 +1,0 @@
-import "core:sys/unix"
-
-fun main() / unix.sys {
-	unix.write(1, "reachable\n")
-	trap()
-	unix.write(2, "unreachable\n");
-}

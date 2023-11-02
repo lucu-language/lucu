@@ -8,7 +8,7 @@ use std::{
 use either::Either;
 
 use crate::{
-    error::{Error, Expected, Range, Ranged},
+    error::{Error, Expected, FileIdx, Range, Ranged},
     lexer::{Group, Token, Tokenizer},
     vecmap::{vecmap_index, VecMap},
 };
@@ -22,6 +22,12 @@ vecmap_index!(ParamIdx);
 vecmap_index!(FunIdx);
 vecmap_index!(EffIdx);
 vecmap_index!(EffFunIdx);
+
+impl Default for ExprIdx {
+    fn default() -> Self {
+        ExprIdx(0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -104,7 +110,7 @@ impl Body {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Lambda {
     pub inputs: VecMap<ParamIdx, Ident>,
     pub body: ExprIdx,
@@ -245,6 +251,9 @@ impl Default for Parsed {
         let main = packages.push(PackageIdx, Package::default());
         let system = packages.push(PackageIdx, Package::default());
 
+        let mut exprs = VecMap::new();
+        exprs.push_value(Ranged(Expression::Error, 0, 0, FileIdx(0)));
+
         Self {
             effects: VecMap::new(),
             functions: VecMap::new(),
@@ -252,7 +261,7 @@ impl Default for Parsed {
             main,
             preamble: core,
             system,
-            exprs: VecMap::new(),
+            exprs,
             types: VecMap::new(),
             idents: VecMap::new(),
         }
@@ -366,6 +375,7 @@ struct Tokens<'a> {
     peeked: Option<Option<<Tokenizer<'a> as Iterator>::Item>>,
     last: usize,
     context: &'a mut Parsed,
+    allow_lambda_args: bool,
 }
 
 impl<'a> Tokens<'a> {
@@ -502,37 +512,46 @@ impl<'a> Tokens<'a> {
         self.iter.errors.push(err);
         None
     }
+    fn lambdas<T>(&mut self, allow: bool, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+        let old = self.allow_lambda_args;
+        self.allow_lambda_args = allow;
+        let val = f(self);
+        self.allow_lambda_args = old;
+        val
+    }
     fn group_single<T>(
         &mut self,
         group: Group,
         f: impl FnOnce(&mut Self) -> Option<T>,
     ) -> Option<Ranged<T>> {
-        let open = self.expect(Token::Open(group))?;
-        match f(self) {
-            Some(t) => match self.peek() {
-                Some(c) if c.0 == Token::Close(group) => {
-                    let tok = self.next().unwrap();
-                    Some(Ranged(t, open.1, tok.2, self.iter.file))
-                }
+        self.lambdas(true, |tk| {
+            let open = tk.expect(Token::Open(group))?;
+            match f(tk) {
+                Some(t) => match tk.peek() {
+                    Some(c) if c.0 == Token::Close(group) => {
+                        let tok = tk.next().unwrap();
+                        Some(Ranged(t, open.1, tok.2, tk.iter.file))
+                    }
+                    None => {
+                        tk.iter.errors.push(Ranged(
+                            Error::UnclosedGroup(group),
+                            open.1,
+                            open.2,
+                            tk.iter.file,
+                        ));
+                        Some(Ranged(t, open.1, usize::MAX, tk.iter.file))
+                    }
+                    _ => Some(
+                        tk.skip_close(Ranged(group, open.1, open.2, tk.iter.file))
+                            .with(t),
+                    ),
+                },
                 None => {
-                    self.iter.errors.push(Ranged(
-                        Error::UnclosedGroup(group),
-                        open.1,
-                        open.2,
-                        self.iter.file,
-                    ));
-                    Some(Ranged(t, open.1, usize::MAX, self.iter.file))
+                    tk.skip_close(Ranged(group, open.1, open.2, tk.iter.file));
+                    None
                 }
-                _ => Some(
-                    self.skip_close(Ranged(group, open.1, open.2, self.iter.file))
-                        .with(t),
-                ),
-            },
-            None => {
-                self.skip_close(Ranged(group, open.1, open.2, self.iter.file));
-                None
             }
-        }
+        })
     }
     fn group(
         &mut self,
@@ -540,65 +559,67 @@ impl<'a> Tokens<'a> {
         comma_separated: bool,
         mut f: impl FnMut(&mut Self) -> Option<()>,
     ) -> Option<Ranged<()>> {
-        let open = self.expect(Token::Open(group))?;
-        Some(loop {
-            match self.peek() {
-                Some(t) if t.0 == Token::Close(group) => {
-                    let t = self.next().unwrap();
-                    break Ranged((), open.1, t.2, self.iter.file);
-                }
-                None => {
-                    self.iter.errors.push(Ranged(
-                        Error::UnclosedGroup(group),
-                        open.1,
-                        open.2,
-                        self.iter.file,
-                    ));
-                    break Ranged((), open.1, usize::MAX, self.iter.file);
-                }
-                _ => {
-                    // parse inner
-                    if f(self).is_none() {
-                        // error parsing, skip to anchor
-                        loop {
-                            match self.peek() {
-                                Some(Ranged(Token::Open(g), start, end, _)) => {
-                                    let g = *g;
-                                    let start = *start;
-                                    let end = *end;
-                                    self.next();
-                                    self.skip_close(Ranged(g, start, end, self.iter.file));
-                                }
-                                Some(Ranged(t, ..)) if t.is_anchor() => break,
-                                None => break,
-                                _ => {
-                                    self.next();
+        self.lambdas(true, |tk| {
+            let open = tk.expect(Token::Open(group))?;
+            Some(loop {
+                match tk.peek() {
+                    Some(t) if t.0 == Token::Close(group) => {
+                        let t = tk.next().unwrap();
+                        break Ranged((), open.1, t.2, tk.iter.file);
+                    }
+                    None => {
+                        tk.iter.errors.push(Ranged(
+                            Error::UnclosedGroup(group),
+                            open.1,
+                            open.2,
+                            tk.iter.file,
+                        ));
+                        break Ranged((), open.1, usize::MAX, tk.iter.file);
+                    }
+                    _ => {
+                        // parse inner
+                        if f(tk).is_none() {
+                            // error parsing, skip to anchor
+                            loop {
+                                match tk.peek() {
+                                    Some(Ranged(Token::Open(g), start, end, _)) => {
+                                        let g = *g;
+                                        let start = *start;
+                                        let end = *end;
+                                        tk.next();
+                                        tk.skip_close(Ranged(g, start, end, tk.iter.file));
+                                    }
+                                    Some(Ranged(t, ..)) if t.is_anchor() => break,
+                                    None => break,
+                                    _ => {
+                                        tk.next();
+                                    }
                                 }
                             }
                         }
-                    }
-                    // parse comma?
-                    if comma_separated {
-                        match self.peek() {
-                            // we are closing next
-                            Some(t) if t.0 == Token::Close(group) => {}
+                        // parse comma?
+                        if comma_separated {
+                            match tk.peek() {
+                                // we are closing next
+                                Some(t) if t.0 == Token::Close(group) => {}
 
-                            // else expect comma
-                            _ => match self.expect(Token::Comma) {
-                                Some(_) => {}
-                                None => {
-                                    break self.skip_close(Ranged(
-                                        group,
-                                        open.1,
-                                        open.2,
-                                        self.iter.file,
-                                    ))
-                                }
-                            },
+                                // else expect comma
+                                _ => match tk.expect(Token::Comma) {
+                                    Some(_) => {}
+                                    None => {
+                                        break tk.skip_close(Ranged(
+                                            group,
+                                            open.1,
+                                            open.2,
+                                            tk.iter.file,
+                                        ))
+                                    }
+                                },
+                            }
                         }
                     }
                 }
-            }
+            })
         })
     }
 }
@@ -656,6 +677,7 @@ pub fn parse_ast<'a>(
         peeked: None,
         last: 0,
         context: parsed,
+        allow_lambda_args: true,
     };
 
     // parse ast
@@ -1013,23 +1035,86 @@ impl Parse for Handler {
 
 impl Parse for Lambda {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        let mut inputs = VecMap::new();
+        let start = tk.pos_start();
 
-        if !matches!(tk.peek(), Some(Ranged(Token::Open(Group::Brace), ..)),) {
-            loop {
+        let mut inputs = VecMap::new();
+        let mut main = Vec::new();
+        let mut last = None;
+
+        tk.group_single(Group::Brace, |tk| {
+            if matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
                 let id = tk.ident()?;
                 let name = tk.push_ident(id);
+                if matches!(tk.peek(), Some(Ranged(Token::Comma | Token::Arrow, ..))) {
+                    // arguments
+                    inputs.push_value(name);
 
-                inputs.push_value(name);
+                    if tk.check(Token::Comma).is_some() {
+                        loop {
+                            let id = tk.ident()?;
+                            let name = tk.push_ident(id);
 
-                if tk.check(Token::Comma).is_none() {
-                    break;
+                            inputs.push_value(name);
+
+                            if tk.check(Token::Comma).is_none() {
+                                break;
+                            }
+                        }
+                    }
+
+                    tk.expect(Token::Arrow)?;
+                } else {
+                    // ident expr
+                    let expr = expression_post(
+                        tk,
+                        Ranged(Expression::Ident(name), start, tk.pos_end(), tk.iter.file),
+                        start,
+                    )?;
+                    let n = tk.push_expr(Ranged(expr, start, tk.pos_end(), tk.iter.file));
+
+                    if tk.check(Token::Semicolon).is_none() {
+                        last = Some(n);
+                        if !tk.peek_check(Token::Close(Group::Brace)) {
+                            // TODO: error
+                            return None;
+                        } else {
+                            return Some(());
+                        }
+                    } else {
+                        main.push(n);
+                    }
                 }
             }
-        }
 
-        let body = Body::parse_or_default(tk);
-        let body = tk.push_expr(body);
+            // rest of exprs
+            loop {
+                // skip semicolons
+                while tk.check(Token::Semicolon).is_some() {}
+
+                // parse expression
+                let expr = Expression::parse_or_default(tk);
+                let n = tk.push_expr(expr);
+
+                if tk.check(Token::Semicolon).is_none() {
+                    last = Some(n);
+                    if !tk.peek_check(Token::Close(Group::Brace)) {
+                        // TODO: error
+                        return None;
+                    } else {
+                        return Some(());
+                    }
+                } else {
+                    main.push(n);
+                }
+            }
+        })?;
+
+        let body = tk.push_expr(Ranged(
+            Expression::Body(Body { main, last }),
+            start,
+            tk.pos_end(),
+            tk.iter.file,
+        ));
 
         Some(Lambda { inputs, body })
     }
@@ -1038,7 +1123,7 @@ impl Parse for Lambda {
 impl Parse for Expression {
     fn parse(tk: &mut Tokens) -> Option<Self> {
         let start = tk.pos_start();
-        let mut expr = tk.ranged(|tk| match tk.peek() {
+        let expr = tk.ranged(|tk| match tk.peek() {
             // uninit
             Some(Ranged(Token::TripleDash, ..)) => {
                 tk.next();
@@ -1088,15 +1173,19 @@ impl Parse for Expression {
             Some(Ranged(Token::With, ..)) => {
                 tk.next();
 
-                let handler = Expression::parse_or_skip(tk)?;
-                let handler = tk.push_expr(handler);
-                let mut handlers = vec![handler];
-
-                while tk.check(Token::Comma).is_some() {
+                let mut handlers = Vec::new();
+                tk.lambdas(false, |tk| {
                     let handler = Expression::parse_or_skip(tk)?;
                     let handler = tk.push_expr(handler);
-                    handlers.push(handler)
-                }
+                    handlers.push(handler);
+
+                    while tk.check(Token::Comma).is_some() {
+                        let handler = Expression::parse_or_skip(tk)?;
+                        let handler = tk.push_expr(handler);
+                        handlers.push(handler);
+                    }
+                    Some(())
+                })?;
 
                 // allow for with-loop
                 let inner = if tk.peek_check(Token::Loop) {
@@ -1121,8 +1210,11 @@ impl Parse for Expression {
             Some(Ranged(Token::If, ..)) => {
                 tk.next();
 
-                let condition = Expression::parse_or_default(tk);
-                let condition = tk.push_expr(condition);
+                let condition = tk.lambdas(false, |tk| {
+                    let condition = Expression::parse_or_default(tk);
+                    let condition = tk.push_expr(condition);
+                    Some(condition)
+                })?;
 
                 let yes = Body::parse_or_default(tk);
                 let yes = tk.push_expr(yes);
@@ -1293,85 +1385,106 @@ impl Parse for Expression {
         })?;
 
         // post-fixes
-        loop {
-            match tk.peek() {
-                // member
-                Some(Ranged(Token::Dot, ..)) => {
-                    tk.next();
-                    let member = tk.ident()?;
-                    expr = Ranged(
-                        Expression::Member(tk.push_expr(expr), tk.push_ident(member)),
-                        start,
-                        tk.pos_end(),
-                        tk.iter.file,
-                    );
-                }
+        expression_post(tk, expr, start)
+    }
+}
 
-                // call
-                Some(Ranged(Token::Open(Group::Paren), ..)) => {
-                    let mut args = Vec::new();
-                    tk.group(Group::Paren, true, |tk| {
-                        let expr = Expression::parse_or_default(tk);
-                        args.push(tk.push_expr(expr));
-                        Some(())
-                    })?;
-                    expr = Ranged(
-                        Expression::Call(tk.push_expr(expr), args),
-                        start,
-                        tk.pos_end(),
-                        tk.iter.file,
-                    );
-                }
-
-                // index
-                Some(Ranged(Token::Open(Group::Bracket), ..)) => {
-                    let index = tk
-                        .group_single(Group::Bracket, |tk| {
-                            let expr = Expression::parse_or_default(tk);
-                            Some(tk.push_expr(expr))
-                        })?
-                        .0;
-
-                    expr = Ranged(
-                        Expression::BinOp(tk.push_expr(expr), BinOp::Index, index),
-                        start,
-                        tk.pos_end(),
-                        tk.iter.file,
-                    )
-                }
-
-                // post-increment
-                Some(Ranged(Token::DoublePlus, ..)) => {
-                    tk.next();
-                    expr = Ranged(
-                        Expression::UnOp(tk.push_expr(expr), UnOp::PostIncrement),
-                        start,
-                        tk.pos_end(),
-                        tk.iter.file,
-                    )
-                }
-
-                // binary ops
-                // TODO: operator precedence
-                Some(Ranged(t, ..)) => match BinOp::from_token(t) {
-                    Some(op) => {
-                        tk.next();
-
-                        let right = Expression::parse_or_default(tk);
-                        let right = tk.push_expr(right);
-
-                        expr = Ranged(
-                            Expression::BinOp(tk.push_expr(expr), op, right),
-                            start,
-                            tk.pos_end(),
-                            tk.iter.file,
-                        )
-                    }
-                    None => break Some(expr.0),
-                },
-
-                _ => break Some(expr.0),
+fn expression_post(
+    tk: &mut Tokens<'_>,
+    mut expr: Ranged<Expression>,
+    start: usize,
+) -> Option<Expression> {
+    loop {
+        match tk.peek() {
+            // member
+            Some(Ranged(Token::Dot, ..)) => {
+                tk.next();
+                let member = tk.ident()?;
+                expr = Ranged(
+                    Expression::Member(tk.push_expr(expr), tk.push_ident(member)),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                );
             }
+
+            // call
+            Some(Ranged(Token::Open(Group::Paren), ..)) => {
+                let mut args = Vec::new();
+
+                // regular arguments
+                tk.group(Group::Paren, true, |tk| {
+                    let expr = Expression::parse_or_default(tk);
+                    args.push(tk.push_expr(expr));
+                    Some(())
+                })?;
+
+                // lambda arguments
+                if tk.allow_lambda_args {
+                    while tk.peek_check(Token::Open(Group::Brace)) {
+                        let lambda = Lambda::parse_or_default(tk);
+                        let handler = lambda.map(Handler::Lambda);
+                        let expr = handler.map(Expression::Handler);
+                        args.push(tk.push_expr(expr));
+                    }
+                }
+
+                expr = Ranged(
+                    Expression::Call(tk.push_expr(expr), args),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                );
+            }
+
+            // index
+            Some(Ranged(Token::Open(Group::Bracket), ..)) => {
+                let index = tk
+                    .group_single(Group::Bracket, |tk| {
+                        let expr = Expression::parse_or_default(tk);
+                        Some(tk.push_expr(expr))
+                    })?
+                    .0;
+
+                expr = Ranged(
+                    Expression::BinOp(tk.push_expr(expr), BinOp::Index, index),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                )
+            }
+
+            // post-increment
+            Some(Ranged(Token::DoublePlus, ..)) => {
+                tk.next();
+                expr = Ranged(
+                    Expression::UnOp(tk.push_expr(expr), UnOp::PostIncrement),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                )
+            }
+
+            // binary ops
+            // TODO: operator precedence
+            Some(Ranged(t, ..)) => match BinOp::from_token(t) {
+                Some(op) => {
+                    tk.next();
+
+                    let right = Expression::parse_or_default(tk);
+                    let right = tk.push_expr(right);
+
+                    expr = Ranged(
+                        Expression::BinOp(tk.push_expr(expr), op, right),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    )
+                }
+                None => break Some(expr.0),
+            },
+
+            _ => break Some(expr.0),
         }
     }
 }
@@ -1392,13 +1505,12 @@ impl Parse for Body {
             if tk.check(Token::Semicolon).is_none() {
                 last = Some(n);
                 if !tk.peek_check(Token::Close(Group::Brace)) {
+                    // TODO: error
                     None
                 } else {
                     Some(())
                 }
             } else {
-                // skip semicolons
-                while tk.check(Token::Semicolon).is_some() {}
                 main.push(n);
                 Some(())
             }

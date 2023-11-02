@@ -7,12 +7,6 @@ effect stdio {
 	fun stderr() writer
 }
 
-fun wait() / stdio {
-	with stdin() {
-		skip_line();
-	}
-}
-
 fun print(s str) / stdio {
 	with stdout() {
 		write(cast s);
@@ -29,19 +23,13 @@ fun printerr(s str) / stdio {
 fun unix() stdio / unix.sys {
 	handle stdio {
 		fun stdin() reader {
-			fun buf {
-				unix.read(0, buf)
-			}
+			fun { buf -> unix.read(0, buf) }
 		}
 		fun stdout() writer {
-			fun buf {
-				unix.write(1, buf)
-			}
+			fun { buf -> unix.write(1, buf) }
 		}
 		fun stderr() writer {
-			fun buf {
-				unix.write(2, buf)
-			}
+			fun { buf -> unix.write(2, buf) }
 		}
 	}
 }
@@ -51,21 +39,15 @@ fun nt() stdio / nt.sys {
 	handle stdio {
 		fun stdin() reader {
 			let stdin = nt.stdio()[0]
-			fun buf {
-				nt.read(stdin, buf)
-			}
+			fun { buf -> nt.read(stdin, buf) }
 		}
 		fun stdout() writer {
 			let stdout = nt.stdio()[1]
-			fun buf {
-				nt.write(stdout, buf)
-			}
+			fun { buf -> nt.write(stdout, buf) }
 		}
 		fun stderr() writer {
 			let stderr = nt.stdio()[2]
-			fun buf {
-				nt.write(stderr, buf)
-			}
+			fun { buf -> nt.write(stderr, buf) }
 		}
 	}
 }

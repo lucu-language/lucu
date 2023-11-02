@@ -23,22 +23,26 @@ fun inc(n usize) usize {
 }
 
 fun print_state(state []u8) / debug {
-	for(0, 16, fun y {
-		for(0, 16, fun x {
+	for(0, 16) {
+		y ->
+		for (0, 16) {
+			x ->
 			let cell = index(x, y)
 			if state[cell] == 0 {
 				putstr("😔")
 			} else {
 				putstr("🥺")
 			}
-		})
+		}
 		putstr("\n")
-	})
+	}
 }
 
 fun next_state(old []u8, mut new []u8) {
-	for(0, 16, fun y {
-		for(0, 16, fun x {
+	for(0, 16) {
+		y ->
+		for(0, 16) {
+			x ->
 			mut neighbors = 0
 			if old[index(dec(x), dec(y))] > 0 {
 				neighbors++
@@ -79,8 +83,8 @@ fun next_state(old []u8, mut new []u8) {
 			} else {
 				new[cell] = 0
 			}
-		})
-	})
+		}
+	}
 }
 
 fun main() / debug {

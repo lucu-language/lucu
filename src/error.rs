@@ -549,7 +549,7 @@ impl Errors {
                     Error::NestedHandlers =>
                         "effect handlers may not escape other effect handlers".into(),
                     Error::TryReturnsHandler =>
-                        "effect handlers may not escape try-with blocks".into(),
+                        "effect handlers may not escape try/with expressions".into(),
                     Error::ExpectedArray(ref found) =>
                         format!("expected an array type, found {}", found),
                     Error::NotEnoughInfo => format!("cannot resolve type: type annotations needed"),

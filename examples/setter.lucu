@@ -14,9 +14,7 @@ fun main() / debug {
 	mut num = 69
 	putint(num)
 
-	let setter set = fun n {
-		num = n
-	}
+	let setter set = fun { n -> num = n }
 
 	try set(420) with setter
 	putint(num)

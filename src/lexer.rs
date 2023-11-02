@@ -32,6 +32,7 @@ pub enum Token {
     Dash,
     DoubleDash,
     TripleDash,
+    Arrow,
     Caret,
     Asterisk,
     Plus,
@@ -84,6 +85,7 @@ impl fmt::Display for Token {
                 Token::Dash => "'-'".into(),
                 Token::DoubleDash => "'--'".into(),
                 Token::TripleDash => "'---'".into(),
+                Token::Arrow => "'->'".into(),
                 Token::Caret => "'^'".into(),
                 Token::Asterisk => "'*'".into(),
                 Token::Plus => "'+'".into(),
@@ -302,6 +304,10 @@ impl<'a> Iterator for Tokenizer<'a> {
                         }
                         _ => Token::DoubleDash,
                     }
+                }
+                Some(&'>') => {
+                    self.next_char();
+                    Token::Arrow
                 }
                 _ => Token::Dash,
             },

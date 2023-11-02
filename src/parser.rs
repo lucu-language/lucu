@@ -785,14 +785,6 @@ impl Parse for Type {
                 tk.next();
                 Some(Type::Never)
             }
-            Some(Ranged(Token::Const, ..)) => {
-                tk.next();
-
-                let ty = Type::parse_or_default(tk);
-                let ty = tk.push_type(ty);
-
-                Some(Type::Const(ty))
-            }
             Some(Ranged(Token::Caret, ..)) => {
                 tk.next();
 
@@ -817,8 +809,21 @@ impl Parse for Type {
                     }
                 });
 
+                let const_start = tk.pos_start();
+                let is_const = tk.check(Token::Const).is_some();
+
                 let ty = Type::parse_or_default(tk);
                 let ty = tk.push_type(ty);
+                let ty = if is_const {
+                    tk.push_type(Ranged(
+                        Type::Const(ty),
+                        const_start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    ))
+                } else {
+                    ty
+                };
 
                 match num {
                     Some(Ranged(num, ..)) => match num {

@@ -135,7 +135,7 @@ fun len(slice []u8) usize {
 
 ##
 # effect to get the location of the call in the source code
-# has a internally defined global handler
+# has an internally defined global handler
 # when used directly, it returns the location of the call to &source_location
 # when used as an effect parameter inside a function, it returns the location of the caller
 ##

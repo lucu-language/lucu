@@ -473,7 +473,12 @@ impl<'a> IRContext<'a> {
                         let src = self.next_reg(TYPE_STR_SLICE);
                         block.instructions.push(Instruction::InitString(
                             src,
-                            format!("{}:{}:{}", self.files[loc.3].name, start.line, start.column),
+                            format!(
+                                "{}:{}:{}",
+                                self.files[loc.3].name,
+                                start.line + 1,
+                                start.column + 1
+                            ),
                         ));
                         let handler_ty = self.insert_type(Type::NakedHandler(idx));
                         let handler = self.next_reg(handler_ty);

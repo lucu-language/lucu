@@ -1,4 +1,4 @@
-@foreign(link = "xcb", prefix = "xcb_", handler = uptr)
+@foreign(prefix = "xcb_", handler = uptr)
 effect conn {
 	# TODO: cint, GetAtomNameCookie
 	fun get_atom_name(atom int) int
@@ -10,9 +10,13 @@ effect conn {
 	fun disconnect()
 }
 
-@capability
-@foreign(link = "xcb", prefix = "xcb_")
+@foreign(prefix = "xcb_")
 effect lib {
 	# TODO: cstring, ^cint
 	fun connect(displayname uptr, screenp uptr) conn
+}
+
+@capability
+fun load() lib / loader {
+	load_into_effect("xcb")
 }

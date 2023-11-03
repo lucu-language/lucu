@@ -1003,11 +1003,15 @@ fn analyze_expr(
             UnOp::PostIncrement => analyze_assignable(ctx, scope, uexpr, expr, errors),
             UnOp::Reference => {
                 let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, false, errors);
-                let ptr = match ctx.asys.types[expected_ty] {
-                    Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty.0)),
-                    _ => ctx.asys.insert_type(Type::Pointer(ty.0)),
-                };
-                (ptr, ty.1)
+                if ty.0 == TYPE_UNKNOWN {
+                    (TYPE_UNKNOWN, false)
+                } else {
+                    let ptr = match ctx.asys.types[expected_ty] {
+                        Type::Pointer(_) => ctx.asys.insert_type(Type::Pointer(ty.0)),
+                        _ => ctx.asys.insert_type(Type::Pointer(ty.0)),
+                    };
+                    (ptr, ty.1)
+                }
             }
             UnOp::Cast => {
                 let ty = analyze_expr(ctx, scope, uexpr, TYPE_UNKNOWN, false, errors);
@@ -1115,9 +1119,28 @@ fn analyze_expr(
                     (expected_ty, mutable || !elem_ty.is_view(ctx))
                 }
                 _ => {
-                    // TODO: default type (const array?)
-                    errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
-                    (TYPE_UNKNOWN, false)
+                    let mut iter = elems.iter().copied();
+                    match iter.next() {
+                        Some(first) => {
+                            let (elem_ty, mut mutable) =
+                                analyze_expr(ctx, scope, first, TYPE_UNKNOWN, false, errors);
+                            for expr in iter {
+                                mutable &= analyze_expr(ctx, scope, expr, elem_ty, false, errors).1;
+                            }
+                            if elem_ty == TYPE_UNKNOWN {
+                                (TYPE_UNKNOWN, false)
+                            } else {
+                                let arr_ty = ctx
+                                    .asys
+                                    .insert_type(Type::ConstArray(elems.len() as u64, elem_ty));
+                                (arr_ty, mutable || !elem_ty.is_view(ctx))
+                            }
+                        }
+                        None => {
+                            errors.push(ctx.parsed.exprs[expr].with(Error::NotEnoughInfo));
+                            (TYPE_UNKNOWN, false)
+                        }
+                    }
                 }
             }
         }

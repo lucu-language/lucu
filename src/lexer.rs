@@ -473,9 +473,6 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
             _ => {
                 self.prev_unfinished = false;
-
-                self.errors
-                    .push(Ranged(Error::UnknownSymbol, pos, self.pos, self.file));
                 Token::UnknownSymbol
             }
         };

@@ -1163,17 +1163,6 @@ pub fn generate_ir(
         {
             let val = asys.values[eff.name];
 
-            // get linked library
-            if let Some(val) = attr
-                .settings
-                .iter()
-                .find(|&&(name, _)| ctx.idents[name].0.eq("link"))
-            {
-                if let AttributeValue::String(ref lib) = val.1 {
-                    ir.ir.links.insert(lib.0.clone());
-                }
-            }
-
             // get handler type
             let ty = attr
                 .settings
@@ -1204,21 +1193,8 @@ pub fn generate_ir(
                 captures: ty.into_iter().collect(),
                 break_ty: TYPE_NEVER,
             });
-            let reg = ir.next_handler_reg(handler);
             let handler_ty = ir.insert_type(Type::Handler(handler));
             foreign.insert(val, handler);
-
-            // is capability?
-            if eff
-                .attributes
-                .iter()
-                .any(|a| ctx.idents[a.name].0.eq("capability"))
-            {
-                if ty.is_some() {
-                    panic!("foreign effect with handler type wants to be a capability");
-                }
-                capabilities.insert(val, reg);
-            }
 
             // get prefix
             let prefix = attr

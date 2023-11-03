@@ -1,5 +1,5 @@
-@capability
-@foreign(link = "c")
+@foreign
 effect string {
+	# TODO: cstring
 	fun strlen(s ^u8) usize
 }

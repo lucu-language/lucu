@@ -1,5 +1,4 @@
-@capability
-@foreign(link = "c")
+@foreign
 effect time {
 	# TODO: maybe ptr
 	# TODO: opaque time type

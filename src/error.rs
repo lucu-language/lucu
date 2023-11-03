@@ -35,7 +35,6 @@ pub type Range = Ranged<()>;
 #[allow(dead_code)]
 pub enum Error {
     // lexer
-    UnknownSymbol,
     UnknownEscape,
     UnclosedString,
     IntTooLarge(u64),
@@ -433,8 +432,6 @@ impl Errors {
             print!(
                 "{}",
                 match err.0 {
-                    Error::UnknownSymbol =>
-                        format!("unknown symbol {}", highlight(0, str, color, true)),
                     Error::UnclosedString => "unclosed string".into(),
                     Error::UnknownEscape => format!(
                         "unknown escape sequence '{}'",

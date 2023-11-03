@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
+use crate::parser::AttributeValue;
 use crate::Target;
 use crate::{
     error::{Error, Errors, Ranged},
@@ -109,12 +110,12 @@ impl TypeIdx {
         match val.0 == usize::MAX {
             true => TYPE_UNKNOWN,
             false => match ctx.asys.defs[val] {
-                Definition::Parameter(_, _, _, t) => t,
+                Definition::Parameter(_, _, t) => t,
                 Definition::Variable(_, _, t) => t,
-                Definition::EffectFunction(_, _, _) => {
+                Definition::EffectFunction(_, _, _, _) => {
                     ctx.asys.insert_type(Type::FunctionLiteral(val))
                 }
-                Definition::Function(_, _) => ctx.asys.insert_type(Type::FunctionLiteral(val)),
+                Definition::Function(_, _, _) => ctx.asys.insert_type(Type::FunctionLiteral(val)),
 
                 Definition::BuiltinType(_) => TYPE_UNKNOWN,
                 Definition::Effect(_) => TYPE_UNKNOWN,
@@ -126,11 +127,11 @@ impl TypeIdx {
 
 #[derive(Debug, Clone)]
 pub enum Definition {
-    Parameter(Val, bool, ParamIdx, TypeIdx), // parameter index in function
-    Variable(bool, ExprIdx, TypeIdx),        // variable defined at expr
-    Effect(EffIdx),                          // effect index in ast
-    EffectFunction(EffIdx, EffFunIdx, TypeIdx), // effect value, function index in effect
-    Function(FunIdx, TypeIdx),               // function index in ast
+    Parameter(bool, Ident, TypeIdx),  // parameter index in function
+    Variable(bool, ExprIdx, TypeIdx), // variable defined at expr
+    Effect(EffIdx),                   // effect index in ast
+    EffectFunction(EffIdx, EffFunIdx, Vec<TypeIdx>, TypeIdx), // effect value, function index in effect
+    Function(FunIdx, Vec<TypeIdx>, TypeIdx),                  // function index in ast
 
     BuiltinType(TypeIdx), // builtin type
     Package(PackageIdx),  // package
@@ -254,21 +255,12 @@ impl<'a> Scope<'a> {
 impl Val {
     fn definition_range(self, ctx: &AsysContext) -> Option<Ranged<()>> {
         match ctx.asys.defs[self] {
-            Definition::Parameter(f, _, p, _) => match ctx.asys.defs[f] {
-                Definition::EffectFunction(e, f, _) => Some(
-                    ctx.parsed.idents[ctx.parsed.effects[e].functions[f].sign.inputs[p].name]
-                        .empty(),
-                ),
-                Definition::Function(f, _) => Some(
-                    ctx.parsed.idents[ctx.parsed.functions[f].decl.sign.inputs[p].name].empty(),
-                ),
-                _ => None,
-            },
+            Definition::Parameter(_, name, _) => Some(ctx.parsed.idents[name].empty()),
             Definition::Effect(e) => Some(ctx.parsed.idents[ctx.parsed.effects[e].name].empty()),
-            Definition::EffectFunction(e, f, _) => {
+            Definition::EffectFunction(e, f, _, _) => {
                 Some(ctx.parsed.idents[ctx.parsed.effects[e].functions[f].name].empty())
             }
-            Definition::Function(f, _) => {
+            Definition::Function(f, _, _) => {
                 Some(ctx.parsed.idents[ctx.parsed.functions[f].decl.name].empty())
             }
             Definition::Variable(_, e, _) => match ctx.parsed.exprs[e].0 {
@@ -305,7 +297,7 @@ fn analyze_assignable(
             let val = ctx.asys.values[id];
             if val.0 != usize::MAX {
                 match ctx.asys.defs[val] {
-                    Definition::Parameter(_, true, _, _) => ty,
+                    Definition::Parameter(true, _, _) => ty,
                     Definition::Variable(true, _, _) => ty,
                     _ => {
                         errors.push(
@@ -361,7 +353,7 @@ fn capture_ident(
     let val = ctx.asys.values[id];
     if val.0 != usize::MAX {
         match ctx.asys.defs[val] {
-            Definition::EffectFunction(e, _, _) => {
+            Definition::EffectFunction(e, _, _, _) => {
                 let e = ctx.asys.values[ctx.parsed.effects[e].name];
                 if Some(e) != effect && scope.scoped_effects.contains(&e) {
                     add_capture(
@@ -373,7 +365,7 @@ fn capture_ident(
                     );
                 }
             }
-            Definition::Function(fun, _) => {
+            Definition::Function(fun, _, _) => {
                 let effects = ctx.parsed.functions[fun]
                     .decl
                     .sign
@@ -393,7 +385,7 @@ fn capture_ident(
                     }
                 }
             }
-            Definition::Parameter(_, mutable, _, _) => {
+            Definition::Parameter(mutable, _, _) => {
                 if scope.get(&ctx.parsed.idents[id].0) == Some(val) {
                     add_capture(captures, Capture { val, mutable });
                 }
@@ -493,7 +485,7 @@ fn analyze_expr(
 
                     // analyze signature
                     let (params, out) = match ctx.asys.defs[effectfun] {
-                        Definition::EffectFunction(eff, fun, out) => {
+                        Definition::EffectFunction(eff, fun, _, out) => {
                             let params = &ctx.parsed.effects[eff].functions[fun].sign.inputs;
                             (params, out)
                         }
@@ -504,19 +496,18 @@ fn analyze_expr(
                         Cow::Borrowed(_) => {
                             // TODO: check if this matches effectfun
                             analyze_return(ctx, scope, decl.sign.output, errors);
-                            let val = ctx.asys.values[decl.name];
-                            analyze_sign(ctx, &scope, val, &decl.sign, errors);
+                            analyze_sign(ctx, &scope, &decl.sign, errors);
                         }
                         Cow::Owned(_) => {
                             // set param types
                             for (i, param) in decl.sign.inputs.iter(ParamIdx) {
                                 let ty = match ctx.asys.defs[ctx.asys.values[params[i].name]] {
-                                    Definition::Parameter(_, _, _, ty) => ty,
+                                    Definition::Parameter(_, _, ty) => ty,
                                     _ => unreachable!(),
                                 };
                                 ctx.asys.push_val(
                                     param.name,
-                                    Definition::Parameter(effectfun, param.mutable, i, ty),
+                                    Definition::Parameter(param.mutable, param.name, ty),
                                 );
                             }
                         }
@@ -589,7 +580,7 @@ fn analyze_expr(
                         ctx.asys.values[ident] = val;
                         let ty = TypeIdx::from_val(ctx, val);
                         let mutable = match ctx.asys.defs[val] {
-                            Definition::Parameter(_, true, _, _) => true,
+                            Definition::Parameter(true, _, _) => true,
                             Definition::Variable(true, _, _) => true,
                             _ => false,
                         };
@@ -649,7 +640,7 @@ fn analyze_expr(
             // TODO: error on effect mismatch
             let (params, return_type) = match fun {
                 Some(fun) => match ctx.asys.defs[fun] {
-                    Definition::Function(fun_idx, return_type) => {
+                    Definition::Function(fun_idx, _, return_type) => {
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
                         (
                             Some(
@@ -671,7 +662,7 @@ fn analyze_expr(
                             return_type,
                         )
                     }
-                    Definition::EffectFunction(eff_idx, fun_idx, return_type) => {
+                    Definition::EffectFunction(eff_idx, fun_idx, _, return_type) => {
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
                         (
                             Some(
@@ -1311,14 +1302,15 @@ fn analyze_type(
 fn analyze_sign(
     ctx: &mut AsysContext,
     scope: &Scope,
-    val: Val,
     func: &FunSign,
     errors: &mut Errors,
-) {
+) -> Vec<TypeIdx> {
     // put effects in scope
     for &effect in func.effects.iter() {
         analyze_effect(ctx, effect, scope, errors);
     }
+
+    let mut params = Vec::new();
 
     // put args in scope
     for (i, param) in func.inputs.iter(ParamIdx) {
@@ -1332,9 +1324,14 @@ fn analyze_sign(
             }
             _ => ty,
         };
-        ctx.asys
-            .push_val(param.name, Definition::Parameter(val, param.mutable, i, ty));
+        params.push(ty);
+        ctx.asys.push_val(
+            param.name,
+            Definition::Parameter(param.mutable, param.name, ty),
+        );
     }
+
+    params
 }
 
 fn scope_sign(ctx: &mut AsysContext, scope: &mut Scope, func: &FunSign) {
@@ -1511,13 +1508,14 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                     pkg: idx,
                 };
                 let return_type = analyze_return(&mut ctx, &scope, decl.sign.output, errors);
-                let val = ctx
-                    .asys
-                    .push_val(decl.name, Definition::EffectFunction(i, fi, return_type));
+                let params = analyze_sign(&mut ctx, &scope, &decl.sign, errors);
+                let val = ctx.asys.push_val(
+                    decl.name,
+                    Definition::EffectFunction(i, fi, params, return_type),
+                );
                 ctx.packages[idx]
                     .funs
                     .insert(parsed.idents[decl.name].0.clone(), val);
-                analyze_sign(&mut ctx, &scope, val, &decl.sign, errors);
 
                 // check capability
                 if let Some(attr) = decl
@@ -1539,10 +1537,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                         }
                     };
 
-                    let allowed = !attr
-                        .settings
-                        .iter()
-                        .any(|s| ctx.parsed.idents[s.0].0.eq("os") && !s.1 .0.eq(os));
+                    let allowed = !attr.settings.iter().any(|s| {
+                        ctx.parsed.idents[s.0].0.eq("os")
+                            && match s.1 {
+                                AttributeValue::String(ref s) => !s.0.eq(os),
+                                AttributeValue::Type(_) => true,
+                            }
+                    });
                     if allowed {
                         // TODO: error on duplicates
                         ctx.asys.capabilities.insert(effect, val);
@@ -1567,13 +1568,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                 pkg: idx,
             };
             let return_type = analyze_return(&mut ctx, &scope, fun.decl.sign.output, errors);
+            let params = analyze_sign(&mut ctx, &scope, &fun.decl.sign, errors);
             let val = ctx
                 .asys
-                .push_val(fun.decl.name, Definition::Function(i, return_type));
+                .push_val(fun.decl.name, Definition::Function(i, params, return_type));
             ctx.packages[idx]
                 .funs
                 .insert(parsed.idents[fun.decl.name].0.clone(), val);
-            analyze_sign(&mut ctx, &scope, val, &fun.decl.sign, errors);
 
             // check if main
             if parsed.idents[fun.decl.name].0 == "main" {
@@ -1601,10 +1602,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                     }
                 };
 
-                let allowed = !attr
-                    .settings
-                    .iter()
-                    .any(|s| ctx.parsed.idents[s.0].0.eq("os") && !s.1 .0.eq(os));
+                let allowed = !attr.settings.iter().any(|s| {
+                    ctx.parsed.idents[s.0].0.eq("os")
+                        && match s.1 {
+                            AttributeValue::String(ref s) => !s.0.eq(os),
+                            AttributeValue::Type(_) => true,
+                        }
+                });
                 if allowed {
                     // TODO: error on duplicates
                     ctx.asys.capabilities.insert(effect, val);
@@ -1729,7 +1733,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
             scope.scoped_effects = &scoped;
 
             let expected = match ctx.asys.defs[val] {
-                Definition::Function(_, return_type) => return_type,
+                Definition::Function(_, _, return_type) => return_type,
                 _ => unreachable!(),
             };
             analyze_expr(&mut ctx, &mut scope, fun.body, expected, false, errors).0;

@@ -1,0 +1,8 @@
+import "vendor:c"
+import "vendor:xcb"
+
+fun main() / debug c.stdio xcb.lib {
+	with xcb.connect(0, 0) {
+		xcb.disconnect()
+	}
+}

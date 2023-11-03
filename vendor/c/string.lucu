@@ -1,0 +1,5 @@
+@capability
+@foreign(link = "c")
+effect string {
+	fun strlen(s ^u8) usize
+}

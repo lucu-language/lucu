@@ -1,0 +1,7 @@
+@capability
+@foreign(link = "c")
+effect time {
+	# TODO: maybe ptr
+	# TODO: opaque time type
+	fun time(t ^int) int
+}

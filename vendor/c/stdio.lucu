@@ -1,0 +1,6 @@
+@capability
+@foreign(link = "c")
+effect stdio {
+	# TODO: cstring, cint
+	fun puts(s ^u8) int
+}

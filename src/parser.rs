@@ -204,9 +204,15 @@ pub struct FunDecl {
 }
 
 #[derive(Debug, Clone)]
+pub enum AttributeValue {
+    String(Ranged<String>),
+    Type(TypeIdx),
+}
+
+#[derive(Debug, Clone)]
 pub struct Attribute {
     pub name: Ident,
-    pub settings: Vec<(Ident, Ranged<String>)>,
+    pub settings: Vec<(Ident, AttributeValue)>,
 }
 
 #[derive(Debug)]
@@ -219,6 +225,7 @@ pub struct Function {
 pub struct Effect {
     pub name: Ident,
     pub functions: VecMap<EffFunIdx, FunDecl>,
+    pub attributes: Vec<Attribute>,
 }
 
 #[derive(Default)]
@@ -377,6 +384,7 @@ struct Tokens<'a> {
     last: usize,
     context: &'a mut Parsed,
     allow_lambda_args: bool,
+    attributes: Option<Vec<Attribute>>,
 }
 
 impl<'a> Tokens<'a> {
@@ -679,6 +687,7 @@ pub fn parse_ast<'a>(
         last: 0,
         context: parsed,
         allow_lambda_args: true,
+        attributes: None,
     };
 
     // parse ast
@@ -753,11 +762,16 @@ pub fn parse_ast<'a>(
             }
 
             // function
-            Some(Ranged(Token::Fun | Token::At, ..)) => {
+            Some(Ranged(Token::Fun, ..)) => {
                 if let Some(Ranged(function, ..)) = Function::parse_or_skip(&mut tk) {
                     let fun = tk.context.functions.push(FunIdx, function);
                     tk.context.packages[idx].functions.push(fun);
                 }
+            }
+
+            // attrs
+            Some(Ranged(Token::At, ..)) => {
+                tk.attributes = Vec::<Attribute>::parse_or_skip(&mut tk).map(|a| a.0);
             }
 
             // ignore semicolons
@@ -921,36 +935,13 @@ impl Parse for FunSign {
 
 impl Parse for FunDecl {
     fn parse(tk: &mut Tokens) -> Option<Self> {
-        let mut attrs = Vec::new();
-        while tk.check(Token::At).is_some() {
-            let name = tk.ident()?;
-            let name = tk.push_ident(name);
-            let mut settings = Vec::new();
-
-            if tk.peek_check(Token::Open(Group::Paren)) {
-                tk.group(Group::Paren, true, |tk| {
-                    let name = tk.ident()?;
-                    let name = tk.push_ident(name);
-
-                    tk.expect(Token::Equals)?;
-
-                    let val = tk.string()?;
-
-                    settings.push((name, val));
-                    Some(())
-                })?;
-            }
-
-            attrs.push(Attribute { name, settings })
-        }
-
         tk.expect(Token::Fun)?;
         let name = tk.ident()?;
 
         let decl = FunDecl {
             name: tk.push_ident(name),
             sign: FunSign::parse(tk)?,
-            attributes: attrs,
+            attributes: tk.attributes.take().unwrap_or(Vec::new()),
         };
 
         Some(decl)
@@ -965,6 +956,7 @@ impl Parse for Effect {
         let mut effect = Effect {
             name: tk.push_ident(name),
             functions: VecMap::new(),
+            attributes: tk.attributes.take().unwrap_or(Vec::new()),
         };
 
         tk.group(Group::Brace, false, |tk| {
@@ -972,6 +964,7 @@ impl Parse for Effect {
             while tk.check(Token::Semicolon).is_some() {}
 
             // parse function
+            tk.attributes = Vec::<Attribute>::parse_or_skip(tk).map(|a| a.0);
             let f = FunDecl::parse_or_skip(tk)?.0;
             effect.functions.push_value(f);
 
@@ -982,6 +975,39 @@ impl Parse for Effect {
         })?;
 
         Some(effect)
+    }
+}
+
+impl Parse for Vec<Attribute> {
+    fn parse(tk: &mut Tokens) -> Option<Self> {
+        let mut attrs = Vec::new();
+        while tk.check(Token::At).is_some() {
+            let name = tk.ident()?;
+            let name = tk.push_ident(name);
+            let mut settings = Vec::new();
+
+            if tk.peek_check(Token::Open(Group::Paren)) {
+                tk.group(Group::Paren, true, |tk| {
+                    let name = tk.ident()?;
+                    let name = tk.push_ident(name);
+
+                    tk.expect(Token::Equals)?;
+
+                    let val = if matches!(tk.peek(), Some(Ranged(Token::String(_), ..))) {
+                        AttributeValue::String(tk.string()?)
+                    } else {
+                        let ty = Type::parse_or_default(tk);
+                        AttributeValue::Type(tk.push_type(ty))
+                    };
+
+                    settings.push((name, val));
+                    Some(())
+                })?;
+            }
+
+            attrs.push(Attribute { name, settings })
+        }
+        Some(attrs)
     }
 }
 
@@ -1090,6 +1116,8 @@ impl Parse for Lambda {
                             return Some(());
                         }
                     } else {
+                        // skip semicolons
+                        while tk.check(Token::Semicolon).is_some() {}
                         main.push(n);
                     }
                 }
@@ -1113,6 +1141,8 @@ impl Parse for Lambda {
                         return Some(());
                     }
                 } else {
+                    // skip semicolons
+                    while tk.check(Token::Semicolon).is_some() {}
                     main.push(n);
                 }
             }
@@ -1564,6 +1594,8 @@ impl Parse for Body {
                     Some(())
                 }
             } else {
+                // skip semicolons
+                while tk.check(Token::Semicolon).is_some() {}
                 main.push(n);
                 Some(())
             }

@@ -1,0 +1,18 @@
+@foreign(link = "xcb", prefix = "xcb_", handler = uptr)
+effect conn {
+	# TODO: cint, GetAtomNameCookie
+	fun get_atom_name(atom int) int
+	# TODO: GetAtomNameCookie, ^^GenericError, ^GetAtomNameReply
+	fun get_atom_name_reply(cookie int, e uptr) uptr
+	# TODO: ^GetAtomNameReply, cstring
+	fun get_atom_name_name(r uptr) ^u8
+
+	fun disconnect()
+}
+
+@capability
+@foreign(link = "xcb", prefix = "xcb_")
+effect lib {
+	# TODO: cstring, ^cint
+	fun connect(displayname uptr, screenp uptr) conn
+}

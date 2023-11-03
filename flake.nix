@@ -19,7 +19,7 @@
         ncurses
       ];
       LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";
-      LUCU_CORE = ./core;
+      LUCU_CORE = ./.;
     };
 
     devShell = pkgs: with pkgs; mkShell {
@@ -36,6 +36,8 @@
         libxml2
         zlib
         ncurses
+
+        xorg.libxcb
       ];
 
       LLVM_SYS_150_PREFIX = "${llvmPackages_15.libllvm.dev}";

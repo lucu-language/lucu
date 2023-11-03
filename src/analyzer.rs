@@ -79,6 +79,7 @@ impl TypeIdx {
             Type::FunctionLiteral(_) => "<unknown>".into(),
             Type::PackageLiteral(_) => "<unknown>".into(),
             Type::Int => "int".into(),
+            Type::UInt => "uint".into(),
             Type::USize => "usize".into(),
             Type::UPtr => "uptr".into(),
             Type::U8 => "u8".into(),
@@ -173,6 +174,7 @@ pub enum Type {
     Slice(TypeIdx),
 
     Int,
+    UInt,
     USize,
     UPtr,
     U8,
@@ -186,7 +188,10 @@ pub enum Type {
 
 impl Type {
     pub fn is_int(&self) -> bool {
-        matches!(self, Type::Int | Type::USize | Type::UPtr | Type::U8)
+        matches!(
+            self,
+            Type::Int | Type::UInt | Type::USize | Type::UPtr | Type::U8
+        )
     }
     pub fn is_ptr(&self) -> bool {
         matches!(self, Type::Pointer(_))
@@ -1354,6 +1359,7 @@ const TYPE_BOOL: TypeIdx = TypeIdx(5);
 const TYPE_USIZE: TypeIdx = TypeIdx(6);
 const TYPE_UPTR: TypeIdx = TypeIdx(7);
 const TYPE_U8: TypeIdx = TypeIdx(8);
+const TYPE_UINT: TypeIdx = TypeIdx(9);
 
 pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysis {
     let os = target.lucu_os();
@@ -1378,6 +1384,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
     asys.types.insert(TypeIdx, Type::USize);
     asys.types.insert(TypeIdx, Type::UPtr);
     asys.types.insert(TypeIdx, Type::U8);
+    asys.types.insert(TypeIdx, Type::UInt);
 
     let str = asys.defs.push(Val, Definition::BuiltinType(TYPE_STR));
     let int = asys.defs.push(Val, Definition::BuiltinType(TYPE_INT));
@@ -1385,11 +1392,13 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
     let uptr = asys.defs.push(Val, Definition::BuiltinType(TYPE_UPTR));
     let u8 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U8));
     let bool = asys.defs.push(Val, Definition::BuiltinType(TYPE_BOOL));
+    let uint = asys.defs.push(Val, Definition::BuiltinType(TYPE_UINT));
 
     let mut packages = VecMap::filled(parsed.packages.len(), Package::default());
     let vals = &mut packages[parsed.preamble].values;
     vals.insert("str".into(), str);
     vals.insert("int".into(), int);
+    vals.insert("uint".into(), uint);
     vals.insert("usize".into(), usize);
     vals.insert("uptr".into(), uptr);
     vals.insert("u8".into(), u8);

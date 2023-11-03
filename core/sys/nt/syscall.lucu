@@ -4,28 +4,32 @@
 # so linking with ntdll.dll is much more preferred
 ##
 effect sys {
-	fun syscall2(nr uptr, a0 uptr, a1 uptr) uptr
-	fun syscall9(nr uptr, a0 uptr, a1 uptr, a2 uptr, a3 uptr, a4 uptr, a5 uptr, a6 uptr, a7 uptr, a8 uptr) uptr
+	fun syscall2(nr int, a0 int, a1 int) int
+	fun syscall9(nr int, a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int) int
 
 	# stdin, stdout, stderr
 	# read from RTL_USER_PROCESS_PARAMETERS from PEB
-	fun stdio() [3]uptr
+	fun stdio() [3]int
 }
 
-fun exit(code uptr) ! / sys {
-	let process uptr = 18446744073709551615 # process -1
+fun ptr_to_reg(ptr uptr) int {
+	cast ptr
+}
+
+fun exit(code int) ! / sys {
+	let process int = 18446744073709551615 # process -1
 	syscall2(44, process, code)
 	unreachable()
 }
 
-fun read(fd uptr, mut buf []u8) usize / sys {
-	mut io_status_block [2]uptr = ---
-	syscall9(6, fd, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+fun read(fd int, mut buf []u8) usize / sys {
+	mut io_status_block [2]int = ---
+	syscall9(6, fd, 0, 0, 0, ptr_to_reg(cast &io_status_block), ptr_to_reg(cast &buf[0]), cast len(buf), 0, 0)
 	cast io_status_block[1]
 }
 
-fun write(fd uptr, buf []u8) usize / sys {
-	mut io_status_block [2]uptr = ---
-	syscall9(8, fd, 0, 0, 0, cast &io_status_block, cast &buf[0], cast len(buf), 0, 0)
+fun write(fd int, buf []u8) usize / sys {
+	mut io_status_block [2]int = ---
+	syscall9(8, fd, 0, 0, 0, ptr_to_reg(cast &io_status_block), ptr_to_reg(cast &buf[0]), cast len(buf), 0, 0)
 	cast io_status_block[1]
 }

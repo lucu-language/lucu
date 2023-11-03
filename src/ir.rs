@@ -199,7 +199,7 @@ impl TypeIdx {
     fn from_type(ir: &mut IRContext, typ: analyzer::TypeIdx) -> TypeIdx {
         use analyzer::Type as T;
         match ir.asys.types[typ] {
-            T::Int => ir.insert_type(Type::Int),
+            T::Int | T::UInt => ir.insert_type(Type::Int),
             T::USize => ir.insert_type(Type::IntSize),
             T::UPtr => ir.insert_type(Type::IntPtr),
             T::U8 => ir.insert_type(Type::Int8),

@@ -14,7 +14,7 @@ effect strbuf {
 
 # implementation of these effects using a constant sized string array
 fun array_buffer() strbuf {
-	mut array [16]const str = ---
+	mut array [16]const str = 0
 	mut size  usize         = 0
 	handle strbuf {
 		fun push(elem str) usize {

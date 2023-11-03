@@ -294,7 +294,7 @@ fn analyze_assignable(
     parent: ExprIdx,
     errors: &mut Errors,
 ) -> (TypeIdx, bool) {
-    match ctx.parsed.exprs[expr].0 {
+    let (found_ty, mutable) = match ctx.parsed.exprs[expr].0 {
         Expression::Ident(id) => {
             let ty = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, false, errors);
             let val = ctx.asys.values[id];
@@ -330,10 +330,7 @@ fn analyze_assignable(
                 }
             };
 
-            match ctx.asys.types[elem] {
-                Type::Const(ty) => (ty, false),
-                _ => (elem, array.1),
-            }
+            (elem, array.1)
         }
         Expression::Error => (TYPE_UNKNOWN, false),
         _ => {
@@ -341,6 +338,11 @@ fn analyze_assignable(
             errors.push(ctx.parsed.exprs[parent].with(Error::AssignExpression));
             (TYPE_UNKNOWN, false)
         }
+    };
+
+    match ctx.asys.types[found_ty] {
+        Type::Const(inner) => (inner, false),
+        _ => (found_ty, mutable),
     }
 }
 
@@ -975,10 +977,7 @@ fn analyze_expr(
                     }
                 };
 
-                match ctx.asys.types[elem] {
-                    Type::Const(ty) => (ty, false),
-                    _ => (elem, array.1),
-                }
+                (elem, array.1)
             }
             _ => {
                 let ret_ty = match op {
@@ -1143,6 +1142,11 @@ fn analyze_expr(
             }
         }
         Expression::Error => (TYPE_UNKNOWN, false),
+    };
+
+    let (found_ty, mutable) = match ctx.asys.types[found_ty] {
+        Type::Const(inner) => (inner, false),
+        _ => (found_ty, mutable),
     };
 
     let typ = match (expected_ty, found_ty.to_base(ctx)) {

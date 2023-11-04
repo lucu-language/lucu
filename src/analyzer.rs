@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::parser::AttributeValue;
 use crate::Target;
 use crate::{
     error::{Error, Errors, Ranged},
     parser::{
-        self, BinOp, EffFunIdx, EffIdx, EffectIdent, ExprIdx, Expression, FunIdx, FunSign, Ident,
+        self, BinOp, EffFunIdx, EffIdx, EffectIdent, ExprIdx, Expression, FunIdx, Ident,
         PackageIdx, ParamIdx, Parsed, UnOp,
     },
     vecmap::{vecmap_index, VecMap, VecSet},
@@ -20,18 +21,141 @@ impl TypeIdx {
     fn matches(self, other: TypeIdx) -> bool {
         self == TYPE_UNKNOWN || other == TYPE_UNKNOWN || self == other
     }
-    fn is_view(self, ctx: &AsysContext) -> bool {
+    fn prevent_mut_downcast(self, ctx: &AsysContext) -> bool {
         match ctx.asys.types[self] {
-            Type::Pointer(_) | Type::Slice(_) | Type::Str => true,
-            Type::ConstArray(_, ty) | Type::Const(ty) if ty.is_view(ctx) => true,
+            Type::Pointer(_) | Type::Slice(_) | Type::Str | Type::Generic(_) => true,
+            Type::ConstArray(_, ty) if ty.prevent_mut_downcast(ctx) => true,
+            Type::Const(_) => false,
             _ => false,
         }
     }
-    fn is_zero_view(self, ctx: &AsysContext) -> bool {
+    fn prevent_uninit(self, ctx: &AsysContext) -> bool {
         match ctx.asys.types[self] {
-            Type::Pointer(_) => true,
-            Type::ConstArray(_, ty) | Type::Const(ty) if ty.is_zero_view(ctx) => true,
+            Type::Pointer(_) | Type::Slice(_) | Type::Str | Type::Generic(_) => true,
+            Type::ConstArray(_, ty) | Type::Const(ty) if ty.prevent_uninit(ctx) => true,
             _ => false,
+        }
+    }
+    fn prevent_zeroinit(self, ctx: &AsysContext) -> bool {
+        match ctx.asys.types[self] {
+            Type::Pointer(_) | Type::Generic(_) => true,
+            Type::ConstArray(_, ty) | Type::Const(ty) if ty.prevent_zeroinit(ctx) => true,
+            _ => false,
+        }
+    }
+    fn resolve_generics(
+        self,
+        ctx: &mut AsysContext,
+        tys: &HashMap<Val, TypeIdx>,
+        effs: &HashMap<Val, Val>,
+    ) -> Option<TypeIdx> {
+        Some(match ctx.asys.types[self] {
+            Type::FunctionLiteral(_) => self,
+            Type::PackageLiteral(_) => self,
+            Type::Handler(effect, fail, _) => {
+                let effect = match ctx.asys.defs[effect] {
+                    Definition::Effect(_) => effect,
+                    Definition::Generic(_) => effs.get(&effect).copied()?,
+                    _ => unreachable!(),
+                };
+
+                let fail = fail.resolve_generics(ctx, tys, effs)?;
+                ctx.asys.insert_type(Type::Handler(effect, fail, None))
+            }
+            Type::Pointer(inner) => {
+                let inner = inner.resolve_generics(ctx, tys, effs)?;
+                ctx.asys.insert_type(Type::Pointer(inner))
+            }
+            Type::Const(inner) => {
+                let inner = inner.resolve_generics(ctx, tys, effs)?;
+                ctx.asys.insert_type(Type::Const(inner))
+            }
+            Type::ConstArray(size, inner) => {
+                let inner = inner.resolve_generics(ctx, tys, effs)?;
+                ctx.asys.insert_type(Type::ConstArray(size, inner))
+            }
+            Type::Slice(inner) => {
+                let inner = inner.resolve_generics(ctx, tys, effs)?;
+                ctx.asys.insert_type(Type::Slice(inner))
+            }
+            Type::Generic(val) => tys.get(&val).copied()?,
+            Type::Int => self,
+            Type::UInt => self,
+            Type::USize => self,
+            Type::UPtr => self,
+            Type::U8 => self,
+            Type::Str => self,
+            Type::Bool => self,
+            Type::None => self,
+            Type::Never => self,
+            Type::Unknown => self,
+        })
+    }
+    fn match_generics(
+        self,
+        real: TypeIdx,
+        ctx: &mut AsysContext,
+        tys: &mut HashMap<Val, TypeIdx>,
+        effs: &mut HashMap<Val, Val>,
+    ) {
+        // TODO: errors
+        match (&ctx.asys.types[self], &ctx.asys.types[real]) {
+            (Type::Unknown, _) => {}
+            (_, Type::Unknown) => {}
+
+            (&Type::Handler(effect, inner, _), &Type::Handler(reffect, rinner, _)) => {
+                inner.match_generics(rinner, ctx, tys, effs);
+                match ctx.asys.defs[effect] {
+                    Definition::Effect(_) => {
+                        if effect != reffect {
+                            // TODO: error
+                            panic!("type mismatch")
+                        }
+                    }
+                    Definition::Generic(_) => {
+                        match effs.get(&effect).copied() {
+                            Some(effect) => {
+                                if effect != reffect {
+                                    // TODO: error
+                                    panic!("type mismatch")
+                                }
+                            }
+                            None => {
+                                effs.insert(effect, reffect);
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            (&Type::Pointer(inner), &Type::Pointer(rinner))
+            | (&Type::Const(inner), &Type::Const(rinner))
+            | (&Type::Slice(inner), &Type::Slice(rinner)) => {
+                inner.match_generics(rinner, ctx, tys, effs);
+            }
+
+            (&Type::ConstArray(size, inner), &Type::ConstArray(rsize, rinner)) => {
+                inner.match_generics(rinner, ctx, tys, effs);
+                if size != rsize {
+                    // TODO: error
+                    panic!("type mismatch")
+                }
+            }
+
+            (&Type::Generic(val), _) => match tys.get(&val).copied() {
+                Some(ty) => ty.match_generics(real, ctx, tys, effs),
+                None => {
+                    tys.insert(val, real);
+                }
+            },
+
+            (a, b) => {
+                if self != real {
+                    // TODO: error
+                    panic!("type mismatch {:?} {:?}", a, b)
+                }
+            }
         }
     }
     fn join(self, other: TypeIdx) -> Option<TypeIdx> {
@@ -86,6 +210,10 @@ impl TypeIdx {
             Type::U8 => "u8".into(),
             Type::Str => "str".into(),
             Type::Bool => "bool".into(),
+            Type::Generic(name) => match ctx.asys.defs[name] {
+                Definition::Generic(name) => ctx.parsed.idents[name].0.clone(),
+                _ => unreachable!(),
+            },
             Type::Handler(val, yeets, _) => yeets.display_handler(val, ctx),
             Type::None => "()".into(),
             Type::Never => "!".into(),
@@ -101,6 +229,7 @@ impl TypeIdx {
             usize::MAX => "<unknown>".into(),
             _ => match ctx.asys.defs[handler] {
                 Definition::Effect(e) => ctx.parsed.idents[ctx.parsed.effects[e].name].0.clone(),
+                Definition::Generic(name) => ctx.parsed.idents[name].0.clone(),
                 _ => "<unknown>".into(),
             },
         };
@@ -112,13 +241,14 @@ impl TypeIdx {
             false => match ctx.asys.defs[val] {
                 Definition::Parameter(_, _, t) => t,
                 Definition::Variable(_, _, t) => t,
-                Definition::EffectFunction(_, _, _, _) => {
+                Definition::EffectFunction(_, _, _) => {
                     ctx.asys.insert_type(Type::FunctionLiteral(val))
                 }
-                Definition::Function(_, _, _) => ctx.asys.insert_type(Type::FunctionLiteral(val)),
+                Definition::Function(_, _) => ctx.asys.insert_type(Type::FunctionLiteral(val)),
 
                 Definition::BuiltinType(_) => TYPE_UNKNOWN,
                 Definition::Effect(_) => TYPE_UNKNOWN,
+                Definition::Generic(_) => TYPE_UNKNOWN,
                 Definition::Package(pkg) => ctx.asys.insert_type(Type::PackageLiteral(pkg)),
             },
         }
@@ -126,15 +256,23 @@ impl TypeIdx {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunSign {
+    pub params: Vec<TypeIdx>,
+    pub return_type: TypeIdx,
+    pub generics: HashMap<String, Val>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Definition {
     Parameter(bool, Ident, TypeIdx),  // parameter index in function
     Variable(bool, ExprIdx, TypeIdx), // variable defined at expr
     Effect(EffIdx),                   // effect index in ast
-    EffectFunction(EffIdx, EffFunIdx, Vec<TypeIdx>, TypeIdx), // effect value, function index in effect
-    Function(FunIdx, Vec<TypeIdx>, TypeIdx),                  // function index in ast
+    EffectFunction(EffIdx, EffFunIdx, Rc<FunSign>), // effect value, function index in effect
+    Function(FunIdx, Rc<FunSign>),    // function index in ast
 
     BuiltinType(TypeIdx), // builtin type
     Package(PackageIdx),  // package
+    Generic(Ident),       // function generic
 }
 
 #[derive(Debug)]
@@ -173,6 +311,7 @@ pub enum Type {
     Const(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
+    Generic(Val),
 
     Int,
     UInt,
@@ -256,11 +395,13 @@ impl Val {
     fn definition_range(self, ctx: &AsysContext) -> Option<Ranged<()>> {
         match ctx.asys.defs[self] {
             Definition::Parameter(_, name, _) => Some(ctx.parsed.idents[name].empty()),
+            Definition::Generic(name) => Some(ctx.parsed.idents[name].empty()),
+
             Definition::Effect(e) => Some(ctx.parsed.idents[ctx.parsed.effects[e].name].empty()),
-            Definition::EffectFunction(e, f, _, _) => {
+            Definition::EffectFunction(e, f, _) => {
                 Some(ctx.parsed.idents[ctx.parsed.effects[e].functions[f].name].empty())
             }
-            Definition::Function(f, _, _) => {
+            Definition::Function(f, _) => {
                 Some(ctx.parsed.idents[ctx.parsed.functions[f].decl.name].empty())
             }
             Definition::Variable(_, e, _) => match ctx.parsed.exprs[e].0 {
@@ -353,7 +494,7 @@ fn capture_ident(
     let val = ctx.asys.values[id];
     if val.0 != usize::MAX {
         match ctx.asys.defs[val] {
-            Definition::EffectFunction(e, _, _, _) => {
+            Definition::EffectFunction(e, _, _) => {
                 let e = ctx.asys.values[ctx.parsed.effects[e].name];
                 if Some(e) != effect && scope.scoped_effects.contains(&e) {
                     add_capture(
@@ -365,7 +506,7 @@ fn capture_ident(
                     );
                 }
             }
-            Definition::Function(fun, _, _) => {
+            Definition::Function(fun, _) => {
                 let effects = ctx.parsed.functions[fun]
                     .decl
                     .sign
@@ -408,6 +549,7 @@ fn capture_ident(
             }
             Definition::BuiltinType(_) => {}
             Definition::Package(_) => {}
+            Definition::Generic(_) => {}
         }
     }
 }
@@ -432,7 +574,7 @@ fn analyze_expr(
                         parser::FailType::Never => TYPE_NEVER,
                         parser::FailType::None => TYPE_NONE,
                         parser::FailType::Some(t) => {
-                            let yeet_type = analyze_type(ctx, scope, t, errors);
+                            let yeet_type = analyze_type(ctx, scope, t, errors, None);
 
                             if matches!(ctx.asys.types[yeet_type], Type::Handler(_, _, _)) {
                                 errors.push(ctx.parsed.types[t].with(Error::NestedHandlers));
@@ -463,6 +605,10 @@ fn analyze_expr(
             if let Some(effect) = effect {
                 let ast_effect = match ctx.asys.defs[effect] {
                     Definition::Effect(idx) => &ctx.parsed.effects[idx],
+                    Definition::Generic(_) => {
+                        // TODO: error
+                        panic!("trying to define generic handler")
+                    }
                     _ => unreachable!(),
                 };
 
@@ -485,18 +631,19 @@ fn analyze_expr(
 
                     // analyze signature
                     let (params, out) = match ctx.asys.defs[effectfun] {
-                        Definition::EffectFunction(eff, fun, _, out) => {
+                        Definition::EffectFunction(eff, fun, ref sign) => {
                             let params = &ctx.parsed.effects[eff].functions[fun].sign.inputs;
-                            (params, out)
+                            (params, sign.return_type)
                         }
                         _ => unreachable!(),
                     };
 
+                    let mut generics = HashMap::new();
                     match decl {
                         Cow::Borrowed(_) => {
                             // TODO: check if this matches effectfun
-                            analyze_return(ctx, scope, decl.sign.output, errors);
-                            analyze_sign(ctx, &scope, &decl.sign, errors);
+                            analyze_return(ctx, scope, decl.sign.output, errors, &mut generics);
+                            analyze_sign(ctx, &scope, &decl.sign, errors, &mut generics);
                         }
                         Cow::Owned(_) => {
                             // set param types
@@ -515,7 +662,7 @@ fn analyze_expr(
 
                     // analyze body
                     let mut child = scope.child();
-                    scope_sign(ctx, &mut child, &decl.sign);
+                    scope_sign(ctx, &mut child, &decl.sign, &generics);
 
                     let mut scoped = scope.scoped_effects.clone();
                     scoped.extend(decl.sign.effects.iter().copied().filter_map(|i| {
@@ -640,7 +787,8 @@ fn analyze_expr(
             // TODO: error on effect mismatch
             let (params, return_type) = match fun {
                 Some(fun) => match ctx.asys.defs[fun] {
-                    Definition::Function(fun_idx, _, return_type) => {
+                    Definition::Function(fun_idx, ref sign) => {
+                        let out = sign.return_type;
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
                         (
                             Some(
@@ -659,10 +807,11 @@ fn analyze_expr(
                                     })
                                     .collect::<Vec<_>>(),
                             ),
-                            return_type,
+                            out,
                         )
                     }
-                    Definition::EffectFunction(eff_idx, fun_idx, _, return_type) => {
+                    Definition::EffectFunction(eff_idx, fun_idx, ref sign) => {
+                        let out = sign.return_type;
                         ctx.asys.exprs[cexpr] = ctx.asys.insert_type(Type::FunctionLiteral(fun));
                         (
                             Some(
@@ -680,7 +829,7 @@ fn analyze_expr(
                                     })
                                     .collect::<Vec<_>>(),
                             ),
-                            return_type,
+                            out,
                         )
                     }
                     _ => {
@@ -692,6 +841,57 @@ fn analyze_expr(
                 },
                 None => (None, TYPE_UNKNOWN),
             };
+
+            // analyze arguments
+            let mut tys = HashMap::new();
+            let mut effs = HashMap::new();
+
+            if let Some(params) = params {
+                if params.len() != exprs.len() {
+                    errors.push(
+                        ctx.parsed.exprs[expr]
+                            .with(Error::ParameterMismatch(params.len(), exprs.len())),
+                    );
+                }
+                for (expr, (param_ty, mutable, range)) in
+                    exprs.iter().copied().zip(params.into_iter())
+                {
+                    let param = match param_ty.resolve_generics(ctx, &tys, &effs) {
+                        Some(expected) => analyze_expr(ctx, scope, expr, expected, false, errors),
+                        None => {
+                            let param = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, false, errors);
+                            if param.0 != TYPE_NEVER {
+                                param_ty.match_generics(param.0, ctx, &mut tys, &mut effs);
+                            }
+                            param
+                        }
+                    };
+                    if mutable && !param.1 && param.0.prevent_mut_downcast(ctx) {
+                        errors.push(
+                            ctx.parsed.exprs[expr].with(Error::MoveMutDowncast(None, Some(range))),
+                        )
+                    }
+                }
+            }
+            let return_type = if return_type == TYPE_NEVER {
+                if expected_ty == TYPE_UNKNOWN {
+                    TYPE_NEVER
+                } else {
+                    expected_ty
+                }
+            } else if expected_ty == TYPE_UNKNOWN {
+                match return_type.resolve_generics(ctx, &tys, &effs) {
+                    Some(ty) => ty,
+                    None => {
+                        errors.push(ctx.parsed.exprs[cexpr].with(Error::NotEnoughInfo));
+                        TYPE_UNKNOWN
+                    }
+                }
+            } else {
+                return_type.match_generics(expected_ty, ctx, &mut tys, &mut effs);
+                expected_ty
+            };
+
             // handle return type as handler
             // this way different calls always return different handlers according to the type checker
             // leading to a type mismatch
@@ -703,27 +903,7 @@ fn analyze_expr(
                 }
                 _ => return_type,
             };
-            // analyze arguments
-            if let Some(params) = params {
-                if params.len() != exprs.len() {
-                    errors.push(
-                        ctx.parsed.exprs[expr]
-                            .with(Error::ParameterMismatch(params.len(), exprs.len())),
-                    );
-                }
-                for (expr, (expected, mutable, range)) in
-                    exprs.iter().copied().zip(params.into_iter())
-                {
-                    let param = analyze_expr(ctx, scope, expr, expected, false, errors);
-                    if mutable && !param.1 && param.0.is_view(ctx) {
-                        errors.push(
-                            ctx.parsed.exprs[expr]
-                                .with(Error::MoveImmutableView(None, Some(range))),
-                        )
-                    }
-                }
-            }
-            (return_type, !return_type.is_view(ctx))
+            (return_type, !return_type.prevent_mut_downcast(ctx))
         }
         Expression::TryWith(expr, handler) => {
             let expected_return = expected_ty;
@@ -748,6 +928,7 @@ fn analyze_expr(
                 if let Some((eff_val, handler_break)) = handler_type {
                     let effect = match ctx.asys.defs[eff_val] {
                         Definition::Effect(idx) => ctx.parsed.effects[idx].name,
+                        Definition::Generic(name) => name,
                         _ => panic!(),
                     };
 
@@ -814,8 +995,10 @@ fn analyze_expr(
                     },
                 }
             } else {
-                // TODO: allow parent expr to be effect of package
-                Some(analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, false, errors).0)
+                let (_ty, _mutable) = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, false, errors);
+                // TODO: currently no values can have children
+                // when structures exist, add them here
+                None
             };
 
             if let Some(handler) = handler {
@@ -873,32 +1056,6 @@ fn analyze_expr(
                             }
                         }
                     }
-                    Type::Handler(effect, _, _) => {
-                        let name = &ctx.parsed.idents[field].0;
-                        let fun = match ctx.asys.defs[effect] {
-                            Definition::Effect(idx) => ctx.parsed.effects[idx]
-                                .functions
-                                .values()
-                                .find(|decl| ctx.parsed.idents[decl.name].0.eq(name))
-                                .map(|decl| ctx.asys.values[decl.name]),
-                            _ => None,
-                        };
-                        match fun {
-                            Some(fun) => {
-                                ctx.asys.values[field] = fun;
-                                (ctx.asys.insert_type(Type::FunctionLiteral(fun)), false)
-                            }
-                            None => {
-                                errors.push(ctx.parsed.idents[field].with(
-                                    Error::UnknownEffectFun(
-                                        effect.definition_range(ctx),
-                                        Some(ctx.parsed.exprs[expr].empty()),
-                                    ),
-                                ));
-                                (TYPE_UNKNOWN, false)
-                            }
-                        }
-                    }
                     Type::Unknown => (TYPE_UNKNOWN, false),
                     _ => {
                         // TODO: type definition
@@ -929,8 +1086,8 @@ fn analyze_expr(
             BinOp::Assign => {
                 let left_type = analyze_assignable(ctx, scope, left, expr, errors);
                 let right_type = analyze_expr(ctx, scope, right, left_type.0, false, errors);
-                if left_type.1 && !right_type.1 && right_type.0.is_view(ctx) {
-                    errors.push(ctx.parsed.exprs[right].with(Error::AssignImmutableView(None)));
+                if left_type.1 && !right_type.1 && right_type.0.prevent_mut_downcast(ctx) {
+                    errors.push(ctx.parsed.exprs[right].with(Error::AssignMutDowncast(None)));
                 }
                 (TYPE_NONE, false)
             }
@@ -1033,12 +1190,12 @@ fn analyze_expr(
         }
         Expression::Let(mutable, name, ty, rexpr) => {
             let val_type = match ty {
-                Some(ty) => analyze_type(ctx, scope, ty, errors),
+                Some(ty) => analyze_type(ctx, scope, ty, errors, None),
                 None => TYPE_UNKNOWN,
             };
             let val_type = analyze_expr(ctx, scope, rexpr, val_type, false, errors);
-            if mutable && !val_type.1 && val_type.0.is_view(ctx) {
-                errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignImmutableView(None)));
+            if mutable && !val_type.1 && val_type.0.prevent_mut_downcast(ctx) {
+                errors.push(ctx.parsed.exprs[rexpr].with(Error::AssignMutDowncast(None)));
             }
 
             let val = ctx
@@ -1073,9 +1230,10 @@ fn analyze_expr(
         Expression::Int(n) => {
             if n == 0 && expected_ty != TYPE_UNKNOWN {
                 // zero init
-                if expected_ty.is_zero_view(ctx) {
+                if expected_ty.prevent_zeroinit(ctx) {
                     errors.push(
-                        ctx.parsed.exprs[expr].with(Error::ZeroinitView(expected_ty.display(ctx))),
+                        ctx.parsed.exprs[expr]
+                            .with(Error::ZeroinitUnallowed(expected_ty.display(ctx))),
                     );
                     (TYPE_UNKNOWN, false)
                 } else if expected_ty == TYPE_NEVER {
@@ -1109,14 +1267,14 @@ fn analyze_expr(
                     for expr in elems.iter().copied() {
                         mutable &= analyze_expr(ctx, scope, expr, elem_ty, false, errors).1;
                     }
-                    (expected_ty, mutable || !elem_ty.is_view(ctx))
+                    (expected_ty, mutable || !elem_ty.prevent_mut_downcast(ctx))
                 }
                 Type::Slice(elem_ty) => {
                     let mut mutable = true;
                     for expr in elems.iter().copied() {
                         mutable &= analyze_expr(ctx, scope, expr, elem_ty, false, errors).1;
                     }
-                    (expected_ty, mutable || !elem_ty.is_view(ctx))
+                    (expected_ty, mutable || !elem_ty.prevent_mut_downcast(ctx))
                 }
                 _ => {
                     let mut iter = elems.iter().copied();
@@ -1133,7 +1291,7 @@ fn analyze_expr(
                                 let arr_ty = ctx
                                     .asys
                                     .insert_type(Type::ConstArray(elems.len() as u64, elem_ty));
-                                (arr_ty, mutable || !elem_ty.is_view(ctx))
+                                (arr_ty, mutable || !elem_ty.prevent_mut_downcast(ctx))
                             }
                         }
                         None => {
@@ -1145,9 +1303,10 @@ fn analyze_expr(
             }
         }
         Expression::Uninit => {
-            if expected_ty.is_view(ctx) {
+            if expected_ty.prevent_uninit(ctx) {
                 errors.push(
-                    ctx.parsed.exprs[expr].with(Error::UndefinedView(expected_ty.display(ctx))),
+                    ctx.parsed.exprs[expr]
+                        .with(Error::UndefinedUnallowed(expected_ty.display(ctx))),
                 );
                 (TYPE_UNKNOWN, false)
             } else if expected_ty == TYPE_NEVER {
@@ -1232,9 +1391,10 @@ fn analyze_return(
     scope: &Scope,
     ty: Option<parser::TypeIdx>,
     errors: &mut Errors,
+    generics: &mut HashMap<String, Val>,
 ) -> TypeIdx {
     match ty {
-        Some(ty) => analyze_type(ctx, scope, ty, errors),
+        Some(ty) => analyze_type(ctx, scope, ty, errors, Some(generics)),
         None => TYPE_NONE,
     }
 }
@@ -1244,6 +1404,7 @@ fn analyze_type(
     scope: &Scope,
     ty: parser::TypeIdx,
     errors: &mut Errors,
+    mut generics: Option<&mut HashMap<String, Val>>,
 ) -> TypeIdx {
     use parser::Type as T;
     let (id, fail) = match ctx.parsed.types[ty].0 {
@@ -1252,20 +1413,75 @@ fn analyze_type(
         T::Path(id) => (id, parser::FailType::Never),
         T::Handler(id, fail) => (id, fail),
         T::Pointer(ty) => {
-            let inner = analyze_type(ctx, scope, ty, errors);
+            let inner = analyze_type(ctx, scope, ty, errors, generics);
             return ctx.asys.insert_type(Type::Pointer(inner));
         }
         T::ConstArray(size, ty) => {
-            let inner = analyze_type(ctx, scope, ty, errors);
+            let inner = analyze_type(ctx, scope, ty, errors, generics);
             return ctx.asys.insert_type(Type::ConstArray(size, inner));
         }
         T::Slice(ty) => {
-            let inner = analyze_type(ctx, scope, ty, errors);
+            let inner = analyze_type(ctx, scope, ty, errors, generics);
             return ctx.asys.insert_type(Type::Slice(inner));
         }
         T::Const(ty) => {
-            let inner = analyze_type(ctx, scope, ty, errors);
+            let inner = analyze_type(ctx, scope, ty, errors, generics);
             return ctx.asys.insert_type(Type::Const(inner));
+        }
+        T::Generic(id) => {
+            let name = &ctx.parsed.idents[id].0;
+            match generics
+                .as_deref()
+                .and_then(|gen| gen.get(name).copied())
+                .or_else(|| scope.get(name))
+            {
+                Some(val) => {
+                    ctx.asys.values[id] = val;
+                    return ctx.asys.insert_type(Type::Generic(val));
+                }
+                None => match generics {
+                    Some(gen) => {
+                        let val = ctx.asys.push_val(id, Definition::Generic(id));
+                        gen.insert(name.clone(), val);
+                        return ctx.asys.insert_type(Type::Generic(val));
+                    }
+                    None => {
+                        panic!("unknown generic");
+                    }
+                },
+            }
+        }
+        T::GenericHandler(id, fail) => {
+            let name = &ctx.parsed.idents[id].0;
+            let val = match generics
+                .as_deref()
+                .and_then(|gen| gen.get(name).copied())
+                .or_else(|| scope.get(name))
+            {
+                Some(val) => {
+                    ctx.asys.values[id] = val;
+                    val
+                }
+                None => match generics.as_deref_mut() {
+                    Some(gen) => {
+                        let val = ctx.asys.push_val(id, Definition::Generic(id));
+                        gen.insert(name.clone(), val);
+                        val
+                    }
+                    None => {
+                        panic!("unknown generic");
+                    }
+                },
+            };
+            let fail = match fail {
+                parser::FailType::Never => TYPE_NEVER,
+                parser::FailType::None => TYPE_NONE,
+                parser::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
+            };
+            if matches!(ctx.asys.types[fail], Type::Handler(_, _, _)) {
+                errors.push(ctx.parsed.types[ty].with(Error::NestedHandlers))
+            }
+            return ctx.asys.insert_type(Type::Handler(val, fail, None));
         }
     };
 
@@ -1303,7 +1519,7 @@ fn analyze_type(
                 let fail = match fail {
                     parser::FailType::Never => TYPE_NEVER,
                     parser::FailType::None => TYPE_NONE,
-                    parser::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors),
+                    parser::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
                 };
                 if matches!(ctx.asys.types[fail], Type::Handler(_, _, _)) {
                     errors.push(ctx.parsed.types[ty].with(Error::NestedHandlers))
@@ -1325,8 +1541,9 @@ fn analyze_type(
 fn analyze_sign(
     ctx: &mut AsysContext,
     scope: &Scope,
-    func: &FunSign,
+    func: &parser::FunSign,
     errors: &mut Errors,
+    generics: &mut HashMap<String, Val>,
 ) -> Vec<TypeIdx> {
     // put effects in scope
     for &effect in func.effects.iter() {
@@ -1338,7 +1555,7 @@ fn analyze_sign(
     // put args in scope
     for (i, param) in func.inputs.iter(ParamIdx) {
         // resolve type
-        let ty = analyze_type(ctx, scope, param.ty, errors);
+        let ty = analyze_type(ctx, scope, param.ty, errors, Some(generics));
         let ty = match ctx.asys.types[ty] {
             Type::Handler(effect, yeet, _) => {
                 let handler = ctx.asys.handlers.push(HandlerIdx, HandlerDef::Param(i));
@@ -1357,7 +1574,12 @@ fn analyze_sign(
     params
 }
 
-fn scope_sign(ctx: &mut AsysContext, scope: &mut Scope, func: &FunSign) {
+fn scope_sign(
+    ctx: &AsysContext,
+    scope: &mut Scope,
+    func: &parser::FunSign,
+    generics: &HashMap<String, Val>,
+) {
     // put args in scope
     for param in func.inputs.values() {
         // add parameter to scope
@@ -1366,6 +1588,11 @@ fn scope_sign(ctx: &mut AsysContext, scope: &mut Scope, func: &FunSign) {
             ctx.asys.values[param.name],
         );
     }
+
+    // put generics in scope
+    scope
+        .values
+        .extend(generics.iter().map(|(k, v)| (k.clone(), v.clone())));
 }
 
 pub const TYPE_NONE: TypeIdx = TypeIdx(1);
@@ -1530,11 +1757,23 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                     scoped_effects: &HashSet::new(),
                     pkg: idx,
                 };
-                let return_type = analyze_return(&mut ctx, &scope, decl.sign.output, errors);
-                let params = analyze_sign(&mut ctx, &scope, &decl.sign, errors);
+
+                let mut generics = HashMap::new();
+                let return_type =
+                    analyze_return(&mut ctx, &scope, decl.sign.output, errors, &mut generics);
+                let params = analyze_sign(&mut ctx, &scope, &decl.sign, errors, &mut generics);
+
                 let val = ctx.asys.push_val(
                     decl.name,
-                    Definition::EffectFunction(i, fi, params, return_type),
+                    Definition::EffectFunction(
+                        i,
+                        fi,
+                        Rc::new(FunSign {
+                            params,
+                            return_type,
+                            generics,
+                        }),
+                    ),
                 );
                 ctx.packages[idx]
                     .funs
@@ -1590,11 +1829,28 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                 scoped_effects: &HashSet::new(),
                 pkg: idx,
             };
-            let return_type = analyze_return(&mut ctx, &scope, fun.decl.sign.output, errors);
-            let params = analyze_sign(&mut ctx, &scope, &fun.decl.sign, errors);
-            let val = ctx
-                .asys
-                .push_val(fun.decl.name, Definition::Function(i, params, return_type));
+
+            let mut generics = HashMap::new();
+            let return_type = analyze_return(
+                &mut ctx,
+                &scope,
+                fun.decl.sign.output,
+                errors,
+                &mut generics,
+            );
+            let params = analyze_sign(&mut ctx, &scope, &fun.decl.sign, errors, &mut generics);
+
+            let val = ctx.asys.push_val(
+                fun.decl.name,
+                Definition::Function(
+                    i,
+                    Rc::new(FunSign {
+                        params,
+                        return_type,
+                        generics,
+                    }),
+                ),
+            );
             ctx.packages[idx]
                 .funs
                 .insert(parsed.idents[fun.decl.name].0.clone(), val);
@@ -1709,24 +1965,6 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
             };
             analyze_expr(&mut ctx, &mut scope, implied, TYPE_UNKNOWN, false, errors);
         }
-        for effect in package
-            .effects
-            .iter()
-            .copied()
-            .map(|idx| &parsed.effects[idx])
-        {
-            for fun in effect.functions.values() {
-                let mut scope = Scope {
-                    parent: Some(&global_scope),
-                    values: HashMap::new(),
-                    funs: &funs,
-                    effects: &effects,
-                    scoped_effects: &scoped_effects,
-                    pkg: idx,
-                };
-                scope_sign(&mut ctx, &mut scope, &fun.sign);
-            }
-        }
         for fun in package
             .functions
             .iter()
@@ -1742,7 +1980,11 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
                 pkg: idx,
             };
             let val = ctx.asys.values[fun.decl.name];
-            scope_sign(&mut ctx, &mut scope, &fun.decl.sign);
+            let generics = match ctx.asys.defs[val] {
+                Definition::Function(_, ref sign) => &sign.generics,
+                _ => unreachable!(),
+            };
+            scope_sign(&ctx, &mut scope, &fun.decl.sign, generics);
 
             let mut scoped = scope.scoped_effects.clone();
             scoped.extend(fun.decl.sign.effects.iter().filter_map(|&i| {
@@ -1756,7 +1998,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
             scope.scoped_effects = &scoped;
 
             let expected = match ctx.asys.defs[val] {
-                Definition::Function(_, _, return_type) => return_type,
+                Definition::Function(_, ref sign) => sign.return_type,
                 _ => unreachable!(),
             };
             analyze_expr(&mut ctx, &mut scope, fun.body, expected, false, errors).0;

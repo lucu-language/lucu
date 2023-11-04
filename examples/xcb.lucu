@@ -1,7 +1,7 @@
 import "vendor:c"
 import "vendor:xcb"
 
-fun main() / debug c.lib xcb.lib {
+fun main() / c.stdio xcb.lib {
 	c.puts(&['h', 'e', 'l', 'l', 'o', 0][0])
 	with xcb.connect(0, 0) {
 		xcb.disconnect()

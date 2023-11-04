@@ -11,15 +11,19 @@ vecmap_index!(FileIdx);
 pub struct Ranged<T>(pub T, pub usize, pub usize, pub FileIdx);
 
 impl<T> Ranged<T> {
+    #[must_use]
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Ranged<U> {
         Ranged(f(self.0), self.1, self.2, self.3)
     }
+    #[must_use]
     pub fn empty(&self) -> Ranged<()> {
         Ranged((), self.1, self.2, self.3)
     }
+    #[must_use]
     pub fn with<U>(&self, val: U) -> Ranged<U> {
         Ranged(val, self.1, self.2, self.3)
     }
+    #[must_use]
     pub fn clamp(self, min: usize, max: usize) -> Self {
         Ranged(
             self.0,
@@ -76,12 +80,12 @@ pub enum Error {
     // borrow checker
     AssignImmutable(Option<Range>),
     AssignExpression,
-    AssignImmutableView(Option<Range>),
-    MoveImmutableView(Option<Range>, Option<Range>),
+    AssignMutDowncast(Option<Range>),
+    MoveMutDowncast(Option<Range>, Option<Range>),
 
     // invalid values
-    UndefinedView(String),
-    ZeroinitView(String),
+    UndefinedUnallowed(String),
+    ZeroinitUnallowed(String),
     NeverValue,
 }
 
@@ -554,15 +558,15 @@ impl Errors {
 
                     Error::AssignImmutable(_) => "cannot assign to immutable variable".into(),
                     Error::AssignExpression => "cannot assign to expression".into(),
-                    Error::AssignImmutableView(_) =>
-                        format!("cannot assign to mutable variable: value is an immutable view"),
-                    Error::MoveImmutableView(_, _) =>
-                        format!("cannot move into mutable parameter: value is an immutable view"),
+                    Error::AssignMutDowncast(_) =>
+                        format!("cannot assign to mutable variable: value is immutable and may not become mutable"),
+                    Error::MoveMutDowncast(_, _) =>
+                        format!("cannot move into mutable parameter: value is immutable and may not become mutable"),
 
-                    Error::UndefinedView(ref ty) =>
-                        format!("cannot leave view type {} undefined", ty),
-                    Error::ZeroinitView(ref ty) =>
-                        format!("cannot zero-initialize view type {}", ty),
+                    Error::UndefinedUnallowed(ref ty) =>
+                        format!("cannot leave type {} undefined", ty),
+                    Error::ZeroinitUnallowed(ref ty) =>
+                        format!("cannot zero-initialize type {}", ty),
                     Error::NeverValue => format!("cannot create a value of type never"),
                 }
             );
@@ -621,12 +625,12 @@ impl Errors {
                         highlights.push(Highlight::from_file(&self.files, def, 1));
                     }
                 }
-                Error::AssignImmutableView(def) => {
+                Error::AssignMutDowncast(def) => {
                     if let Some(def) = def {
                         highlights.push(Highlight::from_file(&self.files, def, 1));
                     }
                 }
-                Error::MoveImmutableView(def, param) => {
+                Error::MoveMutDowncast(def, param) => {
                     if let Some(def) = def {
                         highlights.push(Highlight::from_file(&self.files, def, 1));
                     }

@@ -128,7 +128,7 @@ fun unreachable() ! {
 ##
 # returns the length of a slice
 ##
-fun len(slice []u8) usize {
+fun len(slice []$elem) usize {
 	# internally defined
 	unreachable()
 }
@@ -151,19 +151,11 @@ handle srcloc {
 }
 
 ##
-# effect to load dynamic libraries
-# a loader is provided for the main function that links libraries at compile-time
+# links to a dynamic library using an effect as a foreign interface
+# &$effect SHOULD be annotated with @foreign,
+# as it uses the data inside to determine the symbol names for the effect functions
 ##
-effect loader {
-	##
-	# &$effect SHOULD be annotated with @foreign,
-	# as it uses the data inside to determine the symbol names for the effect functions
-	##
-	fun load_into_effect($lib str) handle $effect
-}
-
-@capability
-fun _linker() loader {
+fun link_effect($lib str) handle $effect {
 	# internally defined
 	unreachable()
 }

@@ -17,6 +17,6 @@ effect lib {
 }
 
 @capability
-fun load() lib / loader {
-	load_into_effect("xcb")
+fun link() lib {
+	link_effect("xcb")
 }

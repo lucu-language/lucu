@@ -3,9 +3,9 @@
 # every header file in libc is its own effect
 # this is a compound effect that contains all of them
 ##
-effect lib = time stdio string
+# effect lib = time stdio string
 
 @capability
-fun load() lib / loader {
-	load_into_effect("c")
+fun link() stdio {
+	link_effect("c")
 }

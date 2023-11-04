@@ -145,6 +145,7 @@ impl Token {
                 | Token::Import
                 | Token::Ampersand
                 | Token::At
+                | Token::Arrow
                 | Token::Loop
                 | Token::Cast
                 | Token::Open(_)
@@ -173,6 +174,7 @@ impl Token {
                 | Token::Dash
                 | Token::Asterisk
                 | Token::Plus
+                | Token::Arrow
 
                 // prevents double semicolons
                 | Token::Semicolon
@@ -398,7 +400,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     }
                 }
             }
-            'a'..='z' | 'A'..='Z' | '_' => {
+            'a'..='z' | 'A'..='Z' | '_' | '$' => {
                 // get word
                 let mut word = String::new();
                 word.push(char);

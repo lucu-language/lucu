@@ -160,6 +160,9 @@ pub enum Type {
     Path(Ident),
     Handler(Ident, FailType),
 
+    Generic(Ident),
+    GenericHandler(Ident, FailType),
+
     Pointer(TypeIdx),
     Const(TypeIdx),
     ConstArray(u64, TypeIdx),
@@ -185,6 +188,7 @@ pub struct EffectIdent {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub mutable: bool,
+    pub const_generic: bool,
     pub name: Ident,
     pub ty: TypeIdx,
 }
@@ -483,7 +487,15 @@ impl<'a> Tokens<'a> {
     fn push_expr(&mut self, expr: Ranged<Expression>) -> ExprIdx {
         self.context.exprs.push(ExprIdx, expr)
     }
+    fn push_generic_ident(&mut self, ident: Ranged<String>) -> (bool, Ident) {
+        let generic = ident.0.starts_with('$');
+        (generic, self.context.idents.push(Ident, ident))
+    }
     fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
+        if ident.0.starts_with('$') {
+            // TODO: error
+            panic!("unexpected generic");
+        }
         self.context.idents.push(Ident, ident)
     }
     fn push_type(&mut self, typ: Ranged<Type>) -> TypeIdx {
@@ -842,13 +854,30 @@ impl Parse for Type {
                     None => Some(Type::Error),
                 }
             }
+            Some(Ranged(Token::Handle, ..)) => {
+                tk.next();
+
+                let id = tk.ident()?;
+                let (generic, id) = tk.push_generic_ident(id);
+                let fail = FailType::parse_or_skip(tk)?.0;
+
+                if generic {
+                    Some(Type::GenericHandler(id, fail))
+                } else {
+                    Some(Type::Handler(id, fail))
+                }
+            }
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
-                let id = tk.push_ident(id);
+                let (generic, id) = tk.push_generic_ident(id);
 
-                match FailType::parse_or_skip(tk)?.0 {
-                    FailType::Never => Some(Type::Path(id)),
-                    ty => Some(Type::Handler(id, ty)),
+                if generic {
+                    Some(Type::Generic(id))
+                } else {
+                    match FailType::parse_or_skip(tk)?.0 {
+                        FailType::Never => Some(Type::Path(id)),
+                        ty => Some(Type::Handler(id, ty)),
+                    }
                 }
             }
             _ => {
@@ -904,10 +933,15 @@ impl Parse for FunSign {
         tk.group(Group::Paren, true, |tk| {
             let mutable = tk.check(Token::Mut).is_some();
             let id = tk.ident()?;
-            let name = tk.push_ident(id);
+            let (const_generic, name) = tk.push_generic_ident(id);
             let ty = Type::parse_or_default(tk);
             let ty = tk.push_type(ty);
-            decl.inputs.push_value(Param { mutable, name, ty });
+            decl.inputs.push_value(Param {
+                mutable,
+                const_generic,
+                name,
+                ty,
+            });
             Some(())
         })?;
 
@@ -1377,7 +1411,7 @@ impl Parse for Expression {
             // ident
             Some(Ranged(Token::Ident(_), ..)) => {
                 let id = tk.ident()?;
-                let ident = tk.push_ident(id);
+                let (_, ident) = tk.push_generic_ident(id);
                 Some(Expression::Ident(ident))
             }
 

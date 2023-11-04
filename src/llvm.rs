@@ -1677,7 +1677,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             Type::Never | Type::None => self.context.void_type().into(),
-            Type::HandlerOutput => {
+            Type::HandlerOutput(..) => {
                 unreachable!("HandlerOutput never filled in with concrete handler type")
             }
             Type::Int8 => self.context.i8_type().into(),

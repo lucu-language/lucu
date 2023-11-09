@@ -1,5 +1,0 @@
-@foreign
-effect string {
-	# TODO: cstring
-	fun strlen(s ^u8) usize
-}

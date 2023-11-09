@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
+use either::Either;
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     basic_block::BasicBlock,
@@ -23,8 +24,8 @@ use inkwell::{
 
 use crate::{
     ir::{
-        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcIdx, ProcImpl, ProcSign, Reg,
-        Type, TypeIdx, Value, IR,
+        AggrIdx, AggregateType, Global, HandlerIdx, Instruction, ProcForeign, ProcForeignIdx,
+        ProcIdx, ProcImpl, ProcSign, Reg, Type, TypeIdx, Value, IR,
     },
     vecmap::VecMap,
     LucuArch, LucuOS,
@@ -39,6 +40,7 @@ struct CodeGen<'ctx> {
     structs: VecMap<AggrIdx, Option<StructType<'ctx>>>,
 
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
+    foreign: VecMap<ProcForeignIdx, FunctionValue<'ctx>>,
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
     syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
@@ -331,6 +333,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         structs: VecMap::new(),
         procs: VecMap::new(),
         globals: VecMap::new(),
+        foreign: VecMap::new(),
         syscalls,
         exit,
         trace,
@@ -341,6 +344,11 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     for typ in ir.aggregates.values() {
         let struc = codegen.generate_struct(ir, typ);
         codegen.structs.push_value(struc);
+    }
+
+    for proc in ir.proc_foreign.values() {
+        let func = codegen.generate_foreign_proc_sign(ir, proc);
+        codegen.foreign.push_value(func);
     }
 
     for proc in ir.proc_sign.values() {
@@ -619,6 +627,28 @@ impl<'ctx> CodeGen<'ctx> {
         self.module
             .add_function(&proc.debug_name, fn_type, Some(Linkage::Internal))
     }
+    fn generate_foreign_proc_sign(&self, ir: &IR, proc: &ProcForeign) -> FunctionValue<'ctx> {
+        let in_types = proc
+            .inputs
+            .iter()
+            .filter_map(|&ty| BasicMetadataTypeEnum::try_from(self.get_type(ir, ty)).ok())
+            .collect::<Vec<_>>();
+
+        let fn_type = match self.get_type(ir, proc.output) {
+            AnyTypeEnum::ArrayType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::FloatType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::IntType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::PointerType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::StructType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::VectorType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::VoidType(t) => t.fn_type(&in_types, false),
+            AnyTypeEnum::FunctionType(_) => unreachable!(),
+        };
+
+        // TODO: add parameter names names to fun
+        self.module
+            .add_function(&proc.symbol, fn_type, Some(Linkage::External))
+    }
     fn generate_proc(
         &self,
         ir: &IR,
@@ -812,6 +842,21 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_int_compare(IntPredicate::ULT, lhs, rhs, "lt")
                             .unwrap();
                         insert!(r, res.into());
+                    }
+                    I::CallForeign(p, r, ref rs) => {
+                        let func = self.foreign[p];
+                        let args: Vec<_> = rs
+                            .iter()
+                            .filter_map(|r| regmap.get(r).map(|&v| v.into()))
+                            .collect();
+
+                        let ret = self.builder.build_call(func, &args, "").unwrap();
+
+                        if let Some(r) = r {
+                            if let Either::Left(v) = ret.try_as_basic_value() {
+                                insert!(r, v);
+                            }
+                        }
                     }
                     I::Call(p, r, ref rs) => {
                         let func = self.procs[p];
@@ -1632,7 +1677,7 @@ impl<'ctx> CodeGen<'ctx> {
                 }
             }
             Type::Never | Type::None => self.context.void_type().into(),
-            Type::HandlerOutput => {
+            Type::HandlerOutput(..) => {
                 unreachable!("HandlerOutput never filled in with concrete handler type")
             }
             Type::Int8 => self.context.i8_type().into(),

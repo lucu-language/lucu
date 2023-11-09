@@ -167,10 +167,10 @@ fn parse_from_filename(
     let mut parsed = Parsed::default();
     let mut errors = Errors::new();
 
-    let preamble = core_path.join("preamble.lucu");
+    let preamble = core_path.join("core").join("preamble.lucu");
     let system = match target.lucu_os() {
-        LucuOS::Linux => Some(core_path.join("sys/linux")),
-        LucuOS::Windows => Some(core_path.join("sys/nt")),
+        LucuOS::Linux => Some(core_path.join("core").join("sys/linux")),
+        LucuOS::Windows => Some(core_path.join("core").join("sys/nt")),
         _ => None,
     };
     let mut files_todo = vec![
@@ -182,7 +182,10 @@ fn parse_from_filename(
     }
 
     let mut libs = HashMap::new();
-    libs.insert("core", core_path);
+    let core = core_path.join("core");
+    libs.insert("core", core.as_path());
+    let vendor = core_path.join("vendor");
+    libs.insert("vendor", vendor.as_path());
 
     let mut n = 0;
     while let Some(&(ref path, pkg)) = files_todo.get(n) {
@@ -276,7 +279,10 @@ struct Args {
     )]
     features: Option<String>,
 
-    #[arg(long, help = "Set the location of the core library")]
+    #[arg(
+        long,
+        help = "Set the location of the folder that contains the core and vendor libraries"
+    )]
     core: Option<PathBuf>,
     #[arg(long, help = "Print compiler output in plaintext, without color")]
     plaintext: bool,
@@ -288,8 +294,9 @@ fn main() {
     let args = Args::parse();
     let core = args.core.unwrap_or_else(|| {
         option_env!("LUCU_CORE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("core"))
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+            .to_path_buf()
     });
 
     let debug = args.debug;
@@ -335,6 +342,7 @@ fn main() {
                 LucuOS::Linux => {
                     Command::new("ld")
                         .arg(&output.with_extension("o"))
+                        .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
                         .arg("-o")
                         .arg(&output)
                         .arg("-e_start")
@@ -347,6 +355,7 @@ fn main() {
                 LucuOS::Windows => {
                     Command::new("x86_64-w64-mingw32-ld")
                         .arg(&output.with_extension("o"))
+                        .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
                         .arg("-o")
                         .arg(&output.with_extension("exe"))
                         .arg("-e_start")
@@ -372,7 +381,7 @@ mod tests {
     use super::*;
 
     fn execute(filename: &Path, output: &Path) -> String {
-        let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("core");
+        let core = Path::new(env!("CARGO_MANIFEST_DIR"));
         let target = Target::host(None, None);
 
         match parse_from_filename(Path::new(filename), &core, &target) {

@@ -128,9 +128,9 @@ fun unreachable() ! {
 ##
 # returns the length of a slice
 ##
-fun len(slice []u8) usize {
+fun len(slice []`elem) usize {
 	# internally defined
-	0
+	unreachable()
 }
 
 ##
@@ -146,8 +146,23 @@ effect srcloc {
 handle srcloc {
 	fun source_location() str {
 		# internally defined
-		0
+		unreachable()
 	}
+}
+
+##
+# links to a dynamic library using an effect as a foreign interface
+# &`effect SHOULD be annotated with @foreign,
+# as it uses the data inside to determine the symbol names for the effect functions
+##
+effect linker {
+	fun link_effect(`lib str) handle `effect
+}
+
+@capability
+fun linker() linker {
+	# internally defined
+	unreachable()
 }
 
 ##

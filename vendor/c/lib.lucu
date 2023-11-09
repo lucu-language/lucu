@@ -1,0 +1,22 @@
+##
+# libc, defined as an effect
+# every header file in libc is its own effect
+# this is a compound effect that contains all of them
+##
+@foreign
+effect lib {
+	# TODO: maybe ptr
+	# TODO: opaque time type
+	fun time(t ^int) int
+
+	# TODO: cstring, cint
+	fun puts(s ^u8) int
+
+	# TODO: cstring
+	fun strlen(s ^u8) usize
+}
+
+@capability
+fun link() lib / linker {
+	link_effect("c")
+}

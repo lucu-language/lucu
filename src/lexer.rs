@@ -55,6 +55,8 @@ pub enum Token {
     UnknownSymbol,
 }
 
+pub const GENERIC: char = '`';
+
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -145,6 +147,7 @@ impl Token {
                 | Token::Import
                 | Token::Ampersand
                 | Token::At
+                | Token::Arrow
                 | Token::Loop
                 | Token::Cast
                 | Token::Open(_)
@@ -173,6 +176,7 @@ impl Token {
                 | Token::Dash
                 | Token::Asterisk
                 | Token::Plus
+                | Token::Arrow
 
                 // prevents double semicolons
                 | Token::Semicolon
@@ -398,7 +402,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     }
                 }
             }
-            'a'..='z' | 'A'..='Z' | '_' => {
+            'a'..='z' | 'A'..='Z' | '_' | GENERIC => {
                 // get word
                 let mut word = String::new();
                 word.push(char);
@@ -473,9 +477,6 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
             _ => {
                 self.prev_unfinished = false;
-
-                self.errors
-                    .push(Ranged(Error::UnknownSymbol, pos, self.pos, self.file));
                 Token::UnknownSymbol
             }
         };

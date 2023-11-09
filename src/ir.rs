@@ -189,6 +189,14 @@ impl TypeIdx {
     fn is_never(self) -> bool {
         self == TYPE_NEVER
     }
+    fn is_handler_of(self, ir: &IRContext, handler_idx: HandlerIdx) -> bool {
+        match ir.ir.types[self] {
+            Type::NakedHandler(idx) | Type::RawHandler(idx, _) | Type::Handler(idx) => {
+                idx == handler_idx
+            }
+            _ => false,
+        }
+    }
 
     pub fn inner(self, ir: &IR) -> TypeIdx {
         match ir.types[self] {
@@ -483,11 +491,11 @@ struct IRContext<'a> {
     proc_map: HashMap<ProcIdent, Either<ProcIdx, ProcForeignIdx>>,
     implied_handlers: HashMap<Val, HandlerIdx>,
     srcloc: Option<(Val, HandlerIdx)>,
+    linker: Option<(Val, HandlerIdx)>,
 
     handlers: VecMap<HandlerIdx, HandlerCtx>,
     foreign: HashMap<Val, HandlerIdx>,
 
-    link_effect: Val,
     len: Val,
 
     parsed: &'a Parsed,
@@ -971,6 +979,7 @@ pub fn generate_ir(
         asys,
         files,
         srcloc: None,
+        linker: None,
         ir: IR {
             proc_sign: VecMap::new(),
             proc_impl: VecMap::new(),
@@ -986,7 +995,6 @@ pub fn generate_ir(
 
             links: HashSet::new(),
         },
-        link_effect: Val(0),
         len: Val(0),
         foreign: HashMap::new(),
     };
@@ -1008,6 +1016,26 @@ pub fn generate_ir(
     // capabilities
     let mut capabilities: HashMap<Val, Reg> = HashMap::new();
     let mut start_instructions = Vec::new();
+
+    // define linker effect
+    let linker_effect = get_effect(ctx, ctx.preamble, "linker");
+    let linker = ir.handlers.push(
+        HandlerIdx,
+        HandlerCtx {
+            effect: asys.values[linker_effect.name],
+            global: None,
+            definition: None,
+            captures: Vec::new(),
+        },
+    );
+    ir.ir.handler_type.push_value(HandlerType {
+        captures: Vec::new(),
+        break_ty: TYPE_NEVER,
+    });
+    let linker_reg = ir.next_handler_reg(linker);
+    start_instructions.push(Instruction::Handler(linker_reg, vec![]));
+    capabilities.insert(asys.values[linker_effect.name], linker_reg);
+    ir.linker = Some((asys.values[linker_effect.name], linker));
 
     // define system effect
     let sys_effect = get_effect(ctx, ctx.system, "sys");
@@ -1204,7 +1232,6 @@ pub fn generate_ir(
     let main = asys.main.expect("no main function");
     let fun = &ir.parsed.functions[main];
 
-    ir.link_effect = asys.values[get_function(ctx, ctx.preamble, "link_effect").decl.name];
     ir.len = asys.values[get_function(ctx, ctx.preamble, "len").decl.name];
 
     // generate foreign effects
@@ -1397,10 +1424,7 @@ pub fn generate_ir(
                     let output =
                         TypeIdx::from_return_type(&mut ir, sign.return_type, &HashMap::new());
                     let handler = handler_tys.pop().unwrap();
-                    let ast_handler = match ctx.exprs[ir.handlers[handler].definition.unwrap()].0 {
-                        Expression::Handler(ref h) => h,
-                        _ => unreachable!(),
-                    };
+                    let def = ir.handlers[handler].definition;
                     gen_handler_proc(
                         &mut ir,
                         ProcIdent {
@@ -1409,7 +1433,7 @@ pub fn generate_ir(
                             handler_params: Vec::new(),
                             generics: Vec::new(),
                         },
-                        ast_handler,
+                        def,
                         Box::new([]),
                         output,
                         Rc::new(HashMap::new()),
@@ -1813,43 +1837,7 @@ fn gen_proc(
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     let val = procident.fun.unwrap_left();
-    if val == ir.link_effect {
-        // link_effect definition
-        let eff = match ir.ir.types[output] {
-            Type::HandlerOutput(eff, _) => eff,
-            _ => unreachable!(),
-        };
-        let foreign = ir.foreign[&eff];
-        let output = ir.insert_type(Type::NakedHandler(foreign));
-
-        let input = ir.next_reg(TYPE_STR_SLICE);
-        let proc_idx = ir.ir.proc_sign.push(
-            ProcIdx,
-            ProcSign {
-                inputs: vec![input],
-                captures: None,
-                output,
-                debug_name: format!("link_effect"),
-                unhandled: Vec::new(),
-                handled: Vec::new(),
-                redirect: Vec::new(),
-            },
-        );
-        proc_todo.push(ProcCtx {
-            proc_idx,
-            expr: fun.body,
-            inside_handler: None,
-            scope: Scope {
-                parent: None,
-                values: HashMap::new(),
-                generics,
-            },
-            handler_defs: Rc::new([]),
-        });
-        ir.proc_map.insert(procident, Either::Left(proc_idx));
-
-        return proc_idx;
-    } else if val == ir.len {
+    if val == ir.len {
         // len definition
         let output = ir.insert_type(Type::IntSize);
         let input = ir.next_reg(param_types[0]);
@@ -2016,14 +2004,10 @@ fn get_handler_proc(
 
     // get proc
     if !ir.proc_map.contains_key(&procident) {
-        let ast_handler = match &ir.parsed.exprs[def.unwrap()].0 {
-            Expression::Handler(handler) => handler,
-            _ => unreachable!(),
-        };
         Either::Left(gen_handler_proc(
             ir,
             procident,
-            ast_handler,
+            def,
             param_types,
             output,
             generics,
@@ -2037,13 +2021,60 @@ fn get_handler_proc(
 fn gen_handler_proc(
     ir: &mut IRContext<'_>,
     procident: ProcIdent,
-    handler: &parser::Handler,
+    def: Option<ExprIdx>,
     param_types: Box<[TypeIdx]>,
     output: TypeIdx,
     generics: Rc<ResolvedGenerics>,
     proc_todo: &mut ProcTodo,
 ) -> ProcIdx {
     let (handler_idx, eff_fun_idx) = procident.fun.unwrap_right();
+
+    if ir.linker.is_some_and(|(_, idx)| handler_idx == idx) {
+        // link_effect definition
+        let eff = match ir.ir.types[output] {
+            Type::HandlerOutput(eff, _) => eff,
+            _ => unreachable!(),
+        };
+        let foreign = ir.foreign[&eff];
+        let output = ir.insert_type(Type::NakedHandler(foreign));
+
+        let input = ir.next_reg(TYPE_STR_SLICE);
+        let proc_idx = ir.ir.proc_sign.push(
+            ProcIdx,
+            ProcSign {
+                inputs: vec![input],
+                captures: None,
+                output,
+                debug_name: format!("link_effect"),
+                unhandled: Vec::new(),
+                handled: Vec::new(),
+                redirect: Vec::new(),
+            },
+        );
+
+        // use len_fun as the body (also unreachable)
+        let len_fun = get_function(ir.parsed, ir.parsed.preamble, "len");
+        proc_todo.push(ProcCtx {
+            proc_idx,
+            expr: len_fun.body,
+            inside_handler: None,
+            scope: Scope {
+                parent: None,
+                values: HashMap::new(),
+                generics,
+            },
+            handler_defs: Rc::new([]),
+        });
+        ir.proc_map.insert(procident, Either::Left(proc_idx));
+
+        return proc_idx;
+    }
+
+    let handler = match &ir.parsed.exprs[def.unwrap()].0 {
+        Expression::Handler(handler) => handler,
+        _ => unreachable!(),
+    };
+
     let eff_val = ir.handlers[handler_idx].effect;
     let effect = match ir.asys.defs[eff_val] {
         Definition::Effect(idx) => &ir.parsed.effects[idx],
@@ -2620,7 +2651,16 @@ fn generate_expr(
 
                             match proc_idx {
                                 Either::Left(idx) => {
-                                    if val == ir.link_effect {
+                                    if ir.linker.is_some_and(|(eff_val, idx)| {
+                                        let effect = match ir.asys.defs[eff_val] {
+                                            Definition::Effect(idx) => &ir.parsed.effects[idx],
+                                            _ => unreachable!(),
+                                        };
+                                        ir.asys.values[effect.functions[EffFunIdx(0)].name] == val
+                                            && ctx.scope.get(eff_val).is_some_and(|v| {
+                                                v.get_type(&ir.ir).is_handler_of(ir, idx)
+                                            })
+                                    }) {
                                         // get library name
                                         match ir.parsed.exprs[args[0]].0 {
                                             E::String(ref lib) => ir.ir.links.insert(lib.clone()),
@@ -2697,7 +2737,17 @@ fn generate_expr(
 
                     match proc_idx {
                         Either::Left(idx) => {
-                            if val == ir.link_effect {
+                            if ir.linker.is_some_and(|(eff_val, idx)| {
+                                let effect = match ir.asys.defs[eff_val] {
+                                    Definition::Effect(idx) => &ir.parsed.effects[idx],
+                                    _ => unreachable!(),
+                                };
+                                ir.asys.values[effect.functions[EffFunIdx(0)].name] == val
+                                    && ctx
+                                        .scope
+                                        .get(eff_val)
+                                        .is_some_and(|v| v.get_type(&ir.ir).is_handler_of(ir, idx))
+                            }) {
                                 // get library name
                                 match ir.parsed.exprs[args[0]].0 {
                                     E::String(ref lib) => ir.ir.links.insert(lib.clone()),

@@ -17,6 +17,6 @@ effect lib {
 }
 
 @capability
-fun link() lib {
+fun link() lib / linker {
 	link_effect("c")
 }

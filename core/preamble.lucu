@@ -155,7 +155,12 @@ handle srcloc {
 # &$effect SHOULD be annotated with @foreign,
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
-fun link_effect($lib str) handle $effect {
+effect linker {
+	fun link_effect($lib str) handle $effect
+}
+
+@capability
+fun linker() linker {
 	# internally defined
 	unreachable()
 }

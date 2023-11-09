@@ -55,6 +55,8 @@ pub enum Token {
     UnknownSymbol,
 }
 
+pub const GENERIC: char = '`';
+
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -400,7 +402,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     }
                 }
             }
-            'a'..='z' | 'A'..='Z' | '_' | '$' => {
+            'a'..='z' | 'A'..='Z' | '_' | GENERIC => {
                 // get word
                 let mut word = String::new();
                 word.push(char);

@@ -128,7 +128,7 @@ fun unreachable() ! {
 ##
 # returns the length of a slice
 ##
-fun len(slice []$elem) usize {
+fun len(slice []`elem) usize {
 	# internally defined
 	unreachable()
 }
@@ -152,11 +152,11 @@ handle srcloc {
 
 ##
 # links to a dynamic library using an effect as a foreign interface
-# &$effect SHOULD be annotated with @foreign,
+# &`effect SHOULD be annotated with @foreign,
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
 effect linker {
-	fun link_effect($lib str) handle $effect
+	fun link_effect(`lib str) handle `effect
 }
 
 @capability

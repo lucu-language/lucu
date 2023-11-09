@@ -9,7 +9,7 @@ use either::Either;
 
 use crate::{
     error::{Error, Expected, FileIdx, Range, Ranged},
-    lexer::{Group, Token, Tokenizer},
+    lexer::{Group, Token, Tokenizer, GENERIC},
     vecmap::{vecmap_index, VecMap},
 };
 
@@ -488,11 +488,11 @@ impl<'a> Tokens<'a> {
         self.context.exprs.push(ExprIdx, expr)
     }
     fn push_generic_ident(&mut self, ident: Ranged<String>) -> (bool, Ident) {
-        let generic = ident.0.starts_with('$');
+        let generic = ident.0.starts_with(GENERIC);
         (generic, self.context.idents.push(Ident, ident))
     }
     fn push_ident(&mut self, ident: Ranged<String>) -> Ident {
-        if ident.0.starts_with('$') {
+        if ident.0.starts_with(GENERIC) {
             // TODO: error
             panic!("unexpected generic");
         }

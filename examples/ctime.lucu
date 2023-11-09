@@ -1,9 +1,8 @@
 import "core:io"
 import "vendor:c"
 
-fun main() / io.stdio c.time {
+fun main() / debug c.lib {
 	mut time = 0
 	c.time(&time)
-
-	io.write_int(time) with io.stdout()
+	putint(time)
 }

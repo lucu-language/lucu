@@ -1,5 +1,5 @@
 import "../sys/linux"
-import "../sys/nt"
+import "../sys/win32"
 
 effect stdio {
 	fun stdin () reader
@@ -31,19 +31,34 @@ fun linux() stdio / linux.sys {
 }
 
 @capability(os = "windows")
-fun nt() stdio / nt.sys {
+fun windows() stdio / win32.sys {
 	handle stdio {
 		fun stdin() reader {
-			let stdin = nt.stdio()[0]
-			fun { buf -> nt.read(stdin, buf) }
+			let stdin = win32.stdin()
+			fun {
+				buf ->
+				mut read = 0
+				win32.ReadConsoleA(stdin, &buf[0], cast len(buf), &read, 0)
+				cast read
+			}
 		}
 		fun stdout() writer {
-			let stdout = nt.stdio()[1]
-			fun { buf -> nt.write(stdout, buf) }
+			let stdout = win32.stdout()
+			fun {
+				buf ->
+				mut written = 0
+				win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
+				cast written
+			}
 		}
 		fun stderr() writer {
-			let stderr = nt.stdio()[2]
-			fun { buf -> nt.write(stderr, buf) }
+			let stderr = win32.stderr()
+			fun {
+				buf ->
+				mut written = 0
+				win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
+				cast written
+			}
 		}
 	}
 }

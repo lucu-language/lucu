@@ -1,3 +1,5 @@
+import "vendor:c"
+
 @foreign(prefix = "xcb_", handler = uptr)
 effect conn {
 	# TODO: cint, GetAtomNameCookie
@@ -19,5 +21,6 @@ effect lib {
 
 @capability
 fun link() lib / linker {
+	c.link()
 	link_effect("xcb")
 }

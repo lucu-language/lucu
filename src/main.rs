@@ -395,6 +395,7 @@ mod tests {
                             .arg(&output.with_extension("o"))
                             .arg("-o")
                             .arg(&output)
+                            .arg("-e_start")
                             .status()
                             .unwrap();
                         Command::new(Path::new("./").join(&output))

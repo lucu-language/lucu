@@ -1,0 +1,31 @@
+##
+# system effect for kernel32
+##
+@foreign
+effect sys {
+	# TODO: int -> DWORD
+	# TODO: uptr -> LPVOID
+	fun GetStdHandle(nStdHandle int) uptr
+	fun ReadConsoleA(hConsoleInput uptr, mut lpBuffer ^u8, nNumberOfCharsToRead int, mut lpNumberOfCharsRead ^int, pInputControl uptr) bool
+	fun WriteConsoleA(hConsoleOutput uptr, lpBuffer ^u8, nNumberOfCharsToWrite int, mut lpNumberOfCharsWritten ^int, lpReserved uptr) bool
+
+	# TODO: int -> UINT
+	fun ExitProcess(uExitCode int) !
+}
+
+fun stdin() uptr / sys {
+	GetStdHandle(4294967286)
+}
+
+fun stdout() uptr / sys {
+	GetStdHandle(4294967285)
+}
+
+fun stderr() uptr / sys {
+	GetStdHandle(4294967284)
+}
+
+@capability(os = "windows")
+fun link() sys / linker {
+	link_effect("kernel32")
+}

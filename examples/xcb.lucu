@@ -1,8 +1,7 @@
 import "vendor:c"
 import "vendor:xcb"
 
-fun main() / c.lib xcb.lib {
-	c.puts(&['h', 'e', 'l', 'l', 'o', 0][0])
+fun main() / xcb.lib {
 	with xcb.connect(0, 0) {
 		xcb.disconnect()
 	}

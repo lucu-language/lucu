@@ -50,7 +50,7 @@ where
 impl<K, V> Default for VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     fn default() -> Self {
         Self::new()
@@ -156,17 +156,11 @@ where
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.vec.values()
     }
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.vec.values_mut()
-    }
     pub fn keys(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = K> {
         self.vec.keys(f)
     }
     pub fn iter(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &V)> {
         self.vec.iter(f)
-    }
-    pub fn iter_mut(&mut self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &mut V)> {
-        self.vec.iter_mut(f)
     }
 }
 
@@ -212,15 +206,5 @@ where
 
     fn index(&self, index: K) -> &Self::Output {
         &self.vec[index]
-    }
-}
-
-impl<K, V> IndexMut<K> for VecSet<K, V>
-where
-    K: Into<usize>,
-    V: Hash + Eq + Clone,
-{
-    fn index_mut(&mut self, index: K) -> &mut Self::Output {
-        &mut self.vec[index]
     }
 }

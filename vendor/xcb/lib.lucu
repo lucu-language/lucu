@@ -20,7 +20,7 @@ effect lib {
 }
 
 @capability
-fun link() lib / linker {
+fun link() lib / foreign {
 	c.link()
 	link_effect("xcb")
 }

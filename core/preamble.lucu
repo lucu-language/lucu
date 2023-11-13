@@ -110,10 +110,18 @@ fun todo(msg str) ! / srcloc {
 	trap()
 }
 
+fun internal() `t / srcloc {
+	compile_error("usage of internal function outside preamble")
+}
+
 ##
 # the following functions have internal definitions
 # these are not based on a specific target
 ##
+
+fun compile_error(`msg str) ! / srcloc {
+	internal()
+}
 
 ##
 # marks that a code path is unreachable
@@ -121,16 +129,14 @@ fun todo(msg str) ! / srcloc {
 # for displaying an error, &panic is preferred
 ##
 fun unreachable() ! {
-	# internally defined
-	loop {}
+	internal()
 }
 
 ##
 # returns the length of a slice
 ##
 fun len(slice []`elem) usize {
-	# internally defined
-	unreachable()
+	internal()
 }
 
 ##
@@ -140,29 +146,30 @@ fun len(slice []`elem) usize {
 # when used as an effect parameter inside a function, it returns the location of the caller
 ##
 effect srcloc {
+	# let `source_location str
 	fun source_location() str
 }
 
 handle srcloc {
+	# let `source_location = internal()
 	fun source_location() str {
-		# internally defined
-		unreachable()
+		internal()
 	}
 }
 
 ##
 # links to a dynamic library using an effect as a foreign interface
-# &`effect SHOULD be annotated with @foreign,
+# &`effect MUST be annotated with @foreign,
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
-effect linker {
+effect foreign {
 	fun link_effect(`lib str) handle `effect
 }
 
 @capability
-fun linker() linker {
-	# internally defined
-	unreachable()
+fun _foreign_internal() foreign # / srcloc
+{
+	internal()
 }
 
 ##
@@ -175,7 +182,6 @@ fun linker() linker {
 # the message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times
 ##
 fun trace(s str) {
-	# internally defined based on target
 }
 
 ##
@@ -188,7 +194,6 @@ fun trace(s str) {
 #  - spin forever
 ##
 fun trap() ! / srcloc {
-	# internally defined based on target
 	trace("trapped at ")
 	trace(source_location())
 	trace("\n")

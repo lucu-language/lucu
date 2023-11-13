@@ -10,7 +10,6 @@ parser todo:
 
 todo:
 - !!! deallocate stuff in loops
-- separate generation code from data types
 - unbounded ranges
 - fail in try blocks
 - opaque types (they will be view types)
@@ -20,5 +19,8 @@ would be nice:
 - tokenizer matches brackets
 - seperate token from data
 - custom anchor tokens per Parse instance
+
+working on:
+- separate generation code from data types
 - analyzer gives semantic IR
 - try blocks no longer their own function

@@ -1,39 +1,27 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fmt::{self, Display},
     rc::Rc,
-    write,
 };
 
 use either::Either;
 
 use crate::{
     analyzer::{self, Analysis, Definition, Val},
+    ast::{self, AttributeValue, BinOp, EffFunIdx, ExprIdx, Expression, PackageIdx, UnOp, AST},
     error::{get_lines, File, FileIdx, Range, Ranged},
-    parser::{
-        self, AttributeValue, BinOp, EffFunIdx, ExprIdx, Expression, PackageIdx, Parsed, UnOp,
-    },
-    vecmap::{vecmap_index, VecMap, VecSet},
+    vecmap::{VecMap, VecSet},
     LucuOS, Target,
 };
 
-#[derive(Debug, Clone)]
-pub enum Value {
-    Value(Reg, Option<Val>),
-    Reference(Reg),
-    Global(Global),
-}
+use super::{
+    AggregateType, Block, BlockIdx, Captures, Global, HandlerIdx, HandlerType, Instruction,
+    ProcForeign, ProcForeignIdx, ProcIdx, ProcImpl, ProcSign, Reg, Type, TypeIdx, Value, IR,
+    TYPE_BOOL, TYPE_NEVER, TYPE_NONE, TYPE_STR_SLICE,
+};
 
 impl Value {
-    pub fn get_type(&self, ir: &IR) -> TypeIdx {
-        match *self {
-            Value::Value(reg, _) => ir.regs[reg],
-            Value::Reference(reg) => ir.regs[reg].inner(ir),
-            Value::Global(glob) => ir.globals[glob],
-        }
-    }
-    fn cast(&self, ir: &mut IRContext, block: &mut Block, ty: TypeIdx) -> Value {
+    fn cast(&self, ir: &mut IRCtx, block: &mut Block, ty: TypeIdx) -> Value {
         match *self {
             Value::Value(reg, val) => {
                 let new = ir.next_reg(ty);
@@ -66,7 +54,7 @@ impl Value {
             _ => Some(self),
         }
     }
-    fn value(&self, ir: &mut IRContext, block: &mut Block) -> Reg {
+    fn value(&self, ir: &mut IRCtx, block: &mut Block) -> Reg {
         match *self {
             Value::Value(reg, _) => reg,
             Value::Reference(ptr) => {
@@ -81,7 +69,7 @@ impl Value {
             }
         }
     }
-    fn reference(&self, ir: &mut IRContext, scope: &mut Scope, block: &mut Block) -> Reg {
+    fn reference(&self, ir: &mut IRCtx, scope: &mut Scope, block: &mut Block) -> Reg {
         match *self {
             Value::Value(reg, val) => {
                 let ty = ir.insert_type(Type::Pointer(self.get_type(&ir.ir)));
@@ -111,116 +99,10 @@ impl Value {
     }
 }
 
-#[derive(Debug)]
-pub struct Captures {
-    pub input: Value,
-    pub members: Vec<Reg>,
-}
-
-#[derive(Debug)]
-pub struct ProcSign {
-    pub inputs: Vec<Reg>,
-    pub captures: Option<Captures>,
-
-    pub output: TypeIdx,
-    pub debug_name: String,
-
-    pub unhandled: Vec<HandlerIdx>,
-    pub handled: Vec<HandlerIdx>,
-    pub redirect: Vec<(HandlerIdx, HandlerIdx)>,
-}
-
-#[derive(Debug)]
-pub struct ProcForeign {
-    pub inputs: Vec<TypeIdx>,
-    pub output: TypeIdx,
-    pub symbol: String,
-}
-
-#[derive(Debug)]
-pub struct ProcImpl {
-    pub blocks: VecMap<BlockIdx, Block>,
-}
-
-impl ProcImpl {
-    fn calls(&self) -> impl Iterator<Item = ProcIdx> + '_ {
-        self.blocks
-            .values()
-            .flat_map(|b| b.instructions.iter())
-            .filter_map(|i| match i {
-                &Instruction::Call(p, _, _) => Some(p),
-                _ => None,
-            })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    Int,
-    IntSize,
-    IntPtr,
-    Int8,
-
-    Bool,
-
-    Pointer(TypeIdx),
-    ConstArray(u64, TypeIdx),
-    Slice(TypeIdx),
-
-    Aggregate(AggrIdx),
-
-    // Handler without a try-with block purther up the stack
-    NakedHandler(HandlerIdx),
-    RawHandler(HandlerIdx, Rc<[usize]>),
-
-    // Handler from a try-with block
-    Handler(HandlerIdx),
-
-    // Temporary output value of functions that return handlers, includes eff val and failure type
-    HandlerOutput(Val, TypeIdx),
-
-    Never,
-    None,
-}
-
 type ResolvedGenerics = HashMap<Val, TypeIdx>;
 
 impl TypeIdx {
-    fn is_never(self) -> bool {
-        self == TYPE_NEVER
-    }
-    fn is_handler_of(self, ir: &IRContext, handler_idx: HandlerIdx) -> bool {
-        match ir.ir.types[self] {
-            Type::NakedHandler(idx) | Type::RawHandler(idx, _) | Type::Handler(idx) => {
-                idx == handler_idx
-            }
-            _ => false,
-        }
-    }
-
-    pub fn inner(self, ir: &IR) -> TypeIdx {
-        match ir.types[self] {
-            Type::Pointer(ty) => ty,
-            Type::ConstArray(_, ty) => ty,
-            Type::Slice(ty) => ty,
-            Type::HandlerOutput(_, ty) => ty,
-            Type::Handler(idx) | Type::NakedHandler(idx) | Type::RawHandler(idx, _) => {
-                ir.handler_type[idx].break_ty
-            }
-            Type::Never => TYPE_NEVER,
-            _ => unreachable!(),
-        }
-    }
-    fn is_handler(self, ir: &IRContext) -> bool {
-        match ir.ir.types[self] {
-            Type::NakedHandler(_)
-            | Type::RawHandler(_, _)
-            | Type::Handler(_)
-            | Type::HandlerOutput(_, _) => true,
-            _ => false,
-        }
-    }
-    fn fill_generic(self, ir: &IRContext, ty: analyzer::TypeIdx, gen: &mut ResolvedGenerics) {
+    fn fill_generic(self, ir: &IRCtx, ty: analyzer::TypeIdx, gen: &mut ResolvedGenerics) {
         use analyzer::Type as T;
         match ir.asys.types[ty] {
             T::FunctionLiteral(_) => {}
@@ -255,7 +137,7 @@ impl TypeIdx {
             T::Unknown => {}
         }
     }
-    fn from_type(ir: &mut IRContext, ty: analyzer::TypeIdx, gen: &ResolvedGenerics) -> TypeIdx {
+    fn from_type(ir: &mut IRCtx, ty: analyzer::TypeIdx, gen: &ResolvedGenerics) -> TypeIdx {
         use analyzer::Type as T;
         match ir.asys.types[ty] {
             T::Int | T::UInt => ir.insert_type(Type::Int),
@@ -291,11 +173,7 @@ impl TypeIdx {
             T::Unknown => unreachable!(),
         }
     }
-    fn from_return_type(
-        ir: &mut IRContext,
-        typ: analyzer::TypeIdx,
-        gen: &ResolvedGenerics,
-    ) -> TypeIdx {
+    fn from_return_type(ir: &mut IRCtx, typ: analyzer::TypeIdx, gen: &ResolvedGenerics) -> TypeIdx {
         use analyzer::Type as T;
         match ir.asys.types[typ] {
             T::Handler(eff, fail, _) => {
@@ -306,7 +184,7 @@ impl TypeIdx {
         }
     }
     fn from_capture(
-        ir: &mut IRContext,
+        ir: &mut IRCtx,
         typ: analyzer::TypeIdx,
         defs: &[(ExprIdx, Option<HandlerIdx>)],
         gen: &ResolvedGenerics,
@@ -330,7 +208,7 @@ impl TypeIdx {
         }
     }
     fn from_capture_val(
-        ir: &mut IRContext,
+        ir: &mut IRCtx,
         val: Val,
         defs: &[(ExprIdx, Option<HandlerIdx>)],
         gen: &ResolvedGenerics,
@@ -350,10 +228,10 @@ impl TypeIdx {
             }
         }
     }
-    fn from_expr(ir: &IRContext, expr: ExprIdx) -> analyzer::TypeIdx {
+    fn from_expr(ir: &IRCtx, expr: ExprIdx) -> analyzer::TypeIdx {
         ir.asys.exprs[expr]
     }
-    fn into_result(self, ir: &mut IRContext) -> ExprResult {
+    fn into_result(self, ir: &mut IRCtx) -> ExprResult {
         match self {
             TYPE_NEVER => Err(Never),
             TYPE_NONE => Ok(None),
@@ -364,104 +242,6 @@ impl TypeIdx {
         }
     }
 }
-
-pub struct AggregateType {
-    pub children: Vec<TypeIdx>,
-    pub debug_name: String,
-}
-
-vecmap_index!(BlockIdx);
-vecmap_index!(TypeIdx);
-vecmap_index!(AggrIdx);
-vecmap_index!(Reg);
-vecmap_index!(Global);
-
-impl Display for Reg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "R{:02}", self.0)
-    }
-}
-
-impl Display for Global {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "G{:02}", self.0)
-    }
-}
-
-impl Display for BlockIdx {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "L{}", self.0)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Block {
-    pub instructions: Vec<Instruction>,
-    pub next: Option<BlockIdx>,
-}
-
-#[derive(Debug)]
-pub enum Instruction {
-    Init(Reg, u64),
-    InitString(Reg, String),
-    Copy(Reg, Reg),
-    Uninit(Reg),
-    Zeroinit(Reg),
-    Cast(Reg, Reg),
-
-    // globals
-    SetScopedGlobal(Global, Reg, BlockIdx),
-    GetGlobal(Reg, Global),
-    GetGlobalPtr(Reg, Global),
-
-    // conditionals
-    Branch(Reg, BlockIdx, BlockIdx),
-    Phi(Reg, Vec<(Reg, BlockIdx)>),
-
-    // operations (r0 = r1 op r2)
-    Equals(Reg, Reg, Reg),
-    Greater(Reg, Reg, Reg),
-    Less(Reg, Reg, Reg),
-    Div(Reg, Reg, Reg),
-    Mul(Reg, Reg, Reg),
-    Add(Reg, Reg, Reg),
-    Sub(Reg, Reg, Reg),
-
-    // call procedure, put return into reg, call with arguments
-    Call(ProcIdx, Option<Reg>, Vec<Reg>),
-    CallForeign(ProcForeignIdx, Option<Reg>, Vec<Reg>),
-
-    // return statements
-    Yeet(Option<Reg>, HandlerIdx), // break with optional value to handler
-    Return(Option<Reg>),           // return with optional value
-    Unreachable,
-
-    // pointers
-    Reference(Reg, Reg),
-    Load(Reg, Reg),
-    Store(Reg, Reg),
-
-    // handler types
-    Handler(Reg, Vec<Reg>),
-    RawHandler(Reg, Reg),
-    UnrawHandler(Reg, Reg),
-
-    // aggregate types
-    Aggregate(Reg, Vec<Reg>),
-    Member(Reg, Reg, usize),
-    ElementPtr(Reg, Reg, Reg),
-    AdjacentPtr(Reg, Reg, Reg),
-
-    // kernel operations
-    Trap,
-    Trace(Reg),
-    Syscall(Option<Reg>, Reg, Vec<Reg>),
-    GS(Reg, u64), // read value at GS register with offset into reg
-}
-
-vecmap_index!(ProcIdx);
-vecmap_index!(ProcForeignIdx);
-vecmap_index!(HandlerIdx);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct ProcIdent {
@@ -479,13 +259,7 @@ struct HandlerCtx {
     captures: Vec<(Val, TypeIdx, bool)>,
 }
 
-#[derive(Debug, Clone)]
-pub struct HandlerType {
-    pub captures: Vec<TypeIdx>,
-    pub break_ty: TypeIdx,
-}
-
-struct IRContext<'a> {
+struct IRCtx<'a> {
     ir: IR,
 
     proc_map: HashMap<ProcIdent, Either<ProcIdx, ProcForeignIdx>>,
@@ -498,12 +272,12 @@ struct IRContext<'a> {
 
     len: Val,
 
-    parsed: &'a Parsed,
+    parsed: &'a AST,
     asys: &'a Analysis,
     files: &'a VecMap<FileIdx, File>,
 }
 
-impl<'a> IRContext<'a> {
+impl<'a> IRCtx<'a> {
     fn copy_reg(&mut self, reg: Reg) -> Reg {
         let typ = self.ir.regs[reg];
         self.next_reg(typ)
@@ -631,241 +405,6 @@ impl<'a> IRContext<'a> {
     }
 }
 
-pub struct IR {
-    pub proc_sign: VecMap<ProcIdx, ProcSign>,
-    pub proc_impl: VecMap<ProcIdx, ProcImpl>,
-    pub proc_foreign: VecMap<ProcForeignIdx, ProcForeign>,
-    pub entry: ProcIdx,
-
-    pub regs: VecMap<Reg, TypeIdx>,
-    pub globals: VecMap<Global, TypeIdx>,
-
-    pub types: VecSet<TypeIdx, Type>,
-    pub handler_type: VecMap<HandlerIdx, HandlerType>,
-    pub aggregates: VecMap<AggrIdx, AggregateType>,
-
-    pub links: HashSet<String>,
-}
-
-impl Display for IR {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (sign, imp) in self.proc_sign.values().zip(self.proc_impl.values()) {
-            // write proc signature
-            write!(f, "{}", sign.debug_name)?;
-
-            if sign.inputs.len() > 0 {
-                write!(f, " ( ")?;
-                for &r in sign.inputs.iter() {
-                    if r != *sign.inputs.first().unwrap() {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", r)?;
-                }
-                write!(f, " )")?;
-            }
-
-            if sign.unhandled.len() > 0 {
-                write!(f, " / ")?;
-                for handler in sign.unhandled.iter().copied() {
-                    if handler != sign.unhandled.first().copied().unwrap() {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", usize::from(handler))?
-                }
-            }
-
-            if sign.handled.len() > 0 {
-                write!(f, " try ")?;
-                for handler in sign.handled.iter().copied() {
-                    if handler != sign.handled.first().copied().unwrap() {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", usize::from(handler))?
-                }
-            }
-
-            write!(f, " {{\n")?;
-
-            // write blocks
-            for (i, block) in imp.blocks.values().enumerate() {
-                // write label
-                if i > 0 {
-                    writeln!(f, "{}:", BlockIdx(i))?;
-                }
-
-                // write instructions
-                for instr in block.instructions.iter() {
-                    write!(f, "  ")?;
-                    match *instr {
-                        Instruction::Init(r, v) => writeln!(f, "{} <- {}", r, v)?,
-                        Instruction::InitString(r, ref v) => writeln!(f, "{} <- \"{}\"", r, v)?,
-                        Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
-                        Instruction::Cast(r, v) => writeln!(f, "{} <- cast {}", r, v)?,
-                        Instruction::Uninit(r) => writeln!(f, "{} <- ---", r)?,
-                        Instruction::Zeroinit(r) => writeln!(f, "{} <- {0}", r)?,
-                        Instruction::Branch(r, y, n) => {
-                            writeln!(f, "       jnz {}, {}, {}", r, y, n)?
-                        }
-                        Instruction::Phi(r, ref v) => writeln!(
-                            f,
-                            "{} <- phi {}",
-                            r,
-                            v.iter()
-                                .map(|(r, b)| format!("[ {}, {} ]", r, b))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )?,
-                        Instruction::Equals(out, left, right) => {
-                            writeln!(f, "{} <- {} == {}", out, left, right)?
-                        }
-                        Instruction::Greater(out, left, right) => {
-                            writeln!(f, "{} <- {} > {}", out, left, right)?
-                        }
-                        Instruction::Less(out, left, right) => {
-                            writeln!(f, "{} <- {} < {}", out, left, right)?
-                        }
-                        Instruction::Div(out, left, right) => {
-                            writeln!(f, "{} <- {} / {}", out, left, right)?
-                        }
-                        Instruction::Mul(out, left, right) => {
-                            writeln!(f, "{} <- {} * {}", out, left, right)?
-                        }
-                        Instruction::Add(out, left, right) => {
-                            writeln!(f, "{} <- {} + {}", out, left, right)?
-                        }
-                        Instruction::Sub(out, left, right) => {
-                            writeln!(f, "{} <- {} - {}", out, left, right)?
-                        }
-                        Instruction::Call(proc, out, ref args) => writeln!(
-                            f,
-                            "{}cal {}{}",
-                            match out {
-                                Some(out) => format!("{} <- ", out),
-                                None => "       ".into(),
-                            },
-                            self.proc_sign[proc].debug_name,
-                            match args
-                                .iter()
-                                .map(|r| r.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .as_str()
-                            {
-                                "" => "".into(),
-                                a => format!(" ( {} )", a),
-                            },
-                        )?,
-                        Instruction::CallForeign(proc, out, ref args) => writeln!(
-                            f,
-                            "{}cal {}{}",
-                            match out {
-                                Some(out) => format!("{} <- ", out),
-                                None => "       ".into(),
-                            },
-                            self.proc_foreign[proc].symbol,
-                            match args
-                                .iter()
-                                .map(|r| r.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .as_str()
-                            {
-                                "" => "".into(),
-                                a => format!(" ( {} )", a),
-                            },
-                        )?,
-                        Instruction::Return(r) => writeln!(
-                            f,
-                            "       ret{}",
-                            match r {
-                                Some(r) => format!(" {}", r),
-                                None => "".into(),
-                            },
-                        )?,
-                        Instruction::Yeet(r, h) => writeln!(
-                            f,
-                            "       brk {}{}",
-                            usize::from(h),
-                            match r {
-                                Some(r) => format!(", {}", r),
-                                None => "".into(),
-                            },
-                        )?,
-                        Instruction::Aggregate(r, ref v) | Instruction::Handler(r, ref v) => {
-                            writeln!(
-                                f,
-                                "{} <- {{ {} }}",
-                                r,
-                                v.iter()
-                                    .map(|r| r.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                            )?
-                        }
-                        Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
-                        Instruction::Unreachable => writeln!(f, "       unreachable")?,
-                        Instruction::SetScopedGlobal(g, r, e) => {
-                            writeln!(f, "{} <- ssg {}, {}", g, r, e)?
-                        }
-                        Instruction::GetGlobal(r, g) => writeln!(f, "{} <- ggl {}", r, g)?,
-                        Instruction::GetGlobalPtr(r, g) => writeln!(f, "{} <- &ggl {}", r, g)?,
-                        Instruction::Reference(ptr, r) => writeln!(f, "{} <- &{}", ptr, r)?,
-                        Instruction::Load(r, ptr) => writeln!(f, "{} <- load {}", r, ptr)?,
-                        Instruction::Store(ptr, r) => writeln!(f, "       store {}, {}", ptr, r)?,
-                        Instruction::RawHandler(r, h) => writeln!(f, "{} <- raw {}", r, h)?,
-                        Instruction::UnrawHandler(r, h) => writeln!(f, "{} <- unraw {}", r, h)?,
-                        Instruction::ElementPtr(r, a, m) => {
-                            writeln!(f, "{} <- gep {}, 0, {}", r, a, m)?
-                        }
-                        Instruction::AdjacentPtr(r, a, m) => {
-                            writeln!(f, "{} <- gep {}, {}", r, a, m)?
-                        }
-                        Instruction::Trap => writeln!(f, "       trap")?,
-                        Instruction::Trace(r) => writeln!(f, "       trace {}", r)?,
-                        Instruction::Syscall(out, nr, ref args) => writeln!(
-                            f,
-                            "{}syscall {}{}",
-                            match out {
-                                Some(out) => format!("{} <- ", out),
-                                None => "       ".into(),
-                            },
-                            nr,
-                            match args
-                                .iter()
-                                .map(|r| r.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                                .as_str()
-                            {
-                                "" => "".into(),
-                                a => format!(" ( {} )", a),
-                            },
-                        )?,
-                        Instruction::GS(reg, offset) => writeln!(f, "{} <- GS:{}", reg, offset)?,
-                    }
-                }
-
-                // write next
-                if let Some(b) = block.next {
-                    if usize::from(b) != i + 1 {
-                        writeln!(f, "         jmp L{}", usize::from(b))?;
-                    }
-                }
-            }
-
-            // end proc
-            writeln!(f, "}}")?;
-        }
-        Ok(())
-    }
-}
-
-const TYPE_NEVER: TypeIdx = TypeIdx(0);
-const TYPE_NONE: TypeIdx = TypeIdx(1);
-
-const TYPE_STR_SLICE: TypeIdx = TypeIdx(5);
-const TYPE_BOOL: TypeIdx = TypeIdx(7);
-
 #[derive(Debug, Default)]
 struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
@@ -926,7 +465,7 @@ impl<'a> ProcCtx<'a> {
 type ProcTodo = Vec<ProcCtx<'static>>;
 
 fn define_function(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     fun: Either<Val, (HandlerIdx, EffFunIdx)>,
     handlers: Vec<HandlerIdx>,
     debug_name: String,
@@ -966,12 +505,12 @@ fn define_function(
 }
 
 pub fn generate_ir(
-    ctx: &Parsed,
+    ctx: &AST,
     asys: &Analysis,
     target: &Target,
     files: &VecMap<FileIdx, File>,
 ) -> IR {
-    let mut ir = IRContext {
+    let mut ir = IRCtx {
         proc_map: HashMap::new(),
         handlers: VecMap::new(),
         implied_handlers: HashMap::new(),
@@ -1018,7 +557,7 @@ pub fn generate_ir(
     let mut start_instructions = Vec::new();
 
     // define linker effect
-    let linker_effect = get_effect(ctx, ctx.preamble, "linker");
+    let linker_effect = get_effect(ctx, ctx.preamble, "foreign");
     let linker = ir.handlers.push(
         HandlerIdx,
         HandlerCtx {
@@ -1252,7 +791,7 @@ pub fn generate_ir(
                     AttributeValue::String(_) => None,
                     AttributeValue::Type(ty) => match ctx.types[ty].0 {
                         // TODO: support all types
-                        parser::Type::Path(id) if ctx.idents[id].0.eq("uptr") => {
+                        ast::Type::Path(id) if ctx.idents[id].0.eq("uptr") => {
                             Some(ir.insert_type(Type::IntPtr))
                         }
                         _ => None,
@@ -1347,6 +886,7 @@ pub fn generate_ir(
         match asys.capabilities.get(&val).copied() {
             Some(fun) => {
                 // add function effects to used capabilities
+                // TODO: support typeclass effects
                 match asys.defs[fun] {
                     Definition::EffectFunction(idx, fun, _) => {
                         effects.extend(
@@ -1604,7 +1144,7 @@ pub fn generate_ir(
     ir.ir
 }
 
-fn get_effect<'a>(ctx: &'a Parsed, package: PackageIdx, name: &str) -> &'a parser::Effect {
+fn get_effect<'a>(ctx: &'a AST, package: PackageIdx, name: &str) -> &'a ast::Effect {
     ctx.packages[package]
         .effects
         .iter()
@@ -1614,7 +1154,7 @@ fn get_effect<'a>(ctx: &'a Parsed, package: PackageIdx, name: &str) -> &'a parse
         .unwrap()
 }
 
-fn get_function<'a>(ctx: &'a Parsed, package: PackageIdx, name: &str) -> &'a parser::Function {
+fn get_function<'a>(ctx: &'a AST, package: PackageIdx, name: &str) -> &'a ast::Function {
     ctx.packages[package]
         .functions
         .iter()
@@ -1625,7 +1165,7 @@ fn get_function<'a>(ctx: &'a Parsed, package: PackageIdx, name: &str) -> &'a par
 }
 
 fn get_proc(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     val: Val,
     proc_idx: ProcIdx,
     scope: &Scope,
@@ -1778,7 +1318,7 @@ fn get_proc(
                 handler_params: param_types
                     .iter()
                     .copied()
-                    .filter(|t| t.is_handler(ir))
+                    .filter(|t| t.is_handler(&ir.ir))
                     .collect(),
                 generics: sorted,
             };
@@ -1812,7 +1352,7 @@ fn get_proc(
 }
 
 fn get_generics(
-    ir: &IRContext,
+    ir: &IRCtx,
     sign: &analyzer::FunSign,
     param_types: &[TypeIdx],
     output: TypeIdx,
@@ -1828,9 +1368,9 @@ fn get_generics(
 }
 
 fn gen_proc(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     procident: ProcIdent,
-    fun: &parser::Function,
+    fun: &ast::Function,
     param_types: Box<[TypeIdx]>,
     output: TypeIdx,
     generics: Rc<ResolvedGenerics>,
@@ -1908,6 +1448,11 @@ fn gen_proc(
     }
 
     // generate func
+    let output = match ir.asys.types[ir.asys.exprs[fun.body]] {
+        analyzer::Type::Never => TYPE_NEVER,
+        _ => output,
+    };
+
     generate_proc_sign(
         ir,
         Some(procident.fun),
@@ -1924,7 +1469,7 @@ fn gen_proc(
 }
 
 fn get_handler_proc(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     handler_idx: HandlerIdx,
     eff_fun_idx: EffFunIdx,
     proc_idx: ProcIdx,
@@ -1988,7 +1533,7 @@ fn get_handler_proc(
         handler_params: param_types
             .iter()
             .copied()
-            .filter(|t| t.is_handler(ir))
+            .filter(|t| t.is_handler(&ir.ir))
             .collect(),
         generics: sorted,
     };
@@ -2019,7 +1564,7 @@ fn get_handler_proc(
 }
 
 fn gen_handler_proc(
-    ir: &mut IRContext<'_>,
+    ir: &mut IRCtx<'_>,
     procident: ProcIdent,
     def: Option<ExprIdx>,
     param_types: Box<[TypeIdx]>,
@@ -2128,6 +1673,11 @@ fn gen_handler_proc(
     }
 
     // generate handler proc
+    let output = match ir.asys.types[ir.asys.exprs[body]] {
+        analyzer::Type::Never => TYPE_NEVER,
+        _ => output,
+    };
+
     generate_proc_sign(
         ir,
         Some(procident.fun),
@@ -2144,7 +1694,7 @@ fn gen_handler_proc(
 }
 
 fn generate_proc_sign(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     ident: Option<Either<Val, (HandlerIdx, EffFunIdx)>>,
     unhandled: Cow<[HandlerIdx]>,
     handled: &[HandlerIdx],
@@ -2283,7 +1833,7 @@ fn generate_proc_sign(
                 handler_params: params
                     .iter()
                     .copied()
-                    .filter_map(|(_, t, _)| if t.is_handler(ir) { Some(t) } else { None })
+                    .filter_map(|(_, t, _)| if t.is_handler(&ir.ir) { Some(t) } else { None })
                     .collect(),
                 generics: sorted,
             },
@@ -2375,7 +1925,7 @@ fn generate_proc_sign(
 }
 
 fn handler_type(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     effect: Val,
     def: Option<analyzer::HandlerIdx>,
     proc_idx: ProcIdx,
@@ -2445,7 +1995,7 @@ fn handler_type(
     }
 }
 
-fn generate_proc_impl(ir: &mut IRContext, mut ctx: ProcCtx, proc_todo: &mut ProcTodo) -> ProcImpl {
+fn generate_proc_impl(ir: &mut IRCtx, mut ctx: ProcCtx, proc_todo: &mut ProcTodo) -> ProcImpl {
     let mut blocks = VecMap::new();
     let start = blocks.push(BlockIdx, Block::default());
 
@@ -2485,7 +2035,7 @@ struct Never;
 type ExprResult = Result<Option<Value>, Never>;
 
 fn get_captures(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     scope: &mut Scope,
     block: &mut Block,
     expr: ExprIdx,
@@ -2581,7 +2131,7 @@ fn get_captures(
 }
 
 fn generate_expr(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     ctx: &mut ProcCtx,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: &mut BlockIdx,
@@ -2658,7 +2208,7 @@ fn generate_expr(
                                         };
                                         ir.asys.values[effect.functions[EffFunIdx(0)].name] == val
                                             && ctx.scope.get(eff_val).is_some_and(|v| {
-                                                v.get_type(&ir.ir).is_handler_of(ir, idx)
+                                                v.get_type(&ir.ir).is_handler_of(&ir.ir, idx)
                                             })
                                     }) {
                                         // get library name
@@ -2743,10 +2293,9 @@ fn generate_expr(
                                     _ => unreachable!(),
                                 };
                                 ir.asys.values[effect.functions[EffFunIdx(0)].name] == val
-                                    && ctx
-                                        .scope
-                                        .get(eff_val)
-                                        .is_some_and(|v| v.get_type(&ir.ir).is_handler_of(ir, idx))
+                                    && ctx.scope.get(eff_val).is_some_and(|v| {
+                                        v.get_type(&ir.ir).is_handler_of(&ir.ir, idx)
+                                    })
                             }) {
                                 // get library name
                                 match ir.parsed.exprs[args[0]].0 {
@@ -3613,7 +3162,7 @@ struct Path {
 }
 
 fn generate_phi(
-    ir: &mut IRContext,
+    ir: &mut IRCtx,
     blocks: &mut VecMap<BlockIdx, Block>,
     block: BlockIdx,
     scope: &mut Scope,

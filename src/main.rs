@@ -8,19 +8,19 @@ use std::{
 };
 
 use analyzer::{analyze, Analysis};
+use ast::{parse_ast, AST};
 use clap::Parser;
 use error::{Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
-use parser::{parse_ast, Parsed};
 use vecmap::VecMap;
 
 mod analyzer;
+mod ast;
 mod error;
 mod ir;
 mod lexer;
 mod llvm;
-mod parser;
 mod vecmap;
 
 #[derive(Debug)]
@@ -163,8 +163,8 @@ fn parse_from_filename(
     main_file: &Path,
     core_path: &Path,
     target: &Target,
-) -> Result<(Parsed, Analysis, VecMap<FileIdx, File>), Errors> {
-    let mut parsed = Parsed::default();
+) -> Result<(AST, Analysis, VecMap<FileIdx, File>), Errors> {
+    let mut parsed = AST::default();
     let mut errors = Errors::new();
 
     let preamble = core_path.join("core").join("preamble.lucu");

@@ -2,14 +2,14 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::parser::AttributeValue;
+use crate::ast::AttributeValue;
 use crate::Target;
 use crate::{
-    error::{Error, Errors, Ranged},
-    parser::{
+    ast::{
         self, BinOp, EffFunIdx, EffIdx, EffectIdent, ExprIdx, Expression, FunIdx, Ident,
-        PackageIdx, ParamIdx, Parsed, UnOp,
+        PackageIdx, ParamIdx, UnOp, AST,
     },
+    error::{Error, Errors, Ranged},
     vecmap::{vecmap_index, VecMap, VecSet},
 };
 
@@ -351,7 +351,7 @@ pub struct Analysis {
 struct AsysContext<'a> {
     asys: Analysis,
     packages: VecMap<PackageIdx, Package>,
-    parsed: &'a Parsed,
+    parsed: &'a AST,
 }
 
 struct Scope<'a> {
@@ -567,13 +567,13 @@ fn analyze_expr(
         Expression::Handler(ref handler) => {
             // resolve effect
             let (effect, ident, yeet_type) = match *handler {
-                parser::Handler::Full {
+                ast::Handler::Full {
                     effect, fail_type, ..
                 } => {
                     let yeet_type = match fail_type {
-                        parser::FailType::Never => TYPE_NEVER,
-                        parser::FailType::None => TYPE_NONE,
-                        parser::FailType::Some(t) => {
+                        ast::FailType::Never => TYPE_NEVER,
+                        ast::FailType::None => TYPE_NONE,
+                        ast::FailType::Some(t) => {
                             let yeet_type = analyze_type(ctx, scope, t, errors, None);
 
                             if matches!(ctx.asys.types[yeet_type], Type::Handler(_, _, _)) {
@@ -589,7 +589,7 @@ fn analyze_expr(
                         yeet_type,
                     )
                 }
-                parser::Handler::Lambda(_) => match ctx.asys.types[expected_ty] {
+                ast::Handler::Lambda(_) => match ctx.asys.types[expected_ty] {
                     Type::Handler(effect, yeet_type, _) => {
                         // TODO: check if matches (one fun, param count)
                         (Some(effect), None, yeet_type)
@@ -1389,7 +1389,7 @@ fn analyze_effect(
 fn analyze_return(
     ctx: &mut AsysContext,
     scope: &Scope,
-    ty: Option<parser::TypeIdx>,
+    ty: Option<ast::TypeIdx>,
     errors: &mut Errors,
     generics: &mut HashMap<String, Val>,
 ) -> TypeIdx {
@@ -1402,15 +1402,15 @@ fn analyze_return(
 fn analyze_type(
     ctx: &mut AsysContext,
     scope: &Scope,
-    ty: parser::TypeIdx,
+    ty: ast::TypeIdx,
     errors: &mut Errors,
     mut generics: Option<&mut HashMap<String, Val>>,
 ) -> TypeIdx {
-    use parser::Type as T;
+    use ast::Type as T;
     let (id, fail) = match ctx.parsed.types[ty].0 {
         T::Never => return TYPE_NEVER,
         T::Error => return TYPE_UNKNOWN,
-        T::Path(id) => (id, parser::FailType::Never),
+        T::Path(id) => (id, ast::FailType::Never),
         T::Handler(id, fail) => (id, fail),
         T::Pointer(ty) => {
             let inner = analyze_type(ctx, scope, ty, errors, generics);
@@ -1474,9 +1474,9 @@ fn analyze_type(
                 },
             };
             let fail = match fail {
-                parser::FailType::Never => TYPE_NEVER,
-                parser::FailType::None => TYPE_NONE,
-                parser::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
+                ast::FailType::Never => TYPE_NEVER,
+                ast::FailType::None => TYPE_NONE,
+                ast::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
             };
             if matches!(ctx.asys.types[fail], Type::Handler(_, _, _)) {
                 errors.push(ctx.parsed.types[ty].with(Error::NestedHandlers))
@@ -1493,7 +1493,7 @@ fn analyze_type(
             ctx.asys.values[id] = val;
             match ctx.asys.defs[val] {
                 Definition::BuiltinType(ty) => {
-                    if matches!(fail, parser::FailType::Never) {
+                    if matches!(fail, ast::FailType::Never) {
                         ty
                     } else {
                         errors.push(ctx.parsed.idents[id].with(Error::ExpectedEffect(
@@ -1517,9 +1517,9 @@ fn analyze_type(
             Some(&val) => {
                 ctx.asys.values[id] = val;
                 let fail = match fail {
-                    parser::FailType::Never => TYPE_NEVER,
-                    parser::FailType::None => TYPE_NONE,
-                    parser::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
+                    ast::FailType::Never => TYPE_NEVER,
+                    ast::FailType::None => TYPE_NONE,
+                    ast::FailType::Some(ty) => analyze_type(ctx, scope, ty, errors, generics),
                 };
                 if matches!(ctx.asys.types[fail], Type::Handler(_, _, _)) {
                     errors.push(ctx.parsed.types[ty].with(Error::NestedHandlers))
@@ -1527,7 +1527,7 @@ fn analyze_type(
                 ctx.asys.insert_type(Type::Handler(val, fail, None))
             }
             None => {
-                if matches!(fail, parser::FailType::Never) {
+                if matches!(fail, ast::FailType::Never) {
                     errors.push(ctx.parsed.idents[id].with(Error::UnknownType))
                 } else {
                     errors.push(ctx.parsed.idents[id].with(Error::UnknownEffect))
@@ -1541,7 +1541,7 @@ fn analyze_type(
 fn analyze_sign(
     ctx: &mut AsysContext,
     scope: &Scope,
-    func: &parser::FunSign,
+    func: &ast::FunSign,
     errors: &mut Errors,
     generics: &mut HashMap<String, Val>,
 ) -> Vec<TypeIdx> {
@@ -1577,7 +1577,7 @@ fn analyze_sign(
 fn scope_sign(
     ctx: &AsysContext,
     scope: &mut Scope,
-    func: &parser::FunSign,
+    func: &ast::FunSign,
     generics: &HashMap<String, Val>,
 ) {
     // put args in scope
@@ -1608,7 +1608,7 @@ const TYPE_UPTR: TypeIdx = TypeIdx(7);
 const TYPE_U8: TypeIdx = TypeIdx(8);
 const TYPE_UINT: TypeIdx = TypeIdx(9);
 
-pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysis {
+pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
     let os = target.lucu_os();
     let os = os.as_str();
 
@@ -1675,7 +1675,7 @@ pub fn analyze(parsed: &Parsed, errors: &mut Errors, target: &Target) -> Analysi
         }
         for &implied in package.implied.iter() {
             let effect = match &parsed.exprs[implied].0 {
-                Expression::Handler(parser::Handler::Full { effect, .. }) => effect,
+                Expression::Handler(ast::Handler::Full { effect, .. }) => effect,
                 _ => panic!(),
             };
             let name = &parsed.idents[effect.effect].0;

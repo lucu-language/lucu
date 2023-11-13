@@ -1,54 +1,19 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
-    matches,
     path::{Path, PathBuf},
 };
 
-use either::Either;
-
 use crate::{
-    error::{Error, Expected, FileIdx, Range, Ranged},
+    error::{Error, Expected, Range, Ranged},
     lexer::{Group, Token, Tokenizer, GENERIC},
-    vecmap::{vecmap_index, VecMap},
+    vecmap::VecMap,
 };
 
-vecmap_index!(ExprIdx);
-vecmap_index!(TypeIdx);
-vecmap_index!(Ident);
-vecmap_index!(PackageIdx);
-
-vecmap_index!(ParamIdx);
-vecmap_index!(FunIdx);
-vecmap_index!(EffIdx);
-vecmap_index!(EffFunIdx);
-
-impl Default for ExprIdx {
-    fn default() -> Self {
-        ExprIdx(0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOp {
-    Assign,
-    Equals,
-    Less,
-    Greater,
-    Divide,
-    Multiply,
-    Subtract,
-    Add,
-    Index,
-    Range,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnOp {
-    PostIncrement,
-    Reference,
-    Cast,
-}
+use super::{
+    Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, EffectIdent, ExprIdx, Expression,
+    FailType, FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx,
+    Param, Type, TypeIdx, UnOp, AST,
+};
 
 impl BinOp {
     fn from_token(value: &Token) -> Option<BinOp> {
@@ -67,331 +32,16 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Default)]
-pub enum Expression {
-    Body(Body),
-    Loop(ExprIdx),
-
-    Call(ExprIdx, Vec<ExprIdx>),
-    Member(ExprIdx, Ident),
-    IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
-    BinOp(ExprIdx, BinOp, ExprIdx),
-    UnOp(ExprIdx, UnOp),
-    Yeet(Option<ExprIdx>),
-    Let(bool, Ident, Option<TypeIdx>, ExprIdx),
-
-    TryWith(ExprIdx, Option<ExprIdx>),
-    Handler(Handler),
-
-    Array(Vec<ExprIdx>),
-    String(String),
-    Character(String),
-    Int(u64),
-    Ident(Ident),
-    Uninit,
-
-    #[default]
-    Error, // error at parsing, coerces to any type
-}
-
-#[derive(Debug)]
-pub struct Body {
-    pub main: Vec<ExprIdx>,
-    pub last: Option<ExprIdx>,
-}
-
-impl Body {
-    fn parse_or_default(tk: &mut Tokens) -> Ranged<Expression> {
-        let start = tk.pos_start();
-        match Self::parse_or_skip(tk) {
-            Some(body) => body.map(Expression::Body),
-            None => Ranged(Expression::Error, start, start, tk.iter.file),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Lambda {
-    pub inputs: VecMap<ParamIdx, Ident>,
-    pub body: ExprIdx,
-}
-
-#[derive(Debug)]
-pub enum Handler {
-    Full {
-        fail_type: FailType,
-        effect: EffectIdent,
-        functions: Vec<Function>,
-    },
-    Lambda(Lambda),
-}
-
-impl Handler {
-    pub fn functions(
-        &self,
-        effect: &Effect,
-    ) -> Either<
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-    > {
-        match *self {
-            Handler::Full { ref functions, .. } => {
-                Either::Left(functions.iter().map(|f| (Cow::Borrowed(&f.decl), f.body)))
-            }
-            Handler::Lambda(Lambda {
-                body, ref inputs, ..
-            }) => {
-                let mut decl: FunDecl = effect.functions.values().next().unwrap().clone();
-
-                // set signature input names
-                for (idx, &input) in inputs.iter(ParamIdx) {
-                    decl.sign.inputs[idx].name = input;
-                }
-
-                Either::Right(std::iter::once((Cow::Owned(decl), body)))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub enum Type {
-    Never,
-    Path(Ident),
-    Handler(Ident, FailType),
-
-    Generic(Ident),
-    GenericHandler(Ident, FailType),
-
-    Pointer(TypeIdx),
-    Const(TypeIdx),
-    ConstArray(u64, TypeIdx),
-    Slice(TypeIdx),
-
-    #[default]
-    Error, // error at parsing, coerces to any type
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum FailType {
-    Never,
-    None,
-    Some(TypeIdx),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EffectIdent {
-    pub package: Option<Ident>,
-    pub effect: Ident,
-}
-
-#[derive(Debug, Clone)]
-pub struct Param {
-    pub mutable: bool,
-    pub const_generic: bool,
-    pub name: Ident,
-    pub ty: TypeIdx,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunSign {
-    pub inputs: VecMap<ParamIdx, Param>,
-    pub output: Option<TypeIdx>,
-    pub effects: Vec<EffectIdent>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunDecl {
-    pub name: Ident,
-    pub sign: FunSign,
-    pub attributes: Vec<Attribute>,
-}
-
-#[derive(Debug, Clone)]
-pub enum AttributeValue {
-    String(Ranged<String>),
-    Type(TypeIdx),
-}
-
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    pub name: Ident,
-    pub settings: Vec<(Ident, AttributeValue)>,
-}
-
-#[derive(Debug)]
-pub struct Function {
-    pub decl: FunDecl,
-    pub body: ExprIdx,
-}
-
-#[derive(Debug)]
-pub struct Effect {
-    pub name: Ident,
-    pub functions: VecMap<EffFunIdx, FunDecl>,
-    pub attributes: Vec<Attribute>,
-}
-
-#[derive(Default)]
-pub struct Package {
-    pub effects: Vec<EffIdx>,
-    pub implied: Vec<ExprIdx>,
-    pub functions: Vec<FunIdx>,
-    pub imports: HashMap<String, PackageIdx>,
-}
-
-pub struct Parsed {
-    pub effects: VecMap<EffIdx, Effect>,
-    pub functions: VecMap<FunIdx, Function>,
-    pub packages: VecMap<PackageIdx, Package>,
-
-    pub main: PackageIdx,
-    pub preamble: PackageIdx,
-
-    // package inside core of the current system
-    pub system: PackageIdx,
-
-    pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
-    pub types: VecMap<TypeIdx, Ranged<Type>>,
-    pub idents: VecMap<Ident, Ranged<String>>,
-}
-
-impl Default for Parsed {
-    fn default() -> Self {
-        let mut packages = VecMap::new();
-        let core = packages.push(PackageIdx, Package::default());
-        let main = packages.push(PackageIdx, Package::default());
-        let system = packages.push(PackageIdx, Package::default());
-
-        let mut exprs = VecMap::new();
-        exprs.push_value(Ranged(Expression::Error, 0, 0, FileIdx(0)));
-
-        Self {
-            effects: VecMap::new(),
-            functions: VecMap::new(),
-            packages,
-            main,
-            preamble: core,
-            system,
-            exprs,
-            types: VecMap::new(),
-            idents: VecMap::new(),
-        }
-    }
-}
-
-impl Parsed {
-    pub fn for_each(
-        &self,
-        expr: ExprIdx,
-        do_try: bool,
-        do_handler: bool,
-        f: &mut impl FnMut(ExprIdx),
-    ) {
-        f(expr);
-        match self.exprs[expr].0 {
-            Expression::Body(ref b) => {
-                for expr in b.main.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(expr) = b.last {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Loop(expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Call(expr, ref args) => {
-                self.for_each(expr, do_try, do_handler, f);
-                for expr in args.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Array(ref elems) => {
-                for expr in elems.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Member(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::IfElse(cond, yes, no) => {
-                self.for_each(cond, do_try, do_handler, f);
-                self.for_each(yes, do_try, do_handler, f);
-                if let Some(no) = no {
-                    self.for_each(no, do_try, do_handler, f);
-                }
-            }
-            Expression::BinOp(left, _, right) => {
-                self.for_each(left, do_try, do_handler, f);
-                self.for_each(right, do_try, do_handler, f);
-            }
-            Expression::Yeet(expr) => {
-                if let Some(expr) = expr {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::TryWith(expr, handler) => {
-                if do_try {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(handler) = handler {
-                    self.for_each(handler, do_try, do_handler, f);
-                }
-            }
-            Expression::Let(_, _, _, expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::UnOp(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Handler(ref h) => {
-                if do_handler {
-                    match *h {
-                        Handler::Full { ref functions, .. } => {
-                            for fun in functions.iter() {
-                                self.for_each(fun.body, do_try, do_handler, f);
-                            }
-                        }
-                        Handler::Lambda(Lambda { body, .. }) => {
-                            self.for_each(body, do_try, do_handler, f);
-                        }
-                    }
-                }
-            }
-            Expression::String(_) => {}
-            Expression::Character(_) => {}
-            Expression::Int(_) => {}
-            Expression::Ident(_) => {}
-            Expression::Error => {}
-            Expression::Uninit => {}
-        }
-    }
-    pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
-        let mut acc = Some(acc);
-        self.for_each(expr, true, false, &mut |e| {
-            acc = Some(f(acc.take().unwrap(), e))
-        });
-        acc.unwrap()
-    }
-    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(ExprIdx) -> bool) -> bool {
-        self.fold(expr, false, |n, e| n || f(e))
-    }
-    pub fn yeets(&self, expr: ExprIdx) -> bool {
-        self.any(expr, |e| matches!(self.exprs[e].0, Expression::Yeet(_)))
-    }
-}
-
-struct Tokens<'a> {
+struct ParseCtx<'a> {
     iter: Tokenizer<'a>,
     peeked: Option<Option<<Tokenizer<'a> as Iterator>::Item>>,
     last: usize,
-    context: &'a mut Parsed,
+    context: &'a mut AST,
     allow_lambda_args: bool,
     attributes: Option<Vec<Attribute>>,
 }
 
-impl<'a> Tokens<'a> {
+impl<'a> ParseCtx<'a> {
     fn pos_start(&mut self) -> usize {
         self.peek().map(|p| p.1).unwrap_or(usize::MAX)
     }
@@ -646,10 +296,10 @@ impl<'a> Tokens<'a> {
 }
 
 trait Parse: Sized {
-    fn parse(tk: &mut Tokens) -> Option<Self>;
+    fn parse(tk: &mut ParseCtx) -> Option<Self>;
 
     // parse, and if it could not be parsed, skip to anchor tokens
-    fn parse_or_skip(tk: &mut Tokens) -> Option<Ranged<Self>> {
+    fn parse_or_skip(tk: &mut ParseCtx) -> Option<Ranged<Self>> {
         let start = tk.pos_start();
         match Self::parse(tk) {
             // successful parse
@@ -677,7 +327,7 @@ trait Parse: Sized {
 }
 
 trait ParseDefault: Parse + Default {
-    fn parse_or_default(tk: &mut Tokens) -> Ranged<Self> {
+    fn parse_or_default(tk: &mut ParseCtx) -> Ranged<Self> {
         let start = tk.pos_start();
         Self::parse_or_skip(tk).unwrap_or(Ranged(Self::default(), start, start, tk.iter.file))
     }
@@ -688,12 +338,12 @@ impl<T> ParseDefault for T where T: Parse + Default {}
 pub fn parse_ast<'a>(
     tk: Tokenizer<'a>,
     idx: PackageIdx,
-    parsed: &'a mut Parsed,
+    parsed: &'a mut AST,
     file_path: &Path,
     lib_paths: &HashMap<&str, &Path>,
     todo_packages: &mut Vec<(PathBuf, PackageIdx)>,
 ) {
-    let mut tk = Tokens {
+    let mut tk = ParseCtx {
         iter: tk,
         peeked: None,
         last: 0,
@@ -805,7 +455,7 @@ pub fn parse_ast<'a>(
 }
 
 impl Parse for Type {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         match tk.peek() {
             Some(Ranged(Token::Bang, ..)) => {
                 tk.next();
@@ -891,7 +541,7 @@ impl Parse for Type {
 }
 
 impl Parse for FailType {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk.check(Token::Yeets).is_some() {
             if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
                 Some(FailType::None)
@@ -907,7 +557,7 @@ impl Parse for FailType {
 }
 
 impl Parse for Option<TypeIdx> {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk
             .peek()
             .map(|t| t.0.continues_statement() || t.0 == Token::Loop)
@@ -923,7 +573,7 @@ impl Parse for Option<TypeIdx> {
 }
 
 impl Parse for FunSign {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut decl = FunSign {
             inputs: VecMap::new(),
             effects: Vec::new(),
@@ -968,7 +618,7 @@ impl Parse for FunSign {
 }
 
 impl Parse for FunDecl {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         tk.expect(Token::Fun)?;
         let name = tk.ident()?;
 
@@ -983,7 +633,7 @@ impl Parse for FunDecl {
 }
 
 impl Parse for Effect {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         tk.expect(Token::Effect)?;
         let name = tk.ident()?;
 
@@ -1013,7 +663,7 @@ impl Parse for Effect {
 }
 
 impl Parse for Vec<Attribute> {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut attrs = Vec::new();
         while tk.check(Token::At).is_some() {
             let name = tk.ident()?;
@@ -1046,7 +696,7 @@ impl Parse for Vec<Attribute> {
 }
 
 impl Parse for Function {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let decl = FunDecl::parse_or_skip(tk)?.0;
 
         let body = Body::parse_or_default(tk);
@@ -1059,7 +709,7 @@ impl Parse for Function {
 }
 
 impl Parse for Handler {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk.check(Token::Fun).is_some() {
             Some(Handler::Lambda(Lambda::parse_or_skip(tk)?.0))
         } else {
@@ -1103,7 +753,7 @@ impl Parse for Handler {
 }
 
 impl Parse for Lambda {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
 
         let mut inputs = VecMap::new();
@@ -1194,7 +844,7 @@ impl Parse for Lambda {
 }
 
 impl Parse for Expression {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
         let expr = tk.ranged(|tk| match tk.peek() {
             // uninit
@@ -1484,7 +1134,7 @@ impl Parse for Expression {
 }
 
 fn expression_post(
-    tk: &mut Tokens<'_>,
+    tk: &mut ParseCtx<'_>,
     mut expr: Ranged<Expression>,
     start: usize,
 ) -> Option<Expression> {
@@ -1607,7 +1257,7 @@ fn expression_post(
 }
 
 impl Parse for Body {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut main = Vec::new();
         let mut last = None;
 
@@ -1636,5 +1286,15 @@ impl Parse for Body {
         })?;
 
         Some(Body { main, last })
+    }
+}
+
+impl Body {
+    fn parse_or_default(tk: &mut ParseCtx) -> Ranged<Expression> {
+        let start = tk.pos_start();
+        match Self::parse_or_skip(tk) {
+            Some(body) => body.map(Expression::Body),
+            None => Ranged(Expression::Error, start, start, tk.iter.file),
+        }
     }
 }

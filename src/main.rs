@@ -21,6 +21,7 @@ mod error;
 mod ir;
 mod lexer;
 mod llvm;
+mod sema;
 mod vecmap;
 
 #[derive(Debug)]
@@ -241,6 +242,8 @@ fn parse_from_filename(
             },
         }
     }
+
+    println!("{:#?}", sema::analyze(&parsed, &mut Errors::new(), &target));
 
     let asys = analyze(&parsed, &mut errors, &target);
 

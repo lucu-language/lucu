@@ -35,6 +35,7 @@ struct Scope {
     funs: HashMap<String, FunIdent>,
     effects: HashMap<String, GenericVal<EffIdx>>,
     types: HashMap<String, TypeIdx>,
+    generics: HashMap<String, GenericIdx>,
 }
 
 impl ScopeStack {
@@ -77,6 +78,9 @@ impl ScopeStack {
     }
     fn get_type(&self, ctx: &SemCtx, name: &str) -> Option<TypeIdx> {
         self.search(ctx, |s| s.types.get(name).copied())
+    }
+    fn get_generic(&self, ctx: &SemCtx, name: &str) -> Option<GenericIdx> {
+        self.search(ctx, |s| s.generics.get(name).copied())
     }
 
     fn try_function(&self, ctx: &mut SemCtx, id: Ident) -> Option<FunIdent> {
@@ -246,14 +250,16 @@ impl SemCtx<'_> {
             }
             T::Generic(id) => {
                 let name = &self.ast.idents[id];
-                match scope.get_type(self, &name.0) {
-                    Some(ty) => ty,
+                match scope.get_generic(self, &name.0) {
+                    Some(idx) => {
+                        // TODO: check if generic is type
+                        self.insert_type(Type::Generic(idx))
+                    }
                     None => match generics {
                         Some(generics) => {
                             let idx = generics.push(GenericIdx, TYPE_TYPE);
-                            let ty = self.insert_type(Type::Generic(idx));
-                            scope.top().types.insert(name.0.clone(), ty);
-                            ty
+                            scope.top().generics.insert(name.0.clone(), idx);
+                            self.insert_type(Type::Generic(idx))
                         }
                         None => {
                             // TODO: custom error
@@ -267,14 +273,16 @@ impl SemCtx<'_> {
                 let fail = self.analyze_fail(scope, fail, generics.as_deref_mut(), generic_handler);
 
                 let name = &self.ast.idents[id];
-                let effect = match scope.get_effect(self, &name.0) {
-                    Some(effect) => effect,
+                let effect = match scope.get_generic(self, &name.0) {
+                    Some(idx) => {
+                        // TODO: check if generic is effect
+                        GenericVal::Generic(idx)
+                    }
                     None => match generics.as_deref_mut() {
                         Some(generics) => {
                             let idx = generics.push(GenericIdx, TYPE_EFFECT);
-                            let effect = GenericVal::Generic(idx);
-                            scope.top().effects.insert(name.0.clone(), effect);
-                            effect
+                            scope.top().generics.insert(name.0.clone(), idx);
+                            GenericVal::Generic(idx)
                         }
                         None => {
                             // TODO: custom error
@@ -555,22 +563,16 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 let mut generics = Generics::default();
                 let mut params = Vec::new();
                 for param in effect.generics.iter().flat_map(|v| v.values()) {
-                    let const_ty = param
+                    let ty = param
                         .ty
                         .map(|ty| ctx.analyze_type(scope, ty, Some(&mut generics), true))
                         .unwrap_or(TYPE_TYPE);
-                    let idx = generics.push(GenericIdx, const_ty);
+                    let idx = generics.push(GenericIdx, ty);
                     let ty = ctx.insert_type(Type::Generic(idx));
                     params.push(ty);
 
                     let name = ast.idents[param.name].0.clone();
-                    if const_ty == TYPE_TYPE {
-                        scope.top().types.insert(name, ty);
-                    } else if const_ty == TYPE_EFFECT {
-                        scope.top().effects.insert(name, GenericVal::Generic(idx));
-                    } else {
-                        // TODO: values
-                    }
+                    scope.top().generics.insert(name, idx);
                 }
 
                 // add functions to scope

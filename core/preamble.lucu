@@ -15,7 +15,7 @@ effect debug {
 }
 
 @capability
-fun debug() debug / io.stdio {
+fun debug() handle debug / io.stdio {
 	let in = io.stdin()
 	let out = io.stdout()
 	handle debug {
@@ -73,7 +73,7 @@ handle break fails {
 ##
 # basic ranged for loop
 ##
-fun for(start usize, end usize, fn consume fails) {
+fun for(start usize, end usize, fn handle consume fails) {
 	mut n = start
 	with fn loop {
 		if n == end {
@@ -167,7 +167,7 @@ effect foreign {
 }
 
 @capability
-fun _foreign_internal() foreign # / srcloc
+fun _foreign_internal() handle foreign # / srcloc
 {
 	internal()
 }

@@ -5,7 +5,7 @@ effect striter {
 effect strbuf {
 	fun push(elem str) usize
 	fun get(index usize) str
-	fun iter() striter fails
+	fun iter() handle striter fails
 }
 
 fun array_buffer() strbuf {
@@ -19,7 +19,7 @@ fun array_buffer() strbuf {
 		fun get(index usize) str {
 			array[index]
 		}
-		fun iter() striter fails {
+		fun iter() handle striter fails {
 			mut current usize = 0
 			fun {
 				if current < size {

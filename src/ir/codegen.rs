@@ -791,7 +791,7 @@ pub fn generate_ir(
                     AttributeValue::String(_) => None,
                     AttributeValue::Type(ty) => match ctx.types[ty].0 {
                         // TODO: support all types
-                        ast::Type::Path(id) if ctx.idents[id].0.eq("uptr") => {
+                        ast::Type::Path(ref id) if ctx.idents[id.ident.ident].0.eq("uptr") => {
                             Some(ir.insert_type(Type::IntPtr))
                         }
                         _ => None,
@@ -874,7 +874,7 @@ pub fn generate_ir(
         .sign
         .effects
         .iter()
-        .map(|i| asys.values[i.effect])
+        .map(|i| asys.values[i.ident.ident])
         .collect::<Vec<_>>();
     while let Some(val) = effects.pop() {
         // we already have this capability defined
@@ -894,7 +894,7 @@ pub fn generate_ir(
                                 .sign
                                 .effects
                                 .iter()
-                                .map(|i| asys.values[i.effect]),
+                                .map(|i| asys.values[i.ident.ident]),
                         );
                     }
                     Definition::Function(fun, _) => {
@@ -904,7 +904,7 @@ pub fn generate_ir(
                                 .sign
                                 .effects
                                 .iter()
-                                .map(|i| asys.values[i.effect]),
+                                .map(|i| asys.values[i.ident.ident]),
                         );
                     }
                     _ => unreachable!(),
@@ -936,9 +936,8 @@ pub fn generate_ir(
             let Some(mut handlers) = sign
                 .effects
                 .iter()
-                .copied()
                 .map(|e| {
-                    let effect = ir.asys.values[e.effect];
+                    let effect = ir.asys.values[e.ident.ident];
                     capabilities.get(&effect).copied().map(|handler| handler)
                 })
                 .collect::<Option<Vec<_>>>()
@@ -1035,8 +1034,7 @@ pub fn generate_ir(
         .sign
         .effects
         .iter()
-        .copied()
-        .map(|i| capabilities[&asys.values[i.effect]])
+        .map(|i| capabilities[&asys.values[i.ident.ident]])
         .collect::<Vec<_>>();
     let handler_tys = handlers
         .iter()
@@ -1281,8 +1279,8 @@ fn get_proc(
                 .sign
                 .effects
                 .iter()
-                .map(|&e| {
-                    let effect = ir.asys.values[e.effect];
+                .map(|e| {
+                    let effect = ir.asys.values[e.ident.ident];
 
                     // TODO: this doesn't need block/loc info
                     let handler_val = ir
@@ -1489,8 +1487,8 @@ fn get_handler_proc(
             decl.sign
                 .effects
                 .iter()
-                .map(|&e| {
-                    let effect = ir.asys.values[e.effect];
+                .map(|e| {
+                    let effect = ir.asys.values[e.ident.ident];
 
                     // TODO: this doesn't need block/loc info
                     let handler_val = ir
@@ -2054,9 +2052,8 @@ fn get_captures(
                         .sign
                         .effects
                         .iter()
-                        .copied()
                         .filter_map(|i| {
-                            let effect = ir.asys.values[i.effect];
+                            let effect = ir.asys.values[i.ident.ident];
                             if Some(effect) == exception {
                                 None
                             } else {
@@ -2075,9 +2072,8 @@ fn get_captures(
                     .sign
                     .effects
                     .iter()
-                    .copied()
                     .filter_map(|i| {
-                        let effect = ir.asys.values[i.effect];
+                        let effect = ir.asys.values[i.ident.ident];
                         if Some(effect) == exception {
                             None
                         } else {

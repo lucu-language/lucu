@@ -10,9 +10,9 @@ use crate::{
 };
 
 use super::{
-    Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, EffectIdent, ExprIdx, Expression,
-    FailType, FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx,
-    Param, Type, TypeIdx, UnOp, AST,
+    Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType, FunDecl,
+    FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent, Param,
+    PolyIdent, PolyParam, Type, TypeIdx, UnOp, AST,
 };
 
 impl BinOp {
@@ -148,8 +148,8 @@ impl<'a> ParseCtx<'a> {
         }
         self.context.idents.push(Ident, ident)
     }
-    fn push_type(&mut self, typ: Ranged<Type>) -> TypeIdx {
-        self.context.types.push(TypeIdx, typ)
+    fn push_type(&mut self, ty: Ranged<Type>) -> TypeIdx {
+        self.context.types.push(TypeIdx, ty)
     }
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {
@@ -479,13 +479,43 @@ impl Parse for Type {
             }
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 enum ArrType {
-                    Const(u64),
+                    Const(ExprIdx),
                     Slice,
                 }
 
                 let num = tk.group_single(Group::Bracket, |tk| match tk.peek() {
                     Some(&Ranged(Token::Close(Group::Bracket), ..)) => Some(ArrType::Slice),
-                    Some(&Ranged(Token::Int(i), ..)) => Some(ArrType::Const(i?)),
+                    Some(r @ &Ranged(Token::Int(i), ..)) => {
+                        let range = r.empty();
+                        let expr = tk.push_expr(range.with(Expression::Int(i?)));
+                        Some(ArrType::Const(expr))
+                    }
+                    Some(&Ranged(Token::Ident(ref s), ..)) => {
+                        if s.starts_with(GENERIC) {
+                            let ident = tk.ident()?;
+                            let range = ident.empty();
+                            let ident = tk.push_generic_ident(ident).1;
+                            let expr = tk.push_expr(range.with(Expression::Ident(ident)));
+                            Some(ArrType::Const(expr))
+                        } else {
+                            let ident = PackagedIdent::parse_or_skip(tk)?;
+                            let expr = match ident.0.package {
+                                Some(pkg) => {
+                                    let pkg = tk.push_expr(
+                                        tk.context.idents[pkg].with(Expression::Ident(pkg)),
+                                    );
+                                    tk.push_expr(ident.with(Expression::Member(pkg, ident.0.ident)))
+                                }
+                                None => tk.push_expr(ident.with(Expression::Ident(ident.0.ident))),
+                            };
+                            Some(ArrType::Const(expr))
+                        }
+                    }
+                    Some(&Ranged(Token::Open(Group::Brace), ..)) => {
+                        let expr = Body::parse_or_default(tk);
+                        let expr = tk.push_expr(expr);
+                        Some(ArrType::Const(expr))
+                    }
                     _ => {
                         let err = tk.peek_range().with(Error::Unexpected(Expected::ArrayKind));
                         tk.iter.errors.push(err);
@@ -507,28 +537,33 @@ impl Parse for Type {
             Some(Ranged(Token::Handle, ..)) => {
                 tk.next();
 
-                let id = tk.ident()?;
-                let (generic, id) = tk.push_generic_ident(id);
-                let fail = FailType::parse_or_skip(tk)?.0;
-
-                if generic {
+                if matches!(tk.peek(), Some(Ranged(Token::Ident(str), ..)) if str.starts_with(GENERIC))
+                {
+                    let id = tk.ident()?;
+                    let id = tk.push_generic_ident(id).1;
+                    let fail = FailType::parse_or_skip(tk)?.0;
                     Some(Type::GenericHandler(id, fail))
                 } else {
+                    let id = PolyIdent::parse_or_skip(tk)?.0;
+                    let fail = FailType::parse_or_skip(tk)?.0;
                     Some(Type::Handler(id, fail))
                 }
             }
             Some(Ranged(Token::Ident(_), ..)) => {
-                let id = tk.ident()?;
-                let (generic, id) = tk.push_generic_ident(id);
-
-                if generic {
+                if matches!(tk.peek(), Some(Ranged(Token::Ident(str), ..)) if str.starts_with(GENERIC))
+                {
+                    let id = tk.ident()?;
+                    let id = tk.push_generic_ident(id).1;
                     Some(Type::Generic(id))
                 } else {
-                    match FailType::parse_or_skip(tk)?.0 {
-                        FailType::Never => Some(Type::Path(id)),
-                        ty => Some(Type::Handler(id, ty)),
-                    }
+                    let id = PolyIdent::parse_or_skip(tk)?.0;
+                    Some(Type::Path(id))
                 }
+            }
+            Some(Ranged(Token::Open(Group::Brace), ..)) => {
+                let expr = Body::parse_or_default(tk);
+                let expr = tk.push_expr(expr);
+                Some(Type::ConstExpr(expr))
             }
             _ => {
                 let err = tk.peek_range().with(Error::Unexpected(Expected::Type));
@@ -599,21 +634,54 @@ impl Parse for FunSign {
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
-                let Some(effect) = tk.ident() else { continue };
-                let effect = tk.push_ident(effect);
-                let (package, effect) = if tk.check(Token::Dot).is_some() {
-                    let package = effect;
-                    let Some(effect) = tk.ident() else { continue };
-                    let effect = tk.push_ident(effect);
-                    (Some(package), effect)
-                } else {
-                    (None, effect)
+                let Some(effect) = PolyIdent::parse_or_skip(tk) else {
+                    continue;
                 };
-                decl.effects.push(EffectIdent { package, effect });
+                decl.effects.push(effect.0);
             }
         }
 
         Some(decl)
+    }
+}
+
+impl Parse for PackagedIdent {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        let ident = tk.ident()?;
+        let ident = tk.push_ident(ident);
+        let (package, ident) = if tk.check(Token::Dot).is_some() {
+            let package = ident;
+            let ident = tk.ident()?;
+            let ident = tk.push_ident(ident);
+            (Some(package), ident)
+        } else {
+            (None, ident)
+        };
+        Some(Self { package, ident })
+    }
+}
+
+impl Parse for PolyIdent {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        let ident = PackagedIdent::parse(tk)?;
+        if tk.peek_check(Token::Open(Group::Paren)) {
+            let mut params = Vec::new();
+            tk.group(Group::Paren, true, |tk| {
+                let ty = Type::parse_or_skip(tk)?;
+                let ty = tk.push_type(ty);
+                params.push(ty);
+                Some(())
+            })?;
+            Some(PolyIdent {
+                ident,
+                params: Some(params),
+            })
+        } else {
+            Some(PolyIdent {
+                ident,
+                params: None,
+            })
+        }
     }
 }
 
@@ -637,8 +705,30 @@ impl Parse for Effect {
         tk.expect(Token::Effect)?;
         let name = tk.ident()?;
 
+        let generics = if tk.peek_check(Token::Open(Group::Paren)) {
+            let mut params = VecMap::new();
+            tk.group(Group::Paren, true, |tk| {
+                let name = tk.ident()?;
+                let name = tk.push_generic_ident(name).1; // TODO: must be generic!
+                let ty =
+                    if !tk.peek_check(Token::Comma) && !tk.peek_check(Token::Close(Group::Paren)) {
+                        let ty = Type::parse_or_default(tk);
+                        let ty = tk.push_type(ty);
+                        Some(ty)
+                    } else {
+                        None
+                    };
+                params.push_value(PolyParam { name, ty });
+                Some(())
+            })?;
+            Some(params)
+        } else {
+            None
+        };
+
         let mut effect = Effect {
             name: tk.push_ident(name),
+            generics,
             functions: VecMap::new(),
             attributes: tk.attributes.take().unwrap_or(Vec::new()),
         };
@@ -714,28 +804,17 @@ impl Parse for Handler {
             Some(Handler::Lambda(Lambda::parse_or_skip(tk)?.0))
         } else {
             tk.expect(Token::Handle)?;
-            let effect = tk.ident()?;
-            let effect = tk.push_ident(effect);
-            let (package, effect) = if tk.check(Token::Dot).is_some() {
-                let package = effect;
-                let effect = tk.ident()?;
-                let effect = tk.push_ident(effect);
-                (Some(package), effect)
-            } else {
-                (None, effect)
-            };
-
-            let mut funcs = Vec::new();
-
+            let effect = PolyIdent::parse_or_skip(tk)?.0;
             let fail_type = FailType::parse_or_skip(tk)?.0;
 
+            let mut functions = Vec::new();
             tk.group(Group::Brace, false, |tk| {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
 
                 // parse function
                 let func = Function::parse_or_skip(tk)?.0;
-                funcs.push(func);
+                functions.push(func);
 
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
@@ -744,8 +823,8 @@ impl Parse for Handler {
             })?;
 
             Some(Handler::Full {
-                effect: EffectIdent { package, effect },
-                functions: funcs,
+                effect,
+                functions,
                 fail_type,
             })
         }

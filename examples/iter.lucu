@@ -1,30 +1,30 @@
-# we define an effect for iterating over a string collection
-effect striter {
-	fun next() str
+# we define an effect for iterating over a collection
+effect iter(`item) {
+	fun next() `item
 }
 
-# we define an effect for interacting with a string buffer
-effect strbuf {
-	fun push(elem str) usize
-	fun get(index usize) str
+# we define an effect for interacting with a buffer
+effect buf(`item) {
+	fun push(elem `item) usize
+	fun get(index usize) `item
 
 	# the iterator fails when next() is called if it is done
-	fun iter() striter fails
+	fun iter() handle iter(`item) fails
 }
 
-# implementation of these effects using a constant sized string array
-fun array_buffer() strbuf {
-	mut array [16]const str = 0
-	mut size  usize         = 0
+# implementation of these effects using a constant sized array
+fun array_buffer(`cap usize) handle buf(`item) {
+	mut array [`cap]`item = 0
+	mut size  usize       = 0
 	handle strbuf {
-		fun push(elem str) usize {
+		fun push(elem `item) usize {
 			array[size] = elem
 			size++
 		}
-		fun get(index usize) str {
+		fun get(index usize) `item {
 			array[index]
 		}
-		fun iter() striter fails {
+		fun iter() handle iter(`item) fails {
 			mut current usize = 0
 			fun {
 				if current < size {
@@ -41,9 +41,11 @@ fun array_buffer() strbuf {
 # the internal 'debug' effect contains the 'putstr' function
 fun main() / debug {
 
+	let buffer handle buf(const str) = array_buffer(16)
+
 	# a 'with' block puts the effect handler in scope
 	# which allows us to use the defined effect functions
-	with array_buffer() {
+	with buffer {
 
 		# we push some elements
 		push("Hello")

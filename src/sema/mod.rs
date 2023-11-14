@@ -11,16 +11,10 @@ mod codegen;
 pub use codegen::*;
 
 #[derive(Debug, Default)]
-pub struct Generics {
-    pub ty: VecMap<GenericIdx, ()>,
-    pub effect: VecMap<GenericIdx, ()>,
-    pub constant: VecMap<GenericIdx, TypeIdx>,
-    pub handler: VecMap<GenericIdx, GenericVal<EffIdx>>,
-}
-
-#[derive(Debug, Default)]
 pub struct FunSign {
+    pub name: String,
     pub generics: Generics,
+
     pub params: Vec<TypeIdx>,
     pub return_type: TypeIdx,
 }
@@ -33,13 +27,28 @@ impl Default for TypeIdx {
 
 #[derive(Debug, Default)]
 pub struct Effect {
+    pub name: String,
+    pub generics: Generics,
+
+    pub params: GenericParams,
     pub funs: VecMap<EffFunIdx, FunSign>,
     pub implied: Vec<ImpliedHandler>,
 }
 
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct EffectIdent {
+    pub effect: EffIdx,
+    pub params: GenericParams,
+}
+
+pub type Generics = VecMap<GenericIdx, TypeIdx>;
+pub type GenericParams = Vec<TypeIdx>;
+
 #[derive(Debug)]
 pub struct ImpliedHandler {
     pub generics: Generics,
+
+    pub params: GenericParams,
     pub fail: TypeIdx,
     pub handler: HandlerIdx,
 }
@@ -65,25 +74,36 @@ impl<T> GenericVal<T> {
             GenericVal::Generic(_) => None,
         }
     }
+    pub fn map<U>(&self, f: impl FnOnce(&T) -> U) -> GenericVal<U> {
+        match *self {
+            GenericVal::Literal(ref t) => GenericVal::Literal(f(t)),
+            GenericVal::Generic(idx) => GenericVal::Generic(idx),
+        }
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
     Handler {
-        effect: GenericVal<EffIdx>,
+        effect: TypeIdx, // HandlerType
         fail: TypeIdx,
         handler: GenericVal<HandlerIdxRef>,
     },
     BoundHandler {
-        effect: GenericVal<EffIdx>,
+        effect: TypeIdx, // HandlerType
         handler: GenericVal<HandlerIdxRef>,
     },
+
+    Type,
+    Effect,
+    HandlerType(GenericVal<EffectIdent>),
+
+    Generic(GenericIdx),
 
     Pointer(TypeIdx),
     Const(TypeIdx),
     ConstArray(GenericVal<u64>, TypeIdx),
     Slice(TypeIdx),
-    Generic(GenericIdx),
 
     Int,
     UInt,

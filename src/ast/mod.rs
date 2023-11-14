@@ -89,8 +89,8 @@ pub struct Lambda {
 #[derive(Debug)]
 pub enum Handler {
     Full {
+        effect: PolyIdent,
         fail_type: FailType,
-        effect: EffectIdent,
         functions: Vec<Function>,
     },
     Lambda(Lambda),
@@ -127,15 +127,18 @@ impl Handler {
 #[derive(Debug, Default, Clone)]
 pub enum Type {
     Never,
-    Path(Ident),
-    Handler(Ident, FailType),
 
+    Path(PolyIdent),
     Generic(Ident),
+
+    Handler(PolyIdent, FailType),
     GenericHandler(Ident, FailType),
+
+    ConstExpr(ExprIdx),
 
     Pointer(TypeIdx),
     Const(TypeIdx),
-    ConstArray(u64, TypeIdx),
+    ConstArray(ExprIdx, TypeIdx),
     Slice(TypeIdx),
 
     #[default]
@@ -149,10 +152,16 @@ pub enum FailType {
     Some(TypeIdx),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct EffectIdent {
+#[derive(Debug, Clone)]
+pub struct PackagedIdent {
     pub package: Option<Ident>,
-    pub effect: Ident,
+    pub ident: Ident,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolyIdent {
+    pub ident: PackagedIdent,
+    pub params: Option<Vec<TypeIdx>>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,11 +172,17 @@ pub struct Param {
     pub ty: TypeIdx,
 }
 
+#[derive(Debug)]
+pub struct PolyParam {
+    pub name: Ident,
+    pub ty: Option<TypeIdx>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FunSign {
     pub inputs: VecMap<ParamIdx, Param>,
     pub output: Option<TypeIdx>,
-    pub effects: Vec<EffectIdent>,
+    pub effects: Vec<PolyIdent>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +213,7 @@ pub struct Function {
 #[derive(Debug)]
 pub struct Effect {
     pub name: Ident,
+    pub generics: Option<VecMap<ParamIdx, PolyParam>>,
     pub functions: VecMap<EffFunIdx, FunDecl>,
     pub attributes: Vec<Attribute>,
 }

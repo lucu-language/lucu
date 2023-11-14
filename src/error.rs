@@ -56,6 +56,7 @@ pub enum Error {
     UnknownPackageValue(Range),
     UnknownPackageEffect(Range),
     UnknownPackageFunction(Range),
+    UnknownPackageType(Range),
     UnknownValue,
     UnknownFunction,
     UnknownValueOrPackage,
@@ -531,6 +532,11 @@ impl Errors {
                         highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
                         highlight(0, str, color, true)
                     ),
+                    Error::UnknownPackageType(pkg) => format!(
+                        "package {} has no type {}",
+                        highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
+                        highlight(0, str, color, true)
+                    ),
 
                     Error::UnknownType =>
                         format!("type {} not found in scope", highlight(0, str, color, true)),
@@ -613,6 +619,9 @@ impl Errors {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
                 }
                 Error::UnknownPackageEffect(pkg) => {
+                    highlights.push(Highlight::from_file(&self.files, pkg, 1));
+                }
+                Error::UnknownPackageType(pkg) => {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
                 }
                 Error::MultipleEffects(effects) => {

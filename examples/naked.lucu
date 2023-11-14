@@ -3,9 +3,7 @@ effect ident {
 }
 
 fun main() / debug {
-	let throw ident fails int = fun {
-		fail n
-	}
+	let throw handle ident fails int = fun { n -> fail n }
 	putint(with throw {
 		let nonnaked = ident
 		with nonnaked {

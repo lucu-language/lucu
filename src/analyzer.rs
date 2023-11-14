@@ -6,8 +6,8 @@ use crate::ast::AttributeValue;
 use crate::Target;
 use crate::{
     ast::{
-        self, BinOp, EffFunIdx, EffIdx, EffectIdent, ExprIdx, Expression, FunIdx, Ident,
-        PackageIdx, ParamIdx, UnOp, AST,
+        self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, FunIdx, Ident, PackageIdx,
+        PackagedIdent, ParamIdx, UnOp, AST,
     },
     error::{Error, Errors, Ranged},
     vecmap::{vecmap_index, VecMap, VecSet},
@@ -512,8 +512,7 @@ fn capture_ident(
                     .sign
                     .effects
                     .iter()
-                    .copied()
-                    .map(|i| ctx.asys.values[i.effect]);
+                    .map(|i| ctx.asys.values[i.ident.ident]);
                 for e in effects {
                     if Some(e) != effect && scope.scoped_effects.contains(&e) {
                         add_capture(
@@ -568,7 +567,9 @@ fn analyze_expr(
             // resolve effect
             let (effect, ident, yeet_type) = match *handler {
                 ast::Handler::Full {
-                    effect, fail_type, ..
+                    ref effect,
+                    fail_type,
+                    ..
                 } => {
                     let yeet_type = match fail_type {
                         ast::FailType::Never => TYPE_NEVER,
@@ -584,7 +585,7 @@ fn analyze_expr(
                         }
                     };
                     (
-                        analyze_effect(ctx, effect, scope, errors),
+                        analyze_effect(ctx, &effect.ident, scope, errors),
                         Some(effect),
                         yeet_type,
                     )
@@ -623,7 +624,7 @@ fn analyze_expr(
                     let Some(effectfun) = effectfun else {
                         errors.push(ctx.parsed.idents[decl.name].with(Error::UnknownEffectFun(
                             effect.definition_range(ctx),
-                            ident.map(|ident| ctx.parsed.idents[ident.effect].empty()),
+                            ident.map(|ident| ctx.parsed.idents[ident.ident.ident].empty()),
                         )));
                         break;
                     };
@@ -665,8 +666,8 @@ fn analyze_expr(
                     scope_sign(ctx, &mut child, &decl.sign, &generics);
 
                     let mut scoped = scope.scoped_effects.clone();
-                    scoped.extend(decl.sign.effects.iter().copied().filter_map(|i| {
-                        let val = ctx.asys.values[i.effect];
+                    scoped.extend(decl.sign.effects.iter().filter_map(|i| {
+                        let val = ctx.asys.values[i.ident.ident];
                         if val.0 == usize::MAX {
                             None
                         } else {
@@ -1346,7 +1347,7 @@ fn analyze_expr(
 
 fn analyze_effect(
     ctx: &mut AsysContext,
-    ident: EffectIdent,
+    ident: &PackagedIdent,
     scope: &Scope,
     errors: &mut Errors,
 ) -> Option<Val> {
@@ -1367,19 +1368,19 @@ fn analyze_effect(
         None => &scope.effects,
     };
 
-    let name = &ctx.parsed.idents[ident.effect].0;
+    let name = &ctx.parsed.idents[ident.ident].0;
     match effects.get(name) {
         Some(&val) => {
-            ctx.asys.values[ident.effect] = val;
+            ctx.asys.values[ident.ident] = val;
             Some(val)
         }
         None => {
             match ident.package {
-                Some(package) => errors.push(ctx.parsed.idents[ident.effect].with(
+                Some(package) => errors.push(ctx.parsed.idents[ident.ident].with(
                     Error::UnknownPackageEffect(ctx.parsed.idents[package].empty()),
                 )),
 
-                None => errors.push(ctx.parsed.idents[ident.effect].with(Error::UnknownEffect)),
+                None => errors.push(ctx.parsed.idents[ident.ident].with(Error::UnknownEffect)),
             }
             None
         }
@@ -1410,14 +1411,18 @@ fn analyze_type(
     let (id, fail) = match ctx.parsed.types[ty].0 {
         T::Never => return TYPE_NEVER,
         T::Error => return TYPE_UNKNOWN,
-        T::Path(id) => (id, ast::FailType::Never),
-        T::Handler(id, fail) => (id, fail),
+        T::Path(ref id) => (id, ast::FailType::Never),
+        T::Handler(ref id, fail) => (id, fail),
         T::Pointer(ty) => {
             let inner = analyze_type(ctx, scope, ty, errors, generics);
             return ctx.asys.insert_type(Type::Pointer(inner));
         }
         T::ConstArray(size, ty) => {
             let inner = analyze_type(ctx, scope, ty, errors, generics);
+            let size = match ctx.parsed.exprs[size].0 {
+                Expression::Int(i) => i,
+                _ => todo!(),
+            };
             return ctx.asys.insert_type(Type::ConstArray(size, inner));
         }
         T::Slice(ty) => {
@@ -1483,8 +1488,10 @@ fn analyze_type(
             }
             return ctx.asys.insert_type(Type::Handler(val, fail, None));
         }
+        T::ConstExpr(_) => todo!(),
     };
 
+    let id = id.ident.ident;
     let name = &ctx.parsed.idents[id].0;
 
     // check scope
@@ -1546,8 +1553,8 @@ fn analyze_sign(
     generics: &mut HashMap<String, Val>,
 ) -> Vec<TypeIdx> {
     // put effects in scope
-    for &effect in func.effects.iter() {
-        analyze_effect(ctx, effect, scope, errors);
+    for effect in func.effects.iter() {
+        analyze_effect(ctx, &effect.ident, scope, errors);
     }
 
     let mut params = Vec::new();
@@ -1678,7 +1685,7 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
                 Expression::Handler(ast::Handler::Full { effect, .. }) => effect,
                 _ => panic!(),
             };
-            let name = &parsed.idents[effect.effect].0;
+            let name = &parsed.idents[effect.ident.ident].0;
             if let Some(effect) = ctx.packages[idx].effects.get(name).copied() {
                 ctx.packages[idx].implied.insert(effect);
             }
@@ -1987,8 +1994,8 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
             scope_sign(&ctx, &mut scope, &fun.decl.sign, generics);
 
             let mut scoped = scope.scoped_effects.clone();
-            scoped.extend(fun.decl.sign.effects.iter().filter_map(|&i| {
-                let val = ctx.asys.values[i.effect];
+            scoped.extend(fun.decl.sign.effects.iter().filter_map(|i| {
+                let val = ctx.asys.values[i.ident.ident];
                 if val.0 == usize::MAX {
                     None
                 } else {

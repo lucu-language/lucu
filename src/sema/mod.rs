@@ -10,7 +10,7 @@ vecmap_index!(HandlerIdx);
 mod codegen;
 pub use codegen::*;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct Generics {
     pub ty: VecMap<GenericIdx, ()>,
     pub effect: VecMap<GenericIdx, ()>,
@@ -18,7 +18,7 @@ pub struct Generics {
     pub handler: VecMap<GenericIdx, GenericVal<EffIdx>>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct FunSign {
     pub generics: Generics,
     pub params: Vec<TypeIdx>,
@@ -31,14 +31,24 @@ impl Default for TypeIdx {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct Effect {
     pub funs: VecMap<EffFunIdx, FunSign>,
+    pub implied: Vec<ImpliedHandler>,
+}
+
+#[derive(Debug)]
+pub struct ImpliedHandler {
+    pub generics: Generics,
+    pub fail: TypeIdx,
+    pub handler: HandlerIdx,
 }
 
 #[derive(Debug)]
 pub struct Handler {
     pub captures: TypeIdx,
+
+    // TODO: should be a vecmap of FunImpl
     pub funs: VecMap<EffFunIdx, FunIdx>,
 }
 
@@ -48,20 +58,25 @@ pub enum GenericVal<T> {
     Generic(GenericIdx),
 }
 
+impl<T> GenericVal<T> {
+    pub fn literal(&self) -> Option<&T> {
+        match self {
+            GenericVal::Literal(t) => Some(t),
+            GenericVal::Generic(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
-    HandlerHint {
-        effect: GenericVal<EffIdx>,
-        fail: TypeIdx,
-    },
     Handler {
         effect: GenericVal<EffIdx>,
         fail: TypeIdx,
-        handler: GenericVal<HandlerIdx>,
+        handler: GenericVal<HandlerIdxRef>,
     },
     BoundHandler {
         effect: GenericVal<EffIdx>,
-        handler: GenericVal<HandlerIdx>,
+        handler: GenericVal<HandlerIdxRef>,
     },
 
     Pointer(TypeIdx),
@@ -91,4 +106,29 @@ pub struct SemIR {
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,
+    pub handler_refs: Vec<Option<HandlerIdx>>,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum HandlerIdxRef {
+    Idx(HandlerIdx),
+    Ref(usize),
+}
+
+impl From<HandlerIdx> for HandlerIdxRef {
+    fn from(value: HandlerIdx) -> Self {
+        Self::Idx(value)
+    }
+}
+
+impl SemIR {
+    pub fn handler(&self, idx: HandlerIdxRef) -> Option<&Handler> {
+        match idx {
+            HandlerIdxRef::Idx(idx) => Some(&self.handlers[idx]),
+            HandlerIdxRef::Ref(idx) => match self.handler_refs[idx] {
+                Some(idx) => Some(&self.handlers[idx]),
+                None => None,
+            },
+        }
+    }
 }

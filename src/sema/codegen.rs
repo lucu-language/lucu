@@ -8,8 +8,8 @@ use crate::{
 };
 
 use super::{
-    Effect, FunIdx, FunSign, GenericIdx, GenericVal, Generics, Handler, HandlerIdx, SemIR, Type,
-    TypeIdx,
+    Effect, FunIdx, FunSign, GenericIdx, GenericVal, Generics, Handler, HandlerIdx, HandlerIdxRef,
+    ImpliedHandler, SemIR, Type, TypeIdx,
 };
 
 struct SemCtx<'a> {
@@ -150,6 +150,24 @@ impl SemCtx<'_> {
     fn push_handler(&mut self, handler: Handler) -> HandlerIdx {
         self.ir.handlers.push(HandlerIdx, handler)
     }
+    fn push_handler_ref(&mut self) -> HandlerIdxRef {
+        let idx = self.ir.handler_refs.len();
+        self.ir.handler_refs.push(None);
+        HandlerIdxRef::Ref(idx)
+    }
+    fn analyze_fail(
+        &mut self,
+        scope: &mut ScopeStack,
+        fail: ast::FailType,
+        generics: Option<&mut Generics>,
+        generic_handler: bool,
+    ) -> TypeIdx {
+        match fail {
+            ast::FailType::Never => TYPE_NEVER,
+            ast::FailType::None => TYPE_NONE,
+            ast::FailType::Some(ty) => self.analyze_type(scope, ty, generics, generic_handler),
+        }
+    }
     fn analyze_type(
         &mut self,
         scope: &mut ScopeStack,
@@ -163,13 +181,7 @@ impl SemCtx<'_> {
             T::Error => TYPE_UNKNOWN,
             T::Path(id) => scope.try_type(self, id),
             T::Handler(id, fail) => {
-                let fail = match fail {
-                    ast::FailType::Never => TYPE_NEVER,
-                    ast::FailType::None => TYPE_NONE,
-                    ast::FailType::Some(ty) => {
-                        self.analyze_type(scope, ty, generics.as_deref_mut(), generic_handler)
-                    }
-                };
+                let fail = self.analyze_fail(scope, fail, generics.as_deref_mut(), generic_handler);
 
                 let effect = match scope.try_effect(self, id) {
                     Some(effect) => effect,
@@ -186,7 +198,14 @@ impl SemCtx<'_> {
                             handler,
                         })
                     }
-                    None => self.insert_type(Type::HandlerHint { effect, fail }),
+                    None => {
+                        let handler = GenericVal::Literal(self.push_handler_ref());
+                        self.insert_type(Type::Handler {
+                            effect,
+                            fail,
+                            handler,
+                        })
+                    }
                 }
             }
             T::Generic(id) => {
@@ -209,13 +228,7 @@ impl SemCtx<'_> {
                 }
             }
             T::GenericHandler(id, fail) => {
-                let fail = match fail {
-                    ast::FailType::Never => TYPE_NEVER,
-                    ast::FailType::None => TYPE_NONE,
-                    ast::FailType::Some(ty) => {
-                        self.analyze_type(scope, ty, generics.as_deref_mut(), generic_handler)
-                    }
-                };
+                let fail = self.analyze_fail(scope, fail, generics.as_deref_mut(), generic_handler);
 
                 let name = &self.ast.idents[id];
                 let effect = match scope.get_effect(self, &name.0) {
@@ -245,7 +258,14 @@ impl SemCtx<'_> {
                             handler,
                         })
                     }
-                    None => self.insert_type(Type::HandlerHint { effect, fail }),
+                    None => {
+                        let handler = GenericVal::Literal(self.push_handler_ref());
+                        self.insert_type(Type::Handler {
+                            effect,
+                            fail,
+                            handler,
+                        })
+                    }
                 }
             }
             T::Pointer(ty) => {
@@ -266,6 +286,16 @@ impl SemCtx<'_> {
             }
         }
     }
+    fn analyze_effect(
+        &mut self,
+        scope: &mut ScopeStack,
+        effect: ast::EffectIdent,
+    ) -> Option<GenericVal<EffIdx>> {
+        match effect.package {
+            Some(id) => scope.try_package_effect(self, id, effect.effect),
+            None => scope.try_effect(self, effect.effect),
+        }
+    }
     fn analyze_sign(
         &mut self,
         scope: &mut ScopeStack,
@@ -284,18 +314,16 @@ impl SemCtx<'_> {
 
             // bound handlers
             for &effect in fun.effects.iter() {
-                let Some(effect) = (match effect.package {
-                    Some(id) => scope.try_package_effect(self, id, effect.effect),
-                    None => scope.try_effect(self, effect.effect),
-                }) else {
-                    continue;
-                };
-
-                let idx = generics.handler.push(GenericIdx, effect);
-                params.push(self.insert_type(Type::BoundHandler {
-                    effect,
-                    handler: GenericVal::Generic(idx),
-                }));
+                match self.analyze_effect(scope, effect) {
+                    Some(effect) => {
+                        let idx = generics.handler.push(GenericIdx, effect);
+                        params.push(self.insert_type(Type::BoundHandler {
+                            effect,
+                            handler: GenericVal::Generic(idx),
+                        }));
+                    }
+                    None => {}
+                }
             }
 
             // parent handler
@@ -320,17 +348,60 @@ impl SemCtx<'_> {
             }
         })
     }
+    fn analyze_implied(&mut self, scope: &mut ScopeStack, implied: &ast::Handler) {
+        scope.child(|scope| {
+            let mut generics = Generics::default();
+
+            let (fail, effect, functions) = match *implied {
+                ast::Handler::Full {
+                    fail_type,
+                    effect,
+                    ref functions,
+                } => (fail_type, effect, functions),
+                ast::Handler::Lambda(_) => unreachable!(),
+            };
+
+            // check effect first so it errors if the effect is generic
+            let effect = self.analyze_effect(scope, effect);
+
+            // get fail type, effect idx
+            let fail = self.analyze_fail(scope, fail, Some(&mut generics), false);
+            let effect = effect?.literal().copied()?;
+
+            // check functions
+            // TODO
+
+            // add implied handler to effect
+            let handler = self.push_handler(Handler {
+                captures: TYPE_NONE,
+                funs: VecMap::new(),
+            });
+            let handler = ImpliedHandler {
+                generics,
+                fail,
+                handler,
+            };
+            self.ir.effects[effect].implied.push(handler);
+
+            Some(())
+        });
+    }
 }
 
 pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     let mut ctx = SemCtx {
         ir: SemIR {
-            effects: VecMap::filled(ast.effects.len(), Effect::default()),
-            fun_sign: VecMap::filled(ast.functions.len(), FunSign::default()),
+            effects: std::iter::repeat_with(Effect::default)
+                .take(ast.effects.len())
+                .collect(),
+            fun_sign: std::iter::repeat_with(FunSign::default)
+                .take(ast.functions.len())
+                .collect(),
             entry: FunIdx(0),
 
             types: VecSet::new(),
             handlers: VecMap::new(),
+            handler_refs: Vec::new(),
         },
         ast,
         errors,
@@ -371,18 +442,6 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 .effects
                 .insert(name, GenericVal::Literal(i));
         }
-        for &implied in package.implied.iter() {
-            let effect = match &ast.exprs[implied].0 {
-                Expression::Handler(ast::Handler::Full { effect, .. }) => effect,
-                _ => panic!(),
-            };
-            let name = &ast.idents[effect.effect].0;
-            if let Some(effect) = ctx.packages[idx].effects.get(name).copied() {
-                // ctx.packages[idx].implied.insert(effect);
-            } else {
-                // TODO: error
-            }
-        }
     }
 
     // analyze function signatures
@@ -404,7 +463,10 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 let name = ast.idents[decl.name].0.clone();
                 ctx.packages[idx].funs.insert(name, FunIdent::Effect(i, fi));
             }
-            ctx.ir.effects[i] = Effect { funs };
+            ctx.ir.effects[i] = Effect {
+                funs,
+                implied: Vec::new(),
+            };
         }
 
         for (i, fun) in package
@@ -429,6 +491,21 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             }
         }
     }
+
+    // analyze implied
+    for (idx, package) in ast.packages.iter(PackageIdx) {
+        let mut scope = ScopeStack::new(idx);
+        for &implied in package.implied.iter() {
+            let handler = match ast.exprs[implied].0 {
+                Expression::Handler(ref handler) => handler,
+                _ => unreachable!(),
+            };
+            ctx.analyze_implied(&mut scope, handler);
+        }
+    }
+
+    // analyze functions
+    // TODO
 
     ctx.ir
 }

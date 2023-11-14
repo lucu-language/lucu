@@ -78,6 +78,15 @@ where
     }
 }
 
+impl<K, V> FromIterator<V> for VecMap<K, V>
+where
+    K: Into<usize>,
+{
+    fn from_iter<T: IntoIterator<Item = V>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
 impl<K, V> VecMap<K, V>
 where
     K: Into<usize>,

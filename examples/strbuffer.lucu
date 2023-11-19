@@ -8,7 +8,7 @@ effect strbuf {
 	fun iter() handle striter fails
 }
 
-fun array_buffer() strbuf {
+fun array_buffer() handle strbuf {
 	mut array [16]const str = 0
 	mut size  usize         = 0
 	handle strbuf {

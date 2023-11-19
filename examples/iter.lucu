@@ -12,6 +12,12 @@ effect buf(`item) {
 	fun iter() handle iter(`item) fails
 }
 
+# default implementation for void buffer
+handle buf(void) {
+	fun push(elem void) usize { 0 }
+	fun get(index usize) void { 0 }
+}
+
 # implementation of these effects using a constant sized array
 fun array_buffer(`cap usize) handle buf(`item) {
 	mut array [`cap]`item = 0

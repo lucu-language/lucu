@@ -243,12 +243,16 @@ fn parse_from_filename(
         }
     }
 
-    println!("{:#?}", sema::analyze(&parsed, &mut Errors::new(), &target));
-
-    let asys = analyze(&parsed, &mut errors, &target);
+    println!("{}", sema::analyze(&parsed, &mut errors, &target));
 
     if errors.is_empty() {
-        Ok((parsed, asys, errors.files))
+        // OLD ANALYZER
+        let asys = analyze(&parsed, &mut errors, &target);
+        if errors.is_empty() {
+            Ok((parsed, asys, errors.files))
+        } else {
+            Err(errors)
+        }
     } else {
         Err(errors)
     }

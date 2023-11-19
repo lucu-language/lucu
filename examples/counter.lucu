@@ -2,7 +2,7 @@ effect counter {
 	fun count() int
 }
 
-fun init_counter(start int) counter {
+fun init_counter(start int) handle counter {
 	mut n = start
 	fun { n++ }
 }

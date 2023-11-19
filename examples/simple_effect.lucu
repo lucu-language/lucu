@@ -2,19 +2,19 @@ effect get {
     fun get() int
 }
 
-fun getter(n int) get {
+fun getter(n int) handle get {
 	fun { n }
 }
 
-fun getter_indirect(n int) get {
+fun getter_indirect(n int) handle get {
 	getter(n)
 }
 
-fun gimme_get() get / get {
+fun gimme_get() handle get / get {
 	get
 }
 
-fun ident(h get) get {
+fun ident(h handle get) handle get {
 	h
 }
 

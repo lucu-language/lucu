@@ -6,7 +6,7 @@ effect get {
 	fun get() str
 }
 
-fun getter(s str) get {
+fun getter(s str) handle get {
 	fun { s }
 }
  

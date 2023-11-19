@@ -26,6 +26,6 @@ fun stderr() uptr / sys {
 }
 
 @capability(os = "windows")
-fun link() sys / foreign {
+fun link() handle sys / foreign {
 	link_effect("kernel32")
 }

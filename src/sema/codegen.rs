@@ -225,15 +225,17 @@ impl SemCtx<'_> {
                 };
 
                 // create handler type
-                let handler_ty = self.insert_type(Type::HandlerType(
-                    effect.map(|&effect| EffectIdent { effect, params }),
-                ));
+                let effect_inst =
+                    self.insert_type(Type::EffectInstance(effect.map(|&effect| EffectIdent {
+                        effect,
+                        generic_params: params.into(),
+                    })));
                 match generics.filter(|_| generic_handler) {
                     Some(generics) => {
-                        let idx = generics.push(GenericIdx, handler_ty);
+                        let idx = generics.push(GenericIdx, effect_inst);
                         let handler = GenericVal::Generic(idx);
                         self.insert_type(Type::Handler {
-                            effect: handler_ty,
+                            effect: effect_inst,
                             fail,
                             handler,
                         })
@@ -241,7 +243,7 @@ impl SemCtx<'_> {
                     None => {
                         let handler = GenericVal::Literal(self.push_handler_ref());
                         self.insert_type(Type::Handler {
-                            effect: handler_ty,
+                            effect: effect_inst,
                             fail,
                             handler,
                         })
@@ -292,17 +294,13 @@ impl SemCtx<'_> {
                     },
                 };
 
-                let handler_ty =
-                    self.insert_type(Type::HandlerType(effect.map(|&effect| EffectIdent {
-                        effect,
-                        params: Vec::new(),
-                    })));
+                let effect_inst = self.insert_type(Type::EffectInstance(effect));
                 match generics.filter(|_| generic_handler) {
                     Some(generics) => {
-                        let idx = generics.push(GenericIdx, handler_ty);
+                        let idx = generics.push(GenericIdx, effect_inst);
                         let handler = GenericVal::Generic(idx);
                         self.insert_type(Type::Handler {
-                            effect: handler_ty,
+                            effect: effect_inst,
                             fail,
                             handler,
                         })
@@ -310,7 +308,7 @@ impl SemCtx<'_> {
                     None => {
                         let handler = GenericVal::Literal(self.push_handler_ref());
                         self.insert_type(Type::Handler {
-                            effect: handler_ty,
+                            effect: effect_inst,
                             fail,
                             handler,
                         })
@@ -379,9 +377,7 @@ impl SemCtx<'_> {
             for param in fun.inputs.values() {
                 let ty = self.analyze_type(scope, param.ty, Some(&mut generics), true);
                 if param.const_generic {
-                    let idx = generics.push(GenericIdx, ty);
-                    let ty = self.insert_type(Type::Generic(idx));
-                    params.push(ty);
+                    generics.push(GenericIdx, ty);
                 } else {
                     params.push(ty);
                 }
@@ -400,10 +396,10 @@ impl SemCtx<'_> {
                 match self.analyze_effect(scope, &id.ident) {
                     Some(effect) => {
                         let handler_ty =
-                            self.insert_type(Type::HandlerType(effect.map(|&effect| {
+                            self.insert_type(Type::EffectInstance(effect.map(|&effect| {
                                 EffectIdent {
                                     effect,
-                                    params: effect_params,
+                                    generic_params: effect_params.into(),
                                 }
                             })));
                         let idx = generics.push(GenericIdx, handler_ty);
@@ -417,14 +413,11 @@ impl SemCtx<'_> {
             }
 
             // parent handler
-            if let Some(i) = parent {
-                let effect = GenericVal::Literal(i);
-                let handler_ty = self.insert_type(Type::HandlerType(effect));
-                let idx = generics.push(GenericIdx, handler_ty);
-                let handler = GenericVal::Generic(idx);
+            if let Some(parent) = parent {
+                let instance = self.insert_type(Type::EffectInstance(GenericVal::Literal(parent)));
                 let ty = self.insert_type(Type::BoundHandler {
-                    effect: handler_ty,
-                    handler,
+                    effect: instance,
+                    handler: GenericVal::Literal(HandlerIdxRef::Me),
                 });
                 params.push(ty);
             }
@@ -479,7 +472,7 @@ impl SemCtx<'_> {
             let handler = ImpliedHandler {
                 generics,
 
-                params,
+                generic_params: params.into(),
                 fail,
                 handler,
             };
@@ -529,6 +522,8 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     insert("uptr", Type::UPtr);
     insert("u8", Type::U8);
     insert("bool", Type::Bool);
+    insert("void", Type::None);
+    insert("never", Type::Never);
 
     // analyze effect signatures
     for (idx, package) in ast.packages.iter(PackageIdx) {
@@ -561,15 +556,13 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             scope.child(|scope| {
                 // get effect generics
                 let mut generics = Generics::default();
-                let mut params = Vec::new();
+
                 for param in effect.generics.iter().flat_map(|v| v.values()) {
                     let ty = param
                         .ty
-                        .map(|ty| ctx.analyze_type(scope, ty, Some(&mut generics), true))
+                        .map(|ty| ctx.analyze_type(scope, ty, None, true))
                         .unwrap_or(TYPE_TYPE);
                     let idx = generics.push(GenericIdx, ty);
-                    let ty = ctx.insert_type(Type::Generic(idx));
-                    params.push(ty);
 
                     let name = ast.idents[param.name].0.clone();
                     scope.top().generics.insert(name, idx);
@@ -578,15 +571,19 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 // add functions to scope
                 let mut funs = VecMap::new();
                 for (fi, decl) in effect.functions.iter(EffFunIdx) {
+                    let parent = EffectIdent {
+                        effect: i,
+                        generic_params: generics
+                            .keys(GenericIdx)
+                            .map(|idx| ctx.insert_type(Type::Generic(idx)))
+                            .collect(),
+                    };
                     let sign = ctx.analyze_sign(
                         scope,
                         generics.clone(),
                         ast.idents[decl.name].0.clone(),
                         &decl.sign,
-                        Some(EffectIdent {
-                            effect: i,
-                            params: params.clone(),
-                        }),
+                        Some(parent),
                     );
                     funs.push_value(sign);
 
@@ -596,7 +593,6 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 ctx.ir.effects[i] = Effect {
                     name: ast.idents[effect.name].0.clone(),
                     generics,
-                    params,
                     funs,
                     implied: Vec::new(),
                 };

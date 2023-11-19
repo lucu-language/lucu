@@ -19,7 +19,7 @@ macro_rules! vecmap_index {
 }
 pub(crate) use vecmap_index;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VecMap<K, V>
 where
     K: Into<usize>,
@@ -123,6 +123,9 @@ where
     pub fn len(&self) -> usize {
         self.vec.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
     // from https://stackoverflow.com/a/74296885
     pub fn get_mut2(&mut self, i: K, j: K) -> Option<(&mut V, &mut V)> {
         let i: usize = i.into();
@@ -170,6 +173,9 @@ where
     }
     pub fn iter(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &V)> {
         self.vec.iter(f)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 }
 

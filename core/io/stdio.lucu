@@ -2,9 +2,9 @@ import "../sys/linux"
 import "../sys/win32"
 
 effect stdio {
-	fun stdin () reader
-	fun stdout() writer
-	fun stderr() writer
+	fun stdin () handle reader
+	fun stdout() handle writer
+	fun stderr() handle writer
 }
 
 fun print(s str) / stdio {
@@ -16,7 +16,7 @@ fun printerr(s str) / stdio {
 }
 
 @capability(os = "linux")
-fun linux() stdio / linux.sys {
+fun linux() handle stdio / linux.sys {
 	handle stdio {
 		fun stdin() reader {
 			fun { buf -> linux.read(0, buf) }
@@ -31,7 +31,7 @@ fun linux() stdio / linux.sys {
 }
 
 @capability(os = "windows")
-fun windows() stdio / win32.sys {
+fun windows() handle stdio / win32.sys {
 	handle stdio {
 		fun stdin() reader {
 			let stdin = win32.stdin()

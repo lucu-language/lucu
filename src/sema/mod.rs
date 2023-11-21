@@ -2,7 +2,7 @@ use std::fmt::{self};
 
 use crate::{
     ast::{EffFunIdx, EffIdx, FunIdx},
-    vecmap::{vecmap_index, VecMap, VecSet},
+    vecmap::{vecmap_index, VecMap, VecMapOffset, VecSet},
 };
 
 vecmap_index!(TypeIdx);
@@ -43,8 +43,8 @@ pub struct EffectIdent {
     pub generic_params: GenericParams,
 }
 
-pub type Generics = VecMap<GenericIdx, TypeIdx>;
-pub type GenericParams = VecMap<GenericIdx, TypeIdx>;
+pub type Generics = VecMapOffset<GenericIdx, TypeIdx>;
+pub type GenericParams = VecMapOffset<GenericIdx, TypeIdx>;
 
 #[derive(Debug)]
 pub struct Capture {
@@ -264,12 +264,12 @@ impl TypeIdx {
 }
 
 impl Generics {
-    fn display(&self, skip_generics: usize, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
-        let mut iter = self.values().copied().enumerate().skip(skip_generics);
-        if let Some((idx, next)) = iter.next() {
+    fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+        let mut iter = self.iter(GenericIdx);
+        if let Some((idx, &next)) = iter.next() {
             write!(f, "<")?;
 
-            write!(f, "`{}", idx)?;
+            write!(f, "`{}", usize::from(idx))?;
             match ir.types[next] {
                 Type::Type(ref constraints) => constraints.display(ir, f)?,
                 _ => {
@@ -278,8 +278,8 @@ impl Generics {
                 }
             }
 
-            for (idx, next) in iter {
-                write!(f, ", `{}", idx)?;
+            for (idx, &next) in iter {
+                write!(f, ", `{}", usize::from(idx))?;
                 match ir.types[next] {
                     Type::Type(ref constraints) => constraints.display(ir, f)?,
                     _ => {
@@ -295,15 +295,9 @@ impl Generics {
 }
 
 impl FunSign {
-    fn display(
-        &self,
-        padding: &str,
-        skip_generics: usize,
-        ir: &SemIR,
-        f: &mut impl fmt::Write,
-    ) -> fmt::Result {
+    fn display(&self, padding: &str, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "{}fun {}", padding, self.name)?;
-        self.generics.display(skip_generics, ir, f)?;
+        self.generics.display(ir, f)?;
         write!(f, "(")?;
         if !self.params.is_empty() {
             let mut iter = self.params.iter().copied();
@@ -328,12 +322,12 @@ impl Effect {
     fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
         // effect signature
         write!(f, "effect {}", self.name)?;
-        self.generics.display(0, ir, f)?;
+        self.generics.display(ir, f)?;
         writeln!(f)?;
 
         // effect functions
         for fun in self.funs.values() {
-            fun.display("  ", self.generics.len(), ir, f)?;
+            fun.display("  ", ir, f)?;
             writeln!(f)?;
         }
 
@@ -353,7 +347,7 @@ impl fmt::Display for SemIR {
         for handler in self.handlers.values() {
             // effect signature
             write!(f, "type {} = handle", handler.debug_name)?;
-            handler.generics.display(0, self, f)?;
+            handler.generics.display(self, f)?;
             write!(f, " {}", self.effects[handler.effect].name)?;
             if !handler.generic_params.is_empty() {
                 write!(f, "<")?;
@@ -384,7 +378,7 @@ impl fmt::Display for SemIR {
         // functions
         for fun in self.fun_sign.values() {
             // fun signature
-            fun.display("", 0, self, f)?;
+            fun.display("", self, f)?;
 
             // fun impl
             // TODO

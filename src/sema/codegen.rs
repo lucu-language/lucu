@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ast::{self, EffFunIdx, EffIdx, Expression, Ident, PackageIdx, AST},
     error::{Error, Errors},
-    vecmap::{VecMap, VecSet},
+    vecmap::{VecMap, VecMapOffset, VecSet},
     Target,
 };
 
@@ -237,7 +237,7 @@ impl SemCtx<'_> {
                 let handler_ty = self.insert_type(Type::Type(TypeConstraints::Handler(
                     effect.map(|&effect| EffectIdent {
                         effect,
-                        generic_params: params.into(),
+                        generic_params: Generics::from_iter(0, params),
                     }),
                     fail,
                 )));
@@ -246,9 +246,11 @@ impl SemCtx<'_> {
                         let idx = generics.push(GenericIdx, handler_ty);
                         self.insert_type(Type::Generic(idx))
                     }
-                    None => {
-                        handler_output(self, generics.unwrap_or(&mut VecMap::new()), handler_ty)
-                    }
+                    None => handler_output(
+                        self,
+                        generics.unwrap_or(&mut VecMapOffset::new(0)),
+                        handler_ty,
+                    ),
                 }
             }
             T::Generic(id) => {
@@ -303,9 +305,11 @@ impl SemCtx<'_> {
                         let idx = generics.push(GenericIdx, handler_ty);
                         self.insert_type(Type::Generic(idx))
                     }
-                    None => {
-                        handler_output(self, generics.unwrap_or(&mut VecMap::new()), handler_ty)
-                    }
+                    None => handler_output(
+                        self,
+                        generics.unwrap_or(&mut VecMapOffset::new(0)),
+                        handler_ty,
+                    ),
                 }
             }
             T::Pointer(ty) => {
@@ -367,17 +371,17 @@ impl SemCtx<'_> {
     fn analyze_sign(
         &mut self,
         scope: &mut ScopeStack,
-        mut generics: Generics,
+        parent_generics: usize,
         name: String,
         ident: FunIdent,
     ) -> FunSign {
-        let generics_start = generics.len();
         let fun = match ident {
             FunIdent::Top(idx) => &self.ast.functions[idx].decl.sign,
             FunIdent::Effect(eff, idx) => &self.ast.effects[eff].functions[idx].sign,
         };
 
         scope.child(|scope| {
+            let mut generics = Generics::new(parent_generics);
             let mut params = Vec::new();
 
             // base params
@@ -414,7 +418,7 @@ impl SemCtx<'_> {
                         let handler_ty = self.insert_type(Type::Type(TypeConstraints::Handler(
                             effect.map(|&effect| EffectIdent {
                                 effect,
-                                generic_params: effect_params.into(),
+                                generic_params: Generics::from_iter(0, effect_params),
                             }),
                             TYPE_NEVER,
                         )));
@@ -442,13 +446,12 @@ impl SemCtx<'_> {
                         };
                         let generic_params = generics
                             .keys(GenericIdx)
-                            .skip(generics_start)
                             .map(|idx| ir.insert_type(Type::Generic(idx)))
-                            .collect();
+                            .collect::<Vec<_>>();
                         ir.insert_type(Type::FunOutput {
                             ty,
                             fun,
-                            generic_params,
+                            generic_params: Generics::from_iter(generics.start(), generic_params),
                         })
                     })
                 }
@@ -499,7 +502,7 @@ impl SemCtx<'_> {
                 generics,
 
                 effect,
-                generic_params: params.into(),
+                generic_params: Generics::from_iter(0, params),
                 fail,
 
                 captures: Vec::new(),
@@ -584,7 +587,6 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             scope.child(|scope| {
                 // get effect generics
                 let mut generics = Generics::default();
-
                 for param in effect.generics.iter().flat_map(|v| v.values()) {
                     let ty = param
                         .ty
@@ -595,13 +597,14 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                     let name = ast.idents[param.name].0.clone();
                     scope.top().generics.insert(name, idx);
                 }
+                let generics = generics;
 
                 // add functions to scope
                 let mut funs = VecMap::new();
                 for (fi, decl) in effect.functions.iter(EffFunIdx) {
                     let sign = ctx.analyze_sign(
                         scope,
-                        generics.clone(),
+                        generics.len(),
                         ast.idents[decl.name].0.clone(),
                         FunIdent::Effect(i, fi),
                     );
@@ -628,7 +631,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             // add function to scope
             let sign = ctx.analyze_sign(
                 &mut scope,
-                Generics::default(),
+                0,
                 ast.idents[fun.decl.name].0.clone(),
                 FunIdent::Top(i),
             );

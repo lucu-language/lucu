@@ -135,7 +135,7 @@ pub enum Type {
 pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
     pub fun_sign: VecMap<FunIdx, FunSign>,
-    pub entry: FunIdx,
+    pub entry: Option<FunIdx>,
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,

@@ -782,7 +782,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             fun_sign: std::iter::repeat_with(FunSign::default)
                 .take(ast.functions.len())
                 .collect(),
-            entry: FunIdx(0),
+            entry: None,
 
             types: VecSet::new(),
             handlers: VecMap::new(),
@@ -929,7 +929,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
 
                 // check if main
                 if idx == ast.main && name.0.eq("main") {
-                    ctx.ir.entry = i;
+                    ctx.ir.entry = Some(i);
                 }
             }
         }

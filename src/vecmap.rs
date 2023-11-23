@@ -97,6 +97,15 @@ where
     }
 }
 
+impl<K, V> From<VecMapOffset<K, V>> for Vec<V>
+where
+    K: Into<usize>,
+{
+    fn from(value: VecMapOffset<K, V>) -> Self {
+        value.vec
+    }
+}
+
 impl<K, V> FromIterator<V> for VecMap<K, V>
 where
     K: Into<usize>,

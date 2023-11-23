@@ -890,6 +890,9 @@ impl Parse for Lambda {
             loop {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
+                if tk.peek_check(Token::Close(Group::Brace)) {
+                    return Some(());
+                }
 
                 // parse expression
                 let expr = Expression::parse_or_default(tk);
@@ -1343,6 +1346,9 @@ impl Parse for Body {
         tk.group(Group::Brace, false, |tk| {
             // skip semicolons
             while tk.check(Token::Semicolon).is_some() {}
+            if tk.peek_check(Token::Close(Group::Brace)) {
+                return Some(());
+            }
 
             // parse expression
             let expr = Expression::parse_or_default(tk);

@@ -243,7 +243,8 @@ fn parse_from_filename(
         }
     }
 
-    println!("{}", sema::analyze(&parsed, &mut errors, &target));
+    let ir = sema::analyze(&parsed, &mut errors, &target);
+    println!("{}", ir);
 
     if errors.is_empty() {
         // OLD ANALYZER

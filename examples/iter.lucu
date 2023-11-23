@@ -16,6 +16,9 @@ effect buf(`item) {
 handle buf(void) {
 	fun push(elem void) usize { 0 }
 	fun get(index usize) void { 0 }
+	fun iter() handle iter(void) {
+		fun {}
+	}
 }
 
 # implementation of these effects using a constant sized array

@@ -92,7 +92,7 @@ pub enum TypeConstraints {
     Handler(GenericVal<EffectIdent>, TypeIdx), // effect, fail
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum FunIdent {
     Top(FunIdx),
     Effect(TypeIdx, EffIdx, EffFunIdx), // handler, effect, function
@@ -106,7 +106,7 @@ pub enum Type {
     Type(TypeConstraints),
     Effect,
 
-    Generic(GenericIdx),
+    Generic(TypeIdx, GenericIdx),
     FunOutput {
         ty: TypeIdx, // type-type
         fun: FunIdent,
@@ -181,6 +181,47 @@ impl TypeConstraints {
 }
 
 impl TypeIdx {
+    fn matches(self, other: Self, _ir: &SemIR) -> bool {
+        // TypeIdx(0) should ALWAYS be Type::Unknown
+        self == other || self == TypeIdx(0) || other == TypeIdx(0)
+    }
+    fn can_move_to(self, other: Self, ir: &SemIR) -> bool {
+        self.matches(other, ir)
+            || match (&ir.types[self], &ir.types[other]) {
+                // any constrained type -> unconstrained type
+                (Type::Type(_), Type::Type(TypeConstraints::None)) => true,
+
+                // handler type -> handler type IF same handler && fail -> fail
+                (
+                    &Type::Type(TypeConstraints::Handler(ref eff_a, fail_a)),
+                    &Type::Type(TypeConstraints::Handler(ref eff_b, fail_b)),
+                ) => eff_a == eff_b && fail_a.can_move_to(fail_b, ir),
+
+                // fun output -> fun output IF same function && typeof output -> typeof output
+                (
+                    &Type::FunOutput {
+                        ty: ty_a,
+                        fun: fun_a,
+                        generic_params: ref generic_a,
+                    },
+                    &Type::FunOutput {
+                        ty: ty_b,
+                        fun: fun_b,
+                        generic_params: ref generic_b,
+                    },
+                ) => fun_a == fun_b && generic_a == generic_b && ty_a.can_move_to(ty_b, ir),
+
+                // generic -> generic IF typeof generic -> typeof generic
+                (&Type::Generic(ty_a, idx_a), &Type::Generic(ty_b, idx_b)) => {
+                    idx_a == idx_b && ty_a.can_move_to(ty_b, ir)
+                }
+
+                // never -> any
+                (Type::Never, _) => true,
+
+                _ => false,
+            }
+    }
     fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
         match ir.types[*self] {
             Type::HandlerSelf => write!(f, "self"),
@@ -225,7 +266,7 @@ impl TypeIdx {
                 Ok(())
             }
             Type::Effect => write!(f, "effect"),
-            Type::Generic(idx) => {
+            Type::Generic(_, idx) => {
                 write!(f, "`{}", usize::from(idx))
             }
             Type::Pointer(inner) => {
@@ -371,7 +412,15 @@ impl fmt::Display for SemIR {
             }
 
             // funs
-            // TODO
+            for fun in handler.funs.values() {
+                // fun signature
+                fun.display("  ", self, f)?;
+
+                // fun impl
+                // TODO
+
+                writeln!(f)?;
+            }
         }
         writeln!(f)?;
 

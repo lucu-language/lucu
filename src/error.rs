@@ -16,7 +16,7 @@ impl<T> Ranged<T> {
         Ranged(f(self.0), self.1, self.2, self.3)
     }
     #[must_use]
-    pub fn empty(&self) -> Ranged<()> {
+    pub fn empty(&self) -> Range {
         Ranged((), self.1, self.2, self.3)
     }
     #[must_use]
@@ -51,8 +51,7 @@ pub enum Error {
     NakedRange,
 
     // name resolution
-    UnknownEffectFun(Option<Ranged<()>>, Option<Ranged<()>>),
-    UnknownField(Option<Ranged<()>>, Option<Ranged<()>>),
+    UnknownField(Option<Range>, Option<Range>),
     UnknownPackageValue(Range),
     UnknownPackageEffect(Range),
     UnknownPackageFunction(Range),
@@ -64,19 +63,24 @@ pub enum Error {
     UnknownPackage,
     UnknownType,
     UnhandledEffect,
-    MultipleEffects(Vec<Ranged<()>>),
+    MultipleEffects(Vec<Range>),
 
     // type analysis
-    ExpectedType(Option<Ranged<()>>),
+    ExpectedType(Option<Range>),
     ExpectedHandler(String),
     ExpectedFunction(String),
-    ExpectedEffect(String, Option<Ranged<()>>),
+    ExpectedEffect(String, Option<Range>),
     ExpectedArray(String),
     TypeMismatch(String, String),
     ParameterMismatch(usize, usize),
     NestedHandlers,
     TryReturnsHandler,
     NotEnoughInfo,
+
+    // handlers
+    UnknownEffectFun(Option<Range>, Option<Range>),
+    SignatureMismatch(Range, Range),
+    UnimplementedMethods(Range, Vec<Range>),
 
     // borrow checker
     AssignImmutable(Option<Range>),
@@ -131,7 +135,7 @@ pub struct LinePos {
     pub column: usize,
 }
 
-pub fn get_lines(file: &str, range: Ranged<()>) -> (LinePos, LinePos) {
+pub fn get_lines(file: &str, range: Range) -> (LinePos, LinePos) {
     let start = file
         .chars()
         .take(range.1)
@@ -174,7 +178,7 @@ struct Highlight {
 }
 
 impl Highlight {
-    fn from_file(files: &VecMap<FileIdx, File>, range: Ranged<()>, color: usize) -> Self {
+    fn from_file(files: &VecMap<FileIdx, File>, range: Range, color: usize) -> Self {
         let file = &files[range.3].content;
         let (start, end) = get_lines(file, range);
         Self {
@@ -472,20 +476,6 @@ impl Errors {
                         "package {} not found in scope",
                         highlight(0, str, color, true)
                     ),
-                    Error::UnknownEffectFun(effect, _) => {
-                        format!(
-                            "effect {}has no function {}",
-                            effect
-                                .map(|effect| highlight(
-                                    1,
-                                    &self.files[effect.3].content[effect.1..effect.2],
-                                    color,
-                                    true
-                                ) + " ")
-                                .unwrap_or(String::new()),
-                            highlight(0, str, color, true)
-                        )
-                    }
                     Error::UnknownValue => format!(
                         "value {} not found in scope",
                         highlight(0, str, color, true)
@@ -552,6 +542,7 @@ impl Errors {
                         format!("type mismatch: expected {}, found {}", expected, found),
                     Error::ParameterMismatch(expected, ref found) =>
                         format!("expected {} argument(s), found {}", expected, found),
+
                     Error::ExpectedEffect(ref found, _) =>
                         format!("expected an effect type, found {}", found),
                     Error::NestedHandlers =>
@@ -561,6 +552,31 @@ impl Errors {
                     Error::ExpectedArray(ref found) =>
                         format!("expected an array type, found {}", found),
                     Error::NotEnoughInfo => format!("cannot resolve type: type annotations needed"),
+
+
+                    Error::UnknownEffectFun(effect, _) => {
+                        format!(
+                            "effect {}has no method {}",
+                            effect
+                                .map(|effect| highlight(
+                                    1,
+                                    &self.files[effect.3].content[effect.1..effect.2],
+                                    color,
+                                    true
+                                ) + " ")
+                                .unwrap_or(String::new()),
+                            highlight(0, str, color, true)
+                        )
+                    }
+                    Error::SignatureMismatch(effect, _) => format!(
+                        "handler method {} has an incompatible signature for effect {}",
+                        highlight(0, str, color, true),
+                        highlight(1, &self.files[effect.3].content[effect.1..effect.2], color, true)
+                    ),
+                    Error::UnimplementedMethods(effect, _) => format!(
+                        "handler does not implement all methods for effect {}",
+                        highlight(1, &self.files[effect.3].content[effect.1..effect.2], color, true),
+                    ),
 
                     Error::AssignImmutable(_) => "cannot assign to immutable variable".into(),
                     Error::AssignExpression => "cannot assign to expression".into(),
@@ -623,6 +639,16 @@ impl Errors {
                 }
                 Error::UnknownPackageType(pkg) => {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
+                }
+                Error::SignatureMismatch(effect, effect_fun) => {
+                    highlights.push(Highlight::from_file(&self.files, effect, 1));
+                    highlights.push(Highlight::from_file(&self.files, effect_fun, 2));
+                }
+                Error::UnimplementedMethods(effect, funs) => {
+                    highlights.push(Highlight::from_file(&self.files, effect, 1));
+                    for fun in funs {
+                        highlights.push(Highlight::from_file(&self.files, fun, 2));
+                    }
                 }
                 Error::MultipleEffects(effects) => {
                     for effect in effects {

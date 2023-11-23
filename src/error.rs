@@ -62,8 +62,11 @@ pub enum Error {
     UnknownEffect,
     UnknownPackage,
     UnknownType,
+    UnknownGeneric,
     UnhandledEffect,
     MultipleEffects(Vec<Range>),
+    MultipleFunctionDefinitions(Range),
+    MultipleEffectDefinitions(Range),
 
     // type analysis
     ExpectedType(Option<Range>),
@@ -527,9 +530,19 @@ impl Errors {
                         highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
                         highlight(0, str, color, true)
                     ),
+                    Error::MultipleFunctionDefinitions(_) => format!(
+                        "function {} is defined multiple times",
+                        highlight(0, str, color, true)
+                    ),
+                    Error::MultipleEffectDefinitions(_) => format!(
+                        "effect {} is defined multiple times",
+                        highlight(0, str, color, true)
+                    ),
 
                     Error::UnknownType =>
                         format!("type {} not found in scope", highlight(0, str, color, true)),
+                    Error::UnknownGeneric =>
+                        format!("generic {} not found in scope", highlight(0, str, color, true)),
                     Error::ExpectedType(_) => format!(
                         "expected a type, found value {}",
                         highlight(0, str, color, true)
@@ -639,6 +652,12 @@ impl Errors {
                 }
                 Error::UnknownPackageType(pkg) => {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
+                }
+                Error::MultipleFunctionDefinitions(first) => {
+                    highlights.push(Highlight::from_file(&self.files, first, 1));
+                }
+                Error::MultipleEffectDefinitions(first) => {
+                    highlights.push(Highlight::from_file(&self.files, first, 1));
                 }
                 Error::SignatureMismatch(effect, effect_fun) => {
                     highlights.push(Highlight::from_file(&self.files, effect, 1));

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::HashMap,
+    fmt::{self},
+};
 
 use crate::{
     ast::{self, EffFunIdx, EffIdx, Expression, Ident, PackageIdx, AST},
@@ -23,6 +26,15 @@ struct SemCtx<'a> {
 enum FunIdent {
     Top(FunIdx),
     Effect(EffIdx, EffFunIdx),
+}
+
+impl FunIdent {
+    fn ident(self, ctx: &SemCtx) -> Ident {
+        match self {
+            FunIdent::Top(idx) => ctx.ast.functions[idx].decl.name,
+            FunIdent::Effect(eff, idx) => ctx.ast.effects[eff].functions[idx].name,
+        }
+    }
 }
 
 struct ScopeStack {
@@ -163,23 +175,23 @@ const TYPE_NEVER: TypeIdx = TypeIdx(2);
 const TYPE_TYPE_UNCONSTRAINED: TypeIdx = TypeIdx(3);
 const TYPE_EFFECT: TypeIdx = TypeIdx(4);
 const TYPE_SELF: TypeIdx = TypeIdx(5);
+const TYPE_USIZE: TypeIdx = TypeIdx(6);
 
-struct Fmt<F>(pub F)
-where
-    F: Fn(&mut fmt::Formatter) -> fmt::Result;
+struct FmtType<'a>(&'a SemIR, TypeIdx);
 
-impl<F> fmt::Display for Fmt<F>
-where
-    F: Fn(&mut fmt::Formatter) -> fmt::Result,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        (self.0)(f)
+impl fmt::Display for FmtType<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'")?;
+        self.1.display(self.0, f)?;
+        write!(f, "'")?;
+        Ok(())
     }
 }
 
 impl SemCtx<'_> {
-    fn no_handler(&mut self, _: &mut Generics, _: TypeIdx) -> TypeIdx {
-        // TODO: error
+    fn no_handler(&mut self, _: &mut Generics, _: TypeIdx, ty: ast::TypeIdx) -> TypeIdx {
+        self.errors
+            .push(self.ast.types[ty].with(Error::NotEnoughInfo));
         TYPE_UNKNOWN
     }
     fn insert_type(&mut self, ty: Type) -> TypeIdx {
@@ -322,13 +334,51 @@ impl SemCtx<'_> {
             | Type::Unknown => ty,
         }
     }
+    fn analyze_generic(
+        &mut self,
+        scope: &mut ScopeStack,
+        id: Ident,
+        typeof_generic: TypeIdx,
+        generics: Option<&mut Generics>,
+    ) -> Option<GenericIdx> {
+        let name = &self.ast.idents[id];
+        match scope.get_generic(self, &name.0) {
+            Some((ty, idx)) => {
+                // check if generic type matches
+                if ty.can_move_to(typeof_generic, &self.ir) {
+                    Some(idx)
+                } else {
+                    self.errors
+                        .push(self.ast.idents[id].with(Error::TypeMismatch(
+                            format!("{}", FmtType(&self.ir, typeof_generic)),
+                            format!("{}", FmtType(&self.ir, ty)),
+                        )));
+                    None
+                }
+            }
+            None => match generics {
+                Some(generics) => {
+                    let idx = generics.push(GenericIdx, typeof_generic);
+                    scope
+                        .top()
+                        .generics
+                        .insert(name.0.clone(), (typeof_generic, idx));
+                    Some(idx)
+                }
+                None => {
+                    self.errors.push(name.with(Error::UnknownGeneric));
+                    None
+                }
+            },
+        }
+    }
     fn analyze_type(
         &mut self,
         scope: &mut ScopeStack,
         ty: ast::TypeIdx,
         mut generics: Option<&mut Generics>,
         generic_handler: bool,
-        handler_output: impl FnOnce(&mut Self, &mut Generics, TypeIdx) -> TypeIdx,
+        handler_output: impl FnOnce(&mut Self, &mut Generics, TypeIdx, ast::TypeIdx) -> TypeIdx,
     ) -> TypeIdx {
         use ast::Type as T;
         match self.ast.types[ty].0 {
@@ -382,58 +432,24 @@ impl SemCtx<'_> {
                         self,
                         generics.unwrap_or(&mut VecMapOffset::new(0)),
                         handler_ty,
+                        ty,
                     ),
                 }
             }
             T::Generic(id) => {
-                let name = &self.ast.idents[id];
-                match scope.get_generic(self, &name.0) {
-                    Some((ty, idx)) => {
-                        // TODO: check if generic is type
-                        self.insert_type(Type::Generic(ty, idx))
-                    }
-                    None => match generics {
-                        Some(generics) => {
-                            let idx = generics.push(GenericIdx, TYPE_TYPE_UNCONSTRAINED);
-                            scope
-                                .top()
-                                .generics
-                                .insert(name.0.clone(), (TYPE_TYPE_UNCONSTRAINED, idx));
-                            self.insert_type(Type::Generic(TYPE_TYPE_UNCONSTRAINED, idx))
-                        }
-                        None => {
-                            // TODO: custom error
-                            self.errors.push(name.with(Error::UnknownType));
-                            TYPE_UNKNOWN
-                        }
-                    },
+                match self.analyze_generic(scope, id, TYPE_TYPE_UNCONSTRAINED, generics) {
+                    Some(idx) => self.insert_type(Type::Generic(TYPE_TYPE_UNCONSTRAINED, idx)),
+                    None => TYPE_UNKNOWN,
                 }
             }
             T::GenericHandler(id, fail) => {
                 let fail = self.analyze_fail(scope, fail, generics.as_deref_mut(), generic_handler);
 
-                let name = &self.ast.idents[id];
-                let effect = match scope.get_generic(self, &name.0) {
-                    Some((_ty, idx)) => {
-                        // TODO: check if generic is effect
-                        GenericVal::Generic(idx)
-                    }
-                    None => match generics.as_deref_mut() {
-                        Some(generics) => {
-                            let idx = generics.push(GenericIdx, TYPE_EFFECT);
-                            scope
-                                .top()
-                                .generics
-                                .insert(name.0.clone(), (TYPE_EFFECT, idx));
-                            GenericVal::Generic(idx)
-                        }
-                        None => {
-                            // TODO: custom error
-                            self.errors.push(name.with(Error::UnknownEffect));
-                            return TYPE_UNKNOWN;
-                        }
-                    },
-                };
+                let effect =
+                    match self.analyze_generic(scope, id, TYPE_EFFECT, generics.as_deref_mut()) {
+                        Some(idx) => GenericVal::Generic(idx),
+                        None => return TYPE_UNKNOWN,
+                    };
 
                 // create handler type
                 let handler_ty =
@@ -447,6 +463,7 @@ impl SemCtx<'_> {
                         self,
                         generics.unwrap_or(&mut VecMapOffset::new(0)),
                         handler_ty,
+                        ty,
                     ),
                 }
             }
@@ -471,17 +488,9 @@ impl SemCtx<'_> {
                 let size = match self.ast.exprs[size].0 {
                     Expression::Int(i) => GenericVal::Literal(i),
                     Expression::Ident(id) => {
-                        let name = &self.ast.idents[id];
-                        match generics {
-                            Some(generics) => {
-                                let idx = generics.push(GenericIdx, TYPE_TYPE_UNCONSTRAINED);
-                                GenericVal::Generic(idx)
-                            }
-                            None => {
-                                // TODO: custom error
-                                self.errors.push(name.with(Error::UnknownType));
-                                return TYPE_UNKNOWN;
-                            }
+                        match self.analyze_generic(scope, id, TYPE_USIZE, generics) {
+                            Some(idx) => GenericVal::Generic(idx),
+                            None => return TYPE_UNKNOWN,
                         }
                     }
                     _ => todo!(),
@@ -575,7 +584,7 @@ impl SemCtx<'_> {
                     ty,
                     Some(&mut generics),
                     false,
-                    |ctx, generics, ty| {
+                    |ctx, generics, ty, _| {
                         let fun = match ident {
                             FunIdent::Top(idx) => super::FunIdent::Top(idx),
                             FunIdent::Effect(eff, idx) => {
@@ -789,6 +798,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     ctx.insert_type(Type::Type(TypeConstraints::None));
     ctx.insert_type(Type::Effect);
     ctx.insert_type(Type::HandlerSelf);
+    ctx.insert_type(Type::USize);
 
     let mut insert = |s: &str, t: Type| {
         let ty = ctx.insert_type(t);
@@ -808,18 +818,24 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     // analyze effect signatures
     for (idx, package) in ast.packages.iter(PackageIdx) {
         // put names in scope
-        // TODO: error on conflict (or overloads?)
         for (i, effect) in package
             .effects
             .iter()
             .copied()
             .map(|idx| (idx, &ast.effects[idx]))
         {
-            // add effect to scope
-            let name = ast.idents[effect.name].0.clone();
-            ctx.packages[idx]
-                .effects
-                .insert(name, GenericVal::Literal(i));
+            let name = &ast.idents[effect.name];
+            if let Some(&GenericVal::Literal(old)) = ctx.packages[idx].effects.get(&name.0) {
+                // error on conflict
+                ctx.errors.push(name.with(Error::MultipleEffectDefinitions(
+                    ast.idents[ast.effects[old].name].empty(),
+                )));
+            } else {
+                // add effect to scope
+                ctx.packages[idx]
+                    .effects
+                    .insert(name.0.clone(), GenericVal::Literal(i));
+            }
         }
     }
 
@@ -865,8 +881,19 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                     );
                     ctx.ir.effects[i].funs.push_value(sign);
 
-                    let name = ast.idents[decl.name].0.clone();
-                    ctx.packages[idx].funs.insert(name, FunIdent::Effect(i, fi));
+                    let name = &ast.idents[decl.name];
+                    if let Some(&old) = ctx.packages[idx].funs.get(&name.0) {
+                        // error on conflict
+                        ctx.errors
+                            .push(name.with(Error::MultipleFunctionDefinitions(
+                                ast.idents[old.ident(&ctx)].empty(),
+                            )));
+                    } else {
+                        // add function to scope
+                        ctx.packages[idx]
+                            .funs
+                            .insert(name.0.clone(), FunIdent::Effect(i, fi));
+                    }
                 }
             });
         }
@@ -887,15 +914,23 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             );
             ctx.ir.fun_sign[i] = sign;
 
-            let name = &ast.idents[fun.decl.name].0;
-            ctx.packages[idx]
-                .funs
-                .insert(name.clone(), FunIdent::Top(i));
+            let name = &ast.idents[fun.decl.name];
+            if let Some(&old) = ctx.packages[idx].funs.get(&name.0) {
+                // error on conflict
+                ctx.errors
+                    .push(name.with(Error::MultipleFunctionDefinitions(
+                        ast.idents[old.ident(&ctx)].empty(),
+                    )));
+            } else {
+                // add function to scope
+                ctx.packages[idx]
+                    .funs
+                    .insert(name.0.clone(), FunIdent::Top(i));
 
-            // check if main
-            if idx == ast.main && name == "main" {
-                ctx.ir.entry = i;
-                // TODO: error on double
+                // check if main
+                if idx == ast.main && name.0.eq("main") {
+                    ctx.ir.entry = i;
+                }
             }
         }
     }

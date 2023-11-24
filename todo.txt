@@ -1,8 +1,6 @@
 typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls (and only allowed in try blocks if they fail!)
-- handler function must match signature
-- functions that return handlers must not be (mutually) recursive
 - functions must not be (mutually) recursive through try blocks
 
 parser todo:
@@ -12,8 +10,36 @@ todo:
 - !!! deallocate stuff in loops
 - unbounded ranges
 - fail in try blocks
-- opaque types (they will be view types)
 - error if core library not found
+- effect associated types
+- effect associated handlers
+- dynamic effects (less powerfull, but are ONE type for every handler)
+- anonymous effects (are always dynamic)
+
+# `t can be moved
+effect auto move(`t) {}
+
+# `t can be moved to a mutable context
+effect auto move_mut(`t) {
+	handle move(`t)
+}
+
+# `t can be 0-initialized (zeroed out is a valid value)
+effect auto zeroinit(`t) {}
+
+# `t can be left uninitialized (any byte combination is a valid value)
+effect auto uninit(`t) {}
+
+effect deref(`t) {
+	type target
+	fun deref(&t `t) &target
+}
+
+effect move_out(`t) {
+	handle deref(`t)
+	handle move(target)
+	fun move_out(&owned t `t) target
+}
 
 would be nice:
 - tokenizer matches brackets
@@ -24,3 +50,4 @@ working on:
 - separate generation code from data types
 - analyzer gives semantic IR
 - try blocks no longer their own function
+- reference parameters / outputs

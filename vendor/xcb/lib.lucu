@@ -2,6 +2,8 @@ import "vendor:c"
 
 @foreign(prefix = "xcb_", handler = uptr)
 effect conn {
+	# handle lib
+
 	# TODO: cint, GetAtomNameCookie
 	fun get_atom_name(atom int) int
 	# TODO: GetAtomNameCookie, ^^GenericError, ^GetAtomNameReply

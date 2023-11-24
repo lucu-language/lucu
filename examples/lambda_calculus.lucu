@@ -1,0 +1,26 @@
+effect run {
+	fun run()
+}
+
+effect choose {
+	fun choose(t run, f run)
+}
+
+fun truly() choose {
+	fun { t, f -> run() with t }
+}
+
+fun falsy() choose {
+	fun { t, f -> run() with f }
+}
+
+fun ify(c choose, t run, f run) {
+	choose(t, f) with c
+}
+
+fun main() / debug {
+	let on_truly run = fun { putstr("true\n") }
+	let on_falsy run = fun { putstr("false\n") }
+	ify(truly(), on_truly, on_falsy)
+	ify(falsy(), on_truly, on_falsy)
+}

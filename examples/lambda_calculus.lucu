@@ -19,8 +19,20 @@ fun ify(c choose, t run, f run) {
 }
 
 fun main() / debug {
-	let on_truly run = fun { putstr("true\n") }
-	let on_falsy run = fun { putstr("false\n") }
-	ify(truly(), on_truly, on_falsy)
-	ify(falsy(), on_truly, on_falsy)
+
+	let true = truly()
+	let false = falsy()
+
+	ify (true) {
+		putstr("true\n")
+	} {
+		putstr("false\n")
+	}
+
+	ify (false) {
+		putstr("true\n")
+	} {
+		putstr("false\n")
+	}
+
 }

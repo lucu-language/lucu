@@ -2,6 +2,7 @@ typechecking todo:
 - fail type in handlers
 - fail type of implicit handlers/naked handler calls (and only allowed in try blocks if they fail!)
 - functions must not be (mutually) recursive through try blocks
+- use global GenericIdx and global AssocIdx instead of the wacky stuff we have right now
 
 parser todo:
 - operator precedence
@@ -39,6 +40,14 @@ effect move_out(`t) {
 	handle deref(`t)
 	handle move(target)
 	fun move_out(&owned t `t) target
+}
+
+effect clone(`t) {
+	fun clone(&t `t) `t
+}
+
+effect copy(`t) {
+	handle clone(`t)
 }
 
 would be nice:

@@ -849,10 +849,11 @@ fn analyze_expr(
 
             if let Some(params) = params {
                 if params.len() != exprs.len() {
-                    errors.push(
-                        ctx.parsed.exprs[expr]
-                            .with(Error::ParameterMismatch(params.len(), exprs.len())),
-                    );
+                    errors.push(ctx.parsed.exprs[expr].with(Error::ParameterMismatch(
+                        None,
+                        params.len(),
+                        exprs.len(),
+                    )));
                 }
                 for (expr, (param_ty, mutable, range)) in
                     exprs.iter().copied().zip(params.into_iter())
@@ -944,6 +945,7 @@ fn analyze_expr(
                     child.scoped_effects = &scoped;
                     if !TypeIdx::matches(expected_break, expected_return) {
                         errors.push(ctx.parsed.exprs[handler].with(Error::TypeMismatch(
+                            None,
                             format!("'{}'", expected_return.display_handler(eff_val, ctx)),
                             format!("'{}'", expected_break.display_handler(eff_val, ctx)),
                         )));
@@ -1334,6 +1336,7 @@ fn analyze_expr(
 
         (_, _) => {
             errors.push(ctx.parsed.exprs[expr].with(Error::TypeMismatch(
+                None,
                 expected_ty.display(ctx),
                 found_ty.display(ctx),
             )));

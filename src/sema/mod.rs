@@ -15,14 +15,27 @@ vecmap_index!(LazyIdx);
 mod codegen;
 pub use codegen::*;
 
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name_def: Option<Range>,
+    pub type_def: Range,
+    pub ty: TypeIdx,
+}
+
+#[derive(Debug, Default)]
+pub struct ReturnType {
+    pub type_def: Option<Range>,
+    pub ty: TypeIdx,
+}
+
 #[derive(Debug, Default)]
 pub struct FunSign {
     pub def: Option<Range>,
     pub name: String,
     pub generics: Generics,
 
-    pub params: Vec<TypeIdx>,
-    pub return_type: TypeIdx,
+    pub params: Vec<Param>,
+    pub return_type: ReturnType,
 }
 
 impl Default for TypeIdx {
@@ -107,12 +120,6 @@ pub enum TypeConstraints {
     Handler(GenericVal<EffectIdent>, TypeIdx), // effect, fail
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub enum FunIdent {
-    Top(FunIdx),
-    Effect(TypeIdx, EffIdx, EffFunIdx), // handler, effect, function
-}
-
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
     Handler(HandlerIdx),
@@ -146,7 +153,7 @@ pub enum Type {
     Bool,
     None,
     Never,
-    Unknown(TypeIdx),
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -205,135 +212,6 @@ impl TypeConstraints {
 }
 
 impl TypeIdx {
-    fn can_move_to(self, other: Self, ir: &SemIR) -> bool {
-        self == other
-            || match (&ir.types[self], &ir.types[other]) {
-                // any constrained type -> unconstrained type
-                (Type::DataType(_), Type::DataType(TypeConstraints::None)) => true,
-
-                // handler -> handler IF same handler && fail -> fail
-                (
-                    &Type::DataType(TypeConstraints::Handler(ref eff_a, fail_a)),
-                    &Type::DataType(TypeConstraints::Handler(ref eff_b, fail_b)),
-                ) => eff_a == eff_b && fail_a.can_move_to(fail_b, ir),
-
-                // assoc -> assoc IF handler -> handler && typeof assoc -> typeof assoc
-                (
-                    &Type::AssocType {
-                        ty: ty_a,
-                        handler: handler_a,
-                        effect: eff_a,
-                        idx: idx_a,
-                        generic_params: ref generic_a,
-                    },
-                    &Type::AssocType {
-                        ty: ty_b,
-                        handler: handler_b,
-                        effect: eff_b,
-                        idx: idx_b,
-                        generic_params: ref generic_b,
-                    },
-                ) => {
-                    eff_a == eff_b
-                        && idx_a == idx_b
-                        && generic_a == generic_b
-                        && handler_a.can_move_to(handler_b, ir)
-                        && ty_a.can_move_to(ty_b, ir)
-                }
-
-                // generic -> generic IF typeof generic -> typeof generic
-                (&Type::Generic(ty_a, idx_a), &Type::Generic(ty_b, idx_b)) => {
-                    idx_a == idx_b && ty_a.can_move_to(ty_b, ir)
-                }
-
-                // never -> any
-                (Type::Never, _) => true,
-
-                // unknown
-                (&Type::Unknown(typeof_ty), _) => other.is_instance_rev(typeof_ty, ir),
-                (_, &Type::Unknown(typeof_ty)) => self.is_instance(typeof_ty, ir),
-
-                _ => false,
-            }
-    }
-    fn is_instance(self, ty: TypeIdx, ir: &SemIR) -> bool {
-        match ir.types[self] {
-            Type::HandlerSelf => false,
-            Type::Effect => false,
-            Type::DataType(_) => false,
-
-            Type::Generic(typeof_ty, _)
-            | Type::LazyHandler(typeof_ty, _)
-            | Type::AssocType { ty: typeof_ty, .. }
-            | Type::Unknown(typeof_ty) => typeof_ty.can_move_to(ty, ir),
-
-            Type::Pointer(_)
-            | Type::Const(_)
-            | Type::ConstArray(_, _)
-            | Type::Slice(_)
-            | Type::Int
-            | Type::UInt
-            | Type::USize
-            | Type::UPtr
-            | Type::U8
-            | Type::Str
-            | Type::Bool
-            | Type::None
-            | Type::Never => match ir.types[ty] {
-                Type::DataType(TypeConstraints::None) => true,
-                _ => false,
-            },
-            Type::Handler(idx) => match ir.types[ty] {
-                Type::DataType(TypeConstraints::None) => true,
-                Type::DataType(TypeConstraints::Handler(GenericVal::Literal(ref ident), fail)) => {
-                    let handler = &ir.handlers[idx];
-                    handler.effect == ident.effect
-                        && handler.generic_params == ident.generic_params
-                        && handler.fail.can_move_to(fail, ir)
-                }
-                _ => false,
-            },
-        }
-    }
-    fn is_instance_rev(self, ty: TypeIdx, ir: &SemIR) -> bool {
-        match ir.types[self] {
-            Type::HandlerSelf => false,
-            Type::Effect => false,
-            Type::DataType(_) => false,
-
-            Type::Generic(typeof_ty, _)
-            | Type::LazyHandler(typeof_ty, _)
-            | Type::AssocType { ty: typeof_ty, .. }
-            | Type::Unknown(typeof_ty) => ty.can_move_to(typeof_ty, ir),
-
-            Type::Pointer(_)
-            | Type::Const(_)
-            | Type::ConstArray(_, _)
-            | Type::Slice(_)
-            | Type::Int
-            | Type::UInt
-            | Type::USize
-            | Type::UPtr
-            | Type::U8
-            | Type::Str
-            | Type::Bool
-            | Type::None
-            | Type::Never => match ir.types[ty] {
-                Type::DataType(TypeConstraints::None) => true,
-                _ => false,
-            },
-            Type::Handler(idx) => match ir.types[ty] {
-                Type::DataType(TypeConstraints::None) => true,
-                Type::DataType(TypeConstraints::Handler(GenericVal::Literal(ref ident), fail)) => {
-                    let handler = &ir.handlers[idx];
-                    handler.effect == ident.effect
-                        && handler.generic_params == ident.generic_params
-                        && fail.can_move_to(handler.fail, ir)
-                }
-                _ => false,
-            },
-        }
-    }
     fn display(
         &self,
         ir: &SemIR,
@@ -410,19 +288,7 @@ impl TypeIdx {
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),
             Type::Never => write!(f, "!"),
-            Type::Unknown(typeof_ty) => {
-                write!(f, "UNKNOWN")?;
-                match ir.types[typeof_ty] {
-                    Type::DataType(ref costraints) => {
-                        costraints.display(ir, generic_params, f)?;
-                    }
-                    _ => {
-                        write!(f, " ")?;
-                        typeof_ty.display(ir, generic_params, f)?;
-                    }
-                }
-                Ok(())
-            }
+            Type::Unknown => write!(f, "UNKNOWN"),
             Type::LazyHandler(typeof_ty, idx) => match ir.lazy_handlers[idx] {
                 Some(idx) => {
                     write!(f, "{}", ir.handlers[idx].debug_name)?;
@@ -492,7 +358,7 @@ impl FunSign {
         self.generics.display(ir, no_params, f)?;
         write!(f, "(")?;
         if !self.params.is_empty() {
-            let mut iter = self.params.iter().copied();
+            let mut iter = self.params.iter().map(|param| param.ty);
 
             let first = iter.next().unwrap();
             first.display(ir, no_params, f)?;
@@ -502,9 +368,9 @@ impl FunSign {
             }
         }
         write!(f, ")")?;
-        if !matches!(ir.types[self.return_type], Type::None) {
+        if !matches!(ir.types[self.return_type.ty], Type::None) {
             write!(f, " ")?;
-            self.return_type.display(ir, no_params, f)?;
+            self.return_type.ty.display(ir, no_params, f)?;
         }
         Ok(())
     }

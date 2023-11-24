@@ -23,7 +23,7 @@ handle buf(void) {
 
 # implementation of these effects using a constant sized array
 fun array_buffer(`cap usize) handle buf(`item) {
-	mut array [`cap]`item = 0
+	mut array [`cap]const `item = 0
 	mut size  usize       = 0
 	handle strbuf {
 		fun push(elem `item) usize {

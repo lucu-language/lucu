@@ -74,8 +74,9 @@ pub enum Error {
     ExpectedFunction(String),
     ExpectedEffect(String, Option<Range>),
     ExpectedArray(String),
-    TypeMismatch(String, String),
-    ParameterMismatch(usize, usize),
+    TypeMismatch(Option<Range>, String, String),
+    ExtendedTypeMismatch(Option<Range>, String, String, Vec<(String, String)>),
+    ParameterMismatch(Option<Range>, usize, usize),
     NestedHandlers,
     TryReturnsHandler,
     NotEnoughInfo,
@@ -551,9 +552,15 @@ impl Errors {
                         format!("type mismatch: expected an effect handler, found {}", found),
                     Error::ExpectedFunction(ref found) =>
                         format!("type mismatch: expected a function, found {}", found),
-                    Error::TypeMismatch(ref expected, ref found) =>
+                    Error::TypeMismatch(_, ref expected, ref found) =>
                         format!("type mismatch: expected {}, found {}", expected, found),
-                    Error::ParameterMismatch(expected, ref found) =>
+                    Error::ExtendedTypeMismatch(_, ref expected, ref found, ref extended) => format!(
+                        "type mismatch: expected {}, found {}\n                      {}",
+                        expected,
+                        found,
+                        extended.iter().map(|(a, b)| format!("expected {}, found {}", a, b)).collect::<Vec<_>>().join("\n                      ")
+                    ),
+                    Error::ParameterMismatch(_, expected, ref found) =>
                         format!("expected {} argument(s), found {}", expected, found),
 
                     Error::ExpectedEffect(ref found, _) =>
@@ -652,6 +659,15 @@ impl Errors {
                 }
                 Error::UnknownPackageType(pkg) => {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
+                }
+                Error::TypeMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
+                }
+                Error::ExtendedTypeMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
+                }
+                Error::ParameterMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
                 }
                 Error::MultipleFunctionDefinitions(first) => {
                     highlights.push(Highlight::from_file(&self.files, first, 1));

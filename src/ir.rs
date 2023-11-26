@@ -1277,7 +1277,6 @@ pub fn generate_ir(
                     captures: Vec::new(),
                 },
             );
-            println!("foreign {} {}", handler.0, ir.parsed.idents[eff.name].0);
             ir.ir.handler_type.push_value(HandlerType {
                 captures: ty.into_iter().collect(),
                 break_ty: TYPE_NEVER,
@@ -1948,8 +1947,6 @@ fn get_handler_proc(
     let eff_val = ir.handlers[handler_idx].effect;
     let effects = match ir.asys.defs[eff_val] {
         Definition::Effect(eff_idx) => {
-            println!("{}", ir.parsed.idents[ir.parsed.effects[eff_idx].name].0);
-
             let decl = &ir.parsed.effects[eff_idx].functions[eff_fun_idx];
             decl.sign
                 .effects
@@ -2013,7 +2010,6 @@ fn get_handler_proc(
     }
 
     // get proc
-    println!("{:#?}", procident);
     if !ir.proc_map.contains_key(&procident) {
         Either::Left(gen_handler_proc(
             ir,

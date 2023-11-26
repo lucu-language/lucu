@@ -390,6 +390,8 @@ fn main() {
                         .arg("--import-undefined") // TODO: get list of symbols from "env" library
                         .arg("-o")
                         .arg(&output.with_extension("wasm"))
+                        .arg("-z")
+                        .arg("stack-size=1048576")
                         .arg("-e_start")
                         .status()
                         .unwrap();

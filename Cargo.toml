@@ -9,3 +9,4 @@ edition = "2021"
 clap = { version = "4.4.7", features = ["derive"] }
 either = "1.9.0"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm15-0"] }
+llvm-sys-150 = { package = "llvm-sys", version = "150.1.2", features = ["prefer-static"] }

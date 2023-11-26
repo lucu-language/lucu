@@ -181,6 +181,7 @@ dependencies = [
  "clap",
  "either",
  "inkwell",
+ "llvm-sys",
 ]
 
 [[package]]

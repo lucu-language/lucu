@@ -2,42 +2,6 @@
 # everything in this file is always in scope
 ##
 
-import "io"
-
-##
-# crude way of reading and writing data
-# defined for the main function
-##
-effect debug {
-	fun putint(n int)
-	fun putstr(s str)
-	fun wait()
-}
-
-@capability
-fun debug() debug / io.stdio {
-	let in = io.stdin()
-	let out = io.stdout()
-	handle debug {
-		fun putint(n int) {
-			with out {
-				io.write_int(n)
-				io.write("\n");
-			}
-		}
-		fun putstr(s str) {
-			with out {
-				io.write(cast s);
-			}
-		}
-		fun wait() {
-			with in {
-				io.skip_line();
-			}
-		}
-	}
-}
-
 ##
 # panics with message if the assertion is not met
 # preferred to be used only for debugging

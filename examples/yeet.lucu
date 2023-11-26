@@ -1,3 +1,5 @@
+import "core:io"
+
 effect throwint {
 	fun throwint() !
 }
@@ -6,43 +8,43 @@ effect throwstr {
 	fun throwstr() !
 }
 
-fun main() / debug {
-	putint(try {
+fun main() / io.stdio {
+	io.putint(try {
 		try {
 			throwint()
 			"unexpected"
-		} with handle throwstr yeets str {
+		} with handle throwstr fails str {
 
 			fun throwstr() ! {
-				yeet "Hello, World!\n"
+				fail "Hello, World!"
 			}
 
 		}
 		69
-	} with handle throwint yeets int {
+	} with handle throwint fails int {
 
 		fun throwint() ! {
-			yeet 42
+			fail 42
 		}
 		
 	})
 
-	putstr(try {
+	io.putstr(try {
 		try {
 			throwstr()
 			69
-		} with handle throwint yeets int {
+		} with handle throwint fails int {
 
 			fun throwint() ! {
-				yeet 42
+				fail 42
 			}
 	
 		}
 		"unexpected"
-	} with handle throwstr yeets str {
+	} with handle throwstr fails str {
 
 		fun throwstr() ! {
-			yeet "Hello, World!\n"
+			fail "Hello, World!"
 		}
 
 	})

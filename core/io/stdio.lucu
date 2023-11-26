@@ -12,15 +12,22 @@ fun print(s str) / stdio {
 	write(cast s) with stdout();
 }
 
-fun println(s str) / stdio {
+fun printerr(s str) / stdio {
+	write(cast s) with stderr();
+}
+
+fun putint(n int) / stdio {
 	with stdout() {
-		write(cast s)
+		write_int(n)
 		write("\n")
 	};
 }
 
-fun printerr(s str) / stdio {
-	write(cast s) with stderr();
+fun putstr(s str) / stdio {
+	with stdout() {
+		write(cast s)
+		write("\n")
+	};
 }
 
 @capability(os = "linux")

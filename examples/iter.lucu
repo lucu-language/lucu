@@ -1,3 +1,6 @@
+# we import 'io' from the core library to interact with the console
+import "core:io"
+
 # we define an effect for iterating over a string collection
 effect striter {
 	fun next() str
@@ -38,7 +41,7 @@ fun array_buffer() strbuf {
 }
 
 # example of using a string buffer
-# the internal 'debug' effect contains the 'putstr' function
+# the 'io.stdio' effect allows use of the 'io.println' function
 fun main() / debug {
 
 	# a 'with' block puts the effect handler in scope
@@ -53,8 +56,7 @@ fun main() / debug {
 		# but it loops until it gets a failure
 		# this way we can iterate over all pushed elements and print them
 		with iter() loop {
-			putstr(next())
-			putstr("\n")
+			io.putstr(next())
 		}
 
 	}

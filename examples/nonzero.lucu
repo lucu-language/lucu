@@ -1,20 +1,22 @@
+import "core:io"
+
 effect nonzero {
 	fun nz(n int) int
 }
 
-handle nonzero yeets {
+handle nonzero fails {
 	fun nz(n int) int {
 		if n == 0 {
-			yeet
+			fail
 		} else {
 			n
 		}
 	}
 }
 
-fun main() / debug {
-	putint(nz(7))
-	putint(nz(2))
-	putint(nz(0))
-	putint(nz(8))
+fun main() / io.stdio {
+	io.putint(nz(7))
+	io.putint(nz(2))
+	io.putint(nz(0))
+	io.putint(nz(8))
 }

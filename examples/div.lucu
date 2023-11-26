@@ -1,3 +1,5 @@
+import "core:io"
+
 # an effect to handle division by zero
 effect div_by_zero {
 
@@ -66,28 +68,28 @@ fun divide_throw(a int, b int) int / catch {
 
 ##
 # our main function
-# a function "putint" exists inside the "debug" effect that can print numbers
+# a function "putint" exists inside the "io" package that can print numbers
 ##
-fun main() / debug {
+fun main() / io.stdio {
 
     try {
 
-        putint(divide_default(12, 4, 1)) # 12 / 4
-        putint(divide_default(12, 0, 1)) # 12 / 0
-        putint(divide_throw(56, 0))      # 56 / 0
-        putint(divide_throw(56, 8))      # 56 / 8
+        io.putint(divide_default(12, 4, 1)) # 12 / 4
+        io.putint(divide_default(12, 0, 1)) # 12 / 0
+        io.putint(divide_throw(56, 0))      # 56 / 0
+        io.putint(divide_throw(56, 8))      # 56 / 8
 
-    } with handle catch yeets {
+    } with handle catch fails {
 
         fun throw() ! {
             # this may not return a value
             # we end the entire try block early
-            yeet
+            fail
         }
 
     }
 
-    putint(420)
+    io.putint(420)
     
 }
 

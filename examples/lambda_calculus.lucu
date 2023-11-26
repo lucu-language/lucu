@@ -1,3 +1,5 @@
+import "core:io"
+
 effect run {
 	fun run()
 }
@@ -18,21 +20,21 @@ fun ify(c choose, t run, f run) {
 	choose(t, f) with c
 }
 
-fun main() / debug {
+fun main() / io.stdio {
 
 	let true = truly()
 	let false = falsy()
 
 	ify (true) {
-		putstr("true\n")
+		io.putstr("true")
 	} {
-		putstr("false\n")
+		io.putstr("false")
 	}
 
 	ify (false) {
-		putstr("true\n")
+		io.putstr("true")
 	} {
-		putstr("false\n")
+		io.putstr("false")
 	}
 
 }

@@ -2,42 +2,6 @@
 # everything in this file is always in scope
 ##
 
-import "io"
-
-##
-# crude way of reading and writing data
-# defined for the main function
-##
-effect debug {
-	fun putint(n int)
-	fun putstr(s str)
-	fun wait()
-}
-
-@capability
-fun debug() handle debug / io.stdio {
-	let in = io.stdin()
-	let out = io.stdout()
-	handle debug {
-		fun putint(n int) {
-			with out {
-				io.write_int(n)
-				io.write("\n");
-			}
-		}
-		fun putstr(s str) {
-			with out {
-				io.write(cast s);
-			}
-		}
-		fun wait() {
-			with in {
-				io.skip_line();
-			}
-		}
-	}
-}
-
 ##
 # panics with message if the assertion is not met
 # preferred to be used only for debugging
@@ -86,6 +50,58 @@ fun for(start usize, end usize, fn handle consume fails) {
 
 effect consume {
 	fun consume(n usize)
+}
+
+##
+# while loop
+##
+fun while(cond handle test, fn handle run fails) {
+	with fn loop {
+		if test() with cond {
+			run()
+		} else {
+			break()
+		}
+	}
+}
+
+##
+# until loop
+##
+fun until(cond handle test, fn handle run fails) {
+	with fn loop {
+		if test() with cond {
+			break()
+		} else {
+			run()
+		}
+	}
+}
+
+##
+# repeat loop
+##
+fun repeat(fn handle run fails `t) `t {
+	with fn loop {
+		run()
+	}
+}
+
+effect test {
+	fun test() bool
+}
+
+effect run {
+	fun run()
+}
+
+# TODO: && operator
+fun and(a bool, b bool) bool {
+	if a {
+		b
+	} else {
+		0 == 1
+	}
 }
 
 ##

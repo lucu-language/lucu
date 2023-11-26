@@ -485,10 +485,99 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         Some(Linkage::Internal),
     );
 
+    let fail_block = context.append_basic_block(fail, "");
+    codegen.builder.position_at_end(fail_block);
+    codegen.builder.build_call(trap, &[], "").unwrap();
+    codegen.builder.build_unreachable().unwrap();
+
+    // memset
     let u8_ptr = context.i8_type().ptr_type(AddressSpace::default());
+    let uptr = context.ptr_sized_int_type(&codegen.target_data, None);
+
+    let memset = codegen.module.add_function(
+        "memset",
+        u8_ptr.fn_type(
+            &[
+                u8_ptr.into(),
+                context.i32_type().into(), // TODO: C int
+                uptr.into(),
+            ],
+            false,
+        ),
+        Some(Linkage::Internal),
+    );
+
+    let start = memset.get_nth_param(0).unwrap().into_pointer_value();
+    let char = memset.get_nth_param(1).unwrap().into_int_value();
+    let size = memset.get_nth_param(2).unwrap().into_int_value();
+
+    let memset_entry = context.append_basic_block(memset, "");
+    let memset_init = context.append_basic_block(memset, "init");
+    let memset_loop = context.append_basic_block(memset, "loop");
+    let memset_ret = context.append_basic_block(memset, "end");
+
+    codegen.builder.position_at_end(memset_entry);
+    let char = codegen
+        .builder
+        .build_int_truncate(char, context.i8_type(), "")
+        .unwrap();
+    let end = unsafe {
+        codegen
+            .builder
+            .build_gep(context.i8_type(), start, &[size], "end")
+            .unwrap()
+    };
+    codegen
+        .builder
+        .build_unconditional_branch(memset_init)
+        .unwrap();
+
+    codegen.builder.position_at_end(memset_init);
+    let phi = codegen.builder.build_phi(u8_ptr, "current").unwrap();
+    let current = phi.as_basic_value().into_pointer_value();
+    let lhs = codegen
+        .builder
+        .build_ptr_to_int(current, uptr, "lhs")
+        .unwrap();
+    let rhs = codegen.builder.build_ptr_to_int(end, uptr, "rhs").unwrap();
+    let cmp = codegen
+        .builder
+        .build_int_compare(IntPredicate::EQ, lhs, rhs, "cmp")
+        .unwrap();
+    codegen
+        .builder
+        .build_conditional_branch(cmp, memset_ret, memset_loop)
+        .unwrap();
+
+    codegen.builder.position_at_end(memset_loop);
+    codegen.builder.build_store(current, char).unwrap();
+    let next = unsafe {
+        codegen
+            .builder
+            .build_gep(
+                context.i8_type(),
+                current,
+                &[uptr.const_int(1, false)],
+                "next",
+            )
+            .unwrap()
+    };
+    phi.add_incoming(&[(&start, memset_entry), (&next, memset_loop)]);
+    codegen
+        .builder
+        .build_unconditional_branch(memset_init)
+        .unwrap();
+
+    codegen.builder.position_at_end(memset_ret);
+    codegen.builder.build_return(Some(&start)).unwrap();
+
     let used_const = u8_ptr.const_array(&[
         guard.as_pointer_value().const_cast(u8_ptr),
         fail.as_global_value().as_pointer_value().const_cast(u8_ptr),
+        memset
+            .as_global_value()
+            .as_pointer_value()
+            .const_cast(u8_ptr),
     ]);
 
     let used = codegen
@@ -497,11 +586,6 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     used.set_linkage(Linkage::Appending);
     used.set_section(Some("llvm.metadata"));
     used.set_initializer(&used_const);
-
-    let fail_block = context.append_basic_block(fail, "");
-    codegen.builder.position_at_end(fail_block);
-    codegen.builder.build_call(trap, &[], "").unwrap();
-    codegen.builder.build_unreachable().unwrap();
 
     // assume valid
     if debug {

@@ -1,3 +1,5 @@
+import "core:io"
+
 effect get {
     fun get() int
 }
@@ -18,16 +20,16 @@ fun ident(h handle get) handle get {
 	h
 }
 
-fun puttwice(n int) / debug {
+fun puttwice(n int) / io.stdio {
 	with getter_indirect(n) {
 		let handler = gimme_get()
-		putint(get()) with handler
+		io.putint(get()) with handler
 		let handler = ident(handler)
-		putint(get()) with handler
+		io.putint(get()) with handler
 	}
 }
 
-fun main() / debug {
-	putint(420)
+fun main() / io.stdio {
+	io.putint(420)
 	puttwice(69)
 }

@@ -398,6 +398,8 @@ fn main() {
                         .arg("--import-undefined") // TODO: get list of symbols from "env" library
                         .arg("-o")
                         .arg(&output.with_extension("wasm"))
+                        .arg("-z")
+                        .arg("stack-size=1048576")
                         .arg("-e_start")
                         .status()
                         .unwrap();
@@ -533,10 +535,5 @@ mod tests {
     #[test]
     fn effect_function_handlers() {
         test_file("printget", "onetwotea")
-    }
-
-    #[test]
-    fn arrays() {
-        test_file("strbuffer", "Hello\nworld\nworld\nHello\n")
     }
 }

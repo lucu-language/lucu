@@ -1,3 +1,6 @@
+# we import 'io' from the core library to interact with the console
+import "core:io"
+
 # we define an effect for iterating over a collection
 effect iter(`item) {
 	fun next() `item
@@ -47,7 +50,7 @@ fun array_buffer(`cap usize) handle buf(`item) {
 }
 
 # example of using a string buffer
-# the internal 'debug' effect contains the 'putstr' function
+# the 'io.stdio' effect allows use of the 'io.println' function
 fun main() / debug {
 
 	let buffer handle buf(const str) = array_buffer(16)
@@ -64,8 +67,7 @@ fun main() / debug {
 		# but it loops until it gets a failure
 		# this way we can iterate over all pushed elements and print them
 		with iter() loop {
-			putstr(next())
-			putstr("\n")
+			io.putstr(next())
 		}
 
 	}

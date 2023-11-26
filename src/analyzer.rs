@@ -856,6 +856,25 @@ fn analyze_expr(
             let mut tys = HashMap::new();
             let mut effs = HashMap::new();
 
+            let return_type = if return_type == TYPE_NEVER {
+                if expected_ty == TYPE_UNKNOWN {
+                    TYPE_NEVER
+                } else {
+                    expected_ty
+                }
+            } else if expected_ty == TYPE_UNKNOWN {
+                match return_type.resolve_generics(ctx, &tys, &effs) {
+                    Some(ty) => ty,
+                    None => {
+                        errors.push(ctx.parsed.exprs[cexpr].with(Error::NotEnoughInfo));
+                        TYPE_UNKNOWN
+                    }
+                }
+            } else {
+                return_type.match_generics(expected_ty, ctx, &mut tys, &mut effs);
+                expected_ty
+            };
+
             if let Some(params) = params {
                 if params.len() != exprs.len() {
                     errors.push(ctx.parsed.exprs[expr].with(Error::ParameterMismatch(
@@ -884,24 +903,6 @@ fn analyze_expr(
                     }
                 }
             }
-            let return_type = if return_type == TYPE_NEVER {
-                if expected_ty == TYPE_UNKNOWN {
-                    TYPE_NEVER
-                } else {
-                    expected_ty
-                }
-            } else if expected_ty == TYPE_UNKNOWN {
-                match return_type.resolve_generics(ctx, &tys, &effs) {
-                    Some(ty) => ty,
-                    None => {
-                        errors.push(ctx.parsed.exprs[cexpr].with(Error::NotEnoughInfo));
-                        TYPE_UNKNOWN
-                    }
-                }
-            } else {
-                return_type.match_generics(expected_ty, ctx, &mut tys, &mut effs);
-                expected_ty
-            };
 
             // handle return type as handler
             // this way different calls always return different handlers according to the type checker

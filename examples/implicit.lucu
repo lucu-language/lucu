@@ -1,3 +1,5 @@
+import "core:io"
+
 effect get {
 	fun get() int
 }
@@ -12,22 +14,22 @@ effect return {
 	fun return(n int) !
 }
 
-handle return yeets int {
+handle return fails int {
 	fun return(n int) ! {
-		yeet n
+		fail n
 	}
 }
 
-fun main() / debug {
-	putint(try {
-		putint(get())
-		putint(get()) with handle get {
+fun main() / io.stdio {
+	io.putint(try {
+		io.putint(get())
+		io.putint(get()) with handle get {
 			fun get() int {
 				420
 			}
 		}
 		return(90)
-		putint(get())
+		io.putint(get())
 		100
 	})
 }

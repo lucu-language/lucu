@@ -1,3 +1,5 @@
+import "core:io"
+
 effect set {
 	fun set(n int)
 }
@@ -10,18 +12,18 @@ fun set_setter_try(n int) / set {
 	set(n)
 }
 
-fun main() / debug {
+fun main() / io.stdio {
 	mut num = 69
-	putint(num)
+	io.putint(num)
 
 	let setter set = fun { n -> num = n }
 
 	set(420) with setter
-	putint(num)
+	io.putint(num)
 
 	set_setter(24, setter)
-	putint(num)
+	io.putint(num)
 
 	set_setter_try(42) with setter
-	putint(num)
+	io.putint(num)
 }

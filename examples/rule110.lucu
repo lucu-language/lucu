@@ -1,4 +1,6 @@
-fun main() / debug {
+import "core:io"
+
+fun main() / io.stdio {
 	# create buffers
 	mut state [128]u8 = 0
 	mut state = state[0..128]
@@ -62,13 +64,13 @@ fun next_state(original []u8, mut next []u8) {
 	)
 }
 
-fun print_state(state []u8) / debug {
+fun print_state(state []u8) / io.stdio {
 	for(0, len(state)) {
 		cell ->
 		if state[cell] == 0 {
-			putstr(" ")
+			io.print(" ")
 		} else {
-			putstr("X")
+			io.print("X")
 		}
 	}
 }

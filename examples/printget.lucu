@@ -1,3 +1,5 @@
+import "core:io"
+
 effect printget {
 	fun print() / get
 }
@@ -10,7 +12,7 @@ fun getter(s str) handle get {
 	fun { s }
 }
  
-fun main() / debug {
+fun main() / io.stdio {
 	try {
 
 		print() with getter("one")
@@ -20,7 +22,7 @@ fun main() / debug {
 	} with handle printget {
 
 		fun print() / get {
-			putstr(get())
+			io.print(get())
 		}
 		
 	}

@@ -1,7 +1,7 @@
-fun main() / debug {
-	putstr(source_location())
-	putstr("\n")
-	putstr(source_location())
-	putstr("\n")
+import "core:io"
+
+fun main() / io.stdio {
+	io.putstr(source_location())
+	io.putstr(source_location())
 	panic("oh no it's a panic")
 }

@@ -1,3 +1,5 @@
+import "core:io"
+
 effect counter {
 	fun count() int
 }
@@ -7,10 +9,10 @@ fun init_counter(start int) handle counter {
 	fun { n++ }
 }
 
-fun main() / debug {
+fun main() / io.stdio {
 	with init_counter(5) {
-		putint(count()) # 5
-		putint(count()) # 6
-		putint(count()) # 7
+		io.putint(count()) # 5
+		io.putint(count()) # 6
+		io.putint(count()) # 7
 	}
 }

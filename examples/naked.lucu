@@ -1,34 +1,36 @@
+import "core:io"
+
 effect ident {
 	fun ident(n int) int
 }
 
-fun main() / debug {
+fun main() / io.stdio {
 	let throw handle ident fails int = fun { n -> fail n }
-	putint(with throw {
+	io.putint(with throw {
 		let nonnaked = ident
 		with nonnaked {
-			putint(ident(5))
+			io.putint(ident(5))
 			420
 		}
-		putstr("unreachable\n")
+		io.putstr("unreachable")
 		69
 	})
-	putint(with throw {
+	io.putint(with throw {
 		let nonnaked = ident
 		with throw {
-			putint(ident(5)) with nonnaked
+			io.putint(ident(5)) with nonnaked
 			420
 		}
-		putstr("unreachable\n")
+		io.putstr("unreachable")
 		69
 	})
-	putint(with throw {
+	io.putint(with throw {
 		let naked = throw
 		with naked {
-			putint(ident(5))
+			io.putint(ident(5))
 			420
 		}
-		putstr("reachable\n")
+		io.putstr("reachable")
 		69
 	})
 }

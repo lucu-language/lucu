@@ -1,3 +1,5 @@
-fun main() / debug {
-	putstr("Hello, World!\n")
+import "core:io"
+
+fun main() / io.stdio {
+	io.putstr("Hello, World!")
 }

@@ -16,6 +16,20 @@ fun printerr(s str) / stdio {
 	write(cast s) with stderr();
 }
 
+fun putint(n int) / stdio {
+	with stdout() {
+		write_int(n)
+		write("\n")
+	};
+}
+
+fun putstr(s str) / stdio {
+	with stdout() {
+		write(cast s)
+		write("\n")
+	};
+}
+
 @capability(os = "linux")
 fun linux() handle stdio / linux.sys {
 	handle stdio {

@@ -114,12 +114,12 @@ fun until(cond test, fn run fails) {
 	}
 }
 
-# TODO: && operator
-fun and(a bool, b bool) bool {
-	if a {
-		b
-	} else {
-		0 == 1
+##
+# repeat loop
+##
+fun repeat(fn run fails `t) `t {
+	with fn loop {
+		run()
 	}
 }
 
@@ -129,6 +129,15 @@ effect test {
 
 effect run {
 	fun run()
+}
+
+# TODO: && operator
+fun and(a bool, b bool) bool {
+	if a {
+		b
+	} else {
+		0 == 1
+	}
 }
 
 ##

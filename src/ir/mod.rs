@@ -81,6 +81,8 @@ pub enum Type {
     IntSize,
     IntPtr,
     Int8,
+    Int16,
+    Int32,
 
     Bool,
 

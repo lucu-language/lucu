@@ -130,6 +130,8 @@ impl TypeIdx {
             T::USize => {}
             T::UPtr => {}
             T::U8 => {}
+            T::U16 => {}
+            T::U32 => {}
             T::Str => {}
             T::Bool => {}
             T::None => {}
@@ -144,6 +146,8 @@ impl TypeIdx {
             T::USize => ir.insert_type(Type::IntSize),
             T::UPtr => ir.insert_type(Type::IntPtr),
             T::U8 => ir.insert_type(Type::Int8),
+            T::U16 => ir.insert_type(Type::Int16),
+            T::U32 => ir.insert_type(Type::Int32),
             T::Str => {
                 let u8 = ir.insert_type(Type::Int8);
                 ir.insert_type(Type::Slice(u8))
@@ -557,7 +561,7 @@ pub fn generate_ir(
     let mut start_instructions = Vec::new();
 
     // define linker effect
-    let linker_effect = get_effect(ctx, ctx.preamble, "foreign");
+    let linker_effect = get_effect(ctx, ctx.preamble, "foreign").unwrap();
     let linker = ir.handlers.push(
         HandlerIdx,
         HandlerCtx {
@@ -578,112 +582,114 @@ pub fn generate_ir(
 
     // define system effect
     let sys_effect = get_effect(ctx, ctx.system, "sys");
-    let sys = ir.handlers.push(
-        HandlerIdx,
-        HandlerCtx {
-            effect: asys.values[sys_effect.name],
-            global: None,
-            definition: None,
+    if let Some(sys_effect) = sys_effect {
+        let sys = ir.handlers.push(
+            HandlerIdx,
+            HandlerCtx {
+                effect: asys.values[sys_effect.name],
+                global: None,
+                definition: None,
+                captures: Vec::new(),
+            },
+        );
+        ir.ir.handler_type.push_value(HandlerType {
             captures: Vec::new(),
-        },
-    );
-    ir.ir.handler_type.push_value(HandlerType {
-        captures: Vec::new(),
-        break_ty: TYPE_NEVER,
-    });
-    let sys_reg = ir.next_handler_reg(sys);
-    start_instructions.push(Instruction::Handler(sys_reg, vec![]));
-    capabilities.insert(asys.values[sys_effect.name], sys_reg);
+            break_ty: TYPE_NEVER,
+        });
+        let sys_reg = ir.next_handler_reg(sys);
+        start_instructions.push(Instruction::Handler(sys_reg, vec![]));
+        capabilities.insert(asys.values[sys_effect.name], sys_reg);
 
-    let intptr = ir.insert_type(Type::IntPtr);
-    match target.lucu_os() {
-        LucuOS::Linux => {
-            for n in 0..=6 {
-                let nr = ir.next_reg(intptr);
-                let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
-                let output = ir.next_reg(intptr);
+        let intptr = ir.insert_type(Type::IntPtr);
+        match target.lucu_os() {
+            LucuOS::Linux => {
+                for n in 0..=6 {
+                    let nr = ir.next_reg(intptr);
+                    let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
+                    let output = ir.next_reg(intptr);
+
+                    define_function(
+                        &mut ir,
+                        Either::Right((sys, EffFunIdx(n))),
+                        vec![],
+                        format!("syscall{}", n),
+                        std::iter::once(nr).chain(inputs.iter().copied()).collect(),
+                        intptr,
+                        vec![
+                            Instruction::Syscall(Some(output), nr, inputs),
+                            Instruction::Return(Some(output)),
+                        ],
+                    );
+                }
+            }
+            LucuOS::Windows => {
+                for (i, n) in vec![2, 9].into_iter().enumerate() {
+                    let nr = ir.next_reg(intptr);
+                    let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
+                    let output = ir.next_reg(intptr);
+
+                    define_function(
+                        &mut ir,
+                        Either::Right((sys, EffFunIdx(i))),
+                        vec![],
+                        format!("syscall{}", n),
+                        std::iter::once(nr).chain(inputs.iter().copied()).collect(),
+                        intptr,
+                        vec![
+                            Instruction::Syscall(Some(output), nr, inputs),
+                            Instruction::Return(Some(output)),
+                        ],
+                    );
+                }
+
+                let output_ty = ir.insert_type(Type::ConstArray(3, intptr));
+                let output = ir.next_reg(output_ty);
+
+                let intptr_ptr = ir.insert_type(Type::Pointer(intptr));
+                let peb_int = ir.next_reg(intptr);
+                let peb_ptr = ir.next_reg(intptr_ptr);
+
+                let params_int_ptr = ir.next_reg(intptr_ptr);
+                let params_int = ir.next_reg(intptr);
+                let params_ptr = ir.next_reg(intptr_ptr);
+
+                let stdio_ptr_ty = ir.insert_type(Type::Pointer(output_ty));
+                let stdio_int_ptr = ir.next_reg(intptr_ptr);
+                let stdio_ptr = ir.next_reg(stdio_ptr_ty);
+
+                let four = ir.next_reg(arrsize);
 
                 define_function(
                     &mut ir,
-                    Either::Right((sys, EffFunIdx(n))),
+                    Either::Right((sys, EffFunIdx(2))),
                     vec![],
-                    format!("syscall{}", n),
-                    std::iter::once(nr).chain(inputs.iter().copied()).collect(),
-                    intptr,
+                    "stdio".into(),
+                    vec![],
+                    output_ty,
                     vec![
-                        Instruction::Syscall(Some(output), nr, inputs),
+                        Instruction::Init(four, 4),
+                        // get PEB*
+                        Instruction::GS(peb_int, 0x60),
+                        Instruction::Cast(peb_ptr, peb_int),
+                        // get RTL_USER_PROCESS_PARAMETERS*
+                        Instruction::AdjacentPtr(params_int_ptr, peb_ptr, four),
+                        Instruction::Load(params_int, params_int_ptr),
+                        Instruction::Cast(params_ptr, params_int),
+                        // get HANDLE[3]*
+                        Instruction::AdjacentPtr(stdio_int_ptr, params_ptr, four),
+                        Instruction::Cast(stdio_ptr, stdio_int_ptr),
+                        // get HANDLE[3]
+                        Instruction::Load(output, stdio_ptr),
                         Instruction::Return(Some(output)),
                     ],
                 );
             }
+            _ => {}
         }
-        LucuOS::Windows => {
-            for (i, n) in vec![2, 9].into_iter().enumerate() {
-                let nr = ir.next_reg(intptr);
-                let inputs = (0..n).map(|_| ir.next_reg(intptr)).collect::<Vec<_>>();
-                let output = ir.next_reg(intptr);
-
-                define_function(
-                    &mut ir,
-                    Either::Right((sys, EffFunIdx(i))),
-                    vec![],
-                    format!("syscall{}", n),
-                    std::iter::once(nr).chain(inputs.iter().copied()).collect(),
-                    intptr,
-                    vec![
-                        Instruction::Syscall(Some(output), nr, inputs),
-                        Instruction::Return(Some(output)),
-                    ],
-                );
-            }
-
-            let output_ty = ir.insert_type(Type::ConstArray(3, intptr));
-            let output = ir.next_reg(output_ty);
-
-            let intptr_ptr = ir.insert_type(Type::Pointer(intptr));
-            let peb_int = ir.next_reg(intptr);
-            let peb_ptr = ir.next_reg(intptr_ptr);
-
-            let params_int_ptr = ir.next_reg(intptr_ptr);
-            let params_int = ir.next_reg(intptr);
-            let params_ptr = ir.next_reg(intptr_ptr);
-
-            let stdio_ptr_ty = ir.insert_type(Type::Pointer(output_ty));
-            let stdio_int_ptr = ir.next_reg(intptr_ptr);
-            let stdio_ptr = ir.next_reg(stdio_ptr_ty);
-
-            let four = ir.next_reg(arrsize);
-
-            define_function(
-                &mut ir,
-                Either::Right((sys, EffFunIdx(2))),
-                vec![],
-                "stdio".into(),
-                vec![],
-                output_ty,
-                vec![
-                    Instruction::Init(four, 4),
-                    // get PEB*
-                    Instruction::GS(peb_int, 0x60),
-                    Instruction::Cast(peb_ptr, peb_int),
-                    // get RTL_USER_PROCESS_PARAMETERS*
-                    Instruction::AdjacentPtr(params_int_ptr, peb_ptr, four),
-                    Instruction::Load(params_int, params_int_ptr),
-                    Instruction::Cast(params_ptr, params_int),
-                    // get HANDLE[3]*
-                    Instruction::AdjacentPtr(stdio_int_ptr, params_ptr, four),
-                    Instruction::Cast(stdio_ptr, stdio_int_ptr),
-                    // get HANDLE[3]
-                    Instruction::Load(output, stdio_ptr),
-                    Instruction::Return(Some(output)),
-                ],
-            );
-        }
-        _ => {}
     }
 
     // define srcloc
-    let srcloc_effect = get_effect(ctx, ctx.preamble, "srcloc");
+    let srcloc_effect = get_effect(ctx, ctx.preamble, "srcloc").unwrap();
     let srcloc = ir.handlers.push(
         HandlerIdx,
         HandlerCtx {
@@ -1142,14 +1148,13 @@ pub fn generate_ir(
     ir.ir
 }
 
-fn get_effect<'a>(ctx: &'a AST, package: PackageIdx, name: &str) -> &'a ast::Effect {
+fn get_effect<'a>(ctx: &'a AST, package: PackageIdx, name: &str) -> Option<&'a ast::Effect> {
     ctx.packages[package]
         .effects
         .iter()
         .copied()
         .map(|i| &ctx.effects[i])
         .find(|e| ctx.idents[e.name].0.eq(name))
-        .unwrap()
 }
 
 fn get_function<'a>(ctx: &'a AST, package: PackageIdx, name: &str) -> &'a ast::Function {

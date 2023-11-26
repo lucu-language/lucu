@@ -84,6 +84,8 @@ impl TypeIdx {
             Type::USize => self,
             Type::UPtr => self,
             Type::U8 => self,
+            Type::U16 => self,
+            Type::U32 => self,
             Type::Str => self,
             Type::Bool => self,
             Type::None => self,
@@ -184,9 +186,12 @@ impl TypeIdx {
             Type::None => "none".into(),
             Type::Never => "never".into(),
             Type::Int => "int".into(),
+            Type::UInt => "uint".into(),
             Type::USize => "usize".into(),
             Type::UPtr => "uptr".into(),
             Type::U8 => "u8".into(),
+            Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(),
             Type::Str => "str".into(),
             Type::Bool => "bool".into(),
             _ => format!("'{}'", self.display_inner(ctx)),
@@ -208,6 +213,8 @@ impl TypeIdx {
             Type::USize => "usize".into(),
             Type::UPtr => "uptr".into(),
             Type::U8 => "u8".into(),
+            Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(),
             Type::Str => "str".into(),
             Type::Bool => "bool".into(),
             Type::Generic(name) => match ctx.asys.defs[name] {
@@ -318,6 +325,8 @@ pub enum Type {
     USize,
     UPtr,
     U8,
+    U16,
+    U32,
 
     Str,
     Bool,
@@ -330,7 +339,7 @@ impl Type {
     pub fn is_int(&self) -> bool {
         matches!(
             self,
-            Type::Int | Type::UInt | Type::USize | Type::UPtr | Type::U8
+            Type::Int | Type::UInt | Type::USize | Type::UPtr | Type::U8 | Type::U16 | Type::U32
         )
     }
     pub fn is_ptr(&self) -> bool {
@@ -1250,9 +1259,12 @@ fn analyze_expr(
                     match ctx.asys.types[expected_ty] {
                         // TODO: check if fits
                         Type::Int => TYPE_INT,
+                        Type::UInt => TYPE_UINT,
                         Type::USize => TYPE_USIZE,
                         Type::UPtr => TYPE_UPTR,
                         Type::U8 => TYPE_U8,
+                        Type::U16 => TYPE_U16,
+                        Type::U32 => TYPE_U32,
 
                         // default type for literal
                         _ => TYPE_INT,
@@ -1617,6 +1629,8 @@ const TYPE_USIZE: TypeIdx = TypeIdx(6);
 const TYPE_UPTR: TypeIdx = TypeIdx(7);
 const TYPE_U8: TypeIdx = TypeIdx(8);
 const TYPE_UINT: TypeIdx = TypeIdx(9);
+const TYPE_U16: TypeIdx = TypeIdx(10);
+const TYPE_U32: TypeIdx = TypeIdx(11);
 
 pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
     let os = target.lucu_os();
@@ -1642,6 +1656,8 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
     asys.types.insert(TypeIdx, Type::UPtr);
     asys.types.insert(TypeIdx, Type::U8);
     asys.types.insert(TypeIdx, Type::UInt);
+    asys.types.insert(TypeIdx, Type::U16);
+    asys.types.insert(TypeIdx, Type::U32);
 
     let str = asys.defs.push(Val, Definition::BuiltinType(TYPE_STR));
     let int = asys.defs.push(Val, Definition::BuiltinType(TYPE_INT));
@@ -1650,6 +1666,8 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
     let u8 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U8));
     let bool = asys.defs.push(Val, Definition::BuiltinType(TYPE_BOOL));
     let uint = asys.defs.push(Val, Definition::BuiltinType(TYPE_UINT));
+    let u16 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U16));
+    let u32 = asys.defs.push(Val, Definition::BuiltinType(TYPE_U32));
 
     let mut packages = VecMap::filled(parsed.packages.len(), Package::default());
     let vals = &mut packages[parsed.preamble].values;
@@ -1660,6 +1678,8 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
     vals.insert("uptr".into(), uptr);
     vals.insert("u8".into(), u8);
     vals.insert("bool".into(), bool);
+    vals.insert("u16".into(), u16);
+    vals.insert("u32".into(), u32);
 
     let mut ctx = AsysContext {
         asys,

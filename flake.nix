@@ -32,10 +32,14 @@
         rustfmt
 
         pkgsCross.mingwW64.buildPackages.gcc
+        lld_15
         libffi
         libxml2
         zlib
         ncurses
+
+        wabt
+        wasmtime
 
         xorg.libxcb
       ];

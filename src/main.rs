@@ -34,6 +34,7 @@ pub struct Target {
 pub enum LucuOS {
     Linux,
     Windows,
+    WASI,
     Unknown,
 }
 
@@ -47,7 +48,7 @@ pub enum LucuArch {
 }
 
 impl LucuArch {
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             LucuArch::I386 => "i386",
             LucuArch::Amd64 => "amd64",
@@ -94,11 +95,18 @@ impl LucuArch {
 }
 
 impl LucuOS {
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             LucuOS::Linux => "linux",
             LucuOS::Windows => "windows",
+            LucuOS::WASI => "wasi",
             LucuOS::Unknown => "unknown",
+        }
+    }
+    pub fn wasm_import_module(&self) -> &'static str {
+        match self {
+            LucuOS::WASI => "wasi_snapshot_preview1",
+            _ => "env",
         }
     }
 }
@@ -114,6 +122,7 @@ impl Target {
         match (sys, env) {
             (Some("linux"), _) => LucuOS::Linux,
             (Some("windows"), _) => LucuOS::Windows,
+            (Some("wasi"), _) => LucuOS::WASI,
             _ => LucuOS::Unknown,
         }
     }
@@ -126,7 +135,7 @@ impl Target {
         } else if self.triple.starts_with("i386") || self.triple.starts_with("x86") {
             LucuArch::I386
         } else if self.triple.starts_with("arm64") || self.triple.starts_with("aarch64") {
-            LucuArch::Amd64
+            LucuArch::Arm64
         } else if self.triple.starts_with("arm") {
             LucuArch::Arm32
         } else if self.triple.starts_with("wasm64") {
@@ -172,7 +181,8 @@ fn parse_from_filename(
     let system = match target.lucu_os() {
         LucuOS::Linux => Some(core_path.join("core").join("sys/linux")),
         LucuOS::Windows => Some(core_path.join("core").join("sys/nt")),
-        _ => None,
+        LucuOS::WASI => Some(core_path.join("core").join("sys/wasi")),
+        LucuOS::Unknown => None,
     };
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
@@ -346,8 +356,10 @@ fn main() {
             }
 
             // TODO: config for linker and runner
-            match target.lucu_os() {
-                LucuOS::Linux => {
+            let os = target.lucu_os();
+            let arch = target.lucu_arch();
+            match (&os, &arch) {
+                (LucuOS::Linux, LucuArch::Amd64) => {
                     Command::new("ld")
                         .arg(&output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
@@ -360,7 +372,7 @@ fn main() {
                         .status()
                         .unwrap();
                 }
-                LucuOS::Windows => {
+                (LucuOS::Windows, LucuArch::Amd64) => {
                     Command::new("x86_64-w64-mingw32-ld")
                         .arg(&output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
@@ -373,7 +385,41 @@ fn main() {
                         .status()
                         .unwrap();
                 }
-                _ => {}
+                (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
+                    let env = os.wasm_import_module();
+                    Command::new("wasm-ld")
+                        .arg(&output.with_extension("o"))
+                        .args(
+                            ir.links
+                                .iter()
+                                .filter(|lib| !str::eq(lib, env))
+                                .map(|lib| format!("-l{}", lib)),
+                        )
+                        .arg("--import-undefined") // TODO: get list of symbols from "env" library
+                        .arg("-o")
+                        .arg(&output.with_extension("wasm"))
+                        .arg("-e_start")
+                        .status()
+                        .unwrap();
+
+                    if matches!(os, LucuOS::WASI) {
+                        Command::new("wasmtime")
+                            .arg(&output.with_extension("wasm"))
+                            .status()
+                            .unwrap();
+                    } else {
+                        println!(
+                            "unknown runner for triple: {}\nplease run the program manually",
+                            target.triple
+                        );
+                    }
+                }
+                _ => {
+                    println!(
+                        "unknown linker setup for triple: {}\nplease link the program manually",
+                        target.triple
+                    );
+                }
             }
         }
         Err(errors) => {

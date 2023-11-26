@@ -42,7 +42,7 @@ fun array_buffer() strbuf {
 
 # example of using a string buffer
 # the 'io.stdio' effect allows use of the 'io.println' function
-fun main() / debug {
+fun main() / io.stdio {
 
 	# a 'with' block puts the effect handler in scope
 	# which allows us to use the defined effect functions

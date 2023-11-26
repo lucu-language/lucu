@@ -1,0 +1,70 @@
+import "core:io"
+
+fun main() / io.stdio {
+	let program []u8 =
+	# hello world
+	#	"++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+	# dbfi.b
+		">>>+[[-]>>[-]++>+>+++++++[<++++>>++<-]++>>+>+>+++++[>++>++++++<<-]+>>>,<++[[>[->>]<[>>]<<-]<[<]<+>>[>]>[<+>-[[<+>-]>]<[[[-]<]++<-[<+++++++++>[<->-]>>]>>]]<<]<]<[[<]>[[>]>>[>>]+[<<]<[<]<+>>-]>[>]+[->>]<<<<[[<<]<[<]+<<[+>+<<-[>-->+<<-[>+<[>>+<<-]]]>[<+>-]<]++>>-->[>]>>[>>]]<<[>>+<[[<]<]>[[<<]<[<]+[-<+>>-[<<+>++>-[<->[<<+>>-]]]<[>+<-]>]>[>]>]>[>>]>>]<<[>>+>>+>>]<<[->>>>>>>>]<<[>.>>>>>>>]<<[>->>>>>]<<[>,>>>]<<[>+>]<<[+<<]<]"
+
+	mut ip usize = 0
+
+	mut buf [65536]u8 = 0
+	mut ptr usize = 0
+
+	until() { ip == len(program) } {
+
+		let char = program[ip]
+		if char == '>' {
+			ptr = ptr + 1
+		} else if char == '<' {
+			ptr = ptr - 1
+		} else if char == '+' {
+			buf[ptr] = buf[ptr] + 1
+		} else if char == '-' {
+			buf[ptr] = buf[ptr] - 1
+		} else if char == '.' {
+			io.write(buf[ptr .. ptr + 1]) with io.stdout()
+		} else if char == ',' {
+			io.read(buf[ptr .. ptr + 1]) with io.stdin()
+		} else if char == '[' {
+			if buf[ptr] == 0 {
+				ip = ip + 1
+				mut layer = 0
+				until() { and(layer == 0, program[ip] == ']') } {
+
+					let char = program[ip]
+					if char == '[' {
+						layer = layer + 1
+					} else if char == ']' {
+						layer = layer - 1
+					}
+					ip = ip + 1
+
+				}
+			} else {
+				# continue within loop
+			}
+		} else if char == ']' {
+			if buf[ptr] == 0 {
+				# exit loop
+			} else {
+				ip = ip - 1
+				mut layer = 0
+				until() { and(layer == 0, program[ip] == '[') } {
+
+					let char = program[ip]
+					if char == '[' {
+						layer = layer - 1
+					} else if char == ']' {
+						layer = layer + 1
+					}
+					ip = ip - 1
+
+				}
+			}
+		}
+
+		ip = ip + 1
+	}
+}

@@ -1,5 +1,6 @@
 import "../sys/linux"
 import "../sys/win32"
+import "../sys/wasi"
 
 effect stdio {
 	fun stdin () reader
@@ -26,6 +27,36 @@ fun linux() stdio / linux.sys {
 		}
 		fun stderr() writer {
 			fun { buf -> linux.write(2, buf) }
+		}
+	}
+}
+
+@capability(os = "wasi")
+fun wasi() stdio / wasi.sys2 {
+	handle stdio {
+		fun stdin() reader {
+			fun {
+				buf ->
+				mut read u32 = 0
+				wasi.fd_read(0, [buf], &read)
+				cast read
+			}
+		}
+		fun stdout() writer {
+			fun {
+				buf ->
+				mut written u32 = 0
+				wasi.fd_write(1, [buf], &written)
+				cast written
+			}
+		}
+		fun stderr() writer {
+			fun {
+				buf ->
+				mut written u32 = 0
+				wasi.fd_write(2, [buf], &written)
+				cast written
+			}
 		}
 	}
 }

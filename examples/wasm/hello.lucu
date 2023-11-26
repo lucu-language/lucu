@@ -1,0 +1,13 @@
+@foreign
+effect env {
+	fun trace(s str)
+}
+
+@capability
+fun link() handle env / linker {
+	link_effect("env")
+}
+
+fun main() / env {
+	trace("Hello, World!")
+}

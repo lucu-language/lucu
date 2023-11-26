@@ -44,7 +44,7 @@ struct CodeGen<'ctx> {
     globals: VecMap<Global, Option<GlobalValue<'ctx>>>,
 
     syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
-    exit: FunctionValue<'ctx>,
+    trap: FunctionValue<'ctx>,
     trace: FunctionValue<'ctx>,
 
     os: LucuOS,
@@ -52,7 +52,15 @@ struct CodeGen<'ctx> {
 }
 
 pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
-    Target::initialize_native(&InitializationConfig::default()).unwrap();
+    let config = &InitializationConfig::default();
+    match target.lucu_arch() {
+        LucuArch::I386 => Target::initialize_x86(config),
+        LucuArch::Amd64 => Target::initialize_x86(config),
+        LucuArch::Arm32 => Target::initialize_arm(config),
+        LucuArch::Arm64 => Target::initialize_aarch64(config),
+        LucuArch::Wasm32 => Target::initialize_webassembly(config),
+        LucuArch::Wasm64 => Target::initialize_webassembly(config),
+    }
 
     let context = Context::create();
     let module = context.create_module("main");
@@ -156,14 +164,14 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         _ => vec![],
     };
 
-    let exit_ty = context.void_type().fn_type(&[], false);
-    let exit = module.add_function("exit", exit_ty, Some(Linkage::Internal));
-    let exit_block = context.append_basic_block(exit, "");
+    let trap_ty = context.void_type().fn_type(&[], false);
+    let trap = module.add_function("$exit", trap_ty, Some(Linkage::Internal));
+    let trap_block = context.append_basic_block(trap, "");
 
     let builder = context.create_builder();
-    builder.position_at_end(exit_block);
-    match os {
-        LucuOS::Linux => {
+    builder.position_at_end(trap_block);
+    match (&os, &arch) {
+        (LucuOS::Linux, _) => {
             builder
                 .build_indirect_call(
                     syscalls[1].unwrap().0,
@@ -177,7 +185,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
                 .unwrap();
             builder.build_unreachable().unwrap();
         }
-        LucuOS::Windows => {
+        (LucuOS::Windows, _) => {
             builder
                 .build_indirect_call(
                     syscalls[2].unwrap().0,
@@ -195,9 +203,20 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
                 .unwrap();
             builder.build_unreachable().unwrap();
         }
+        (LucuOS::WASI, _) | // TODO
+        (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
+            let asm_ty = context.void_type().fn_type(&[], false);
+            let asm = context.create_inline_asm(asm_ty, "unreachable".into(), "".into(), true, false, None, false);
+            builder.build_indirect_call(asm_ty, asm, &[], "").unwrap();
+            builder.build_unreachable().unwrap();
+        }
         _ => {
             // loop forever
-            builder.build_unconditional_branch(exit_block).unwrap();
+            let block = context.append_basic_block(trap, "");
+            builder.build_unconditional_branch(block).unwrap();
+
+            builder.position_at_end(block);
+            builder.build_unconditional_branch(block).unwrap();
         }
     }
 
@@ -210,7 +229,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         false,
     );
     let trace_ty = context.void_type().fn_type(&[string.into()], false);
-    let trace = module.add_function("trace", trace_ty, Some(Linkage::Internal));
+    let trace = module.add_function("$trace", trace_ty, Some(Linkage::Internal));
     let trace_block = context.append_basic_block(trace, "");
 
     builder.position_at_end(trace_block);
@@ -319,6 +338,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
 
             builder.build_return(None).unwrap();
         }
+        LucuOS::WASI | // TODO
         LucuOS::Unknown => {
             // do nothing
             builder.build_return(None).unwrap();
@@ -335,7 +355,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         globals: VecMap::new(),
         foreign: VecMap::new(),
         syscalls,
-        exit,
+        trap,
         trace,
         os,
         arch,
@@ -389,7 +409,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     // set main func
     let start = codegen.module.add_function(
         "_start",
-        codegen.context.void_type().fn_type(&[], false),
+        context.void_type().fn_type(&[], false),
         Some(Linkage::External),
     );
     start.add_attribute(
@@ -451,6 +471,37 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
             codegen.builder.build_return(None).unwrap();
         }
     }
+
+    // __stack_chk_guard and __stack_chk_fail
+    let guard = codegen
+        .module
+        .add_global(codegen.iptr_type(), None, "__stack_chk_guard");
+    guard.set_linkage(Linkage::Internal);
+    guard.set_initializer(&codegen.iptr_type().get_undef());
+
+    let fail = codegen.module.add_function(
+        "__stack_chk_fail",
+        context.void_type().fn_type(&[], false),
+        Some(Linkage::Internal),
+    );
+
+    let u8_ptr = context.i8_type().ptr_type(AddressSpace::default());
+    let used_const = u8_ptr.const_array(&[
+        guard.as_pointer_value().const_cast(u8_ptr),
+        fail.as_global_value().as_pointer_value().const_cast(u8_ptr),
+    ]);
+
+    let used = codegen
+        .module
+        .add_global(used_const.get_type(), None, "llvm.compiler.used");
+    used.set_linkage(Linkage::Appending);
+    used.set_section(Some("llvm.metadata"));
+    used.set_initializer(&used_const);
+
+    let fail_block = context.append_basic_block(fail, "");
+    codegen.builder.position_at_end(fail_block);
+    codegen.builder.build_call(trap, &[], "").unwrap();
+    codegen.builder.build_unreachable().unwrap();
 
     // assume valid
     if debug {
@@ -624,8 +675,11 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // TODO: add parameter names names to fun
-        self.module
-            .add_function(&proc.debug_name, fn_type, Some(Linkage::Internal))
+        self.module.add_function(
+            format!("${}", proc.debug_name).as_str(),
+            fn_type,
+            Some(Linkage::Internal),
+        )
     }
     fn generate_foreign_proc_sign(&self, ir: &IR, proc: &ProcForeign) -> FunctionValue<'ctx> {
         let in_types = proc
@@ -646,8 +700,19 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // TODO: add parameter names names to fun
-        self.module
-            .add_function(&proc.symbol, fn_type, Some(Linkage::External))
+        let func = self
+            .module
+            .add_function(&proc.symbol, fn_type, Some(Linkage::External));
+
+        if matches!(self.arch, LucuArch::Wasm32 | LucuArch::Wasm64) {
+            func.add_attribute(
+                AttributeLoc::Function,
+                self.context
+                    .create_string_attribute("wasm-import-module", self.os.wasm_import_module()),
+            );
+        }
+
+        func
     }
     fn generate_proc(
         &self,
@@ -1318,7 +1383,7 @@ impl<'ctx> CodeGen<'ctx> {
                         }
                     }
                     I::Trap => {
-                        self.builder.build_call(self.exit, &[], "").unwrap();
+                        self.builder.build_call(self.trap, &[], "").unwrap();
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }
@@ -1681,6 +1746,8 @@ impl<'ctx> CodeGen<'ctx> {
                 unreachable!("HandlerOutput never filled in with concrete handler type")
             }
             Type::Int8 => self.context.i8_type().into(),
+            Type::Int16 => self.context.i16_type().into(),
+            Type::Int32 => self.context.i32_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::Pointer(ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),

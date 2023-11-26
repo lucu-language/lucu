@@ -51,7 +51,7 @@ fun array_buffer(`cap usize) handle buf(`item) {
 
 # example of using a string buffer
 # the 'io.stdio' effect allows use of the 'io.println' function
-fun main() / debug {
+fun main() / io.stdio {
 
 	let buffer handle buf(const str) = array_buffer(16)
 

@@ -30,6 +30,10 @@ fun putstr(s str) / stdio {
 	};
 }
 
+fun wait() / stdio {
+	skip_line() with stdin();
+}
+
 @capability(os = "linux")
 fun linux() handle stdio / linux.sys {
 	handle stdio {

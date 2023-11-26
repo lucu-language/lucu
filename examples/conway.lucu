@@ -1,3 +1,5 @@
+import "core:io"
+
 fun init_board() [256]u8 {
 	0
 }
@@ -22,19 +24,19 @@ fun inc(n usize) usize {
 	}
 }
 
-fun print_state(state []u8) / debug {
+fun print_state(state []u8) / io.stdio {
 	for(0, 16) {
 		y ->
 		for (0, 16) {
 			x ->
 			let cell = index(x, y)
 			if state[cell] == 0 {
-				putstr("😔")
+				io.print("😔")
 			} else {
-				putstr("🥺")
+				io.print("🥺")
 			}
 		}
-		putstr("\n")
+		io.print("\n")
 	}
 }
 
@@ -87,7 +89,7 @@ fun next_state(old []u8, mut new []u8) {
 	}
 }
 
-fun main() / debug {
+fun main() / io.stdio {
 	# create buffers
 	mut state = init_board()[0..256]
 	mut next = init_board()[0..256]
@@ -104,7 +106,7 @@ fun main() / debug {
 		print_state(state)
 
 		# wait for stdin
-		wait()
+		io.wait()
 
 		# get next state
 		next_state(state, next)

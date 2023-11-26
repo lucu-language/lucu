@@ -31,15 +31,13 @@ effect auto zeroinit(`t) {}
 # `t can be left uninitialized (any byte combination is a valid value)
 effect auto uninit(`t) {}
 
+effect auto pointee(`t) {
+	type metadata
+}
+
 effect deref(`t) {
 	type target
 	fun deref(&t `t) &target
-}
-
-effect move_out(`t) {
-	handle deref(`t)
-	handle move(target)
-	fun move_out(&owned t `t) target
 }
 
 effect clone(`t) {
@@ -48,6 +46,156 @@ effect clone(`t) {
 
 effect copy(`t) {
 	handle clone(`t)
+}
+
+handle auto drop(`t) fun { t -> }
+
+fun choose(b bool, t `t, f `t) `t ref t, f {
+	if b {
+		t
+	} else {
+		f
+	}
+}
+
+effect buf(`elem) {
+	type key
+	type key_range
+
+	handle copy(key)
+	handle copy(key_range)
+
+	fun push(e `elem) key ref
+	fun get(i key) &`elem
+
+	fun push_range(&owned e []`elem) key_range ref
+	fun get_range(i key_range) &[]`elem
+}
+
+effect alloc {
+	type box(`t)
+
+	handle move_mut(box(`t))
+	handle deref(box(`t))
+	type target with deref(box(`t)) = `t
+
+	fun new(&owned t `t) box(`t)
+}
+
+struct range(start usize, end usize)
+
+struct partial_array(`elem) (
+	arr [N]mem.maybe_uninit(`elem),
+	len usize,
+)
+
+fun empty() partial_array(`N, `elem) {
+	(---, 0)
+}
+
+fun append(mut &p partial_array(`N, `elem), e `elem) usize {
+	mem.init(p.arr[p.len], e)
+	let idx = p.len
+	p.len += 1
+	idx
+}
+
+fun append_slice(mut &p partial_array(`N, `elem), &owned es []`elem) range {
+	mem.init_slice(p.arr[p.len .. p.len + len(es)], es)
+	let start = p.len
+	p.len += len(es)
+	(start, p.len)
+}
+
+# ^const : cannot be modified
+# ^owned : will be dropped when out of scope
+# ^wreck : its children will be dropped when out of scope
+# ^      : any of the previous, or mutable
+
+handle ops.index(partial_array(`N, `elem)) {
+	type out = `elem
+	fun index(&p partial_array(`N, `elem), n usize) &out {
+		mem.assume_init(p.arr[n])
+	}
+}
+
+handle mem.drop(partial_array(`N, `elem)) {
+	fun drop(&wreck p partial_array(`N, `elem)) {
+		for(0, p.len) {
+			idx ->
+			mem.drop(p[idx])
+		}
+	}
+}
+
+fun array_buffer(`N usize) handle buf(`elem) fails {
+
+	let mut buffer partial_array(`N, `elem) = empty()
+
+	handle buf {
+		type key       = usize
+		type key_range = range
+
+		fun push(e `elem) key ref {
+			if buffer.len == `N {
+				fail
+			} else {
+				append(buffer, e)
+			}
+		}
+		fun get(i key) &`elem {
+			unsafe_unlock(buffer[i])
+		}
+
+		fun push_range(&owned es []`elem) key_range ref {
+			if len + len(es) > `N {
+				fail
+			} else {
+				append_slice(buffer, es)
+			}
+		}
+		fun get_range(i key_range) &[]`elem {
+			unsafe_unlock(buffer[i.start .. i.end])
+		}
+	}
+}
+
+fun arena_alloc() handle alloc with buf(u8) {
+	handle alloc {
+		type box(`t) = ^owned `t
+
+		fun new(&owned t `t) box(`t) {
+			# TODO: alignment padding
+
+			let raw = unsafe_decompose(t)
+			let range = push_range(raw.bytes)
+
+			let ptr ^`t       = &unsafe_cast(get(range), raw.meta)
+			let ptr ^owned `t = &unsafe_owned(ptr^)
+			ptr
+		}
+	}
+}
+
+fun unsafe_decompose(&t `t) struct(&bytes []u8, &meta metadata) with pointee(`t) {
+	# NOTE: when called with an owned ref this does NOT drop t but forgets about it
+	internal()
+}
+
+fun unsafe_owned(&t `t) &owned `t {
+	internal()
+}
+
+fun unsafe_unlock(&t `t) &`t ref {
+	internal()
+}
+
+fun unsafe_cast(&u `u, m metadata) &`t with pointee(`t) {
+	internal()
+}
+
+fun move_slice(mut &to []`t, &owned from []`t) &[]`t {
+	internal()
 }
 
 would be nice:

@@ -12,6 +12,13 @@ fun print(s str) / stdio {
 	write(cast s) with stdout();
 }
 
+fun println(s str) / stdio {
+	with stdout() {
+		write(cast s)
+		write("\n")
+	};
+}
+
 fun printerr(s str) / stdio {
 	write(cast s) with stderr();
 }

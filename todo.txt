@@ -20,9 +20,9 @@ todo:
 # `t can be moved
 effect auto move(`t) {}
 
-# `t can be moved to a mutable context
-effect auto move_mut(`t) {
-	handle move(`t)
+# `t has a compile-time size
+effect auto sized(`t) {
+	const SIZE usize
 }
 
 # `t can be 0-initialized (zeroed out is a valid value)
@@ -37,18 +37,26 @@ effect auto pointee(`t) {
 
 effect deref(`t) {
 	type target
-	fun deref(&t `t) &target
+	fun deref(t `t) ^target ref t
+}
+
+effect clone_ref(`t) {
+	fun clone_ref(t `t) `t ref t
 }
 
 effect clone(`t) {
-	fun clone(&t `t) `t
+	fun clone(t `t) `t
 }
 
 effect copy(`t) {
-	handle clone(`t)
+	handle clone_ref(`t)
 }
 
-handle auto drop(`t) fun { t -> }
+effect drop(`t) {
+	fun _drop(mut t `t)
+}
+
+fun drop(t `t) {}
 
 fun choose(b bool, t `t, f `t) `t ref t, f {
 	if b {
@@ -62,139 +70,69 @@ effect buf(`elem) {
 	type key
 	type key_range
 
+	handle sized(key)
+	handle sized(key_range)
+	handle move(key)
+	handle move(key_range)
 	handle copy(key)
 	handle copy(key_range)
 
-	fun push(e `elem) key ref
-	fun get(i key) &`elem
+	fun push(sink e `elem) key
+	fun get(i key) ^`elem ref i
 
-	fun push_range(&owned e []`elem) key_range ref
-	fun get_range(i key_range) &[]`elem
+	fun push_range(sink es []`elem) key_range
+	fun get_range(is key_range) ^[]`elem ref i
 }
 
 effect alloc {
 	type box(`t)
+		with move(`t)
 
-	handle move_mut(box(`t))
+	handle sized(box(`t))
+	handle move(box(`t))
 	handle deref(box(`t))
-	type target with deref(box(`t)) = `t
+		with target = `t
 
-	fun new(&owned t `t) box(`t)
+	fun new(sink t `t) box(`t)
 }
 
-struct range(start usize, end usize)
-
-struct partial_array(`elem) (
-	arr [N]mem.maybe_uninit(`elem),
-	len usize,
-)
-
-fun empty() partial_array(`N, `elem) {
-	(---, 0)
-}
-
-fun append(mut &p partial_array(`N, `elem), e `elem) usize {
-	mem.init(p.arr[p.len], e)
-	let idx = p.len
-	p.len += 1
-	idx
-}
-
-fun append_slice(mut &p partial_array(`N, `elem), &owned es []`elem) range {
-	mem.init_slice(p.arr[p.len .. p.len + len(es)], es)
-	let start = p.len
-	p.len += len(es)
-	(start, p.len)
-}
-
-# ^const : cannot be modified
-# ^owned : will be dropped when out of scope
-# ^wreck : its children will be dropped when out of scope
-# ^      : any of the previous, or mutable
-
-handle ops.index(partial_array(`N, `elem)) {
-	type out = `elem
-	fun index(&p partial_array(`N, `elem), n usize) &out {
-		mem.assume_init(p.arr[n])
-	}
-}
-
-handle mem.drop(partial_array(`N, `elem)) {
-	fun drop(&wreck p partial_array(`N, `elem)) {
-		for(0, p.len) {
-			idx ->
-			mem.drop(p[idx])
-		}
-	}
-}
-
-fun array_buffer(`N usize) handle buf(`elem) fails {
-
-	let mut buffer partial_array(`N, `elem) = empty()
-
-	handle buf {
-		type key       = usize
-		type key_range = range
-
-		fun push(e `elem) key ref {
-			if buffer.len == `N {
-				fail
-			} else {
-				append(buffer, e)
-			}
-		}
-		fun get(i key) &`elem {
-			unsafe_unlock(buffer[i])
-		}
-
-		fun push_range(&owned es []`elem) key_range ref {
-			if len + len(es) > `N {
-				fail
-			} else {
-				append_slice(buffer, es)
-			}
-		}
-		fun get_range(i key_range) &[]`elem {
-			unsafe_unlock(buffer[i.start .. i.end])
-		}
+handle clone(box(`t))
+	with clone(`t) 
+	with alloc
+{
+	fun clone(b box(`t)) box(`t) {
+		new(clone(b^))
 	}
 }
 
 fun arena_alloc() handle alloc with buf(u8) {
 	handle alloc {
-		type box(`t) = ^owned `t
+		type box(`t) = owned(`t)
 
-		fun new(&owned t `t) box(`t) {
+		fun new(sink t `t) box(`t) {
 			# TODO: alignment padding
 
-			let raw = unsafe_decompose(t)
-			let range = push_range(raw.bytes)
-
-			let ptr ^`t       = &unsafe_cast(get(range), raw.meta)
-			let ptr ^owned `t = &unsafe_owned(ptr^)
-			ptr
+			let raw = unsafe_raw(&t)
+			let range = push_range(raw.bytes^)
+			unsafe_owned(unsafe_cast(get(range), raw.meta))
+			forget(t)
 		}
 	}
 }
 
-fun unsafe_decompose(&t `t) struct(&bytes []u8, &meta metadata) with pointee(`t) {
-	# NOTE: when called with an owned ref this does NOT drop t but forgets about it
+fun unsafe_raw(t ^`t) struct(bytes ^[]u8, meta metadata) ref t
+	with pointee(`t)
+{
 	internal()
 }
 
-fun unsafe_owned(&t `t) &owned `t {
+fun unsafe_cast(u ^`u, m metadata) ^`t ref u, m
+	with pointee(`t)
+{
 	internal()
 }
 
-fun unsafe_unlock(&t `t) &`t ref {
-	internal()
-}
-
-fun unsafe_cast(&u `u, m metadata) &`t with pointee(`t) {
-	internal()
-}
-
-fun move_slice(mut &to []`t, &owned from []`t) &[]`t {
+fun unsafe_owned(t ^`t) owned(t) {
 	internal()
 }
 

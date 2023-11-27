@@ -759,11 +759,13 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // TODO: add parameter names names to fun
-        self.module.add_function(
+        let func = self.module.add_function(
             format!("${}", proc.debug_name).as_str(),
             fn_type,
             Some(Linkage::Internal),
-        )
+        );
+
+        func
     }
     fn generate_foreign_proc_sign(&self, ir: &IR, proc: &ProcForeign) -> FunctionValue<'ctx> {
         let in_types = proc

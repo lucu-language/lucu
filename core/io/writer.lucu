@@ -1,5 +1,6 @@
 effect writer {
 	fun write(buf []u8) usize
+	fun flush()
 }
 
 fun write_int(n int) / writer {
@@ -21,4 +22,29 @@ fun write_int(n int) / writer {
 	}
 
 	write(buf[current..20]);
+}
+
+fun buffer_writes(mut buffer []u8) writer / writer {
+	let super = writer
+
+	mut buffer = buffer
+	mut current usize = 0
+
+	handle writer {
+		fun write(buf []u8) usize {
+			for(0, len(buf)) { i ->
+				if current == len(buffer) {
+					write(buffer) with super
+					current = 0
+				}
+				buffer[current++] = buf[i]
+			}
+			len(buf)
+		}
+		fun flush() {
+			write(buffer[0 .. current]) with super
+			flush()                     with super
+			current = 0
+		}
+	}
 }

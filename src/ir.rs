@@ -316,10 +316,11 @@ impl TypeIdx {
         typ: analyzer::TypeIdx,
         defs: &[(ExprIdx, Option<HandlerIdx>)],
         gen: &ResolvedGenerics,
+        scope: &Scope,
     ) -> TypeIdx {
         use analyzer::Type as T;
         match ir.asys.types[typ] {
-            T::Handler(_, _, Some(idx)) => match ir.asys.handlers[idx] {
+            T::Handler(eff, _, Some(idx)) => match ir.asys.handlers[idx] {
                 analyzer::HandlerDef::Handler(def, _) | analyzer::HandlerDef::Call(def) => {
                     let idx = defs.iter().find(|&&(expr, _)| expr == def).unwrap().1;
                     match idx {
@@ -327,7 +328,13 @@ impl TypeIdx {
                         None => TYPE_NEVER,
                     }
                 }
-                analyzer::HandlerDef::Signature => todo!(),
+                analyzer::HandlerDef::Signature => {
+                    let val = scope.get(eff).expect("signature handler not in scope");
+                    match ir.ir.types[val.get_type(&ir.ir)] {
+                        Type::Handler(idx) => ir.insert_type(Type::Handler(idx)),
+                        _ => unreachable!(),
+                    }
+                }
                 analyzer::HandlerDef::Param(_) => unreachable!(),
                 analyzer::HandlerDef::Error => unreachable!(),
             },
@@ -340,10 +347,11 @@ impl TypeIdx {
         val: Val,
         defs: &[(ExprIdx, Option<HandlerIdx>)],
         gen: &ResolvedGenerics,
+        scope: &Scope,
     ) -> TypeIdx {
         match ir.asys.defs[val] {
-            Definition::Parameter(_, _, t) => TypeIdx::from_capture(ir, t, defs, gen),
-            Definition::Variable(_, _, t) => TypeIdx::from_capture(ir, t, defs, gen),
+            Definition::Parameter(_, _, t) => TypeIdx::from_capture(ir, t, defs, gen, scope),
+            Definition::Variable(_, _, t) => TypeIdx::from_capture(ir, t, defs, gen, scope),
             Definition::EffectFunction(_, _, _) => todo!(),
             Definition::Function(_, _) => todo!(),
 
@@ -592,6 +600,7 @@ impl<'a> IRContext<'a> {
                                 c.val,
                                 handler_defs,
                                 &scope.generics,
+                                scope,
                             ),
                         };
                         let ty = match c.mutable {

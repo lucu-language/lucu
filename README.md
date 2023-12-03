@@ -173,6 +173,10 @@ handle show(str) {
 > [!WARNING]  
 > Generics in lucu effects are not fully supported yet and will crash the compiler. It is being worked on
 
+### Effects for typed exceptions
+
+TODO (see https://github.com/Astavie/lucu/blob/main/examples/div.lucu)
+
 ## Examples
 
 - Good amount of comments:

@@ -528,4 +528,9 @@ mod tests {
     fn effect_function_handlers() {
         test_file("printget", "onetwotea")
     }
+
+    #[test]
+    fn write_buffer() {
+        test_file("write_buffer", "Hello, World!\n")
+    }
 }

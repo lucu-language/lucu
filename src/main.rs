@@ -309,6 +309,8 @@ struct Args {
 }
 
 fn main() {
+    unsafe { backtrace_on_stack_overflow::enable() };
+
     let args = Args::parse();
     let core = args.core.unwrap_or_else(|| {
         option_env!("LUCU_CORE")

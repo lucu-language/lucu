@@ -6,14 +6,14 @@ use std::{
 use crate::{
     ast::{self, EffFunIdx, EffIdx, Expression, Ident, PackageIdx, AST},
     error::{Error, Errors, Range},
-    vecmap::{VecMap, VecMapOffset, VecSet},
+    vecmap::{VecMap, VecSet},
     Target,
 };
 
 use super::{
-    Assoc, AssocIdx, Effect, EffectIdent, FunIdx, FunSign, GenericIdx, GenericParams, GenericVal,
-    Generics, Handler, HandlerIdx, LazyIdx, Param, ReturnType, SemIR, Type, TypeConstraints,
-    TypeIdx,
+    get_param, get_value, get_value_mut, Assoc, AssocDef, AssocIdx, Effect, EffectIdent, FunIdx,
+    FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx,
+    LazyIdx, Param, ReturnType, SemIR, Type, TypeConstraints, TypeIdx,
 };
 
 struct SemCtx<'a> {
@@ -48,7 +48,7 @@ struct Scope {
     funs: HashMap<String, FunIdent>,
     effects: HashMap<String, GenericVal<EffIdx>>,
     types: HashMap<String, TypeIdx>,
-    generics: HashMap<String, (TypeIdx, GenericIdx)>,
+    generics: HashMap<String, Generic>,
 }
 
 impl ScopeStack {
@@ -92,7 +92,7 @@ impl ScopeStack {
     fn get_type(&self, ctx: &SemCtx, name: &str) -> Option<TypeIdx> {
         self.search(ctx, |s| s.types.get(name).copied())
     }
-    fn get_generic(&self, ctx: &SemCtx, name: &str) -> Option<(TypeIdx, GenericIdx)> {
+    fn get_generic(&self, ctx: &SemCtx, name: &str) -> Option<Generic> {
         self.search(ctx, |s| s.generics.get(name).copied())
     }
 
@@ -223,18 +223,13 @@ impl SemCtx<'_> {
         generic_params: &GenericParams,
         parent_generics: usize,
         handler_self: TypeIdx,
-        assoc_types: Option<&VecMap<AssocIdx, TypeIdx>>,
+        assoc_types: Option<&Vec<(AssocIdx, TypeIdx)>>,
     ) -> TypeIdx {
-        let translate = |ctx: &mut Self, ty: TypeIdx, idx: GenericIdx| {
-            if idx.0 < generic_params.start() {
-                ctx.insert_type(Type::Generic(ty, idx))
-            } else if idx.0 < generic_params.start() + generic_params.len() {
-                generic_params[idx]
-            } else {
-                let idx = GenericIdx(idx.0 - generic_params.len() + parent_generics);
-                ctx.insert_type(Type::Generic(ty, idx))
-            }
-        };
+        let translate =
+            |ctx: &mut Self, generic: Generic| match get_param(generic_params, generic.idx) {
+                Some(ty) => ty,
+                None => ctx.insert_type(Type::Generic(generic)),
+            };
         match self.ir.types[ty] {
             Type::DataType(ref constraints) => match *constraints {
                 TypeConstraints::None => ty,
@@ -242,29 +237,35 @@ impl SemCtx<'_> {
                     let effect = match *effect {
                         GenericVal::Literal(ref ident) => {
                             let effect = ident.effect;
-                            let start = ident.generic_params.start();
-                            let params = Vec::from(ident.generic_params.clone());
-                            let params = GenericParams::from_iter(
-                                start,
-                                params.into_iter().map(|ty| {
-                                    self.translate_generics(
-                                        ty,
-                                        generic_params,
-                                        parent_generics,
-                                        handler_self,
-                                        assoc_types,
+                            let params = ident.generic_params.clone();
+                            let params =
+                                GenericParams::from_iter(params.into_iter().map(|(idx, ty)| {
+                                    (
+                                        idx,
+                                        self.translate_generics(
+                                            ty,
+                                            generic_params,
+                                            parent_generics,
+                                            handler_self,
+                                            assoc_types,
+                                        ),
                                     )
-                                }),
-                            );
+                                }));
                             GenericVal::Literal(EffectIdent {
                                 effect,
                                 generic_params: params,
                             })
                         }
                         GenericVal::Generic(idx) => {
-                            let ty = translate(self, TYPE_EFFECT, idx);
+                            let ty = translate(
+                                self,
+                                Generic {
+                                    idx,
+                                    typeof_ty: TYPE_EFFECT,
+                                },
+                            );
                             match self.ir.types[ty] {
-                                Type::Generic(_, idx) => GenericVal::Generic(idx),
+                                Type::Generic(generic) => GenericVal::Generic(generic.idx),
                                 _ => todo!(),
                             }
                         }
@@ -280,29 +281,27 @@ impl SemCtx<'_> {
                 }
             },
             Type::AssocType {
-                ty,
+                assoc,
                 handler,
                 effect,
-                idx,
                 generic_params: ref params,
             } => {
-                let start = params.start();
-                let params = Vec::from(params.clone());
-                let params = GenericParams::from_iter(
-                    start,
-                    params.into_iter().map(|ty| {
+                let params = params.clone();
+                let params = GenericParams::from_iter(params.into_iter().map(|(idx, ty)| {
+                    (
+                        idx,
                         self.translate_generics(
                             ty,
                             generic_params,
                             parent_generics,
                             handler_self,
                             assoc_types,
-                        )
-                    }),
-                );
+                        ),
+                    )
+                }));
 
                 let ty = self.translate_generics(
-                    ty,
+                    assoc.typeof_ty,
                     generic_params,
                     parent_generics,
                     handler_self,
@@ -318,7 +317,7 @@ impl SemCtx<'_> {
 
                 if let Some(assoc_types) = assoc_types.filter(|_| handler == handler_self) {
                     self.translate_generics(
-                        assoc_types[idx],
+                        get_value(assoc_types, &assoc.idx).copied().unwrap(),
                         &params,
                         parent_generics,
                         handler_self,
@@ -326,15 +325,17 @@ impl SemCtx<'_> {
                     )
                 } else {
                     self.insert_type(Type::AssocType {
-                        ty,
+                        assoc: Assoc {
+                            idx: assoc.idx,
+                            typeof_ty: ty,
+                        },
                         handler,
                         effect,
-                        idx,
                         generic_params: params,
                     })
                 }
             }
-            Type::Generic(ty, idx) => translate(self, ty, idx),
+            Type::Generic(generic) => translate(self, generic),
             Type::Pointer(inner) => {
                 let inner = self.translate_generics(
                     inner,
@@ -359,9 +360,15 @@ impl SemCtx<'_> {
                 let size = match size {
                     GenericVal::Literal(_) => size,
                     GenericVal::Generic(idx) => {
-                        let ty = translate(self, TYPE_USIZE, idx);
+                        let ty = translate(
+                            self,
+                            Generic {
+                                idx,
+                                typeof_ty: TYPE_USIZE,
+                            },
+                        );
                         match self.ir.types[ty] {
-                            Type::Generic(_, idx) => GenericVal::Generic(idx),
+                            Type::Generic(generic) => GenericVal::Generic(generic.idx),
                             _ => todo!(),
                         }
                     }
@@ -417,30 +424,32 @@ impl SemCtx<'_> {
         id: Ident,
         typeof_generic: TypeIdx,
         generics: Option<&mut Generics>,
-    ) -> Option<GenericIdx> {
+    ) -> Option<Generic> {
         let name = &self.ast.idents[id];
         match scope.get_generic(self, &name.0) {
-            Some((ty, idx)) => {
+            Some(generic) => {
                 // check if generic type matches
                 self.check_move_rev(
                     typeof_generic,
-                    ty,
+                    generic.typeof_ty,
                     &mut TypeError {
                         loc: name.empty(),
                         def: None,
                         layers: Vec::new(),
                     },
                 );
-                Some(idx)
+                Some(generic)
             }
             None => match generics {
                 Some(generics) => {
-                    let idx = generics.push(GenericIdx, typeof_generic);
-                    scope
-                        .top()
-                        .generics
-                        .insert(name.0.clone(), (typeof_generic, idx));
-                    Some(idx)
+                    let idx = self.ir.generic_names.push(GenericIdx, name.0.clone());
+                    let value = Generic {
+                        idx,
+                        typeof_ty: typeof_generic,
+                    };
+                    generics.push(value);
+                    scope.top().generics.insert(name.0.clone(), value);
+                    Some(value)
                 }
                 None => {
                     self.errors.push(name.with(Error::UnknownGeneric));
@@ -502,25 +511,35 @@ impl SemCtx<'_> {
                 let handler_ty = self.insert_type(Type::DataType(TypeConstraints::Handler(
                     effect.map(|&effect| EffectIdent {
                         effect,
-                        generic_params: Generics::from_iter(0, params),
+                        // TODO: error on length mismatch
+                        generic_params: self.ir.effects[effect]
+                            .generics
+                            .iter()
+                            .map(|g| g.idx)
+                            .zip(params)
+                            .collect(),
                     }),
                     fail,
                 )));
                 match generics.as_deref_mut().filter(|_| generic_handler) {
                     Some(generics) => {
-                        let idx = generics.push(GenericIdx, handler_ty);
-                        self.insert_type(Type::Generic(handler_ty, idx))
+                        let len = self.ir.generic_names.len() + self.ir.assoc_names.len();
+                        let idx = self.ir.generic_names.push(GenericIdx, format!("`_{}", len));
+
+                        let value = Generic {
+                            idx,
+                            typeof_ty: handler_ty,
+                        };
+                        generics.push(value);
+                        self.insert_type(Type::Generic(value))
                     }
-                    None => handler_output(
-                        self,
-                        generics.unwrap_or(&mut VecMapOffset::new(0)),
-                        handler_ty,
-                        ty,
-                    ),
+                    None => {
+                        handler_output(self, generics.unwrap_or(&mut Vec::new()), handler_ty, ty)
+                    }
                 }
             }
             T::Generic(id) => match self.analyze_generic(scope, id, TYPE_DATATYPE, generics) {
-                Some(idx) => self.insert_type(Type::Generic(TYPE_DATATYPE, idx)),
+                Some(generic) => self.insert_type(Type::Generic(generic)),
                 None => TYPE_UNKNOWN,
             },
             T::GenericHandler(id, fail) => {
@@ -534,7 +553,7 @@ impl SemCtx<'_> {
 
                 let effect =
                     match self.analyze_generic(scope, id, TYPE_EFFECT, generics.as_deref_mut()) {
-                        Some(idx) => GenericVal::Generic(idx),
+                        Some(generic) => GenericVal::Generic(generic.idx),
                         None => return TYPE_UNKNOWN,
                     };
 
@@ -543,15 +562,19 @@ impl SemCtx<'_> {
                     self.insert_type(Type::DataType(TypeConstraints::Handler(effect, fail)));
                 match generics.as_deref_mut().filter(|_| generic_handler) {
                     Some(generics) => {
-                        let idx = generics.push(GenericIdx, handler_ty);
-                        self.insert_type(Type::Generic(handler_ty, idx))
+                        let len = self.ir.generic_names.len() + self.ir.assoc_names.len();
+                        let idx = self.ir.generic_names.push(GenericIdx, format!("`_{}", len));
+
+                        let value = Generic {
+                            idx,
+                            typeof_ty: handler_ty,
+                        };
+                        generics.push(value);
+                        self.insert_type(Type::Generic(value))
                     }
-                    None => handler_output(
-                        self,
-                        generics.unwrap_or(&mut VecMapOffset::new(0)),
-                        handler_ty,
-                        ty,
-                    ),
+                    None => {
+                        handler_output(self, generics.unwrap_or(&mut Vec::new()), handler_ty, ty)
+                    }
                 }
             }
             T::Pointer(ty) => {
@@ -574,7 +597,7 @@ impl SemCtx<'_> {
                     Expression::Int(i) => GenericVal::Literal(i),
                     Expression::Ident(id) => {
                         match self.analyze_generic(scope, id, TYPE_USIZE, generics) {
-                            Some(idx) => GenericVal::Generic(idx),
+                            Some(generic) => GenericVal::Generic(generic.idx),
                             None => return TYPE_UNKNOWN,
                         }
                     }
@@ -602,15 +625,14 @@ impl SemCtx<'_> {
     fn analyze_sign(
         &mut self,
         scope: &mut ScopeStack,
-        parent_generics: usize,
         name: Ident,
         effect: Option<EffIdx>,
         fun: &ast::FunSign,
-        mut assoc: Option<&mut VecMap<AssocIdx, Assoc>>,
+        mut assocs: Option<&mut Vec<AssocDef>>,
     ) -> FunSign {
         scope.child(|scope| {
             let name = &self.ast.idents[name];
-            let mut generics = Generics::new(parent_generics);
+            let mut generics = Generics::new();
             let mut params = Vec::new();
 
             // base params
@@ -625,7 +647,7 @@ impl SemCtx<'_> {
                 if param.const_generic {
                     let ty = match self.analyze_generic(scope, param.name, ty, Some(&mut generics))
                     {
-                        Some(idx) => self.insert_type(Type::Generic(ty, idx)),
+                        Some(generic) => self.insert_type(Type::Generic(generic)),
                         None => TYPE_UNKNOWN,
                     };
                     params.push(Param {
@@ -666,12 +688,27 @@ impl SemCtx<'_> {
                             self.insert_type(Type::DataType(TypeConstraints::Handler(
                                 effect.map(|&effect| EffectIdent {
                                     effect,
-                                    generic_params: Generics::from_iter(0, effect_params),
+                                    // TODO: check if length match
+                                    generic_params: self.ir.effects[effect]
+                                        .generics
+                                        .iter()
+                                        .map(|generic| generic.idx)
+                                        .zip(effect_params)
+                                        .collect(),
                                 }),
                                 TYPE_NEVER,
                             )));
-                        let idx = generics.push(GenericIdx, handler_ty);
-                        let ty = self.insert_type(Type::Generic(handler_ty, idx));
+
+                        let len = self.ir.generic_names.len() + self.ir.assoc_names.len();
+                        let idx = self.ir.generic_names.push(GenericIdx, format!("`_{}", len));
+
+                        let value = Generic {
+                            idx,
+                            typeof_ty: handler_ty,
+                        };
+                        generics.push(value);
+                        let ty = self.insert_type(Type::Generic(value));
+
                         params.push(Param {
                             name_def: Some(self.ast.idents[id.ident.ident].empty()),
                             type_def: self.ast.idents[id.ident.ident].empty(),
@@ -692,40 +729,40 @@ impl SemCtx<'_> {
             }
 
             // return type
-            let mut assocs = 0;
             let return_type = match fun.output {
                 Some(ty) => self.analyze_type(
                     scope,
                     ty,
                     Some(&mut generics),
                     false,
-                    &mut |ctx, generics, ty, _| match &mut assoc {
-                        Some(assoc) => {
+                    &mut |ctx, generics, ty, _| match &mut assocs {
+                        Some(assocs) => {
                             let effect = effect.unwrap();
-                            let idx = assoc.push(
+                            let idx = ctx.ir.assoc_names.push(
                                 AssocIdx,
-                                Assoc {
-                                    name: format!("{}${}", name.0, assocs),
-                                    infer: true,
-                                    typeof_ty: ty,
-                                    generics: generics.clone(),
-                                },
+                                format!(
+                                    "_{}",
+                                    ctx.ir.generic_names.len() + ctx.ir.assoc_names.len()
+                                ),
                             );
-                            assocs += 1;
-                            let effect_generics_len = ctx.ir.effects[effect].generics.len();
+                            let assoc = Assoc { idx, typeof_ty: ty };
+                            assocs.push(AssocDef {
+                                assoc,
+                                infer: true,
+                                generics: generics.clone(),
+                            });
                             let generic_params = generics
-                                .iter(GenericIdx)
-                                .map(|(idx, &ty)| ctx.insert_type(Type::Generic(ty, idx)))
-                                .collect::<Vec<_>>();
+                                .iter()
+                                .copied()
+                                .map(|generic| {
+                                    (generic.idx, ctx.insert_type(Type::Generic(generic)))
+                                })
+                                .collect();
                             ctx.insert_type(Type::AssocType {
-                                ty,
+                                assoc,
                                 handler: TYPE_SELF,
                                 effect,
-                                idx,
-                                generic_params: GenericParams::from_iter(
-                                    effect_generics_len,
-                                    generic_params,
-                                ),
+                                generic_params,
                             })
                         }
                         None => {
@@ -755,7 +792,7 @@ impl SemCtx<'_> {
         b: FunIdent,
         generic_params: &GenericParams,
         parent_generics: usize,
-        assoc_types: &VecMap<AssocIdx, TypeIdx>,
+        assoc_types: &Vec<(AssocIdx, TypeIdx)>,
     ) {
         let b = match b {
             FunIdent::Top(idx) => &self.ir.fun_sign[idx],
@@ -838,26 +875,43 @@ impl SemCtx<'_> {
             let effect = self.analyze_effect(scope, &id.ident)?.literal().copied()?;
 
             let generics = generics;
-            let generic_params = Generics::from_iter(0, params);
+            // TODO: check if length matches
+            let generic_params = self.ir.effects[effect]
+                .generics
+                .iter()
+                .map(|generic| generic.idx)
+                .zip(params)
+                .collect::<Vec<_>>();
 
             // check functions
             let mut funs: VecMap<EffFunIdx, FunSign> = std::iter::repeat_with(FunSign::default)
                 .take(self.ast.effects[effect].functions.len())
                 .collect();
             let assoc_typeof_types = self.ir.effects[effect]
-                .assoc_types
-                .values()
-                .map(|assoc| assoc.typeof_ty)
+                .assocs
+                .iter()
+                .map(|assoc| (assoc.assoc.idx, assoc.assoc.typeof_ty))
                 .collect::<Vec<_>>();
             let assoc_typeof_types = assoc_typeof_types
                 .into_iter()
-                .map(|assoc| {
-                    self.translate_generics(assoc, &generic_params, generics.len(), TYPE_SELF, None)
+                .map(|(idx, typeof_ty)| {
+                    (
+                        idx,
+                        self.translate_generics(
+                            typeof_ty,
+                            &generic_params,
+                            generics.len(),
+                            TYPE_SELF,
+                            None,
+                        ),
+                    )
                 })
-                .collect::<VecMap<_, _>>();
-            let mut assoc_types = std::iter::repeat(TYPE_UNKNOWN)
-                .take(assoc_typeof_types.len())
-                .collect::<VecMap<_, _>>();
+                .collect::<Vec<_>>();
+            let mut assoc_types = assoc_typeof_types
+                .iter()
+                .map(|a| a.0)
+                .zip(std::iter::repeat(TYPE_UNKNOWN))
+                .collect::<Vec<_>>();
             for function in functions {
                 // analyze signature
                 let name = &self.ast.idents[function.decl.name];
@@ -868,7 +922,6 @@ impl SemCtx<'_> {
 
                 let sign = self.analyze_sign(
                     scope,
-                    generics.len(),
                     function.decl.name,
                     Some(effect),
                     &function.decl.sign,
@@ -891,11 +944,16 @@ impl SemCtx<'_> {
                         );
                         self.check_and_infer(
                             |ctx, ty| match *ty {
-                                Type::AssocType { handler, idx, .. } => {
+                                Type::AssocType { handler, assoc, .. } => {
                                     if handler == TYPE_SELF
-                                        && ctx.ir.effects[effect].assoc_types[idx].infer
+                                        && ctx.ir.effects[effect]
+                                            .assocs
+                                            .iter()
+                                            .find(|a| a.assoc.idx == assoc.idx)
+                                            .unwrap()
+                                            .infer
                                     {
-                                        Some(idx)
+                                        Some(assoc.idx)
                                     } else {
                                         None
                                     }
@@ -992,11 +1050,11 @@ impl SemCtx<'_> {
             Some(())
         });
     }
-    fn check_and_infer<K: Copy + Into<usize>>(
+    fn check_and_infer<K: Copy + Into<usize> + PartialEq>(
         &mut self,
         convert: impl Fn(&Self, &Type) -> Option<K>,
-        typeof_types: &VecMap<K, TypeIdx>,
-        types: &mut VecMap<K, TypeIdx>,
+        typeof_types: &Vec<(K, TypeIdx)>,
+        types: &mut Vec<(K, TypeIdx)>,
         parent: TypeIdx,
         ty: TypeIdx,
         output: bool,
@@ -1010,12 +1068,20 @@ impl SemCtx<'_> {
                 Some(idx) => {
                     let typeof_b = ctx.typeof_ty(b);
                     if output {
-                        ctx.check_move_rev(typeof_types[idx], typeof_b, error_loc);
+                        ctx.check_move_rev(
+                            get_value(typeof_types, &idx).copied().unwrap(),
+                            typeof_b,
+                            error_loc,
+                        );
                     } else {
-                        ctx.check_move(typeof_types[idx], typeof_b, error_loc);
+                        ctx.check_move(
+                            get_value(typeof_types, &idx).copied().unwrap(),
+                            typeof_b,
+                            error_loc,
+                        );
                     }
 
-                    let type_idx = &mut types[idx];
+                    let type_idx = get_value_mut(types, &idx).unwrap();
                     *type_idx = ctx.supertype(*type_idx, b, error_loc);
                     Some(*type_idx)
                 }
@@ -1086,9 +1152,9 @@ impl SemCtx<'_> {
                 )))
             }
 
-            Type::Generic(typeof_ty, _) => typeof_ty,
+            Type::Generic(generic) => generic.typeof_ty,
             Type::LazyHandler(typeof_ty, _) => typeof_ty,
-            Type::AssocType { ty: typeof_ty, .. } => typeof_ty,
+            Type::AssocType { assoc, .. } => assoc.typeof_ty,
 
             Type::HandlerSelf => TYPE_DATATYPE,
             Type::Pointer(_) => TYPE_DATATYPE,
@@ -1130,20 +1196,24 @@ impl SemCtx<'_> {
                         if let (GenericVal::Literal(a), GenericVal::Literal(b)) = (eff_a, eff_b) {
                             if a.effect == b.effect {
                                 let effect = a.effect;
-                                let start = a.generic_params.start();
                                 let generic_params = a
                                     .generic_params
-                                    .values()
-                                    .copied()
-                                    .zip(b.generic_params.values().copied())
+                                    .iter()
+                                    .map(|&(_, b)| b)
+                                    .zip(b.generic_params.iter().map(|&(_, b)| b))
                                     .collect::<Vec<_>>();
 
                                 let fail = self.matches(fail_a, fail_b, error_loc, compare);
                                 let generic_params = generic_params
                                     .into_iter()
-                                    .map(|(a, b)| self.matches(a, b, error_loc, compare));
-                                let generic_params =
-                                    GenericParams::from_iter(start, generic_params);
+                                    .map(|(a, b)| self.matches(a, b, error_loc, compare))
+                                    .collect::<Vec<_>>();
+                                let generic_params = self.ir.effects[effect]
+                                    .generics
+                                    .iter()
+                                    .map(|generic| generic.idx)
+                                    .zip(generic_params)
+                                    .collect();
 
                                 self.insert_type(Type::DataType(TypeConstraints::Handler(
                                     GenericVal::Literal(EffectIdent {
@@ -1174,39 +1244,52 @@ impl SemCtx<'_> {
 
                     (
                         &Type::AssocType {
-                            ty: ty_a,
+                            assoc:
+                                Assoc {
+                                    idx: idx_a,
+                                    typeof_ty: ty_a,
+                                },
                             handler: handler_a,
                             effect: eff_a,
-                            idx: idx_a,
                             generic_params: ref generic_a,
                         },
                         &Type::AssocType {
-                            ty: ty_b,
+                            assoc:
+                                Assoc {
+                                    idx: idx_b,
+                                    typeof_ty: ty_b,
+                                },
                             handler: handler_b,
                             effect: eff_b,
-                            idx: idx_b,
                             generic_params: ref generic_b,
                         },
                     ) if eff_a == eff_b && idx_a == idx_b => {
-                        let start = generic_a.start();
                         let generic_params = generic_a
-                            .values()
-                            .copied()
-                            .zip(generic_b.values().copied())
+                            .iter()
+                            .map(|&(_, b)| b)
+                            .zip(generic_b.iter().map(|&(_, b)| b))
                             .collect::<Vec<_>>();
 
                         let ty = self.matches(ty_a, ty_b, error_loc, compare);
                         let handler = self.matches(handler_a, handler_b, error_loc, compare);
                         let generic_params = generic_params
                             .into_iter()
-                            .map(|(a, b)| self.matches(a, b, error_loc, compare));
-                        let generic_params = GenericParams::from_iter(start, generic_params);
+                            .map(|(a, b)| self.matches(a, b, error_loc, compare))
+                            .collect::<Vec<_>>();
+                        let generic_params = self.ir.effects[eff_a]
+                            .generics
+                            .iter()
+                            .map(|generic| generic.idx)
+                            .zip(generic_params)
+                            .collect();
 
                         self.insert_type(Type::AssocType {
-                            ty,
+                            assoc: Assoc {
+                                idx: idx_a,
+                                typeof_ty: ty,
+                            },
                             handler,
                             effect: eff_a,
-                            idx: idx_a,
                             generic_params,
                         })
                     }
@@ -1316,6 +1399,9 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             types: VecSet::new(),
             handlers: VecMap::new(),
             lazy_handlers: VecMap::new(),
+
+            generic_names: VecMap::new(),
+            assoc_names: VecMap::new(),
         },
         ast,
         errors,
@@ -1386,30 +1472,30 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 // get effect generics
                 let mut generics = Generics::default();
                 for param in effect.generics.iter().flat_map(|v| v.values()) {
+                    let name = ast.idents[param.name].0.clone();
                     let ty = param
                         .ty
                         .map(|ty| ctx.analyze_type(scope, ty, None, true, &mut SemCtx::no_handler))
                         .unwrap_or(TYPE_DATATYPE);
-                    let idx = generics.push(GenericIdx, ty);
 
-                    let name = ast.idents[param.name].0.clone();
-                    scope.top().generics.insert(name, (ty, idx));
+                    let idx = ctx.ir.generic_names.push(GenericIdx, name.clone());
+                    let value = Generic { idx, typeof_ty: ty };
+                    generics.push(value);
+                    scope.top().generics.insert(name, value);
                 }
-                let generics_len = generics.len();
                 ctx.ir.effects[i] = Effect {
                     name: ast.idents[effect.name].0.clone(),
                     generics,
-                    assoc_types: VecMap::new(),
+                    assocs: Vec::new(),
                     funs: VecMap::new(),
                     implied: Vec::new(),
                 };
 
                 // add functions to scope
-                let mut assoc_types = VecMap::new();
+                let mut assoc_types = Vec::new();
                 for (fi, decl) in effect.functions.iter(EffFunIdx) {
                     let sign = ctx.analyze_sign(
                         scope,
-                        generics_len,
                         decl.name,
                         Some(i),
                         &decl.sign,
@@ -1431,7 +1517,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                             .insert(name.0.clone(), FunIdent::Effect(i, fi));
                     }
                 }
-                ctx.ir.effects[i].assoc_types = assoc_types;
+                ctx.ir.effects[i].assocs = assoc_types;
             });
         }
 
@@ -1442,7 +1528,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             .map(|i| (i, &ast.functions[i]))
         {
             // add function to scope
-            let sign = ctx.analyze_sign(&mut scope, 0, fun.decl.name, None, &fun.decl.sign, None);
+            let sign = ctx.analyze_sign(&mut scope, fun.decl.name, None, &fun.decl.sign, None);
             ctx.ir.fun_sign[i] = sign;
 
             let name = &ast.idents[fun.decl.name];

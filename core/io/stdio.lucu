@@ -104,7 +104,7 @@ fun windows() handle stdio / win32.sys {
 			let stdin = win32.stdin()
 			fun {
 				buf ->
-				mut read = 0
+				mut read u32 = 0
 				win32.ReadConsoleA(stdin, &buf[0], cast len(buf), &read, 0)
 				cast read
 			}
@@ -113,7 +113,7 @@ fun windows() handle stdio / win32.sys {
 			let stdout = win32.stdout()
 			handle writer {
 				fun write(buf []u8) usize {
-					mut written = 0
+					mut written u32 = 0
 					win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
 					cast written
 				}
@@ -125,7 +125,7 @@ fun windows() handle stdio / win32.sys {
 			let stderr = win32.stderr()
 			handle writer {
 				fun write(buf []u8) usize {
-					mut written = 0
+					mut written u32 = 0
 					win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
 					cast written
 				}

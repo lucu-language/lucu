@@ -131,6 +131,14 @@ pub enum TypeConstraints {
     Handler(GenericVal<EffectIdent>, TypeIdx), // effect, fail
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum IntSize {
+    Reg,
+    Size,
+    Ptr,
+    Bits(u32),
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
     Handler(HandlerIdx),
@@ -153,11 +161,7 @@ pub enum Type {
     ConstArray(GenericVal<u64>, TypeIdx),
     Slice(TypeIdx),
 
-    Int,
-    UInt,
-    USize,
-    UPtr,
-    U8,
+    Integer(bool, IntSize),
 
     Str,
     Bool,
@@ -236,6 +240,29 @@ pub fn get_value_mut<'a, K: PartialEq, V>(vec: &'a mut Vec<(K, V)>, key: &K) -> 
     vec.iter_mut().find(|(k, _)| k.eq(key)).map(|(_, v)| v)
 }
 
+impl IntSize {
+    fn display(self, ir: &SemIR, signed: bool, f: &mut impl fmt::Write) -> fmt::Result {
+        match self {
+            IntSize::Reg => match signed {
+                true => write!(f, "int"),
+                false => write!(f, "uint"),
+            },
+            IntSize::Size => match signed {
+                true => write!(f, "isize"),
+                false => write!(f, "usize"),
+            },
+            IntSize::Ptr => match signed {
+                true => write!(f, "iptr"),
+                false => write!(f, "uptr"),
+            },
+            IntSize::Bits(bits) => match signed {
+                true => write!(f, "i{}", bits),
+                false => write!(f, "u{}", bits),
+            },
+        }
+    }
+}
+
 impl TypeIdx {
     fn display(
         &self,
@@ -298,11 +325,7 @@ impl TypeIdx {
                 write!(f, "[]")?;
                 inner.display(ir, generic_params, f)
             }
-            Type::Int => write!(f, "int"),
-            Type::UInt => write!(f, "uint"),
-            Type::USize => write!(f, "usize"),
-            Type::UPtr => write!(f, "uptr"),
-            Type::U8 => write!(f, "u8"),
+            Type::Integer(signed, size) => size.display(ir, signed, f),
             Type::Str => write!(f, "str"),
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),

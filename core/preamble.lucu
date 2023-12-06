@@ -182,12 +182,6 @@ effect foreign {
 	fun link_effect(`lib str) handle `effect
 }
 
-@capability
-fun _foreign_internal() handle foreign # / srcloc
-{
-	internal()
-}
-
 ##
 # the following functions may have an internal definition based on the target
 # they also have default implementations for unknown targets

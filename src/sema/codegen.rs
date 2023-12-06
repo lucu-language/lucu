@@ -13,7 +13,7 @@ use crate::{
 use super::{
     get_param, get_value, get_value_mut, Assoc, AssocDef, AssocIdx, Effect, EffectIdent, FunIdx,
     FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx,
-    LazyIdx, Param, ReturnType, SemIR, Type, TypeConstraints, TypeIdx,
+    IntSize, LazyIdx, Param, ReturnType, SemIR, Type, TypeConstraints, TypeIdx,
 };
 
 struct SemCtx<'a> {
@@ -406,11 +406,7 @@ impl SemCtx<'_> {
 
             Type::Handler(_)
             | Type::Effect
-            | Type::Int
-            | Type::UInt
-            | Type::USize
-            | Type::UPtr
-            | Type::U8
+            | Type::Integer(_, _)
             | Type::Str
             | Type::Bool
             | Type::None
@@ -1161,11 +1157,7 @@ impl SemCtx<'_> {
             Type::Const(_) => TYPE_DATATYPE,
             Type::ConstArray(_, _) => TYPE_DATATYPE,
             Type::Slice(_) => TYPE_DATATYPE,
-            Type::Int => TYPE_DATATYPE,
-            Type::UInt => TYPE_DATATYPE,
-            Type::USize => TYPE_DATATYPE,
-            Type::UPtr => TYPE_DATATYPE,
-            Type::U8 => TYPE_DATATYPE,
+            Type::Integer(_, _) => TYPE_DATATYPE,
             Type::Str => TYPE_DATATYPE,
             Type::Bool => TYPE_DATATYPE,
             Type::None => TYPE_DATATYPE,
@@ -1314,17 +1306,14 @@ impl SemCtx<'_> {
                         self.insert_type(Type::ConstArray(size_a, inner))
                     }
 
-                    (Type::Int, Type::Int)
-                    | (Type::Unknown, Type::Unknown)
+                    (Type::Integer(sa, ia), Type::Integer(sb, ib)) if sa == sb && ia == ib => a,
+
+                    (Type::Unknown, Type::Unknown)
                     | (Type::Effect, Type::Effect)
                     | (
                         Type::DataType(TypeConstraints::None),
                         Type::DataType(TypeConstraints::None),
                     )
-                    | (Type::UInt, Type::UInt)
-                    | (Type::USize, Type::USize)
-                    | (Type::UPtr, Type::UPtr)
-                    | (Type::U8, Type::U8)
                     | (Type::Str, Type::Str)
                     | (Type::Bool, Type::Bool)
                     | (Type::None, Type::None)
@@ -1414,22 +1403,32 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     ctx.insert_type(Type::DataType(TypeConstraints::None));
     ctx.insert_type(Type::Effect);
     ctx.insert_type(Type::HandlerSelf);
-    ctx.insert_type(Type::USize);
+    ctx.insert_type(Type::Integer(false, IntSize::Size));
 
-    let mut insert = |s: &str, t: Type| {
+    let mut insert = |t: Type| {
         let ty = ctx.insert_type(t);
+        let name = format!("{}", FmtType(&ctx.ir, ty));
+        let name = String::from(&name[1..name.len() - 1]);
         let types = &mut ctx.packages[ast.preamble].types;
-        types.insert(s.into(), ty);
+        types.insert(name, ty);
     };
 
-    insert("str", Type::Str);
-    insert("int", Type::Int);
-    insert("uint", Type::UInt);
-    insert("usize", Type::USize);
-    insert("uptr", Type::UPtr);
-    insert("u8", Type::U8);
-    insert("bool", Type::Bool);
-    insert("void", Type::None);
+    insert(Type::Str);
+    insert(Type::Bool);
+    insert(Type::None);
+
+    insert(Type::Integer(false, IntSize::Reg));
+    insert(Type::Integer(true, IntSize::Reg));
+    insert(Type::Integer(false, IntSize::Size));
+    insert(Type::Integer(true, IntSize::Size));
+    insert(Type::Integer(false, IntSize::Ptr));
+    insert(Type::Integer(true, IntSize::Ptr));
+
+    for i in 0u32..4 {
+        let bits = 8u32 << i;
+        insert(Type::Integer(false, IntSize::Bits(bits)));
+        insert(Type::Integer(true, IntSize::Bits(bits)));
+    }
 
     // analyze effect signatures
     for (idx, package) in ast.packages.iter(PackageIdx) {

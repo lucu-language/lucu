@@ -7,7 +7,6 @@ use crate::{
     vecmap::{vecmap_index, VecMap, VecSet},
 };
 
-vecmap_index!(TypeIdx);
 vecmap_index!(GenericIdx);
 vecmap_index!(AssocIdx);
 vecmap_index!(HandlerIdx);
@@ -15,7 +14,30 @@ vecmap_index!(LazyIdx);
 
 vecmap_index!(BlockIdx);
 vecmap_index!(InstrIdx);
-vecmap_index!(GlobalIdx);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct TypeIdx(usize);
+
+impl From<TypeIdx> for usize {
+    fn from(value: TypeIdx) -> Self {
+        value.0 >> 2
+    }
+}
+
+impl TypeIdx {
+    pub(crate) fn new(idx: usize, is_const: bool, is_lent: bool) -> Self {
+        Self(idx << 2 | (if is_lent { 2 } else { 0 }) | (if is_const { 1 } else { 0 }))
+    }
+    pub fn is_const(self) -> bool {
+        self.0 & 1 == 1
+    }
+    pub fn is_lent(self) -> bool {
+        self.0 & 2 == 2
+    }
+    pub fn with(self, is_const: bool, is_lent: bool) -> Self {
+        Self::new(usize::from(self), is_const, is_lent)
+    }
+}
 
 mod codegen;
 pub use codegen::analyze;
@@ -251,7 +273,6 @@ pub enum Type {
     },
 
     Pointer(TypeIdx),
-    Const(TypeIdx),
     ConstArray(GenericVal<u64>, TypeIdx),
     Slice(TypeIdx),
 
@@ -418,6 +439,12 @@ impl TypeIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
+        if self.is_lent() {
+            write!(f, "lent ")?;
+        }
+        if self.is_const() {
+            write!(f, "const ")?;
+        }
         match ir.types[*self] {
             Type::HandlerSelf => write!(f, "self"),
             Type::Handler { idx, .. } => {
@@ -457,10 +484,6 @@ impl TypeIdx {
             },
             Type::Pointer(inner) => {
                 write!(f, "^")?;
-                inner.display(ir, generic_params, f)
-            }
-            Type::Const(inner) => {
-                write!(f, "const ")?;
                 inner.display(ir, generic_params, f)
             }
             Type::ConstArray(size, inner) => {

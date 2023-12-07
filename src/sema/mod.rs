@@ -1,7 +1,8 @@
-use std::fmt::{self};
+use either::Either;
+use std::fmt;
 
 use crate::{
-    ast::{EffFunIdx, EffIdx, FunIdx},
+    ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
     error::Range,
     vecmap::{vecmap_index, VecMap, VecSet},
 };
@@ -12,14 +13,100 @@ vecmap_index!(AssocIdx);
 vecmap_index!(HandlerIdx);
 vecmap_index!(LazyIdx);
 
+vecmap_index!(BlockIdx);
+vecmap_index!(InstrIdx);
+vecmap_index!(GlobalIdx);
+
 mod codegen;
-pub use codegen::*;
+pub use codegen::analyze;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum FunctionDef {
+    Top(FunIdx),
+    Handler(HandlerIdx, EffFunIdx),
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum Value {
+    Reg(BlockIdx, InstrIdx),
+    Reference(BlockIdx, InstrIdx),
+
+    ConstantAggregate(Vec<Value>),
+    ConstantInt(bool, u64),
+    ConstantString(String),
+    ConstantBool(bool),
+    ConstantType(TypeIdx),
+    ConstantNone,
+    ConstantUninit,
+    ConstantZero,
+    ConstantUnknown,
+
+    Param(ParamIdx),
+    HandlerParam(usize),
+}
+
+#[derive(Debug, Default)]
+pub struct FunImpl {
+    pub blocks: VecMap<BlockIdx, Block>,
+}
+
+#[derive(Debug, Default)]
+pub struct Block {
+    pub instructions: VecMap<InstrIdx, Instruction>,
+}
+
+#[derive(Debug)]
+pub enum Instruction {
+    Cast(Value, TypeIdx),
+
+    Jump(BlockIdx),
+    Branch(Value, BlockIdx, BlockIdx),
+    Phi(Vec<(Value, BlockIdx)>),
+
+    Equals(Value, Value),
+    Greater(Value, Value),
+    Less(Value, Value),
+    Div(Value, Value),
+    Mul(Value, Value),
+    Add(Value, Value),
+    Sub(Value, Value),
+
+    PushHandler(Value), // handler -> bound handler
+    Call(
+        FunctionDef,
+        // generics
+        Vec<Value>,
+        // params
+        Vec<Value>,
+        // effect params
+        Vec<(Value, Option<BlockIdx>)>,
+    ),
+    PopHandler,
+
+    Yeet(Value),
+    Return(Value),
+    Unreachable,
+
+    Reference(Value),
+    Load(Value),
+    Store(Value, Value),
+
+    Member(Value, u32),
+    ElementPtr(Value, Value),
+    AdjacentPtr(Value, Value),
+
+    Trap,
+    Trace(Value),
+    Syscall(Value, Vec<Value>),
+}
 
 #[derive(Debug, Clone)]
 pub struct Param {
-    pub name_def: Option<Range>,
+    pub name_def: Range,
+    pub name: String,
     pub type_def: Range,
     pub ty: TypeIdx,
+    pub mutable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -34,7 +121,8 @@ pub struct FunSign {
     pub name: String,
     pub generics: Generics,
 
-    pub params: Vec<Param>,
+    pub params: VecMap<ParamIdx, Param>,
+    pub effect_params: Vec<Param>,
     pub return_type: ReturnType,
 }
 
@@ -101,7 +189,7 @@ pub struct Handler {
     pub assoc_types: Vec<(AssocIdx, TypeIdx)>,
 
     pub captures: Vec<Capture>,
-    pub funs: VecMap<EffFunIdx, FunSign>, // TODO: FunDecl
+    pub funs: VecMap<EffFunIdx, (FunSign, FunImpl)>,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -129,6 +217,7 @@ impl<T> GenericVal<T> {
 pub enum TypeConstraints {
     None,
     Handler(GenericVal<EffectIdent>, TypeIdx), // effect, fail
+    BoundHandler(GenericVal<EffectIdent>),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -141,7 +230,12 @@ pub enum IntSize {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
-    Handler(HandlerIdx),
+    Handler {
+        idx: HandlerIdx,
+        generic_params: GenericParams,
+        bound: bool,
+    },
+
     LazyHandler(TypeIdx, LazyIdx),
     HandlerSelf,
 
@@ -164,6 +258,7 @@ pub enum Type {
     Integer(bool, IntSize),
 
     Str,
+    Char,
     Bool,
     None,
     Never,
@@ -174,11 +269,12 @@ pub enum Type {
 pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
     pub fun_sign: VecMap<FunIdx, FunSign>,
+    pub fun_impl: VecMap<FunIdx, FunImpl>,
     pub entry: Option<FunIdx>,
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,
-    pub lazy_handlers: VecMap<LazyIdx, Option<HandlerIdx>>,
+    pub lazy_handlers: VecMap<LazyIdx, Option<Either<HandlerIdx, LazyIdx>>>,
 
     pub generic_names: VecMap<GenericIdx, String>,
     pub assoc_names: VecMap<AssocIdx, String>,
@@ -224,6 +320,29 @@ impl TypeConstraints {
                 }
                 Ok(())
             }
+            TypeConstraints::BoundHandler(ref effect) => {
+                write!(f, " / bound ")?;
+                match *effect {
+                    GenericVal::Literal(ref effect) => {
+                        write!(f, "{}", ir.effects[effect.effect].name)?;
+
+                        if !effect.generic_params.is_empty() {
+                            write!(f, "<")?;
+                            let mut iter = effect.generic_params.iter().copied();
+
+                            let first = iter.next().unwrap();
+                            first.1.display(ir, generic_params, f)?;
+                            for next in iter {
+                                write!(f, ", ")?;
+                                next.1.display(ir, generic_params, f)?;
+                            }
+                            write!(f, ">")?;
+                        }
+                    }
+                    GenericVal::Generic(idx) => write!(f, "`{}", usize::from(idx))?,
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -241,8 +360,8 @@ pub fn get_value_mut<'a, K: PartialEq, V>(vec: &'a mut Vec<(K, V)>, key: &K) -> 
 }
 
 impl IntSize {
-    fn display(self, ir: &SemIR, signed: bool, f: &mut impl fmt::Write) -> fmt::Result {
-        match self {
+    fn display(&self, signed: bool, f: &mut impl fmt::Write) -> fmt::Result {
+        match *self {
             IntSize::Reg => match signed {
                 true => write!(f, "int"),
                 false => write!(f, "uint"),
@@ -263,6 +382,35 @@ impl IntSize {
     }
 }
 
+impl LazyIdx {
+    fn display(
+        &self,
+        typeof_ty: TypeIdx,
+        ir: &SemIR,
+        generic_params: &GenericParams,
+        f: &mut impl fmt::Write,
+    ) -> fmt::Result {
+        match ir.lazy_handlers[*self] {
+            Some(idx) => match idx {
+                Either::Left(idx) => {
+                    write!(f, "{}", ir.handlers[idx].debug_name)
+                }
+                Either::Right(idx) => idx.display(typeof_ty, ir, generic_params, f),
+            },
+            None => {
+                write!(f, "LAZY#{}", self.0)?;
+                match ir.types[typeof_ty] {
+                    Type::DataType(ref costraints) => costraints.display(ir, generic_params, f),
+                    _ => {
+                        write!(f, " ")?;
+                        typeof_ty.display(ir, generic_params, f)
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl TypeIdx {
     fn display(
         &self,
@@ -272,7 +420,10 @@ impl TypeIdx {
     ) -> fmt::Result {
         match ir.types[*self] {
             Type::HandlerSelf => write!(f, "self"),
-            Type::Handler(idx) => write!(f, "{}", ir.handlers[idx].debug_name),
+            Type::Handler { idx, .. } => {
+                // TODO: expand
+                write!(f, "{}", ir.handlers[idx].debug_name)
+            }
             Type::DataType(ref constraints) => {
                 write!(f, "type")?;
                 constraints.display(ir, generic_params, f)
@@ -325,31 +476,14 @@ impl TypeIdx {
                 write!(f, "[]")?;
                 inner.display(ir, generic_params, f)
             }
-            Type::Integer(signed, size) => size.display(ir, signed, f),
+            Type::Integer(signed, size) => size.display(signed, f),
             Type::Str => write!(f, "str"),
+            Type::Char => write!(f, "char"),
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),
             Type::Never => write!(f, "!"),
             Type::Unknown => write!(f, "UNKNOWN"),
-            Type::LazyHandler(typeof_ty, idx) => match ir.lazy_handlers[idx] {
-                Some(idx) => {
-                    write!(f, "{}", ir.handlers[idx].debug_name)?;
-                    Ok(())
-                }
-                None => {
-                    write!(f, "LAZY#{}", idx.0)?;
-                    match ir.types[typeof_ty] {
-                        Type::DataType(ref costraints) => {
-                            costraints.display(ir, generic_params, f)?;
-                        }
-                        _ => {
-                            write!(f, " ")?;
-                            typeof_ty.display(ir, generic_params, f)?;
-                        }
-                    }
-                    Ok(())
-                }
-            },
+            Type::LazyHandler(typeof_ty, idx) => idx.display(typeof_ty, ir, generic_params, f),
         }
     }
 }
@@ -401,7 +535,7 @@ impl FunSign {
         display_generics(&self.generics, ir, no_params, f)?;
         write!(f, "(")?;
         if !self.params.is_empty() {
-            let mut iter = self.params.iter().map(|param| param.ty);
+            let mut iter = self.params.values().map(|param| param.ty);
 
             let first = iter.next().unwrap();
             first.display(ir, no_params, f)?;
@@ -414,6 +548,176 @@ impl FunSign {
         if !matches!(ir.types[self.return_type.ty], Type::None) {
             write!(f, " ")?;
             self.return_type.ty.display(ir, no_params, f)?;
+        }
+        if !self.effect_params.is_empty() {
+            write!(f, " / ")?;
+            let mut iter = self.effect_params.iter().map(|param| param.ty);
+
+            let first = iter.next().unwrap();
+            first.display(ir, no_params, f)?;
+            for next in iter {
+                write!(f, " ")?;
+                next.display(ir, no_params, f)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Value {
+    fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+        match *self {
+            Value::Reg(block, instr) => write!(f, "%{}.{}", block.0, instr.0),
+            Value::Reference(block, instr) => write!(f, "%{}.{}^", block.0, instr.0),
+            Value::ConstantInt(signed, n) => write!(f, "{}{}", if signed { "-" } else { "" }, n),
+            Value::ConstantString(ref str) => write!(f, "{}", str),
+            Value::ConstantBool(b) => write!(f, "{}", b),
+            Value::ConstantType(ty) => ty.display(ir, &Vec::new(), f),
+            Value::ConstantNone => write!(f, "{{}}"),
+            Value::ConstantUninit => write!(f, "---"),
+            Value::ConstantZero => write!(f, "0"),
+            Value::ConstantUnknown => write!(f, "ERR"),
+            Value::ConstantAggregate(ref vec) => {
+                write!(f, "[")?;
+                for val in vec {
+                    write!(f, " ")?;
+                    val.display(ir, f)?;
+                    write!(f, ",")?;
+                }
+                write!(f, "]")?;
+                Ok(())
+            }
+            Value::Param(param) => write!(f, "%p{}", param.0),
+            Value::HandlerParam(param) => write!(f, "%h{}", param),
+        }
+    }
+}
+
+impl FunImpl {
+    fn display(&self, padding: &str, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+        for (idx, block) in self.blocks.iter(BlockIdx) {
+            writeln!(f, "{}B{}", padding, idx.0)?;
+            for (i, instr) in block.instructions.iter(InstrIdx) {
+                write!(f, "{}  ", padding)?;
+                match instr {
+                    Instruction::Cast(v, t) => {
+                        write!(f, "cast ")?;
+                        v.display(ir, f)?;
+                        write!(f, " as ")?;
+                        t.display(ir, &Vec::new(), f)?;
+                    }
+                    Instruction::Jump(block) => {
+                        write!(f, "jump B{}", block.0)?;
+                    }
+                    Instruction::Branch(cond, yes, no) => {
+                        write!(f, "branch ")?;
+                        cond.display(ir, f)?;
+                        write!(f, " B{} else B{}", yes.0, no.0)?;
+                    }
+                    Instruction::Phi(vec) => {
+                        write!(f, "phi",)?;
+                        for (val, block) in vec {
+                            write!(f, " B{}: ", block.0)?;
+                            val.display(ir, f)?;
+                            write!(f, ",")?;
+                        }
+                    }
+                    Instruction::Equals(a, b) => {
+                        write!(f, "== ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Greater(a, b) => {
+                        write!(f, "> ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Less(a, b) => {
+                        write!(f, "< ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Div(a, b) => {
+                        write!(f, "/ ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Mul(a, b) => {
+                        write!(f, "* ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Add(a, b) => {
+                        write!(f, "+ ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Sub(a, b) => {
+                        write!(f, "- ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Trap => {
+                        write!(f, "trap")?;
+                    }
+                    Instruction::Yeet(v) => {
+                        write!(f, "fail ")?;
+                        v.display(ir, f)?;
+                    }
+                    Instruction::Return(v) => {
+                        write!(f, "return ")?;
+                        v.display(ir, f)?;
+                    }
+                    Instruction::Unreachable => {
+                        write!(f, "unreachable")?;
+                    }
+                    Instruction::Reference(v) => {
+                        write!(f, "alloca ")?;
+                        v.display(ir, f)?;
+                    }
+                    Instruction::Load(v) => {
+                        write!(f, "load ")?;
+                        v.display(ir, f)?;
+                    }
+                    Instruction::Store(a, b) => {
+                        write!(f, "store ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::Member(v, n) => {
+                        write!(f, "member ")?;
+                        v.display(ir, f)?;
+                        write!(f, " {}", n)?;
+                    }
+                    Instruction::ElementPtr(a, b) => {
+                        write!(f, "elemptr ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+                    Instruction::AdjacentPtr(a, b) => {
+                        write!(f, "adjptr ")?;
+                        a.display(ir, f)?;
+                        write!(f, " ")?;
+                        b.display(ir, f)?;
+                    }
+
+                    Instruction::PushHandler(_) => todo!(),
+                    Instruction::Call(_, _, _, _) => todo!(),
+                    Instruction::PopHandler => todo!(),
+                    Instruction::Trace(_) => todo!(),
+                    Instruction::Syscall(_, _) => todo!(),
+                }
+                writeln!(f)?;
+            }
         }
         Ok(())
     }
@@ -512,12 +816,11 @@ impl Handler {
         // funs
         for fun in self.funs.values() {
             // fun signature
-            fun.display("  ", ir, f)?;
+            fun.0.display("  ", ir, f)?;
+            writeln!(f)?;
 
             // fun impl
-            // TODO
-
-            writeln!(f)?;
+            fun.1.display("  ", ir, f)?;
         }
         Ok(())
     }
@@ -538,14 +841,13 @@ impl fmt::Display for SemIR {
         writeln!(f)?;
 
         // functions
-        for fun in self.fun_sign.values() {
+        for (fun, imp) in self.fun_sign.values().zip(self.fun_impl.values()) {
             // fun signature
             fun.display("", self, f)?;
+            writeln!(f)?;
 
             // fun impl
-            // TODO
-
-            writeln!(f)?;
+            imp.display("", self, f)?;
         }
 
         Ok(())

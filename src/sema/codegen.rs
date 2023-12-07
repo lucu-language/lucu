@@ -1,19 +1,25 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self},
 };
 
+use either::Either;
+
 use crate::{
-    ast::{self, EffFunIdx, EffIdx, Expression, Ident, PackageIdx, AST},
+    ast::{
+        self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp, AST,
+    },
     error::{Error, Errors, Range},
+    sema::Instruction,
     vecmap::{VecMap, VecSet},
     Target,
 };
 
 use super::{
-    get_param, get_value, get_value_mut, Assoc, AssocDef, AssocIdx, Effect, EffectIdent, FunIdx,
-    FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx,
-    IntSize, LazyIdx, Param, ReturnType, SemIR, Type, TypeConstraints, TypeIdx,
+    get_param, get_value, get_value_mut, Assoc, AssocDef, AssocIdx, Block, BlockIdx, Effect,
+    EffectIdent, FunIdx, FunImpl, FunSign, Generic, GenericIdx, GenericParams, GenericVal,
+    Generics, Handler, HandlerIdx, InstrIdx, IntSize, LazyIdx, Param, ReturnType, SemIR, Type,
+    TypeConstraints, TypeIdx, Value,
 };
 
 struct SemCtx<'a> {
@@ -43,12 +49,20 @@ struct ScopeStack {
     package: PackageIdx,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
+struct Variable {
+    value: Value,
+    ty: TypeIdx,
+    mutable: bool,
+}
+
+#[derive(Default)]
 struct Scope {
     funs: HashMap<String, FunIdent>,
     effects: HashMap<String, GenericVal<EffIdx>>,
     types: HashMap<String, TypeIdx>,
     generics: HashMap<String, Generic>,
+    values: HashMap<String, Variable>,
 }
 
 impl ScopeStack {
@@ -177,6 +191,11 @@ const TYPE_DATATYPE: TypeIdx = TypeIdx(3);
 const TYPE_EFFECT: TypeIdx = TypeIdx(4);
 const TYPE_SELF: TypeIdx = TypeIdx(5);
 const TYPE_USIZE: TypeIdx = TypeIdx(6);
+const TYPE_BOOL: TypeIdx = TypeIdx(7);
+const TYPE_INT: TypeIdx = TypeIdx(8);
+const TYPE_STR: TypeIdx = TypeIdx(9);
+const TYPE_CHAR: TypeIdx = TypeIdx(10);
+const TYPE_U8: TypeIdx = TypeIdx(11);
 
 struct FmtType<'a>(&'a SemIR, TypeIdx);
 
@@ -190,6 +209,10 @@ impl fmt::Display for FmtType<'_> {
 }
 
 impl SemCtx<'_> {
+    fn lazy_handler(&mut self, _: &mut Generics, ty: TypeIdx, _: ast::TypeIdx) -> TypeIdx {
+        let idx = self.ir.lazy_handlers.push(LazyIdx, None);
+        self.insert_type(Type::LazyHandler(ty, idx))
+    }
     fn no_handler(&mut self, _: &mut Generics, _: TypeIdx, ty: ast::TypeIdx) -> TypeIdx {
         self.errors
             .push(self.ast.types[ty].with(Error::NotEnoughInfo));
@@ -279,6 +302,45 @@ impl SemCtx<'_> {
                     );
                     self.insert_type(Type::DataType(TypeConstraints::Handler(effect, fail)))
                 }
+                TypeConstraints::BoundHandler(ref effect) => {
+                    let effect = match *effect {
+                        GenericVal::Literal(ref ident) => {
+                            let effect = ident.effect;
+                            let params = ident.generic_params.clone();
+                            let params =
+                                GenericParams::from_iter(params.into_iter().map(|(idx, ty)| {
+                                    (
+                                        idx,
+                                        self.translate_generics(
+                                            ty,
+                                            generic_params,
+                                            parent_generics,
+                                            handler_self,
+                                            assoc_types,
+                                        ),
+                                    )
+                                }));
+                            GenericVal::Literal(EffectIdent {
+                                effect,
+                                generic_params: params,
+                            })
+                        }
+                        GenericVal::Generic(idx) => {
+                            let ty = translate(
+                                self,
+                                Generic {
+                                    idx,
+                                    typeof_ty: TYPE_EFFECT,
+                                },
+                            );
+                            match self.ir.types[ty] {
+                                Type::Generic(generic) => GenericVal::Generic(generic.idx),
+                                _ => todo!(),
+                            }
+                        }
+                    };
+                    self.insert_type(Type::DataType(TypeConstraints::BoundHandler(effect)))
+                }
             },
             Type::AssocType {
                 assoc,
@@ -334,6 +396,31 @@ impl SemCtx<'_> {
                         generic_params: params,
                     })
                 }
+            }
+            Type::Handler {
+                idx,
+                generic_params: ref params,
+                bound,
+            } => {
+                let params = params.clone();
+                let params = GenericParams::from_iter(params.into_iter().map(|(idx, ty)| {
+                    (
+                        idx,
+                        self.translate_generics(
+                            ty,
+                            generic_params,
+                            parent_generics,
+                            handler_self,
+                            assoc_types,
+                        ),
+                    )
+                }));
+
+                self.insert_type(Type::Handler {
+                    idx,
+                    generic_params: params,
+                    bound,
+                })
             }
             Type::Generic(generic) => translate(self, generic),
             Type::Pointer(inner) => {
@@ -404,10 +491,10 @@ impl SemCtx<'_> {
             }
             Type::HandlerSelf => handler_self,
 
-            Type::Handler(_)
-            | Type::Effect
+            Type::Effect
             | Type::Integer(_, _)
             | Type::Str
+            | Type::Char
             | Type::Bool
             | Type::None
             | Type::Unknown
@@ -629,7 +716,8 @@ impl SemCtx<'_> {
         scope.child(|scope| {
             let name = &self.ast.idents[name];
             let mut generics = Generics::new();
-            let mut params = Vec::new();
+            let mut params = VecMap::new();
+            let mut handler_params = Vec::new();
 
             // base params
             for param in fun.inputs.values() {
@@ -646,16 +734,20 @@ impl SemCtx<'_> {
                         Some(generic) => self.insert_type(Type::Generic(generic)),
                         None => TYPE_UNKNOWN,
                     };
-                    params.push(Param {
-                        name_def: Some(self.ast.idents[param.name].empty()),
+                    params.push_value(Param {
+                        name_def: self.ast.idents[param.name].empty(),
+                        name: self.ast.idents[param.name].0.clone(),
                         type_def: self.ast.types[param.ty].empty(),
                         ty,
+                        mutable: param.mutable,
                     });
                 } else {
-                    params.push(Param {
-                        name_def: Some(self.ast.idents[param.name].empty()),
+                    params.push_value(Param {
+                        name_def: self.ast.idents[param.name].empty(),
+                        name: self.ast.idents[param.name].0.clone(),
                         type_def: self.ast.types[param.ty].empty(),
                         ty,
+                        mutable: param.mutable,
                     });
                 }
             }
@@ -681,10 +773,10 @@ impl SemCtx<'_> {
                 match self.analyze_effect(scope, &id.ident) {
                     Some(effect) => {
                         let handler_ty =
-                            self.insert_type(Type::DataType(TypeConstraints::Handler(
+                            self.insert_type(Type::DataType(TypeConstraints::BoundHandler(
                                 effect.map(|&effect| EffectIdent {
                                     effect,
-                                    // TODO: check if length match
+                                    // TODO: error on length mismatch
                                     generic_params: self.ir.effects[effect]
                                         .generics
                                         .iter()
@@ -692,7 +784,6 @@ impl SemCtx<'_> {
                                         .zip(effect_params)
                                         .collect(),
                                 }),
-                                TYPE_NEVER,
                             )));
 
                         let len = self.ir.generic_names.len() + self.ir.assoc_names.len();
@@ -705,10 +796,12 @@ impl SemCtx<'_> {
                         generics.push(value);
                         let ty = self.insert_type(Type::Generic(value));
 
-                        params.push(Param {
-                            name_def: Some(self.ast.idents[id.ident.ident].empty()),
+                        handler_params.push(Param {
+                            name_def: self.ast.idents[id.ident.ident].empty(),
+                            name: self.ast.idents[id.ident.ident].0.clone(),
                             type_def: self.ast.idents[id.ident.ident].empty(),
                             ty,
+                            mutable: false,
                         });
                     }
                     None => {}
@@ -717,10 +810,12 @@ impl SemCtx<'_> {
 
             // parent handler
             if let Some(effect) = effect {
-                params.push(Param {
-                    name_def: Some(self.ast.idents[self.ast.effects[effect].name].empty()),
+                handler_params.push(Param {
+                    name_def: self.ast.idents[self.ast.effects[effect].name].empty(),
+                    name: self.ast.idents[self.ast.effects[effect].name].0.clone(),
                     type_def: self.ast.idents[self.ast.effects[effect].name].empty(),
                     ty: TYPE_SELF,
+                    mutable: false,
                 });
             }
 
@@ -775,6 +870,7 @@ impl SemCtx<'_> {
                 name: name.0.clone(),
                 generics,
                 params,
+                effect_params: handler_params,
                 return_type: ReturnType {
                     type_def: fun.output.map(|ty| self.ast.types[ty].empty()),
                     ty: return_type,
@@ -810,7 +906,7 @@ impl SemCtx<'_> {
             return;
         }
 
-        for (a, b) in a.params.iter().zip(params.into_iter()) {
+        for (a, b) in a.params.values().zip(Vec::from(params).into_iter()) {
             let translated = self.translate_generics(
                 b.ty,
                 generic_params,
@@ -871,7 +967,7 @@ impl SemCtx<'_> {
             let effect = self.analyze_effect(scope, &id.ident)?.literal().copied()?;
 
             let generics = generics;
-            // TODO: check if length matches
+            // TODO: error on length mismatch
             let generic_params = self.ir.effects[effect]
                 .generics
                 .iter()
@@ -880,9 +976,10 @@ impl SemCtx<'_> {
                 .collect::<Vec<_>>();
 
             // check functions
-            let mut funs: VecMap<EffFunIdx, FunSign> = std::iter::repeat_with(FunSign::default)
-                .take(self.ast.effects[effect].functions.len())
-                .collect();
+            let mut funs: VecMap<EffFunIdx, (FunSign, FunImpl)> =
+                std::iter::repeat_with(Default::default)
+                    .take(self.ast.effects[effect].functions.len())
+                    .collect();
             let assoc_typeof_types = self.ir.effects[effect]
                 .assocs
                 .iter()
@@ -925,7 +1022,13 @@ impl SemCtx<'_> {
                 );
 
                 // analyze function
-                // TODO
+                let imp = self.generate_function(
+                    Either::Right(&sign),
+                    function.body,
+                    scope,
+                    Some(fail),
+                    None,
+                );
 
                 match matching {
                     Some((idx, _)) => {
@@ -984,7 +1087,7 @@ impl SemCtx<'_> {
                         );
 
                         // set function
-                        funs[idx] = sign;
+                        funs[idx] = (sign, imp);
                     }
                     None => {
                         self.errors.push(name.with(Error::UnknownEffectFun(
@@ -1000,7 +1103,7 @@ impl SemCtx<'_> {
 
             // check if signatures match
             let mut missing = Vec::new();
-            for (idx, sign) in funs.iter(EffFunIdx) {
+            for (idx, (sign, _)) in funs.iter(EffFunIdx) {
                 let name = self.ast.idents[self.ast.effects[effect].functions[idx].name].empty();
 
                 // check if missing
@@ -1104,12 +1207,22 @@ impl SemCtx<'_> {
         })
     }
     fn check_move(&mut self, from: TypeIdx, to: TypeIdx, error_loc: &mut TypeError) {
-        self.matches(from, to, error_loc, &mut |ctx, from, to, _| {
+        self.matches(from, to, error_loc, &mut |ctx, from, to, error_loc| {
             if from == to {
                 return Some(from);
             }
             match (&ctx.ir.types[from], &ctx.ir.types[to]) {
                 (&Type::DataType(_), &Type::DataType(TypeConstraints::None)) => Some(TYPE_DATATYPE),
+
+                (
+                    Type::DataType(TypeConstraints::BoundHandler(_)),
+                    Type::DataType(TypeConstraints::Handler(eff_b, _)),
+                ) => {
+                    let to = ctx
+                        .insert_type(Type::DataType(TypeConstraints::BoundHandler(eff_b.clone())));
+                    ctx.check_move(from, to, error_loc);
+                    Some(from)
+                }
 
                 (_, Type::Unknown) => Some(from),
                 (Type::Never, _) => Some(to),
@@ -1120,12 +1233,22 @@ impl SemCtx<'_> {
         });
     }
     fn check_move_rev(&mut self, to: TypeIdx, from: TypeIdx, error_loc: &mut TypeError) {
-        self.matches(to, from, error_loc, &mut |ctx, to, from, _| {
+        self.matches(to, from, error_loc, &mut |ctx, to, from, error_loc| {
             if to == from {
-                return Some(to);
+                return Some(from);
             }
             match (&ctx.ir.types[to], &ctx.ir.types[from]) {
                 (&Type::DataType(TypeConstraints::None), &Type::DataType(_)) => Some(TYPE_DATATYPE),
+
+                (
+                    Type::DataType(TypeConstraints::Handler(eff_a, _)),
+                    Type::DataType(TypeConstraints::BoundHandler(_)),
+                ) => {
+                    let to = ctx
+                        .insert_type(Type::DataType(TypeConstraints::BoundHandler(eff_a.clone())));
+                    ctx.check_move_rev(to, from, error_loc);
+                    Some(from)
+                }
 
                 (_, Type::Never) => Some(to),
                 (_, Type::Unknown) => Some(to),
@@ -1137,15 +1260,24 @@ impl SemCtx<'_> {
     }
     fn typeof_ty(&mut self, ty: TypeIdx) -> TypeIdx {
         match self.ir.types[ty] {
-            Type::Handler(idx) => {
+            Type::Handler { idx, bound, .. } => {
                 let handler = &self.ir.handlers[idx];
-                self.insert_type(Type::DataType(TypeConstraints::Handler(
-                    GenericVal::Literal(EffectIdent {
-                        effect: handler.effect,
-                        generic_params: handler.generic_params.clone(),
-                    }),
-                    handler.fail,
-                )))
+                if bound {
+                    self.insert_type(Type::DataType(TypeConstraints::BoundHandler(
+                        GenericVal::Literal(EffectIdent {
+                            effect: handler.effect,
+                            generic_params: handler.generic_params.clone(),
+                        }),
+                    )))
+                } else {
+                    self.insert_type(Type::DataType(TypeConstraints::Handler(
+                        GenericVal::Literal(EffectIdent {
+                            effect: handler.effect,
+                            generic_params: handler.generic_params.clone(),
+                        }),
+                        handler.fail,
+                    )))
+                }
             }
 
             Type::Generic(generic) => generic.typeof_ty,
@@ -1159,6 +1291,7 @@ impl SemCtx<'_> {
             Type::Slice(_) => TYPE_DATATYPE,
             Type::Integer(_, _) => TYPE_DATATYPE,
             Type::Str => TYPE_DATATYPE,
+            Type::Char => TYPE_DATATYPE,
             Type::Bool => TYPE_DATATYPE,
             Type::None => TYPE_DATATYPE,
 
@@ -1233,6 +1366,53 @@ impl SemCtx<'_> {
                             }
                         }
                     }
+                    (
+                        &Type::DataType(TypeConstraints::BoundHandler(ref eff_a)),
+                        &Type::DataType(TypeConstraints::BoundHandler(ref eff_b)),
+                    ) => {
+                        if let (GenericVal::Literal(a), GenericVal::Literal(b)) = (eff_a, eff_b) {
+                            if a.effect == b.effect {
+                                let effect = a.effect;
+                                let generic_params = a
+                                    .generic_params
+                                    .iter()
+                                    .map(|&(_, b)| b)
+                                    .zip(b.generic_params.iter().map(|&(_, b)| b))
+                                    .collect::<Vec<_>>();
+
+                                let generic_params = generic_params
+                                    .into_iter()
+                                    .map(|(a, b)| self.matches(a, b, error_loc, compare))
+                                    .collect::<Vec<_>>();
+                                let generic_params = self.ir.effects[effect]
+                                    .generics
+                                    .iter()
+                                    .map(|generic| generic.idx)
+                                    .zip(generic_params)
+                                    .collect();
+
+                                self.insert_type(Type::DataType(TypeConstraints::BoundHandler(
+                                    GenericVal::Literal(EffectIdent {
+                                        effect,
+                                        generic_params,
+                                    }),
+                                )))
+                            } else {
+                                TypeError::commit(error_loc, self);
+                                TYPE_UNKNOWN
+                            }
+                        } else {
+                            if eff_a == eff_b {
+                                // TODO: compare effect
+                                let eff = eff_a.clone();
+
+                                self.insert_type(Type::DataType(TypeConstraints::BoundHandler(eff)))
+                            } else {
+                                TypeError::commit(error_loc, self);
+                                TYPE_UNKNOWN
+                            }
+                        }
+                    }
 
                     (
                         &Type::AssocType {
@@ -1286,6 +1466,41 @@ impl SemCtx<'_> {
                         })
                     }
 
+                    (
+                        &Type::Handler {
+                            idx: idx_a,
+                            generic_params: ref generic_a,
+                            bound: bound_a,
+                        },
+                        &Type::Handler {
+                            idx: idx_b,
+                            generic_params: ref generic_b,
+                            bound: bound_b,
+                        },
+                    ) if idx_a == idx_b && bound_a == bound_b => {
+                        let generic_params = generic_a
+                            .iter()
+                            .map(|&(_, b)| b)
+                            .zip(generic_b.iter().map(|&(_, b)| b))
+                            .collect::<Vec<_>>();
+                        let generic_params = generic_params
+                            .into_iter()
+                            .map(|(a, b)| self.matches(a, b, error_loc, compare))
+                            .collect::<Vec<_>>();
+                        let generic_params = self.ir.effects[self.ir.handlers[idx_a].effect]
+                            .generics
+                            .iter()
+                            .map(|generic| generic.idx)
+                            .zip(generic_params)
+                            .collect();
+
+                        self.insert_type(Type::Handler {
+                            idx: idx_a,
+                            generic_params,
+                            bound: bound_a,
+                        })
+                    }
+
                     (&Type::Pointer(a), &Type::Pointer(b)) => {
                         let inner = self.matches(a, b, error_loc, compare);
                         self.insert_type(Type::Pointer(inner))
@@ -1319,7 +1534,6 @@ impl SemCtx<'_> {
                     | (Type::None, Type::None)
                     | (Type::Never, Type::Never) => a,
 
-                    (&Type::Handler(idx), &Type::Handler(idx2)) if idx == idx2 => a,
                     (&Type::LazyHandler(_, idx), &Type::LazyHandler(_, idx2)) if idx == idx2 => a,
 
                     _ => {
@@ -1330,7 +1544,813 @@ impl SemCtx<'_> {
             })
         })
     }
+    fn generate_function(
+        &mut self,
+        sign: Either<FunIdx, &FunSign>,
+        body: ExprIdx,
+        scope: &mut ScopeStack,
+        yeetable: Option<TypeIdx>,
+        yeetable_def: Option<Range>,
+    ) -> FunImpl {
+        scope.child(|scope| {
+            let ir_sign = match sign {
+                Either::Left(idx) => &self.ir.fun_sign[idx],
+                Either::Right(sign) => sign,
+            };
+            let handler_stack = ir_sign
+                .effect_params
+                .iter()
+                .map(|param| param.ty)
+                .collect::<Vec<_>>();
+
+            for (idx, param) in ir_sign.params.iter(ParamIdx) {
+                scope.top().values.insert(
+                    param.name.clone(),
+                    Variable {
+                        value: Value::Param(idx),
+                        ty: param.ty,
+                        mutable: param.mutable,
+                    },
+                );
+            }
+            for generic in ir_sign.generics.iter() {
+                scope
+                    .top()
+                    .generics
+                    .insert(self.ir.generic_names[generic.idx].clone(), generic.clone());
+            }
+
+            let mut blocks = VecMap::new();
+            let block = blocks.push(BlockIdx, Block::default());
+            let mut fun_ctx = FunCtx {
+                handler_stack,
+                internal_handler_stack: Vec::new(),
+                phis: PhiStack::default(),
+                scope,
+                sign,
+                blocks,
+                block,
+                yeetable,
+                yeetable_def,
+            };
+
+            let out = self.check_expr(
+                &mut fun_ctx,
+                body,
+                ir_sign.return_type.ty,
+                ir_sign.return_type.type_def,
+            );
+
+            match out {
+                Some(val) => fun_ctx.blocks[fun_ctx.block]
+                    .instructions
+                    .push_value(Instruction::Return(val)),
+                None => fun_ctx.blocks[fun_ctx.block]
+                    .instructions
+                    .push_value(Instruction::Unreachable),
+            }
+
+            FunImpl {
+                blocks: fun_ctx.blocks,
+            }
+        })
+    }
+    fn check_expr(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+        expected: TypeIdx,
+        expected_def: Option<Range>,
+    ) -> Option<Value> {
+        let error_loc = &mut TypeError {
+            loc: self.ast.exprs[expr].empty(),
+            def: expected_def,
+            layers: Vec::new(),
+        };
+
+        use Expression as E;
+        match (&self.ast.exprs[expr].0, &self.ir.types[expected]) {
+            (&E::Body(ref body), _) => ctx.child(|ctx| {
+                for expr in body.main.iter().copied() {
+                    self.synth_expr(ctx, expr)?;
+                }
+                body.last
+                    .map(|expr| self.check_expr(ctx, expr, expected, expected_def))
+                    .unwrap_or_else(|| {
+                        self.check_move(TYPE_NONE, expected, error_loc);
+                        Some(Value::ConstantNone)
+                    })
+            }),
+            (&E::IfElse(cond, yes, no), _) => {
+                let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
+                let (yes_block, no_block) = ctx.branch(cond);
+
+                let mut phis = HashMap::new();
+
+                ctx.block = yes_block;
+                let yes_val = ctx.phi(false, &mut phis, |ctx| {
+                    self.check_expr(ctx, yes, expected, expected_def)
+                });
+                let yes_end = ctx.block;
+
+                ctx.block = no_block;
+                let no_val = match no {
+                    Some(no) => ctx.phi(false, &mut phis, |ctx| {
+                        self.check_expr(ctx, no, expected, expected_def)
+                    }),
+                    None => {
+                        self.check_move(TYPE_NONE, expected, error_loc);
+                        Some(Value::ConstantNone)
+                    }
+                };
+                let no_end = ctx.block;
+
+                ctx.complete_phi(&[yes_end, no_end], phis);
+                match (yes_val, no_val) {
+                    (Some(yes_val), Some(no_val)) => {
+                        let instr = ctx.blocks[ctx.block].instructions.push(
+                            InstrIdx,
+                            Instruction::Phi(vec![(yes_val, yes_end), (no_val, no_end)]),
+                        );
+                        Some(Value::Reg(ctx.block, instr))
+                    }
+                    (Some(v), None) => Some(v),
+                    (None, Some(v)) => Some(v),
+                    (None, None) => None,
+                }
+            }
+            (&E::Array(ref exprs), &Type::Slice(elem)) => {
+                let elems = exprs
+                    .iter()
+                    .copied()
+                    .map(|expr| self.check_expr(ctx, expr, elem, expected_def))
+                    .collect::<Option<Vec<_>>>()?;
+                let len = elems.len() as u64;
+
+                let arr = Value::ConstantAggregate(elems);
+                let ptr = ctx.push(Instruction::Reference(arr));
+                let slice = Value::ConstantAggregate(vec![ptr, Value::ConstantInt(false, len)]);
+                Some(slice)
+            }
+            (&E::Array(ref exprs), &Type::ConstArray(GenericVal::Literal(n), elem))
+                if n == exprs.len() as u64 =>
+            {
+                let elems = exprs
+                    .iter()
+                    .copied()
+                    .map(|expr| self.check_expr(ctx, expr, elem, expected_def))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Value::ConstantAggregate(elems))
+            }
+            (&E::Uninit, _) => {
+                // TODO: test if allowed
+                Some(Value::ConstantUninit)
+            }
+            (&E::Int(0), _) => {
+                // TODO: test if allowed
+                Some(Value::ConstantZero)
+            }
+            (&E::Int(n), &Type::Integer(_signed, _size)) => {
+                // TODO: test if fits
+                Some(Value::ConstantInt(false, n))
+            }
+            (&E::Character(ref str), &Type::Integer(_signed, _size)) => {
+                // TODO: test if fits, test if single char
+                let c = str.chars().next().unwrap();
+                let c = u64::from(c);
+                Some(Value::ConstantInt(false, c))
+            }
+            (&E::String(ref str), &Type::Slice(elem)) if elem == TYPE_U8 => {
+                Some(Value::ConstantString(str.clone()))
+            }
+            (&E::UnOp(inner, UnOp::Cast), _) => {
+                // TODO: test if allowed
+                let (value, ty) = self.synth_expr(ctx, inner)?;
+                let instr = ctx.blocks[ctx.block]
+                    .instructions
+                    .push(InstrIdx, Instruction::Cast(value, expected));
+                Some(Value::Reg(ctx.block, instr))
+            }
+            _ => {
+                let (found, found_ty) = self.synth_expr(ctx, expr)?;
+                self.check_move(found_ty, expected, error_loc);
+                Some(found)
+            }
+        }
+    }
+    fn assignable_expr(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+    ) -> Option<Either<(String, Variable), (Value, TypeIdx)>> {
+        // TODO: return Value::Reference on Right
+
+        use Expression as E;
+        match self.ast.exprs[expr].0 {
+            E::BinOp(left, BinOp::Index, right) => {
+                let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
+                match self.assignable_expr(ctx, left)? {
+                    Either::Left((name, var)) => {
+                        let (ptr, elem_ty) = match self.ir.types[var.ty] {
+                            Type::ConstArray(_, inner) => {
+                                let instr = ctx.blocks[ctx.block]
+                                    .instructions
+                                    .push(InstrIdx, Instruction::Reference(var.value));
+                                ctx.modify(
+                                    name,
+                                    Variable {
+                                        value: Value::Reference(ctx.block, instr),
+                                        ..var
+                                    },
+                                );
+                                (Value::Reg(ctx.block, instr), inner)
+                            }
+                            Type::Slice(inner) => {
+                                let ptr = ctx.push(Instruction::Member(var.value, 0));
+                                (ptr, inner)
+                            }
+                            Type::Unknown => {
+                                return Some(Either::Right((Value::ConstantUnknown, TYPE_UNKNOWN)));
+                            }
+                            _ => todo!("give error"),
+                        };
+
+                        let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
+                        Some(Either::Right((elem, elem_ty)))
+                    }
+                    Either::Right((value, ty)) => {
+                        let inner = match self.ir.types[ty] {
+                            Type::Pointer(inner) => inner,
+                            Type::Unknown => {
+                                return Some(Either::Right((Value::ConstantUnknown, TYPE_UNKNOWN)));
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        let (ptr, elem_ty) = match self.ir.types[inner] {
+                            Type::ConstArray(_, inner) => (value, inner),
+                            Type::Slice(inner) => {
+                                let slice = ctx.push(Instruction::Load(value));
+                                let ptr = ctx.push(Instruction::Member(slice, 0));
+                                (ptr, inner)
+                            }
+                            Type::Unknown => {
+                                return Some(Either::Right((Value::ConstantUnknown, TYPE_UNKNOWN)));
+                            }
+                            _ => todo!("give error"),
+                        };
+
+                        let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
+                        Some(Either::Right((elem, elem_ty)))
+                    }
+                }
+            }
+            E::Ident(id) => {
+                let name = &self.ast.idents[id].0;
+                match ctx.get_value(self, name) {
+                    Some(var) => {
+                        if let Value::Reference(block, instr) = var.value {
+                            // variable is already a reference
+                            let ptr_ty = self.insert_type(Type::Pointer(var.ty));
+                            Some(Either::Right((Value::Reg(block, instr), ptr_ty)))
+                        } else {
+                            // return variable
+                            Some(Either::Left((name.clone(), var)))
+                        }
+                    }
+                    None => {
+                        self.errors
+                            .push(self.ast.idents[id].with(Error::UnknownValue));
+                        Some(Either::Right((Value::ConstantUnknown, TYPE_UNKNOWN)))
+                    }
+                }
+            }
+            E::Error => Some(Either::Right((Value::ConstantUnknown, TYPE_UNKNOWN))),
+            _ => todo!("give error"),
+        }
+    }
+    fn synth_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
+        use Expression as E;
+        match self.ast.exprs[expr].0 {
+            E::Body(ref body) => ctx.child(|ctx| {
+                for expr in body.main.iter().copied() {
+                    self.synth_expr(ctx, expr)?;
+                }
+                body.last
+                    .map(|expr| self.synth_expr(ctx, expr))
+                    .unwrap_or(Some((Value::ConstantNone, TYPE_NONE)))
+            }),
+            E::Loop(inner) => {
+                ctx.phi(true, &mut HashMap::new(), |ctx| self.synth_expr(ctx, inner));
+                None
+            }
+            E::IfElse(cond, yes, no) => {
+                let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
+                let (yes_block, no_block) = ctx.branch(cond);
+
+                let mut phis = HashMap::new();
+
+                ctx.block = yes_block;
+                let yes_val = ctx.phi(false, &mut phis, |ctx| self.synth_expr(ctx, yes));
+                let yes_end = ctx.block;
+
+                ctx.block = no_block;
+                let no_val = match no {
+                    Some(no) => ctx.phi(false, &mut phis, |ctx| self.synth_expr(ctx, no)),
+                    None => Some((Value::ConstantNone, TYPE_NONE)),
+                };
+                let no_end = ctx.block;
+
+                ctx.complete_phi(&[yes_end, no_end], phis);
+                match (yes_val, no_val) {
+                    (Some(yes_val), Some(no_val)) => {
+                        let common = self.supertype(
+                            yes_val.1,
+                            no_val.1,
+                            &mut TypeError {
+                                loc: self.ast.exprs[no.unwrap_or(yes)].empty(),
+                                def: match no {
+                                    Some(_) => Some(self.ast.exprs[yes].empty()),
+                                    None => None,
+                                },
+                                layers: Vec::new(),
+                            },
+                        );
+                        let instr = ctx.blocks[ctx.block].instructions.push(
+                            InstrIdx,
+                            Instruction::Phi(vec![(yes_val.0, yes_end), (no_val.0, no_end)]),
+                        );
+                        Some((Value::Reg(ctx.block, instr), common))
+                    }
+                    (Some(v), None) => Some(v),
+                    (None, Some(v)) => Some(v),
+                    (None, None) => None,
+                }
+            }
+
+            E::TryWith(_, _) => {
+                ctx.push(Instruction::Trap);
+                Some((Value::ConstantUnknown, TYPE_UNKNOWN))
+            }
+            E::Handler(_) => {
+                ctx.push(Instruction::Trap);
+                Some((Value::ConstantUnknown, TYPE_UNKNOWN))
+            }
+            E::Call(_, _) => {
+                ctx.push(Instruction::Trap);
+                Some((Value::ConstantUnknown, TYPE_UNKNOWN))
+            }
+
+            E::BinOp(left, BinOp::Assign, right) => {
+                match self.assignable_expr(ctx, left)? {
+                    Either::Left((name, var)) => {
+                        let right = self.check_expr(ctx, right, var.ty, None)?;
+                        ctx.modify(
+                            name,
+                            Variable {
+                                value: right,
+                                ..var
+                            },
+                        );
+                    }
+                    Either::Right((value, ty)) => {
+                        let inner = match self.ir.types[ty] {
+                            Type::Pointer(inner) => inner,
+                            Type::Unknown => {
+                                return Some((Value::ConstantNone, TYPE_NONE));
+                            }
+                            _ => unreachable!(),
+                        };
+                        let right = self.check_expr(ctx, right, inner, None)?;
+                        ctx.push(Instruction::Store(value, right));
+                    }
+                }
+                Some((Value::ConstantNone, TYPE_NONE))
+            }
+            E::BinOp(left, BinOp::Index, right) => {
+                let (left, left_ty) = self.synth_expr(ctx, left)?;
+                let (ptr, elem_ty) = match self.ir.types[left_ty] {
+                    Type::Slice(elem) => {
+                        let ptr = ctx.push(Instruction::Member(left, 0));
+                        (ptr, elem)
+                    }
+                    Type::ConstArray(_, elem) => {
+                        let ptr = ctx.push(Instruction::Reference(left));
+                        (ptr, elem)
+                    }
+                    Type::Unknown => {
+                        return Some((Value::ConstantUnknown, TYPE_UNKNOWN));
+                    }
+                    _ => todo!("give error"),
+                };
+                // TODO: allow range
+                let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
+                let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
+                Some((elem, elem_ty))
+            }
+            E::BinOp(left, op, right) => {
+                let (left, left_ty) = self.synth_expr(ctx, left)?;
+                let (right, right_ty) = self.synth_expr(ctx, right)?;
+                // TODO: check if same ints
+
+                let out = match op {
+                    BinOp::Index => unreachable!(),
+                    BinOp::Assign => unreachable!(),
+                    BinOp::Range => unreachable!(),
+                    BinOp::Equals => TYPE_BOOL,
+                    BinOp::Less => TYPE_BOOL,
+                    BinOp::Greater => TYPE_BOOL,
+                    BinOp::Divide => left_ty,
+                    BinOp::Multiply => left_ty,
+                    BinOp::Subtract => left_ty,
+                    BinOp::Add => left_ty,
+                };
+
+                let res = ctx.push(match op {
+                    BinOp::Index => unreachable!(),
+                    BinOp::Assign => unreachable!(),
+                    BinOp::Range => unreachable!(),
+                    BinOp::Equals => Instruction::Equals(left, right),
+                    BinOp::Less => Instruction::Less(left, right),
+                    BinOp::Greater => Instruction::Greater(left, right),
+                    BinOp::Divide => Instruction::Div(left, right),
+                    BinOp::Multiply => Instruction::Mul(left, right),
+                    BinOp::Subtract => Instruction::Sub(left, right),
+                    BinOp::Add => Instruction::Add(left, right),
+                });
+
+                Some((res, out))
+            }
+            E::UnOp(inner, UnOp::PostIncrement) => match self.assignable_expr(ctx, inner)? {
+                Either::Left((name, var)) => {
+                    let incremented = ctx.push(Instruction::Add(
+                        var.value.clone(),
+                        Value::ConstantInt(false, 1),
+                    ));
+                    ctx.modify(
+                        name,
+                        Variable {
+                            value: incremented,
+                            ..var.clone()
+                        },
+                    );
+                    Some((var.value, var.ty))
+                }
+                Either::Right((value, ty)) => {
+                    // TODO: check if integer type
+                    let inner = match self.ir.types[ty] {
+                        Type::Pointer(inner) => inner,
+                        Type::Unknown => {
+                            return Some((Value::ConstantUnknown, TYPE_UNKNOWN));
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let loaded = ctx.push(Instruction::Load(value.clone()));
+                    let incremented = ctx.push(Instruction::Add(
+                        loaded.clone(),
+                        Value::ConstantInt(false, 1),
+                    ));
+                    ctx.push(Instruction::Store(value, incremented));
+
+                    Some((loaded, inner))
+                }
+            },
+            E::UnOp(inner, UnOp::Reference) => match self.assignable_expr(ctx, inner)? {
+                Either::Left((name, var)) => {
+                    let instr = ctx.blocks[ctx.block]
+                        .instructions
+                        .push(InstrIdx, Instruction::Reference(var.value));
+                    ctx.modify(
+                        name,
+                        Variable {
+                            value: Value::Reference(ctx.block, instr),
+                            ..var
+                        },
+                    );
+
+                    let ptr_ty = self.insert_type(Type::Pointer(var.ty));
+                    Some((Value::Reg(ctx.block, instr), ptr_ty))
+                }
+                Either::Right((value, ty)) => Some((value, ty)),
+            },
+            E::UnOp(_, UnOp::Cast) => {
+                self.errors
+                    .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
+                Some((Value::ConstantUninit, TYPE_UNKNOWN))
+            }
+            E::Yeet(inner) => {
+                match ctx.yeetable {
+                    Some(yeet_ty) => {
+                        let value = match inner {
+                            Some(inner) => {
+                                self.check_expr(ctx, inner, yeet_ty, ctx.yeetable_def)?
+                            }
+                            None => {
+                                self.check_move(
+                                    TYPE_NONE,
+                                    yeet_ty,
+                                    &mut TypeError {
+                                        loc: self.ast.exprs[expr].empty(),
+                                        def: ctx.yeetable_def,
+                                        layers: Vec::new(),
+                                    },
+                                );
+                                Value::ConstantNone
+                            }
+                        };
+                        ctx.blocks[ctx.block]
+                            .instructions
+                            .push_value(Instruction::Yeet(value));
+                    }
+                    None => {
+                        // TODO: error
+                    }
+                }
+                None
+            }
+            E::Let(mutable, id, ty, expr) => {
+                let (value, ty) = match ty {
+                    Some(ty) => {
+                        let def = self.ast.types[ty].empty();
+                        let ty =
+                            self.analyze_type(ctx.scope, ty, None, false, &mut Self::lazy_handler);
+                        (self.check_expr(ctx, expr, ty, Some(def))?, ty)
+                    }
+                    None => self.synth_expr(ctx, expr)?,
+                };
+                let name = self.ast.idents[id].0.clone();
+                ctx.define(name, Variable { value, ty, mutable });
+                Some((Value::ConstantNone, TYPE_NONE))
+            }
+            E::Array(ref exprs) => {
+                let mut iter = exprs.iter().copied();
+                match iter.next() {
+                    Some(first) => {
+                        let (val, ty) = self.synth_expr(ctx, first)?;
+                        let elems = std::iter::once(Some(val))
+                            .chain(iter.map(|expr| self.check_expr(ctx, expr, ty, None)))
+                            .collect::<Option<Vec<_>>>()?;
+                        let arr_ty = self.insert_type(Type::ConstArray(
+                            GenericVal::Literal(elems.len() as u64),
+                            ty,
+                        ));
+                        Some((Value::ConstantAggregate(elems), arr_ty))
+                    }
+                    None => {
+                        self.errors
+                            .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
+                        Some((Value::ConstantUninit, TYPE_UNKNOWN))
+                    }
+                }
+            }
+            E::String(ref str) => Some((Value::ConstantString(str.clone()), TYPE_STR)),
+            E::Character(ref str) => {
+                // TODO: test if fits, test if single char (otherwise test if rune)
+                let c = str.chars().next().unwrap();
+                let c = u64::from(c);
+                Some((Value::ConstantInt(false, c), TYPE_CHAR))
+            }
+            E::Ident(id) => {
+                let name = &self.ast.idents[id].0;
+                match ctx.get_value(self, name) {
+                    Some(var) => Some((var.value, var.ty)),
+                    None => {
+                        self.errors
+                            .push(self.ast.idents[id].with(Error::UnknownValue));
+                        Some((Value::ConstantUnknown, TYPE_UNKNOWN))
+                    }
+                }
+            }
+            E::Int(n) => Some((Value::ConstantInt(false, n), TYPE_INT)),
+            E::Uninit => {
+                self.errors
+                    .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
+                Some((Value::ConstantUninit, TYPE_UNKNOWN))
+            }
+            E::Error => Some((Value::ConstantUnknown, TYPE_UNKNOWN)),
+            E::Member(_, _) => todo!(),
+        }
+    }
 }
+
+struct FunCtx<'a> {
+    sign: Either<FunIdx, &'a FunSign>,
+    handler_stack: Vec<TypeIdx>,
+    internal_handler_stack: Vec<(TypeIdx, usize, BlockIdx)>,
+
+    phis: PhiStack,
+    scope: &'a mut ScopeStack,
+
+    yeetable: Option<TypeIdx>,
+    yeetable_def: Option<Range>,
+
+    blocks: VecMap<BlockIdx, Block>,
+    block: BlockIdx,
+}
+
+impl FunCtx<'_> {
+    fn child<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.scope.push();
+        let t = f(self);
+        self.scope.pop();
+        t
+    }
+    fn phi<T>(
+        &mut self,
+        loops: bool,
+        phis: &mut HashMap<String, Vec<(Value, BlockIdx)>>,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.push_phi(loops);
+        self.scope.push();
+        let t = f(self);
+        self.scope.pop();
+        self.commit_phi(phis);
+        self.pop_phi();
+        t
+    }
+    fn push(&mut self, instr: Instruction) -> Value {
+        let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
+        Value::Reg(self.block, idx)
+    }
+    fn get_value(&mut self, ctx: &mut SemCtx, name: &str) -> Option<Variable> {
+        let var = self.scope.search(ctx, |s| s.values.get(name).cloned())?;
+
+        let header = self.phis.phis.last().and_then(|p| p.header.as_ref());
+        match header {
+            Some(header) => {
+                let idx = self.blocks[header.init]
+                    .instructions
+                    .push(InstrIdx, Instruction::Phi(vec![(var.value, header.entry)]));
+                Some(Variable {
+                    value: Value::Reg(header.init, idx),
+                    ..var
+                })
+            }
+            None => Some(var),
+        }
+    }
+    fn push_phi(&mut self, loops: bool) {
+        let header = if loops {
+            let entry = self.block;
+            let init = self.blocks.push(BlockIdx, Block::default());
+            self.blocks[entry]
+                .instructions
+                .push_value(Instruction::Jump(init));
+            let first = self.blocks.push(BlockIdx, Block::default());
+
+            self.block = first;
+            Some(PhiHeader {
+                entry,
+                init,
+                first,
+                instructions: HashMap::new(),
+            })
+        } else {
+            None
+        };
+
+        self.phis.phis.push(Phi {
+            scope_pos: self.scope.scopes.len(),
+            own_vars: HashSet::new(),
+            modified_vars: HashMap::new(),
+            header,
+        })
+    }
+    fn branch(&mut self, v: Value) -> (BlockIdx, BlockIdx) {
+        let yes = self.blocks.push(BlockIdx, Block::default());
+        let no = self.blocks.push(BlockIdx, Block::default());
+        self.blocks[self.block]
+            .instructions
+            .push_value(Instruction::Branch(v, yes, no));
+        (yes, no)
+    }
+    fn commit_phi(&mut self, phis: &mut HashMap<String, Vec<(Value, BlockIdx)>>) {
+        let prev = self.block;
+        let phi = self.phis.phis.last().unwrap();
+        if let Some(header) = &phi.header {
+            for (name, &idx) in header.instructions.iter() {
+                let phis = match self.blocks[header.init].instructions[idx] {
+                    Instruction::Phi(ref mut v) => v,
+                    _ => unreachable!(),
+                };
+                match phi.modified_vars.get(name).cloned() {
+                    Some(value) => phis.push((value, prev)),
+                    None => {
+                        let base_val = phis[0].0.clone();
+                        phis.push((base_val, prev));
+                    }
+                }
+            }
+        }
+        for (name, value) in phi.modified_vars.iter() {
+            match phis.get_mut(name) {
+                Some(vec) => {
+                    vec.push((value.clone(), prev));
+                }
+                None => {
+                    phis.insert(name.clone(), vec![(value.clone(), prev)]);
+                }
+            }
+        }
+        for (name, vec) in phis.iter_mut() {
+            if !phi.modified_vars.contains_key(name) {
+                let base_var = self.scope.scopes[0..phi.scope_pos]
+                    .iter()
+                    .rev()
+                    .map(|scope| scope.values.get(name))
+                    .find(Option::is_some)
+                    .flatten()
+                    .expect("no base val");
+                vec.push((base_var.value.clone(), prev));
+            }
+        }
+    }
+    fn pop_phi(&mut self) {
+        let phi = self.phis.phis.pop().unwrap();
+        if let Some(header) = phi.header {
+            self.blocks[header.init]
+                .instructions
+                .push_value(Instruction::Jump(header.first));
+        }
+    }
+    fn complete_phi(&mut self, from: &[BlockIdx], phis: HashMap<String, Vec<(Value, BlockIdx)>>) {
+        let idx = self.blocks.push(BlockIdx, Block::default());
+        for block in from.iter().copied() {
+            self.blocks[block]
+                .instructions
+                .push_value(Instruction::Jump(idx));
+        }
+
+        for (name, mut phis) in phis {
+            let base_var = self
+                .scope
+                .scopes
+                .iter()
+                .rev()
+                .map(|scope| scope.values.get(&name))
+                .find(Option::is_some)
+                .flatten()
+                .expect("no base val");
+            for block in from.iter().copied() {
+                if !phis.iter().any(|(_, idx)| idx.eq(&block)) {
+                    phis.push((base_var.value.clone(), block));
+                }
+            }
+            let instr = self.blocks[idx]
+                .instructions
+                .push(InstrIdx, Instruction::Phi(phis));
+            self.modify(
+                name,
+                Variable {
+                    value: Value::Reg(idx, instr),
+                    ..base_var.clone()
+                },
+            );
+        }
+
+        self.block = idx;
+    }
+    fn modify(&mut self, s: String, v: Variable) {
+        for phis in self.phis.phis.iter_mut().rev() {
+            if phis.own_vars.contains(&s) {
+                break;
+            } else {
+                phis.modified_vars.insert(s.clone(), v.value.clone());
+            }
+        }
+        self.scope.top().values.insert(s, v);
+    }
+    fn define(&mut self, s: String, v: Variable) {
+        if let Some(phi) = self.phis.phis.last_mut() {
+            phi.own_vars.insert(s.clone());
+        }
+        self.scope.top().values.insert(s, v);
+    }
+}
+
+#[derive(Default)]
+struct PhiStack {
+    phis: Vec<Phi>,
+}
+
+#[derive(Default)]
+struct Phi {
+    scope_pos: usize,
+    own_vars: HashSet<String>,
+    modified_vars: HashMap<String, Value>,
+    header: Option<PhiHeader>,
+}
+
+struct PhiHeader {
+    entry: BlockIdx,
+    init: BlockIdx,
+    first: BlockIdx,
+    instructions: HashMap<String, InstrIdx>,
+}
+
+type ExprResult = Option<Value>;
 
 struct TypeError {
     loc: Range,
@@ -1383,6 +2403,9 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
             fun_sign: std::iter::repeat_with(FunSign::default)
                 .take(ast.functions.len())
                 .collect(),
+            fun_impl: std::iter::repeat_with(FunImpl::default)
+                .take(ast.functions.len())
+                .collect(),
             entry: None,
 
             types: VecSet::new(),
@@ -1394,7 +2417,9 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
         },
         ast,
         errors,
-        packages: VecMap::filled(ast.packages.len(), Scope::default()),
+        packages: std::iter::repeat_with(Scope::default)
+            .take(ast.packages.len())
+            .collect(),
     };
 
     ctx.insert_type(Type::Unknown);
@@ -1404,6 +2429,11 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     ctx.insert_type(Type::Effect);
     ctx.insert_type(Type::HandlerSelf);
     ctx.insert_type(Type::Integer(false, IntSize::Size));
+    ctx.insert_type(Type::Bool);
+    ctx.insert_type(Type::Integer(true, IntSize::Reg));
+    ctx.insert_type(Type::Str);
+    ctx.insert_type(Type::Char);
+    ctx.insert_type(Type::Integer(false, IntSize::Bits(8)));
 
     let mut insert = |t: Type| {
         let ty = ctx.insert_type(t);
@@ -1415,6 +2445,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
 
     insert(Type::Str);
     insert(Type::Bool);
+    insert(Type::Char);
     insert(Type::None);
 
     insert(Type::Integer(false, IntSize::Reg));
@@ -1552,6 +2583,7 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     }
 
     // analyze implied
+    // TODO: this doesn't allow implied handlers to use other implied handlers
     for (idx, package) in ast.packages.iter(PackageIdx) {
         let mut scope = ScopeStack::new(idx);
         for &implied in package.implied.iter() {
@@ -1564,7 +2596,18 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
     }
 
     // analyze functions
-    // TODO
+    for (idx, package) in ast.packages.iter(PackageIdx) {
+        let mut scope = ScopeStack::new(idx);
+        for (i, fun) in package
+            .functions
+            .iter()
+            .copied()
+            .map(|i| (i, &ast.functions[i]))
+        {
+            ctx.ir.fun_impl[i] =
+                ctx.generate_function(Either::Left(i), fun.body, &mut scope, None, None);
+        }
+    }
 
     ctx.ir
 }

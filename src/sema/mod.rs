@@ -8,7 +8,6 @@ use crate::{
 };
 
 vecmap_index!(GenericIdx);
-vecmap_index!(AssocIdx);
 vecmap_index!(HandlerIdx);
 vecmap_index!(LazyIdx);
 
@@ -74,6 +73,7 @@ pub struct FunImpl {
 
 #[derive(Debug, Default)]
 pub struct Block {
+    pub block_value: Option<InstrIdx>,
     pub instructions: VecMap<InstrIdx, Instruction>,
 }
 
@@ -144,7 +144,7 @@ pub struct FunSign {
     pub generics: Generics,
 
     pub params: VecMap<ParamIdx, Param>,
-    pub effect_params: Vec<Param>,
+    pub effect_stack: Vec<GenericVal<EffectIdent>>,
     pub return_type: ReturnType,
 }
 
@@ -154,22 +154,9 @@ impl Default for TypeIdx {
     }
 }
 
-#[derive(Debug)]
-pub struct AssocDef {
-    pub assoc: Assoc,
-    pub infer: bool,
-    pub generics: Generics,
-}
-
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Generic {
     pub idx: GenericIdx,
-    pub typeof_ty: TypeIdx,
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Assoc {
-    pub idx: AssocIdx,
     pub typeof_ty: TypeIdx,
 }
 
@@ -178,10 +165,21 @@ pub struct Effect {
     pub name: String,
     pub generics: Generics, // indices correspond 1-1 with ast generics
 
-    pub assocs: Vec<AssocDef>,
-
     pub funs: VecMap<EffFunIdx, FunSign>,
     pub implied: Vec<HandlerIdx>,
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct HandlerIdent {
+    pub handler: HandlerIdx,
+    pub generic_params: GenericParams,
+    pub fail_type: TypeIdx,
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub struct EffectType {
+    pub effect: GenericVal<EffectIdent>,
+    pub fail_type: TypeIdx,
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
@@ -208,8 +206,6 @@ pub struct Handler {
     pub generic_params: GenericParams,
     pub fail: TypeIdx,
 
-    pub assoc_types: Vec<(AssocIdx, TypeIdx)>,
-
     pub captures: Vec<Capture>,
     pub funs: VecMap<EffFunIdx, (FunSign, FunImpl)>,
 }
@@ -235,13 +231,6 @@ impl<T> GenericVal<T> {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub enum TypeConstraints {
-    None,
-    Handler(GenericVal<EffectIdent>, TypeIdx), // effect, fail
-    BoundHandler(GenericVal<EffectIdent>),
-}
-
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum IntSize {
     Reg,
@@ -252,25 +241,13 @@ pub enum IntSize {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
-    Handler {
-        idx: HandlerIdx,
-        generic_params: GenericParams,
-        bound: bool,
-    },
+    Handler(Lazy),
 
-    LazyHandler(TypeIdx, LazyIdx),
-    HandlerSelf,
-
-    DataType(TypeConstraints),
     Effect,
+    DataType,
+    HandlerType(EffectType),
 
     Generic(Generic),
-    AssocType {
-        assoc: Assoc,
-        handler: TypeIdx,
-        effect: EffIdx,
-        generic_params: GenericParams,
-    },
 
     Pointer(TypeIdx),
     ConstArray(GenericVal<u64>, TypeIdx),
@@ -283,7 +260,13 @@ pub enum Type {
     Bool,
     None,
     Never,
-    Unknown,
+    Error,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct Lazy {
+    pub idx: LazyIdx,
+    pub typeof_handler: TypeIdx,
 }
 
 #[derive(Debug)]
@@ -295,77 +278,9 @@ pub struct SemIR {
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,
-    pub lazy_handlers: VecMap<LazyIdx, Option<Either<HandlerIdx, LazyIdx>>>,
+    pub lazy_handlers: VecMap<LazyIdx, Option<Either<GenericVal<HandlerIdent>, LazyIdx>>>,
 
     pub generic_names: VecMap<GenericIdx, String>,
-    pub assoc_names: VecMap<AssocIdx, String>,
-}
-
-impl TypeConstraints {
-    fn display(
-        &self,
-        ir: &SemIR,
-        generic_params: &GenericParams,
-        f: &mut impl fmt::Write,
-    ) -> fmt::Result {
-        match *self {
-            TypeConstraints::None => Ok(()),
-            TypeConstraints::Handler(ref effect, fail) => {
-                write!(f, " / handle ")?;
-                match *effect {
-                    GenericVal::Literal(ref effect) => {
-                        write!(f, "{}", ir.effects[effect.effect].name)?;
-
-                        if !effect.generic_params.is_empty() {
-                            write!(f, "<")?;
-                            let mut iter = effect.generic_params.iter().copied();
-
-                            let first = iter.next().unwrap();
-                            first.1.display(ir, generic_params, f)?;
-                            for next in iter {
-                                write!(f, ", ")?;
-                                next.1.display(ir, generic_params, f)?;
-                            }
-                            write!(f, ">")?;
-                        }
-                    }
-                    GenericVal::Generic(idx) => write!(f, "`{}", usize::from(idx))?,
-                }
-                match ir.types[fail] {
-                    Type::Never => {}
-                    Type::None => write!(f, " fails")?,
-                    _ => {
-                        write!(f, " fails ")?;
-                        fail.display(ir, generic_params, f)?;
-                    }
-                }
-                Ok(())
-            }
-            TypeConstraints::BoundHandler(ref effect) => {
-                write!(f, " / bound ")?;
-                match *effect {
-                    GenericVal::Literal(ref effect) => {
-                        write!(f, "{}", ir.effects[effect.effect].name)?;
-
-                        if !effect.generic_params.is_empty() {
-                            write!(f, "<")?;
-                            let mut iter = effect.generic_params.iter().copied();
-
-                            let first = iter.next().unwrap();
-                            first.1.display(ir, generic_params, f)?;
-                            for next in iter {
-                                write!(f, ", ")?;
-                                next.1.display(ir, generic_params, f)?;
-                            }
-                            write!(f, ">")?;
-                        }
-                    }
-                    GenericVal::Generic(idx) => write!(f, "`{}", usize::from(idx))?,
-                }
-                Ok(())
-            }
-        }
-    }
 }
 
 pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<TypeIdx> {
@@ -374,10 +289,6 @@ pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<Type
 
 pub fn get_value<'a, K: PartialEq, V>(vec: &'a Vec<(K, V)>, key: &K) -> Option<&'a V> {
     vec.iter().find(|(k, _)| k.eq(key)).map(|(_, v)| v)
-}
-
-pub fn get_value_mut<'a, K: PartialEq, V>(vec: &'a mut Vec<(K, V)>, key: &K) -> Option<&'a mut V> {
-    vec.iter_mut().find(|(k, _)| k.eq(key)).map(|(_, v)| v)
 }
 
 impl IntSize {
@@ -406,29 +317,28 @@ impl IntSize {
 impl LazyIdx {
     fn display(
         &self,
-        typeof_ty: TypeIdx,
+        typeof_handler: TypeIdx,
         ir: &SemIR,
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         match ir.lazy_handlers[*self] {
-            Some(idx) => match idx {
-                Either::Left(idx) => {
-                    write!(f, "{}", ir.handlers[idx].debug_name)
-                }
-                Either::Right(idx) => idx.display(typeof_ty, ir, generic_params, f),
+            Some(ref idx) => match idx {
+                Either::Left(idx) => match idx {
+                    GenericVal::Literal(ref ident) => {
+                        write!(f, "{}", ir.handlers[ident.handler].debug_name)?;
+                        // TODO: print params
+                    }
+                    &GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
+                },
+                Either::Right(idx) => idx.display(typeof_handler, ir, generic_params, f)?,
             },
             None => {
-                write!(f, "LAZY#{}", self.0)?;
-                match ir.types[typeof_ty] {
-                    Type::DataType(ref costraints) => costraints.display(ir, generic_params, f),
-                    _ => {
-                        write!(f, " ")?;
-                        typeof_ty.display(ir, generic_params, f)
-                    }
-                }
+                write!(f, "LAZY#{} handle ", self.0)?;
+                typeof_handler.display(ir, generic_params, f)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -446,36 +356,27 @@ impl TypeIdx {
             write!(f, "const ")?;
         }
         match ir.types[*self] {
-            Type::HandlerSelf => write!(f, "self"),
-            Type::Handler { idx, .. } => {
-                // TODO: expand
-                write!(f, "{}", ir.handlers[idx].debug_name)
-            }
-            Type::DataType(ref constraints) => {
-                write!(f, "type")?;
-                constraints.display(ir, generic_params, f)
-            }
-            Type::AssocType {
-                assoc,
-                generic_params: ref params,
-                ..
-            } => {
-                write!(f, "{}", ir.assoc_names[assoc.idx])?;
-                if !params.is_empty() {
-                    write!(f, "<")?;
-                    let mut iter = params.iter().copied();
-
-                    let first = iter.next().unwrap();
-                    first.1.display(ir, generic_params, f)?;
-                    for next in iter {
-                        write!(f, ", ")?;
-                        next.1.display(ir, generic_params, f)?;
+            Type::Handler(ref lazy) => lazy.idx.display(lazy.typeof_handler, ir, generic_params, f),
+            Type::DataType => write!(f, "type"),
+            Type::Effect => write!(f, "effect"),
+            Type::HandlerType(ref eff) => {
+                match eff.effect {
+                    GenericVal::Literal(ref eff) => {
+                        write!(f, "{}", ir.effects[eff.effect].name)?;
+                        // TODO: print params
                     }
-                    write!(f, ">")?;
+                    GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
+                }
+                match ir.types[eff.fail_type] {
+                    Type::Never => {}
+                    Type::None => write!(f, " fails")?,
+                    _ => {
+                        write!(f, " fails ")?;
+                        eff.fail_type.display(ir, generic_params, f)?;
+                    }
                 }
                 Ok(())
             }
-            Type::Effect => write!(f, "effect"),
             Type::Generic(generic) => match get_param(generic_params, generic.idx) {
                 Some(ty) => ty.display(ir, generic_params, f),
                 None => {
@@ -490,7 +391,7 @@ impl TypeIdx {
                 write!(f, "[")?;
                 match size {
                     GenericVal::Literal(size) => write!(f, "{}", size)?,
-                    GenericVal::Generic(idx) => write!(f, "`{}", usize::from(idx))?,
+                    GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
                 }
                 write!(f, "]")?;
                 inner.display(ir, generic_params, f)
@@ -505,8 +406,7 @@ impl TypeIdx {
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),
             Type::Never => write!(f, "!"),
-            Type::Unknown => write!(f, "UNKNOWN"),
-            Type::LazyHandler(typeof_ty, idx) => idx.display(typeof_ty, ir, generic_params, f),
+            Type::Error => write!(f, "UNKNOWN"),
         }
     }
 }
@@ -524,26 +424,16 @@ fn display_generics(
 
         write!(f, "<")?;
         write!(f, "{}", ir.generic_names[idx])?;
-        match ir.types[next] {
-            Type::DataType(ref constraints) => constraints.display(ir, generic_params, f)?,
-            _ => {
-                write!(f, " ")?;
-                next.display(ir, generic_params, f)?;
-            }
-        }
+        write!(f, " ")?;
+        next.display(ir, generic_params, f)?;
 
         for generic in iter {
             let idx = generic.idx;
             let next = generic.typeof_ty;
 
             write!(f, ", {}", ir.generic_names[idx])?;
-            match ir.types[next] {
-                Type::DataType(ref constraints) => constraints.display(ir, generic_params, f)?,
-                _ => {
-                    write!(f, " ")?;
-                    next.display(ir, generic_params, f)?;
-                }
-            }
+            write!(f, " ")?;
+            next.display(ir, generic_params, f)?;
         }
         write!(f, ">")?;
     }
@@ -572,15 +462,27 @@ impl FunSign {
             write!(f, " ")?;
             self.return_type.ty.display(ir, no_params, f)?;
         }
-        if !self.effect_params.is_empty() {
+        if !self.effect_stack.is_empty() {
             write!(f, " / ")?;
-            let mut iter = self.effect_params.iter().map(|param| param.ty);
+            let mut iter = self.effect_stack.iter();
 
             let first = iter.next().unwrap();
-            first.display(ir, no_params, f)?;
+            match *first {
+                GenericVal::Literal(ref eff) => {
+                    write!(f, "{}", ir.effects[eff.effect].name)?;
+                    // TODO: print params
+                }
+                GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
+            }
             for next in iter {
                 write!(f, " ")?;
-                next.display(ir, no_params, f)?;
+                match *next {
+                    GenericVal::Literal(ref eff) => {
+                        write!(f, "{}", ir.effects[eff.effect].name)?;
+                        // TODO: print params
+                    }
+                    GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
+                }
             }
         }
         Ok(())
@@ -620,7 +522,7 @@ impl FunImpl {
     fn display(&self, padding: &str, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
         for (idx, block) in self.blocks.iter(BlockIdx) {
             writeln!(f, "{}B{}", padding, idx.0)?;
-            for (i, instr) in block.instructions.iter(InstrIdx) {
+            for (_i, instr) in block.instructions.iter(InstrIdx) {
                 write!(f, "{}  ", padding)?;
                 match instr {
                     Instruction::Cast(v, t) => {
@@ -755,24 +657,6 @@ impl Effect {
         display_generics(&self.generics, ir, no_params, f)?;
         writeln!(f)?;
 
-        // assoc
-        for assoc in self.assocs.iter() {
-            match ir.types[assoc.assoc.typeof_ty] {
-                Type::DataType(ref constraints) => {
-                    write!(f, "  type {}", ir.assoc_names[assoc.assoc.idx])?;
-                    display_generics(&assoc.generics, ir, no_params, f)?;
-                    constraints.display(ir, no_params, f)?;
-                }
-                _ => {
-                    write!(f, "  let {}", ir.assoc_names[assoc.assoc.idx])?;
-                    display_generics(&assoc.generics, ir, no_params, f)?;
-                    write!(f, " ")?;
-                    assoc.assoc.typeof_ty.display(ir, no_params, f)?;
-                }
-            }
-            writeln!(f)?;
-        }
-
         // functions
         for fun in self.funs.values() {
             fun.display("  ", ir, f)?;
@@ -809,31 +693,6 @@ impl Handler {
         for capture in self.captures.iter() {
             write!(f, "  {} ", capture.debug_name)?;
             capture.ty.display(ir, no_params, f)?;
-        }
-
-        // assoc
-        for (idx, ty) in self.assoc_types.iter().copied() {
-            let def = ir.effects[self.effect]
-                .assocs
-                .iter()
-                .find(|def| def.assoc.idx == idx)
-                .unwrap();
-            match ir.types[def.assoc.typeof_ty] {
-                Type::DataType(ref constraints) => {
-                    write!(f, "  type {}", ir.assoc_names[idx])?;
-                    display_generics(&def.generics, ir, &self.generic_params, f)?;
-                    constraints.display(ir, &self.generic_params, f)?;
-                }
-                _ => {
-                    write!(f, "  let {}", ir.assoc_names[idx])?;
-                    display_generics(&def.generics, ir, &self.generic_params, f)?;
-                    write!(f, " ")?;
-                    def.assoc.typeof_ty.display(ir, &self.generic_params, f)?;
-                }
-            }
-            write!(f, " = ")?;
-            ty.display(ir, no_params, f)?;
-            writeln!(f)?;
         }
 
         // funs

@@ -1233,15 +1233,7 @@ impl SemCtx<'_> {
 
             E::BinOp(left, BinOp::Assign, right) => {
                 let (value, ty) = self.assignable_expr(ctx, left)?;
-
-                let inner = match self.ir.types[ty] {
-                    Type::Pointer(inner) => inner,
-                    Type::Error => {
-                        return Some((Value::ConstantNone, TYPE_NONE));
-                    }
-                    _ => unreachable!(),
-                };
-                let right = self.check_expr(ctx, right, inner, None)?;
+                let right = self.check_expr(ctx, right, ty, None)?;
                 ctx.push(Instruction::Store(value, right));
 
                 Some((Value::ConstantNone, TYPE_NONE))
@@ -1262,10 +1254,22 @@ impl SemCtx<'_> {
                     }
                     _ => todo!("give error"),
                 };
-                // TODO: allow range
-                let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-                let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
-                Some((elem, elem_ty))
+
+                if let E::BinOp(rleft, BinOp::Range, rright) = self.ast.exprs[right].0 {
+                    let rleft = self.check_expr(ctx, rleft, TYPE_USIZE, None)?;
+                    let rright = self.check_expr(ctx, rright, TYPE_USIZE, None)?;
+
+                    let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone()));
+                    let len = ctx.push(Instruction::Sub(rright, rleft));
+
+                    let slice = Value::ConstantAggregate(vec![ptr, len].into());
+                    let slice_ty = self.insert_type(Type::Slice(elem_ty), false, true);
+                    Some((slice, slice_ty))
+                } else {
+                    let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
+                    let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
+                    Some((elem, elem_ty))
+                }
             }
             E::BinOp(left, op, right) => {
                 let (left, left_ty) = self.synth_expr(ctx, left)?;

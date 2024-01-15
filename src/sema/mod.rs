@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 
 use crate::{
     ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
-    error::Range,
+    error::{Range, Ranged},
     vecmap::{vecmap_index, VecMap, VecSet},
 };
 
@@ -16,6 +16,21 @@ vecmap_index!(InstrIdx);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct TypeIdx(usize);
+
+#[derive(Debug, Clone, Copy)]
+pub enum FunIdent {
+    Top(FunIdx),
+    Effect(EffIdx, EffFunIdx),
+}
+
+impl FunIdent {
+    pub fn sign<'a>(self, ir: &'a SemIR) -> &'a FunSign {
+        match self {
+            FunIdent::Top(idx) => &ir.fun_sign[idx],
+            FunIdent::Effect(eff, idx) => &ir.effects[eff].funs[idx],
+        }
+    }
+}
 
 impl From<TypeIdx> for usize {
     fn from(value: TypeIdx) -> Self {
@@ -41,12 +56,6 @@ impl TypeIdx {
 mod codegen;
 pub use codegen::analyze;
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum FunctionDef {
-    Top(FunIdx),
-    Handler(HandlerIdx, EffFunIdx),
-}
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Value {
     Reg(BlockIdx, Option<InstrIdx>),
@@ -54,7 +63,7 @@ pub enum Value {
 
     ConstantAggregate(Rc<[Value]>),
     ConstantInt(bool, u64),
-    ConstantString(Rc<str>),
+    ConstantString(Rc<[u8]>),
     ConstantBool(bool),
     ConstantType(TypeIdx),
     ConstantNone,
@@ -63,7 +72,6 @@ pub enum Value {
     ConstantError,
 
     Param(ParamIdx),
-    HandlerParam(usize),
 }
 
 #[derive(Debug, Default)]
@@ -95,13 +103,13 @@ pub enum Instruction {
 
     PushHandler(Value), // handler -> bound handler
     Call(
-        FunctionDef,
+        FunIdent,
         // generics
-        Vec<Value>,
+        GenericParams,
         // params
         Vec<Value>,
         // effect params
-        Vec<(Value, Option<BlockIdx>)>,
+        Vec<(usize, Option<BlockIdx>)>,
     ),
     PopHandler,
 
@@ -129,6 +137,7 @@ pub struct Param {
     pub type_def: Range,
     pub ty: TypeIdx,
     pub mutable: bool,
+    pub const_generic: Option<GenericIdx>,
 }
 
 #[derive(Debug, Default)]
@@ -144,7 +153,7 @@ pub struct FunSign {
     pub generics: Generics,
 
     pub params: VecMap<ParamIdx, Param>,
-    pub effect_stack: Vec<GenericVal<EffectIdent>>,
+    pub effect_stack: Vec<Ranged<GenericVal<EffectIdent>>>,
     pub return_type: ReturnType,
 }
 
@@ -241,9 +250,10 @@ pub enum IntSize {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum Type {
+    Effect(EffectIdent),
     Handler(Lazy),
 
-    Effect,
+    EffectType,
     DataType,
     HandlerType(EffectType),
 
@@ -261,6 +271,8 @@ pub enum Type {
     None,
     Never,
     Error,
+
+    CompileTime(Value, TypeIdx),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -364,7 +376,7 @@ impl TypeIdx {
         match ir.types[*self] {
             Type::Handler(ref lazy) => lazy.idx.display(lazy.typeof_handler, ir, generic_params, f),
             Type::DataType => write!(f, "type"),
-            Type::Effect => write!(f, "effect"),
+            Type::EffectType => write!(f, "effect"),
             Type::HandlerType(ref eff) => {
                 match eff.effect {
                     GenericVal::Literal(ref eff) => {
@@ -413,6 +425,15 @@ impl TypeIdx {
             Type::None => write!(f, "void"),
             Type::Never => write!(f, "!"),
             Type::Error => write!(f, "UNKNOWN"),
+            Type::Effect(ref eff) => {
+                write!(f, "{}", ir.effects[eff.effect].name)?;
+                // TODO: print params
+                Ok(())
+            }
+            Type::CompileTime(ref val, _) => {
+                val.display(ir, &ir.fun_impl[FunIdx(0)], f)?;
+                Ok(())
+            }
         }
     }
 }
@@ -473,7 +494,7 @@ impl FunSign {
             let mut iter = self.effect_stack.iter();
 
             let first = iter.next().unwrap();
-            match *first {
+            match first.0 {
                 GenericVal::Literal(ref eff) => {
                     write!(f, "{}", ir.effects[eff.effect].name)?;
                     // TODO: print params
@@ -482,7 +503,7 @@ impl FunSign {
             }
             for next in iter {
                 write!(f, " ")?;
-                match *next {
+                match next.0 {
                     GenericVal::Literal(ref eff) => {
                         write!(f, "{}", ir.effects[eff.effect].name)?;
                         // TODO: print params
@@ -532,7 +553,9 @@ impl Value {
                 }
             },
             Value::ConstantInt(signed, n) => write!(f, "{}{}", if signed { "-" } else { "" }, n),
-            Value::ConstantString(ref str) => write!(f, "{}", str),
+            Value::ConstantString(ref str) => {
+                write!(f, "\"{}\"", std::str::from_utf8(str).unwrap())
+            }
             Value::ConstantBool(b) => write!(f, "{}", b),
             Value::ConstantType(ty) => ty.display(ir, &Vec::new(), f),
             Value::ConstantNone => write!(f, "{{}}"),
@@ -550,7 +573,6 @@ impl Value {
                 Ok(())
             }
             Value::Param(param) => write!(f, "%p{}", param.0),
-            Value::HandlerParam(param) => write!(f, "%h{}", param),
         }
     }
 }
@@ -677,9 +699,16 @@ impl FunImpl {
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
+                    Instruction::Call(fun, _, ref args, _) => {
+                        write!(f, "call {} (", fun.sign(ir).name)?;
+                        for val in args {
+                            val.display(ir, proc, f)?;
+                            write!(f, ",")?;
+                        }
+                        write!(f, ")")?;
+                    }
 
                     Instruction::PushHandler(_) => todo!(),
-                    Instruction::Call(_, _, _, _) => todo!(),
                     Instruction::PopHandler => todo!(),
                     Instruction::Trace(_) => todo!(),
                     Instruction::Syscall(_, _) => todo!(),

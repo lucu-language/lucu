@@ -80,6 +80,7 @@ pub enum Error {
     NestedHandlers,
     TryReturnsHandler,
     NotEnoughInfo,
+    UnresolvedEffect(Range),
 
     // handlers
     UnknownEffectFun(Option<Range>, Option<Range>),
@@ -572,7 +573,10 @@ impl Errors {
                     Error::ExpectedArray(ref found) =>
                         format!("expected an array type, found {}", found),
                     Error::NotEnoughInfo => format!("cannot resolve type: type annotations needed"),
-
+                    Error::UnresolvedEffect(def) => format!(
+                        "unhandled effect {} for function call",
+                        highlight(1, &self.files[def.3].content[def.1..def.2], color, true)
+                    ),
 
                     Error::UnknownEffectFun(effect, _) => {
                         format!(
@@ -707,6 +711,9 @@ impl Errors {
                     if let Some(param) = param {
                         highlights.push(Highlight::from_file(&self.files, param, 2));
                     }
+                }
+                Error::UnresolvedEffect(def) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
                 }
                 _ => (),
             }

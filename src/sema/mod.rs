@@ -1,5 +1,5 @@
 use either::Either;
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 use crate::{
     ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
@@ -49,18 +49,18 @@ pub enum FunctionDef {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Value {
-    Reg(BlockIdx, InstrIdx),
-    Reference(BlockIdx, InstrIdx),
+    Reg(BlockIdx, Option<InstrIdx>),
+    Reference(BlockIdx, Option<InstrIdx>),
 
-    ConstantAggregate(Vec<Value>),
+    ConstantAggregate(Rc<[Value]>),
     ConstantInt(bool, u64),
-    ConstantString(String),
+    ConstantString(Rc<str>),
     ConstantBool(bool),
     ConstantType(TypeIdx),
     ConstantNone,
     ConstantUninit,
     ConstantZero,
-    ConstantUnknown,
+    ConstantError,
 
     Param(ParamIdx),
     HandlerParam(usize),
@@ -73,8 +73,8 @@ pub struct FunImpl {
 
 #[derive(Debug, Default)]
 pub struct Block {
-    pub block_value: Option<InstrIdx>,
     pub instructions: VecMap<InstrIdx, Instruction>,
+    pub value: Option<Vec<(Value, BlockIdx)>>,
 }
 
 #[derive(Debug)]
@@ -322,22 +322,8 @@ impl LazyIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        match ir.lazy_handlers[*self] {
-            Some(ref idx) => match idx {
-                Either::Left(idx) => match idx {
-                    GenericVal::Literal(ref ident) => {
-                        write!(f, "{}", ir.handlers[ident.handler].debug_name)?;
-                        // TODO: print params
-                    }
-                    &GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx])?,
-                },
-                Either::Right(idx) => idx.display(typeof_handler, ir, generic_params, f)?,
-            },
-            None => {
-                write!(f, "LAZY#{} handle ", self.0)?;
-                typeof_handler.display(ir, generic_params, f)?;
-            }
-        }
+        write!(f, "handle ")?;
+        typeof_handler.display(ir, generic_params, f)?;
         Ok(())
     }
 }
@@ -490,10 +476,41 @@ impl FunSign {
 }
 
 impl Value {
-    fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+    fn display(&self, ir: &SemIR, proc: &FunImpl, f: &mut impl fmt::Write) -> fmt::Result {
         match *self {
-            Value::Reg(block, instr) => write!(f, "%{}.{}", block.0, instr.0),
-            Value::Reference(block, instr) => write!(f, "%{}.{}^", block.0, instr.0),
+            Value::Reg(block, instr) => match instr {
+                Some(instr) => {
+                    write!(f, "%{}.{}", block.0, instr.0)?;
+                    Ok(())
+                }
+                None => {
+                    let vec = proc.blocks[block].value.as_ref().unwrap();
+                    write!(f, "phi")?;
+                    for (val, block) in vec {
+                        write!(f, " B{}: ", block.0)?;
+                        val.display(ir, proc, f)?;
+                        write!(f, ",")?;
+                    }
+                    Ok(())
+                }
+            },
+            Value::Reference(block, instr) => match instr {
+                Some(instr) => {
+                    write!(f, "%{}.{}^", block.0, instr.0)?;
+                    Ok(())
+                }
+                None => {
+                    let vec = proc.blocks[block].value.as_ref().unwrap();
+                    write!(f, "phi")?;
+                    for (val, block) in vec {
+                        write!(f, " B{}: ", block.0)?;
+                        val.display(ir, proc, f)?;
+                        write!(f, ",")?;
+                    }
+                    write!(f, "^")?;
+                    Ok(())
+                }
+            },
             Value::ConstantInt(signed, n) => write!(f, "{}{}", if signed { "-" } else { "" }, n),
             Value::ConstantString(ref str) => write!(f, "{}", str),
             Value::ConstantBool(b) => write!(f, "{}", b),
@@ -501,12 +518,12 @@ impl Value {
             Value::ConstantNone => write!(f, "{{}}"),
             Value::ConstantUninit => write!(f, "---"),
             Value::ConstantZero => write!(f, "0"),
-            Value::ConstantUnknown => write!(f, "ERR"),
+            Value::ConstantError => write!(f, "ERR"),
             Value::ConstantAggregate(ref vec) => {
                 write!(f, "[")?;
-                for val in vec {
+                for val in vec.iter() {
                     write!(f, " ")?;
-                    val.display(ir, f)?;
+                    val.display(ir, proc, f)?;
                     write!(f, ",")?;
                 }
                 write!(f, "]")?;
@@ -519,7 +536,13 @@ impl Value {
 }
 
 impl FunImpl {
-    fn display(&self, padding: &str, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+    fn display(
+        &self,
+        padding: &str,
+        ir: &SemIR,
+        proc: &FunImpl,
+        f: &mut impl fmt::Write,
+    ) -> fmt::Result {
         for (idx, block) in self.blocks.iter(BlockIdx) {
             writeln!(f, "{}B{}", padding, idx.0)?;
             for (_i, instr) in block.instructions.iter(InstrIdx) {
@@ -527,7 +550,7 @@ impl FunImpl {
                 match instr {
                     Instruction::Cast(v, t) => {
                         write!(f, "cast ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                         write!(f, " as ")?;
                         t.display(ir, &Vec::new(), f)?;
                     }
@@ -536,103 +559,103 @@ impl FunImpl {
                     }
                     Instruction::Branch(cond, yes, no) => {
                         write!(f, "branch ")?;
-                        cond.display(ir, f)?;
+                        cond.display(ir, proc, f)?;
                         write!(f, " B{} else B{}", yes.0, no.0)?;
                     }
                     Instruction::Phi(vec) => {
                         write!(f, "phi",)?;
                         for (val, block) in vec {
                             write!(f, " B{}: ", block.0)?;
-                            val.display(ir, f)?;
+                            val.display(ir, proc, f)?;
                             write!(f, ",")?;
                         }
                     }
                     Instruction::Equals(a, b) => {
                         write!(f, "== ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Greater(a, b) => {
                         write!(f, "> ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Less(a, b) => {
                         write!(f, "< ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Div(a, b) => {
                         write!(f, "/ ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Mul(a, b) => {
                         write!(f, "* ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Add(a, b) => {
                         write!(f, "+ ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Sub(a, b) => {
                         write!(f, "- ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Trap => {
                         write!(f, "trap")?;
                     }
                     Instruction::Yeet(v) => {
                         write!(f, "fail ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                     }
                     Instruction::Return(v) => {
                         write!(f, "return ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                     }
                     Instruction::Unreachable => {
                         write!(f, "unreachable")?;
                     }
                     Instruction::Reference(v) => {
                         write!(f, "alloca ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                     }
                     Instruction::Load(v) => {
                         write!(f, "load ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                     }
                     Instruction::Store(a, b) => {
                         write!(f, "store ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::Member(v, n) => {
                         write!(f, "member ")?;
-                        v.display(ir, f)?;
+                        v.display(ir, proc, f)?;
                         write!(f, " {}", n)?;
                     }
                     Instruction::ElementPtr(a, b) => {
                         write!(f, "elemptr ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
                     Instruction::AdjacentPtr(a, b) => {
                         write!(f, "adjptr ")?;
-                        a.display(ir, f)?;
+                        a.display(ir, proc, f)?;
                         write!(f, " ")?;
-                        b.display(ir, f)?;
+                        b.display(ir, proc, f)?;
                     }
 
                     Instruction::PushHandler(_) => todo!(),
@@ -702,7 +725,7 @@ impl Handler {
             writeln!(f)?;
 
             // fun impl
-            fun.1.display("  ", ir, f)?;
+            fun.1.display("  ", ir, &fun.1, f)?;
         }
         Ok(())
     }
@@ -729,7 +752,7 @@ impl fmt::Display for SemIR {
             writeln!(f)?;
 
             // fun impl
-            imp.display("", self, f)?;
+            imp.display("", self, imp, f)?;
         }
 
         Ok(())

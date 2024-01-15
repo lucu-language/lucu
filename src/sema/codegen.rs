@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fmt::{self},
+    rc::Rc,
 };
 
 use either::Either;
@@ -9,7 +10,7 @@ use crate::{
     ast::{
         self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp, AST,
     },
-    error::{Error, Errors, Range},
+    error::{Error, Errors, FileIdx, Range, Ranged},
     sema::Instruction,
     vecmap::{VecMap, VecSet},
     Target,
@@ -107,6 +108,9 @@ impl ScopeStack {
     }
     fn get_generic(&self, ctx: &SemCtx, name: &str) -> Option<Generic> {
         self.search(ctx, |s| s.generics.get(name).copied())
+    }
+    fn get_value(&self, ctx: &SemCtx, name: &str) -> Option<Variable> {
+        self.search(ctx, |s| s.values.get(name).cloned())
     }
 
     fn try_function(&self, ctx: &mut SemCtx, id: Ident) -> Option<FunIdent> {
@@ -960,34 +964,45 @@ impl SemCtx<'_> {
                 Either::Right(sign) => sign,
             };
 
-            for (idx, param) in ir_sign.params.iter(ParamIdx) {
-                scope.top().values.insert(
-                    param.name.clone(),
-                    Variable {
-                        value: Value::Param(idx),
-                        ty: param.ty,
-                        mutable: param.mutable,
-                    },
-                );
-            }
-            for generic in ir_sign.generics.iter() {
-                scope
-                    .top()
-                    .generics
-                    .insert(self.ir.generic_names[generic.idx].clone(), generic.clone());
-            }
-
             let mut blocks = VecMap::new();
             let block = blocks.push(BlockIdx, Block::default());
             let mut fun_ctx = FunCtx {
-                phis: PhiStack::default(),
                 scope,
-                sign,
                 blocks,
                 block,
                 yeetable,
                 yeetable_def,
             };
+
+            for (idx, param) in ir_sign.params.iter(ParamIdx) {
+                if param.mutable {
+                    let value = fun_ctx.push_ref(Instruction::Reference(Value::Param(idx)));
+                    fun_ctx.define(
+                        param.name.clone(),
+                        Variable {
+                            value,
+                            ty: param.ty,
+                            mutable: param.mutable,
+                        },
+                    );
+                } else {
+                    fun_ctx.define(
+                        param.name.clone(),
+                        Variable {
+                            value: Value::Param(idx),
+                            ty: param.ty,
+                            mutable: param.mutable,
+                        },
+                    );
+                }
+            }
+            for generic in ir_sign.generics.iter() {
+                fun_ctx
+                    .scope
+                    .top()
+                    .generics
+                    .insert(self.ir.generic_names[generic.idx].clone(), generic.clone());
+            }
 
             let out = self.check_expr(
                 &mut fun_ctx,
@@ -1037,53 +1052,37 @@ impl SemCtx<'_> {
             }),
             (&E::IfElse(cond, yes, no), _) => {
                 let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
-                let (yes_block, no_block) = ctx.branch(cond);
-
-                let mut phis = HashMap::new();
-
-                ctx.block = yes_block;
-                let yes_val = ctx.phi(false, &mut phis, |ctx| {
-                    self.check_expr(ctx, yes, expected, expected_def)
-                });
-                let yes_end = ctx.block;
-
-                ctx.block = no_block;
-                let no_val = match no {
-                    Some(no) => ctx.phi(false, &mut phis, |ctx| {
-                        self.check_expr(ctx, no, expected, expected_def)
-                    }),
-                    None => {
-                        self.check_move(TYPE_NONE, expected, error_loc);
-                        Some(Value::ConstantNone)
-                    }
-                };
-                let no_end = ctx.block;
-
-                ctx.complete_phi(&[yes_end, no_end], phis);
-                match (yes_val, no_val) {
-                    (Some(yes_val), Some(no_val)) => {
-                        let instr = ctx.blocks[ctx.block].instructions.push(
-                            InstrIdx,
-                            Instruction::Phi(vec![(yes_val, yes_end), (no_val, no_end)]),
-                        );
-                        Some(Value::Reg(ctx.block, instr))
-                    }
-                    (Some(v), None) => Some(v),
-                    (None, Some(v)) => Some(v),
-                    (None, None) => None,
-                }
+                ctx.branch(
+                    self,
+                    cond,
+                    |me, ctx| {
+                        me.check_expr(ctx, yes, expected, expected_def)
+                            .map(|val| (val, expected, None))
+                    },
+                    |me, ctx| match no {
+                        Some(no) => me
+                            .check_expr(ctx, no, expected, expected_def)
+                            .map(|val| (val, expected, None)),
+                        None => {
+                            me.check_move(TYPE_NONE, expected, error_loc);
+                            Some((Value::ConstantNone, expected, None))
+                        }
+                    },
+                )
+                .map(|(val, _)| val)
             }
             (&E::Array(ref exprs), &Type::Slice(elem)) => {
                 let elems = exprs
                     .iter()
                     .copied()
                     .map(|expr| self.check_expr(ctx, expr, elem, expected_def))
-                    .collect::<Option<Vec<_>>>()?;
+                    .collect::<Option<Rc<[_]>>>()?;
                 let len = elems.len() as u64;
 
                 let arr = Value::ConstantAggregate(elems);
                 let ptr = ctx.push(Instruction::Reference(arr));
-                let slice = Value::ConstantAggregate(vec![ptr, Value::ConstantInt(false, len)]);
+                let slice =
+                    Value::ConstantAggregate(vec![ptr, Value::ConstantInt(false, len)].into());
                 Some(slice)
             }
             (&E::Array(ref exprs), &Type::ConstArray(GenericVal::Literal(n), elem))
@@ -1093,7 +1092,7 @@ impl SemCtx<'_> {
                     .iter()
                     .copied()
                     .map(|expr| self.check_expr(ctx, expr, elem, expected_def))
-                    .collect::<Option<Vec<_>>>()?;
+                    .collect::<Option<Rc<[_]>>>()?;
                 Some(Value::ConstantAggregate(elems))
             }
             (&E::Uninit, _) => {
@@ -1115,15 +1114,20 @@ impl SemCtx<'_> {
                 Some(Value::ConstantInt(false, c))
             }
             (&E::String(ref str), &Type::Slice(elem)) if elem == TYPE_U8 => {
-                Some(Value::ConstantString(str.clone()))
+                Some(Value::ConstantString(str.as_str().into()))
             }
             (&E::UnOp(inner, UnOp::Cast), _) => {
                 // TODO: test if allowed
                 let (value, ty) = self.synth_expr(ctx, inner)?;
                 let instr = ctx.blocks[ctx.block]
                     .instructions
-                    .push(InstrIdx, Instruction::Cast(value, expected));
-                Some(Value::Reg(ctx.block, instr))
+                    .push(InstrIdx, Instruction::Cast(value.clone(), expected));
+
+                if matches!(value, Value::Reference(_, _)) {
+                    Some(Value::Reference(ctx.block, Some(instr)))
+                } else {
+                    Some(Value::Reg(ctx.block, Some(instr)))
+                }
             }
             _ => {
                 let (found, found_ty) = self.synth_expr(ctx, expr)?;
@@ -1132,94 +1136,50 @@ impl SemCtx<'_> {
             }
         }
     }
-    fn assignable_expr(
-        &mut self,
-        ctx: &mut FunCtx,
-        expr: ExprIdx,
-    ) -> Option<Either<(String, Variable), (Value, TypeIdx)>> {
+    fn assignable_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
         // TODO: return Value::Reference on Right
 
         use Expression as E;
         match self.ast.exprs[expr].0 {
             E::BinOp(left, BinOp::Index, right) => {
                 let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-                match self.assignable_expr(ctx, left)? {
-                    Either::Left((name, var)) => {
-                        let (ptr, elem_ty) = match self.ir.types[var.ty] {
-                            Type::ConstArray(_, inner) => {
-                                let instr = ctx.blocks[ctx.block]
-                                    .instructions
-                                    .push(InstrIdx, Instruction::Reference(var.value));
-                                ctx.modify(
-                                    name,
-                                    Variable {
-                                        value: Value::Reference(ctx.block, instr),
-                                        ..var
-                                    },
-                                );
-                                (Value::Reg(ctx.block, instr), inner)
-                            }
-                            Type::Slice(inner) => {
-                                let ptr = ctx.push(Instruction::Member(var.value, 0));
-                                (ptr, inner)
-                            }
-                            Type::Error => {
-                                return Some(Either::Right((Value::ConstantUnknown, TYPE_ERROR)));
-                            }
-                            _ => todo!("give error"),
-                        };
+                let (value, ty) = self.assignable_expr(ctx, left)?;
 
-                        let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
-                        Some(Either::Right((elem, elem_ty)))
+                let (ptr, elem_ty) = match self.ir.types[ty] {
+                    Type::ConstArray(_, inner) => (value, inner),
+                    Type::Slice(inner) => {
+                        let slice = ctx.push(Instruction::Load(value));
+                        let ptr = ctx.push(Instruction::Member(slice, 0));
+                        (ptr, inner)
                     }
-                    Either::Right((value, ty)) => {
-                        let inner = match self.ir.types[ty] {
-                            Type::Pointer(inner) => inner,
-                            Type::Error => {
-                                return Some(Either::Right((Value::ConstantUnknown, TYPE_ERROR)));
-                            }
-                            _ => unreachable!(),
-                        };
-
-                        let (ptr, elem_ty) = match self.ir.types[inner] {
-                            Type::ConstArray(_, inner) => (value, inner),
-                            Type::Slice(inner) => {
-                                let slice = ctx.push(Instruction::Load(value));
-                                let ptr = ctx.push(Instruction::Member(slice, 0));
-                                (ptr, inner)
-                            }
-                            Type::Error => {
-                                return Some(Either::Right((Value::ConstantUnknown, TYPE_ERROR)));
-                            }
-                            _ => todo!("give error"),
-                        };
-
-                        let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
-                        Some(Either::Right((elem, elem_ty)))
+                    Type::Error => {
+                        return Some((Value::ConstantError, TYPE_ERROR));
                     }
-                }
+                    _ => todo!("give error"),
+                };
+
+                let elem = ctx.push_ref(Instruction::AdjacentPtr(ptr, right));
+                Some((elem, elem_ty))
             }
             E::Ident(id) => {
                 let name = &self.ast.idents[id].0;
                 match ctx.get_value(self, name) {
                     Some(var) => {
-                        if let Value::Reference(block, instr) = var.value {
-                            // variable is already a reference
-                            let ptr_ty = self.insert_type(Type::Pointer(var.ty), false, true);
-                            Some(Either::Right((Value::Reg(block, instr), ptr_ty)))
+                        if var.mutable {
+                            // mutable variables must always be references
+                            Some((var.value, var.ty))
                         } else {
-                            // return variable
-                            Some(Either::Left((name.clone(), var)))
+                            todo!("give error")
                         }
                     }
                     None => {
                         self.errors
                             .push(self.ast.idents[id].with(Error::UnknownValue));
-                        Some(Either::Right((Value::ConstantUnknown, TYPE_ERROR)))
+                        Some((Value::ConstantError, TYPE_ERROR))
                     }
                 }
             }
-            E::Error => Some(Either::Right((Value::ConstantUnknown, TYPE_ERROR))),
+            E::Error => Some((Value::ConstantError, TYPE_ERROR)),
             _ => todo!("give error"),
         }
     }
@@ -1235,89 +1195,55 @@ impl SemCtx<'_> {
                     .unwrap_or(Some((Value::ConstantNone, TYPE_NONE)))
             }),
             E::Loop(inner) => {
-                ctx.phi(true, &mut HashMap::new(), |ctx| self.synth_expr(ctx, inner));
+                let old = ctx.jump();
+                self.synth_expr(ctx, inner)?;
+                ctx.push(Instruction::Jump(old));
                 None
             }
             E::IfElse(cond, yes, no) => {
                 let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
-                let (yes_block, no_block) = ctx.branch(cond);
-
-                let mut phis = HashMap::new();
-
-                ctx.block = yes_block;
-                let yes_val = ctx.phi(false, &mut phis, |ctx| self.synth_expr(ctx, yes));
-                let yes_end = ctx.block;
-
-                ctx.block = no_block;
-                let no_val = match no {
-                    Some(no) => ctx.phi(false, &mut phis, |ctx| self.synth_expr(ctx, no)),
-                    None => Some((Value::ConstantNone, TYPE_NONE)),
-                };
-                let no_end = ctx.block;
-
-                ctx.complete_phi(&[yes_end, no_end], phis);
-                match (yes_val, no_val) {
-                    (Some(yes_val), Some(no_val)) => {
-                        let common = self.supertype(
-                            yes_val.1,
-                            no_val.1,
-                            TypeRange {
-                                loc: self.ast.exprs[no.unwrap_or(yes)].empty(),
-                                def: match no {
-                                    Some(_) => Some(self.ast.exprs[yes].empty()),
-                                    None => None,
-                                },
-                            },
-                        );
-                        let instr = ctx.blocks[ctx.block].instructions.push(
-                            InstrIdx,
-                            Instruction::Phi(vec![(yes_val.0, yes_end), (no_val.0, no_end)]),
-                        );
-                        Some((Value::Reg(ctx.block, instr), common))
-                    }
-                    (Some(v), None) => Some(v),
-                    (None, Some(v)) => Some(v),
-                    (None, None) => None,
-                }
+                ctx.branch(
+                    self,
+                    cond,
+                    |me, ctx| {
+                        me.synth_expr(ctx, yes)
+                            .map(|(val, ty)| (val, ty, Some(self.ast.exprs[yes].empty())))
+                    },
+                    |me, ctx| match no {
+                        Some(no) => me
+                            .synth_expr(ctx, no)
+                            .map(|(val, ty)| (val, ty, Some(self.ast.exprs[no].empty()))),
+                        None => Some((Value::ConstantNone, TYPE_NONE, None)),
+                    },
+                )
             }
 
             E::TryWith(_, _) => {
                 ctx.push(Instruction::Trap);
-                Some((Value::ConstantUnknown, TYPE_ERROR))
+                Some((Value::ConstantError, TYPE_ERROR))
             }
             E::Handler(_) => {
                 ctx.push(Instruction::Trap);
-                Some((Value::ConstantUnknown, TYPE_ERROR))
+                Some((Value::ConstantError, TYPE_ERROR))
             }
             E::Call(_, _) => {
                 ctx.push(Instruction::Trap);
-                Some((Value::ConstantUnknown, TYPE_ERROR))
+                Some((Value::ConstantError, TYPE_ERROR))
             }
 
             E::BinOp(left, BinOp::Assign, right) => {
-                match self.assignable_expr(ctx, left)? {
-                    Either::Left((name, var)) => {
-                        let right = self.check_expr(ctx, right, var.ty, None)?;
-                        ctx.modify(
-                            name,
-                            Variable {
-                                value: right,
-                                ..var
-                            },
-                        );
+                let (value, ty) = self.assignable_expr(ctx, left)?;
+
+                let inner = match self.ir.types[ty] {
+                    Type::Pointer(inner) => inner,
+                    Type::Error => {
+                        return Some((Value::ConstantNone, TYPE_NONE));
                     }
-                    Either::Right((value, ty)) => {
-                        let inner = match self.ir.types[ty] {
-                            Type::Pointer(inner) => inner,
-                            Type::Error => {
-                                return Some((Value::ConstantNone, TYPE_NONE));
-                            }
-                            _ => unreachable!(),
-                        };
-                        let right = self.check_expr(ctx, right, inner, None)?;
-                        ctx.push(Instruction::Store(value, right));
-                    }
-                }
+                    _ => unreachable!(),
+                };
+                let right = self.check_expr(ctx, right, inner, None)?;
+                ctx.push(Instruction::Store(value, right));
+
                 Some((Value::ConstantNone, TYPE_NONE))
             }
             E::BinOp(left, BinOp::Index, right) => {
@@ -1332,7 +1258,7 @@ impl SemCtx<'_> {
                         (ptr, elem)
                     }
                     Type::Error => {
-                        return Some((Value::ConstantUnknown, TYPE_ERROR));
+                        return Some((Value::ConstantError, TYPE_ERROR));
                     }
                     _ => todo!("give error"),
                 };
@@ -1374,59 +1300,30 @@ impl SemCtx<'_> {
 
                 Some((res, out))
             }
-            E::UnOp(inner, UnOp::PostIncrement) => match self.assignable_expr(ctx, inner)? {
-                Either::Left((name, var)) => {
-                    let incremented = ctx.push(Instruction::Add(
-                        var.value.clone(),
-                        Value::ConstantInt(false, 1),
-                    ));
-                    ctx.modify(
-                        name,
-                        Variable {
-                            value: incremented,
-                            ..var.clone()
-                        },
-                    );
-                    Some((var.value, var.ty))
-                }
-                Either::Right((value, ty)) => {
-                    // TODO: check if integer type
-                    let inner = match self.ir.types[ty] {
-                        Type::Pointer(inner) => inner,
-                        Type::Error => {
-                            return Some((Value::ConstantUnknown, TYPE_ERROR));
-                        }
-                        _ => unreachable!(),
-                    };
+            E::UnOp(inner, UnOp::PostIncrement) => {
+                let (value, ty) = self.assignable_expr(ctx, inner)?;
 
-                    let loaded = ctx.push(Instruction::Load(value.clone()));
-                    let incremented = ctx.push(Instruction::Add(
-                        loaded.clone(),
-                        Value::ConstantInt(false, 1),
-                    ));
-                    ctx.push(Instruction::Store(value, incremented));
+                // TODO: check if integer type
+                let loaded = ctx.push(Instruction::Load(value.clone()));
+                let incremented = ctx.push(Instruction::Add(
+                    loaded.clone(),
+                    Value::ConstantInt(false, 1),
+                ));
+                ctx.push(Instruction::Store(value, incremented));
 
-                    Some((loaded, inner))
+                Some((loaded, ty))
+            }
+            E::UnOp(inner, UnOp::Reference) => {
+                let (value, ty) = self.assignable_expr(ctx, inner)?;
+                match value {
+                    Value::Reference(block, instr) => {
+                        let ptr_ty = self.insert_type(Type::Pointer(ty), false, true);
+                        Some((Value::Reg(block, instr), ptr_ty))
+                    }
+                    Value::ConstantError => Some((value, ty)),
+                    _ => unreachable!(),
                 }
-            },
-            E::UnOp(inner, UnOp::Reference) => match self.assignable_expr(ctx, inner)? {
-                Either::Left((name, var)) => {
-                    let instr = ctx.blocks[ctx.block]
-                        .instructions
-                        .push(InstrIdx, Instruction::Reference(var.value));
-                    ctx.modify(
-                        name,
-                        Variable {
-                            value: Value::Reference(ctx.block, instr),
-                            ..var
-                        },
-                    );
-
-                    let ptr_ty = self.insert_type(Type::Pointer(var.ty), false, true);
-                    Some((Value::Reg(ctx.block, instr), ptr_ty))
-                }
-                Either::Right((value, ty)) => Some((value, ty)),
-            },
+            }
             E::UnOp(_, UnOp::Cast) => {
                 self.errors
                     .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
@@ -1472,7 +1369,21 @@ impl SemCtx<'_> {
                     None => self.synth_expr(ctx, expr)?,
                 };
                 let name = self.ast.idents[id].0.clone();
-                ctx.define(name, Variable { value, ty, mutable });
+
+                if mutable {
+                    let ptr = ctx.push_ref(Instruction::Reference(value));
+                    ctx.define(
+                        name,
+                        Variable {
+                            value: ptr,
+                            ty,
+                            mutable,
+                        },
+                    );
+                } else {
+                    ctx.define(name, Variable { value, ty, mutable });
+                }
+
                 Some((Value::ConstantNone, TYPE_NONE))
             }
             E::Array(ref exprs) => {
@@ -1482,7 +1393,7 @@ impl SemCtx<'_> {
                         let (val, ty) = self.synth_expr(ctx, first)?;
                         let elems = std::iter::once(Some(val))
                             .chain(iter.map(|expr| self.check_expr(ctx, expr, ty, None)))
-                            .collect::<Option<Vec<_>>>()?;
+                            .collect::<Option<Rc<[_]>>>()?;
                         let arr_ty = self.insert_type(
                             Type::ConstArray(GenericVal::Literal(elems.len() as u64), ty),
                             false,
@@ -1497,7 +1408,7 @@ impl SemCtx<'_> {
                     }
                 }
             }
-            E::String(ref str) => Some((Value::ConstantString(str.clone()), TYPE_STR)),
+            E::String(ref str) => Some((Value::ConstantString(str.as_str().into()), TYPE_STR)),
             E::Character(ref str) => {
                 // TODO: test if fits, test if single char (otherwise test if rune)
                 let c = str.chars().next().unwrap();
@@ -1511,7 +1422,7 @@ impl SemCtx<'_> {
                     None => {
                         self.errors
                             .push(self.ast.idents[id].with(Error::UnknownValue));
-                        Some((Value::ConstantUnknown, TYPE_ERROR))
+                        Some((Value::ConstantError, TYPE_ERROR))
                     }
                 }
             }
@@ -1521,16 +1432,13 @@ impl SemCtx<'_> {
                     .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 Some((Value::ConstantUninit, TYPE_ERROR))
             }
-            E::Error => Some((Value::ConstantUnknown, TYPE_ERROR)),
+            E::Error => Some((Value::ConstantError, TYPE_ERROR)),
             E::Member(_, _) => todo!(),
         }
     }
 }
 
 struct FunCtx<'a> {
-    sign: Either<FunIdx, &'a FunSign>,
-
-    phis: PhiStack,
     scope: &'a mut ScopeStack,
 
     yeetable: Option<TypeIdx>,
@@ -1547,198 +1455,120 @@ impl FunCtx<'_> {
         self.scope.pop();
         t
     }
-    fn phi<T>(
-        &mut self,
-        loops: bool,
-        phis: &mut HashMap<String, Vec<(Value, BlockIdx)>>,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> T {
-        self.push_phi(loops);
-        self.scope.push();
-        let t = f(self);
-        self.scope.pop();
-        self.commit_phi(phis);
-        self.pop_phi();
-        t
-    }
     fn push(&mut self, instr: Instruction) -> Value {
         let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
-        Value::Reg(self.block, idx)
+        Value::Reg(self.block, Some(idx))
     }
-    fn get_value(&mut self, ctx: &mut SemCtx, name: &str) -> Option<Variable> {
-        let var = self.scope.search(ctx, |s| s.values.get(name).cloned())?;
+    fn push_ref(&mut self, instr: Instruction) -> Value {
+        let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
+        Value::Reference(self.block, Some(idx))
+    }
+    fn get_value(&self, ctx: &SemCtx, name: &str) -> Option<Variable> {
+        self.scope.get_value(ctx, name)
+    }
+    fn define(&mut self, name: String, var: Variable) {
+        self.scope.top().values.insert(name, var);
+    }
+    fn jump(&mut self) -> BlockIdx {
+        let block = self.blocks.push(
+            BlockIdx,
+            Block {
+                instructions: VecMap::new(),
+                value: None,
+            },
+        );
+        self.push(Instruction::Jump(block));
 
-        let header = self.phis.phis.last().and_then(|p| p.header.as_ref());
-        match header {
-            Some(header) => {
-                let idx = self.blocks[header.init]
-                    .instructions
-                    .push(InstrIdx, Instruction::Phi(vec![(var.value, header.entry)]));
-                Some(Variable {
-                    value: Value::Reg(header.init, idx),
-                    ..var
-                })
+        let old = self.block;
+        self.block = block;
+        old
+    }
+    fn branch(
+        &mut self,
+        ctx: &mut SemCtx,
+        cond: Value,
+        yes: impl FnOnce(&mut SemCtx, &mut Self) -> Option<(Value, TypeIdx, Option<Range>)>,
+        no: impl FnOnce(&mut SemCtx, &mut Self) -> Option<(Value, TypeIdx, Option<Range>)>,
+    ) -> Option<(Value, TypeIdx)> {
+        let end_block = self.blocks.push(
+            BlockIdx,
+            Block {
+                instructions: VecMap::new(),
+                value: None,
+            },
+        );
+
+        let yes_block = self.blocks.push(
+            BlockIdx,
+            Block {
+                instructions: VecMap::new(),
+                value: None,
+            },
+        );
+        let no_block = self.blocks.push(
+            BlockIdx,
+            Block {
+                instructions: VecMap::new(),
+                value: None,
+            },
+        );
+
+        self.push(Instruction::Branch(cond, yes_block, no_block));
+
+        self.block = yes_block;
+        let (yval, yty, yloc) = match yes(ctx, self) {
+            Some((a, b, c)) => {
+                self.push(Instruction::Jump(end_block));
+                (a, b, c)
             }
-            None => Some(var),
-        }
-    }
-    fn push_phi(&mut self, loops: bool) {
-        let header = if loops {
-            let entry = self.block;
-            let init = self.blocks.push(BlockIdx, Block::default());
-            self.blocks[entry]
-                .instructions
-                .push_value(Instruction::Jump(init));
-            let first = self.blocks.push(BlockIdx, Block::default());
-
-            self.block = first;
-            Some(PhiHeader {
-                entry,
-                init,
-                first,
-                instructions: HashMap::new(),
-            })
-        } else {
-            None
+            None => (Value::ConstantError, TYPE_NEVER, None),
         };
 
-        self.phis.phis.push(Phi {
-            scope_pos: self.scope.scopes.len(),
-            own_vars: HashSet::new(),
-            modified_vars: HashMap::new(),
-            header,
-        })
-    }
-    fn branch(&mut self, v: Value) -> (BlockIdx, BlockIdx) {
-        let yes = self.blocks.push(BlockIdx, Block::default());
-        let no = self.blocks.push(BlockIdx, Block::default());
-        self.blocks[self.block]
-            .instructions
-            .push_value(Instruction::Branch(v, yes, no));
-        (yes, no)
-    }
-    fn commit_phi(&mut self, phis: &mut HashMap<String, Vec<(Value, BlockIdx)>>) {
-        let prev = self.block;
-        let phi = self.phis.phis.last().unwrap();
-        if let Some(header) = &phi.header {
-            for (name, &idx) in header.instructions.iter() {
-                let phis = match self.blocks[header.init].instructions[idx] {
-                    Instruction::Phi(ref mut v) => v,
-                    _ => unreachable!(),
-                };
-                match phi.modified_vars.get(name).cloned() {
-                    Some(value) => phis.push((value, prev)),
-                    None => {
-                        let base_val = phis[0].0.clone();
-                        phis.push((base_val, prev));
-                    }
+        self.block = no_block;
+        let (nval, nty, nloc) = match no(ctx, self) {
+            Some((a, b, c)) => {
+                self.push(Instruction::Jump(end_block));
+                (a, b, c)
+            }
+            None => (Value::ConstantError, TYPE_NEVER, None),
+        };
+
+        self.block = end_block;
+        let common = ctx.supertype(
+            yty,
+            nty,
+            TypeRange {
+                loc: nloc.or(yloc).unwrap_or(Ranged((), 0, 0, FileIdx(0))),
+                def: nloc.and_then(|_| yloc),
+            },
+        );
+
+        let mut phi = Vec::new();
+        if yty != TYPE_NEVER {
+            phi.push((yval.clone(), yes_block));
+        }
+        if nty != TYPE_NEVER {
+            phi.push((nval.clone(), no_block));
+        }
+
+        if phi.is_empty() {
+            None
+        } else if let [(val, _)] = phi.as_slice() {
+            Some((val.clone(), common))
+        } else {
+            match (yval, nval) {
+                (Value::ConstantNone, Value::ConstantNone) => Some((Value::ConstantNone, common)),
+                (Value::Reference(_, _), Value::Reference(_, _)) => {
+                    self.blocks[self.block].value = Some(phi);
+                    Some((Value::Reference(self.block, None), common))
+                }
+                _ => {
+                    self.blocks[self.block].value = Some(phi);
+                    Some((Value::Reg(self.block, None), common))
                 }
             }
         }
-        for (name, value) in phi.modified_vars.iter() {
-            match phis.get_mut(name) {
-                Some(vec) => {
-                    vec.push((value.clone(), prev));
-                }
-                None => {
-                    phis.insert(name.clone(), vec![(value.clone(), prev)]);
-                }
-            }
-        }
-        for (name, vec) in phis.iter_mut() {
-            if !phi.modified_vars.contains_key(name) {
-                let base_var = self.scope.scopes[0..phi.scope_pos]
-                    .iter()
-                    .rev()
-                    .map(|scope| scope.values.get(name))
-                    .find(Option::is_some)
-                    .flatten()
-                    .expect("no base val");
-                vec.push((base_var.value.clone(), prev));
-            }
-        }
     }
-    fn pop_phi(&mut self) {
-        let phi = self.phis.phis.pop().unwrap();
-        if let Some(header) = phi.header {
-            self.blocks[header.init]
-                .instructions
-                .push_value(Instruction::Jump(header.first));
-        }
-    }
-    fn complete_phi(&mut self, from: &[BlockIdx], phis: HashMap<String, Vec<(Value, BlockIdx)>>) {
-        let idx = self.blocks.push(BlockIdx, Block::default());
-        for block in from.iter().copied() {
-            self.blocks[block]
-                .instructions
-                .push_value(Instruction::Jump(idx));
-        }
-
-        for (name, mut phis) in phis {
-            let base_var = self
-                .scope
-                .scopes
-                .iter()
-                .rev()
-                .map(|scope| scope.values.get(&name))
-                .find(Option::is_some)
-                .flatten()
-                .expect("no base val");
-            for block in from.iter().copied() {
-                if !phis.iter().any(|(_, idx)| idx.eq(&block)) {
-                    phis.push((base_var.value.clone(), block));
-                }
-            }
-            let instr = self.blocks[idx]
-                .instructions
-                .push(InstrIdx, Instruction::Phi(phis));
-            self.modify(
-                name,
-                Variable {
-                    value: Value::Reg(idx, instr),
-                    ..base_var.clone()
-                },
-            );
-        }
-
-        self.block = idx;
-    }
-    fn modify(&mut self, s: String, v: Variable) {
-        for phis in self.phis.phis.iter_mut().rev() {
-            if phis.own_vars.contains(&s) {
-                break;
-            } else {
-                phis.modified_vars.insert(s.clone(), v.value.clone());
-            }
-        }
-        self.scope.top().values.insert(s, v);
-    }
-    fn define(&mut self, s: String, v: Variable) {
-        if let Some(phi) = self.phis.phis.last_mut() {
-            phi.own_vars.insert(s.clone());
-        }
-        self.scope.top().values.insert(s, v);
-    }
-}
-
-#[derive(Default)]
-struct PhiStack {
-    phis: Vec<Phi>,
-}
-
-#[derive(Default)]
-struct Phi {
-    scope_pos: usize,
-    own_vars: HashSet<String>,
-    modified_vars: HashMap<String, Value>,
-    header: Option<PhiHeader>,
-}
-
-struct PhiHeader {
-    entry: BlockIdx,
-    init: BlockIdx,
-    first: BlockIdx,
-    instructions: HashMap<String, InstrIdx>,
 }
 
 type ExprResult = Option<Value>;

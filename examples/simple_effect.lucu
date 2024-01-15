@@ -12,21 +12,15 @@ fun getter_indirect(n int) handle get {
 	getter(n)
 }
 
-fun gimme_get() handle get / get {
-	get
-}
-
 fun ident(h handle get) handle get {
 	h
 }
 
 fun puttwice(n int) / io.stdio {
-	with getter_indirect(n) {
-		let handler = gimme_get()
-		io.putint(get()) with handler
-		let handler = ident(handler)
-		io.putint(get()) with handler
-	}
+	let handler = getter_indirect(n)
+	let handler = ident(handler)
+	io.putint(get()) with handler
+	io.putint(get()) with handler
 }
 
 fun main() / io.stdio {

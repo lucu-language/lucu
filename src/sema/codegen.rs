@@ -925,6 +925,32 @@ impl SemCtx<'_> {
             (Type::Error, _) => true,
             (_, Type::Error) => true,
 
+            (Type::HandlerType(from), Type::HandlerType(to)) => {
+                from.effect == to.effect && self.test_move(from.fail_type, to.fail_type)
+            }
+
+            (&Type::Handler(from), &Type::Handler(to)) => {
+                if self.test_move(from.typeof_handler, to.typeof_handler) {
+                    let from_last = self.ir.lazy_last(from.idx);
+                    let to_last = self.ir.lazy_last(to.idx);
+                    match (from_last, to_last) {
+                        (_, None) => {
+                            *self.ir.lazy_last_mut(to.idx) = Some(Either::Right(from.idx));
+                            true
+                        }
+                        (None, _) => {
+                            *self.ir.lazy_last_mut(from.idx) = Some(Either::Right(to.idx));
+                            true
+                        }
+                        (Some(Either::Left(from)), Some(Either::Left(to))) if from == to => true,
+                        _ => false,
+                    }
+                } else {
+                    // incorrect meta-type
+                    false
+                }
+            }
+
             _ => false,
         }
     }
@@ -1137,8 +1163,6 @@ impl SemCtx<'_> {
         }
     }
     fn assignable_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
-        // TODO: return Value::Reference on Right
-
         use Expression as E;
         match self.ast.exprs[expr].0 {
             E::BinOp(left, BinOp::Index, right) => {
@@ -1271,6 +1295,9 @@ impl SemCtx<'_> {
                     Some((elem, elem_ty))
                 }
             }
+            E::BinOp(_, BinOp::Range, _) => {
+                todo!("give error")
+            }
             E::BinOp(left, op, right) => {
                 let (left, left_ty) = self.synth_expr(ctx, left)?;
                 let (right, right_ty) = self.synth_expr(ctx, right)?;
@@ -1318,6 +1345,8 @@ impl SemCtx<'_> {
                 Some((loaded, ty))
             }
             E::UnOp(inner, UnOp::Reference) => {
+                // TODO: also make this work for non-mutable variables? (const pointer)
+
                 let (value, ty) = self.assignable_expr(ctx, inner)?;
                 match value {
                     Value::Reference(block, instr) => {

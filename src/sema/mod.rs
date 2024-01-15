@@ -283,6 +283,26 @@ pub struct SemIR {
     pub generic_names: VecMap<GenericIdx, String>,
 }
 
+impl SemIR {
+    pub fn lazy_last(&self, lazy: LazyIdx) -> &Option<Either<GenericVal<HandlerIdent>, LazyIdx>> {
+        if let Some(Either::Right(idx)) = self.lazy_handlers[lazy] {
+            self.lazy_last(idx)
+        } else {
+            &self.lazy_handlers[lazy]
+        }
+    }
+    pub fn lazy_last_mut(
+        &mut self,
+        lazy: LazyIdx,
+    ) -> &mut Option<Either<GenericVal<HandlerIdent>, LazyIdx>> {
+        if let Some(Either::Right(idx)) = self.lazy_handlers[lazy] {
+            self.lazy_last_mut(idx)
+        } else {
+            &mut self.lazy_handlers[lazy]
+        }
+    }
+}
+
 pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<TypeIdx> {
     get_value(generic_params, &idx).copied()
 }

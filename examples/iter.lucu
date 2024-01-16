@@ -9,10 +9,10 @@ effect iter(`item) {
 # we define an effect for interacting with a buffer
 effect buf(`item) {
 	fun push(elem `item) usize
-	fun get(index usize) `item
+	fun get(index usize) const `item
 
 	# the iterator fails when next() is called if it is done
-	fun iter() handle iter(`item) fails
+	fun iter() handle iter(const `item) fails
 }
 
 # default implementation for void buffer
@@ -28,15 +28,15 @@ handle buf(void) {
 fun array_buffer(`cap usize) handle buf(`item) {
 	mut array [`cap]const `item = 0
 	mut size  usize       = 0
-	handle strbuf {
+	handle buf(`item) {
 		fun push(elem `item) usize {
 			array[size] = elem
 			size++
 		}
-		fun get(index usize) `item {
+		fun get(index usize) const `item {
 			array[index]
 		}
-		fun iter() handle iter(`item) fails {
+		fun iter() handle iter(const `item) fails {
 			mut current usize = 0
 			fun {
 				if current < size {

@@ -247,6 +247,7 @@ impl SemCtx<'_> {
             .types
             .insert(|idx| TypeIdx::new(idx, is_const, is_lent), ty)
             .clone()
+            .with(is_const, is_lent)
     }
     fn push_handler(&mut self, handler: Handler) -> HandlerIdx {
         self.ir.handlers.push(HandlerIdx, handler)
@@ -276,14 +277,22 @@ impl SemCtx<'_> {
             Type::Handler(lazy) => {
                 let typeof_handler =
                     self.translate_generics(lazy.typeof_handler, generic_params)?;
-                self.insert_type(
-                    Type::Handler(Lazy {
-                        idx: lazy.idx,
-                        typeof_handler,
-                    }),
-                    ty.is_const(),
-                    ty.is_lent(),
-                )
+
+                if let &Some(Either::Left(GenericVal::Generic(idx))) = self.ir.lazy_last(lazy.idx) {
+                    match get_param(generic_params, idx) {
+                        Some(ty) => ty,
+                        None => None?,
+                    }
+                } else {
+                    self.insert_type(
+                        Type::Handler(Lazy {
+                            idx: lazy.idx,
+                            typeof_handler,
+                        }),
+                        ty.is_const(),
+                        ty.is_lent(),
+                    )
+                }
             }
             Type::Effect(ref ident) => {
                 let ie = ident.effect;
@@ -581,10 +590,9 @@ impl SemCtx<'_> {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 self.insert_type(Type::Pointer(inner), false, true)
             }
-            T::Const(ty) => {
-                let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                inner.with(true, inner.is_lent())
-            }
+            T::Const(ty) => self
+                .analyze_type(scope, ty, generics, generic_handler, handler_output)
+                .with_const(true),
             T::ConstArray(size, ty) => {
                 let inner = self.analyze_type(
                     scope,
@@ -647,6 +655,7 @@ impl SemCtx<'_> {
                     true,
                     &mut Self::no_handler,
                 );
+                let ty = ty.with_const((!param.mutable && !self.is_copy(ty)) || ty.is_const());
                 if param.const_generic {
                     let generic = self
                         .analyze_generic(scope, param.name, ty, Some(&mut generics))
@@ -754,9 +763,6 @@ impl SemCtx<'_> {
         let params = b.params.clone();
 
         if a.params.len() != b.params.len() {
-            // TODO: get correct amount of parameters
-            // this now also includes effect params and 'self'
-            // which might be confusing
             self.errors
                 .push(b.def.unwrap().with(Error::ParameterMismatch(
                     Some(a.def.unwrap()),
@@ -767,7 +773,7 @@ impl SemCtx<'_> {
         }
 
         for (a, b) in a.params.values().zip(Vec::from(params).into_iter()) {
-            // FIXME: does this always succeed?
+            // FIXME: can fail to translate its own generics (which should be untranslated)
             let translated = self.translate_generics(b.ty, generic_params).unwrap();
             self.check_move(
                 translated,
@@ -778,6 +784,8 @@ impl SemCtx<'_> {
                 },
             );
         }
+
+        // TODO: check effect_stack
 
         // NOTE: output already has been checked
     }
@@ -954,8 +962,11 @@ impl SemCtx<'_> {
             (_, Type::Generic(generic)) => {
                 infer_generic(params, generic.idx, from);
             }
-            (Type::Handler(from), Type::Handler(to)) => {
-                self.infer_generics(params, from.typeof_handler, to.typeof_handler);
+            (Type::Handler(inner), Type::Handler(to)) => {
+                if let &Some(Either::Left(GenericVal::Generic(idx))) = self.ir.lazy_last(to.idx) {
+                    infer_generic(params, idx, from);
+                }
+                self.infer_generics(params, inner.typeof_handler, to.typeof_handler);
             }
             (Type::HandlerType(from), Type::HandlerType(to)) => {
                 let from_fail = from.fail_type;
@@ -1047,6 +1058,27 @@ impl SemCtx<'_> {
             )));
         }
     }
+    fn is_copy(&self, a: TypeIdx) -> bool {
+        match self.ir.types[a] {
+            Type::Effect(_) => false,
+            Type::Handler(_) => false,
+            Type::EffectType => false,
+            Type::DataType => false,
+            Type::HandlerType(_) => false,
+            Type::Generic(_) => false,
+            Type::Pointer(_) => false,
+            Type::ConstArray(_, _) => false,
+            Type::Slice(_) => false,
+            Type::Integer(_, _) => true,
+            Type::Str => false,
+            Type::Char => true,
+            Type::Bool => true,
+            Type::None => true,
+            Type::Never => true,
+            Type::Error => true,
+            Type::CompileTime(_, _) => true,
+        }
+    }
     fn test_move(&mut self, from: TypeIdx, to: TypeIdx) -> bool {
         if from == to {
             return true;
@@ -1080,7 +1112,7 @@ impl SemCtx<'_> {
                             *self.ir.lazy_last_mut(from.idx) = Some(Either::Right(to.idx));
                             true
                         }
-                        (Some(Either::Left(from)), Some(Either::Left(to))) if from == to => true,
+                        // (Some(Either::Left(from)), Some(Either::Left(to))) if from == to => true,
                         _ => false,
                     }
                 } else {
@@ -1090,31 +1122,6 @@ impl SemCtx<'_> {
             }
 
             _ => false,
-        }
-    }
-    fn typeof_ty(&mut self, ty: TypeIdx) -> TypeIdx {
-        match self.ir.types[ty] {
-            Type::Generic(generic) => generic.typeof_ty,
-            Type::CompileTime(_, meta) => meta,
-
-            Type::Effect(_) => TYPE_EFFECT,
-
-            Type::Handler(_) => TYPE_DATATYPE,
-            Type::Pointer(_) => TYPE_DATATYPE,
-            Type::ConstArray(_, _) => TYPE_DATATYPE,
-            Type::Slice(_) => TYPE_DATATYPE,
-            Type::Integer(_, _) => TYPE_DATATYPE,
-            Type::Str => TYPE_DATATYPE,
-            Type::Char => TYPE_DATATYPE,
-            Type::Bool => TYPE_DATATYPE,
-            Type::None => TYPE_DATATYPE,
-
-            Type::Never => TYPE_NEVER,
-            Type::Error => TYPE_ERROR,
-
-            Type::DataType => todo!(),
-            Type::EffectType => todo!(),
-            Type::HandlerType(_) => todo!(),
         }
     }
     fn generate_function(
@@ -1261,6 +1268,7 @@ impl SemCtx<'_> {
                 .map(|(val, _)| val)
             }
             (&E::Array(ref exprs), &Type::Slice(elem)) => {
+                let elem = elem.with_const(elem.is_const() || expected.is_const());
                 let elems = exprs
                     .iter()
                     .copied()
@@ -1277,6 +1285,7 @@ impl SemCtx<'_> {
             (&E::Array(ref exprs), &Type::ConstArray(GenericVal::Literal(n), elem))
                 if n == exprs.len() as u64 =>
             {
+                let elem = elem.with_const(elem.is_const() || expected.is_const());
                 let elems = exprs
                     .iter()
                     .copied()
@@ -1375,7 +1384,29 @@ impl SemCtx<'_> {
                         let (val, ty) = match self.translate_generics(param_ty, &generic_params) {
                             Some(to) => (self.check_expr(ctx, arg, to, Some(param_def))?, to),
                             None => {
-                                let (val, from) = self.synth_expr(ctx, arg)?;
+                                let (val, from) = if let Type::Handler(lazy) =
+                                    self.ir.types[param_ty]
+                                {
+                                    // lambda support
+                                    if let Some(typeof_handler) = self
+                                        .translate_generics(lazy.typeof_handler, &generic_params)
+                                    {
+                                        let idx = self.ir.lazy_handlers.push(LazyIdx, None);
+                                        let from = self.insert_type(
+                                            Type::Handler(Lazy {
+                                                idx,
+                                                typeof_handler,
+                                            }),
+                                            param_ty.is_const(),
+                                            param_ty.is_lent(),
+                                        );
+                                        (self.check_expr(ctx, arg, from, None)?, from)
+                                    } else {
+                                        self.synth_expr(ctx, arg)?
+                                    }
+                                } else {
+                                    self.synth_expr(ctx, arg)?
+                                };
                                 self.infer_generics(&mut generic_params, from, param_ty);
 
                                 if from != TYPE_ERROR
@@ -1483,6 +1514,117 @@ impl SemCtx<'_> {
 
                 let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
                 Some(val)
+            }
+            (&E::Handler(ast::Handler::Lambda(ref lambda)), &Type::Handler(lazy)) => {
+                ctx.child(|ctx| {
+                    let ty = match self.ir.types[lazy.typeof_handler] {
+                        Type::HandlerType(ref ty) => ty,
+                        Type::Generic(_) => todo!("give error"),
+                        _ => unreachable!(),
+                    };
+                    let fail = ty.fail_type;
+                    let eff = match ty.effect {
+                        GenericVal::Literal(ref effect) => effect.clone(),
+                        GenericVal::Generic(_) => todo!("give error"),
+                    };
+
+                    // check function
+                    let ast = &self.ast.effects[eff.effect];
+                    if ast.functions.len() != 1 {
+                        todo!("give error");
+                    }
+
+                    let fun = &ast.functions[EffFunIdx(0)];
+                    if fun.sign.inputs.len() != lambda.inputs.len() {
+                        todo!("give error");
+                    }
+
+                    // analyze signature
+                    let mut sign = self.ir.effects[eff.effect].funs[EffFunIdx(0)].clone();
+                    for (param, ident) in sign
+                        .params
+                        .values_mut()
+                        .zip(lambda.inputs.values().copied())
+                    {
+                        // rename params to lambda names
+                        param.name_def = self.ast.idents[ident].empty();
+                        param.name = self.ast.idents[ident].0.clone();
+
+                        // FIXME: can fail to translate its own generics (which should be untranslated)
+                        param.ty = self
+                            .translate_generics(param.ty, &eff.generic_params)
+                            .unwrap();
+                    }
+                    // TODO: translate effect_stack
+
+                    // FIXME: can fail to translate its own generics (which should be untranslated)
+                    sign.return_type.ty = self
+                        .translate_generics(sign.return_type.ty, &eff.generic_params)
+                        .unwrap();
+
+                    // analyze function
+                    let mut value_captures = Vec::new();
+                    let mut effect_captures = Vec::new();
+                    let imp = self.generate_function(
+                        Either::Right(&sign),
+                        lambda.body,
+                        ctx.scope,
+                        Some(fail),
+                        None,
+                        &mut value_captures,
+                        &mut effect_captures,
+                    );
+
+                    // create handler
+                    let handler = self.push_handler(Handler {
+                        debug_name: format!("H{}", self.ir.handlers.len()),
+                        generics: Vec::new(), // FIXME: clone function generics
+
+                        effect: eff.effect,
+                        generic_params: eff.generic_params,
+                        fail,
+
+                        value_captures: value_captures
+                            .iter()
+                            .map(|s| Capture {
+                                debug_name: s.into(),
+                                ty: ctx.get_value(self, s).unwrap().ty,
+                            })
+                            .collect(),
+                        effect_captures: effect_captures.clone(),
+
+                        funs: vec![(sign, imp)].into(),
+                    });
+
+                    let idx = self.ir.lazy_handlers.push(
+                        LazyIdx,
+                        Some(Either::Left(GenericVal::Literal(HandlerIdent {
+                            handler,
+                            generic_params: Vec::new(), // FIXME: clone function generics
+                            fail_type: fail,
+                        }))),
+                    );
+                    let ty = self.insert_type(
+                        Type::Handler(Lazy {
+                            idx,
+                            typeof_handler: lazy.typeof_handler,
+                        }),
+                        false,
+                        false,
+                    );
+                    self.check_move(ty, expected, error_loc);
+
+                    Some(Value::ConstantHandler(
+                        value_captures
+                            .into_iter()
+                            .map(|s| ctx.get_value(self, &s).unwrap().value)
+                            .collect(),
+                        effect_captures
+                            .into_iter()
+                            .map(|s| ctx.get_effect(self, s).unwrap())
+                            .collect(),
+                    ))
+                })
             }
 
             _ => {
@@ -1705,8 +1847,7 @@ impl SemCtx<'_> {
                             ));
                         }
 
-                        // add implied handler to effect
-                        println!("{:?} {}", value_captures, self.ir.effects[effidx].name);
+                        // create handler
                         let handler = self.push_handler(Handler {
                             debug_name: format!("H{}", self.ir.handlers.len()),
                             generics: Vec::new(), // FIXME: clone function generics
@@ -1814,7 +1955,29 @@ impl SemCtx<'_> {
                         let (val, ty) = match self.translate_generics(param_ty, &generic_params) {
                             Some(to) => (self.check_expr(ctx, arg, to, Some(param_def))?, to),
                             None => {
-                                let (val, from) = self.synth_expr(ctx, arg)?;
+                                let (val, from) = if let Type::Handler(lazy) =
+                                    self.ir.types[param_ty]
+                                {
+                                    // lambda support
+                                    if let Some(typeof_handler) = self
+                                        .translate_generics(lazy.typeof_handler, &generic_params)
+                                    {
+                                        let idx = self.ir.lazy_handlers.push(LazyIdx, None);
+                                        let from = self.insert_type(
+                                            Type::Handler(Lazy {
+                                                idx,
+                                                typeof_handler,
+                                            }),
+                                            param_ty.is_const(),
+                                            param_ty.is_lent(),
+                                        );
+                                        (self.check_expr(ctx, arg, from, None)?, from)
+                                    } else {
+                                        self.synth_expr(ctx, arg)?
+                                    }
+                                } else {
+                                    self.synth_expr(ctx, arg)?
+                                };
                                 self.infer_generics(&mut generic_params, from, param_ty);
 
                                 if from != TYPE_ERROR

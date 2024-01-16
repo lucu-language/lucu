@@ -51,6 +51,9 @@ impl TypeIdx {
     pub fn with(self, is_const: bool, is_lent: bool) -> Self {
         Self::new(usize::from(self), is_const, is_lent)
     }
+    pub fn with_const(self, is_const: bool) -> Self {
+        Self::new(usize::from(self), is_const, self.is_lent())
+    }
 }
 
 mod codegen;
@@ -68,7 +71,6 @@ pub enum Value {
     ConstantInt(bool, u64),
     ConstantString(Rc<[u8]>),
     ConstantBool(bool),
-    ConstantType(TypeIdx),
     ConstantNone,
     ConstantUninit,
     ConstantZero,
@@ -89,7 +91,6 @@ impl Value {
             Value::ConstantInt(_, _) => true,
             Value::ConstantString(_) => true,
             Value::ConstantBool(_) => true,
-            Value::ConstantType(_) => true,
             Value::ConstantNone => true,
             Value::ConstantUninit => true,
             Value::ConstantZero => true,
@@ -174,13 +175,13 @@ pub struct Param {
     pub const_generic: Option<GenericIdx>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ReturnType {
     pub type_def: Option<Range>,
     pub ty: TypeIdx,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FunSign {
     pub def: Option<Range>,
     pub name: String,
@@ -593,7 +594,6 @@ impl Value {
                 write!(f, "\"{}\"", std::str::from_utf8(str).unwrap())
             }
             Value::ConstantBool(b) => write!(f, "{}", b),
-            Value::ConstantType(ty) => ty.display(ir, &Vec::new(), f),
             Value::ConstantNone => write!(f, "{{}}"),
             Value::ConstantUninit => write!(f, "---"),
             Value::ConstantZero => write!(f, "0"),
@@ -813,6 +813,7 @@ impl Handler {
         for capture in self.value_captures.iter() {
             write!(f, "  {} ", capture.debug_name)?;
             capture.ty.display(ir, no_params, f)?;
+            write!(f, "\n")?;
         }
 
         // funs

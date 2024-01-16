@@ -11,7 +11,7 @@ use crate::{
         self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp, AST,
     },
     error::{Error, Errors, FileIdx, Range, Ranged},
-    sema::Instruction,
+    sema::{EffectArg, Instruction},
     vecmap::{VecMap, VecSet},
     Target,
 };
@@ -1347,12 +1347,12 @@ impl SemCtx<'_> {
                     .zip(
                         sign.params
                             .values()
-                            .map(|p| (p.ty, p.type_def))
+                            .map(|p| (p.ty, p.type_def, p.const_generic))
                             .collect::<Vec<_>>(),
                     )
-                    .map(|(arg, (param_ty, param_def))| {
-                        match self.translate_generics(param_ty, &generic_params) {
-                            Some(to) => self.check_expr(ctx, arg, to, Some(param_def)),
+                    .map(|(arg, (param_ty, param_def, const_generic))| {
+                        let (val, ty) = match self.translate_generics(param_ty, &generic_params) {
+                            Some(to) => (self.check_expr(ctx, arg, to, Some(param_def))?, to),
                             None => {
                                 let (val, from) = self.synth_expr(ctx, arg)?;
                                 self.infer_generics(&mut generic_params, from, param_ty);
@@ -1370,11 +1370,45 @@ impl SemCtx<'_> {
                                         )))
                                 }
 
-                                Some(val)
+                                (val, from)
+                            }
+                        };
+                        if let Some(const_generic) = const_generic {
+                            match val {
+                                Value::ConstantAggregate(_)
+                                | Value::ConstantInt(_, _)
+                                | Value::ConstantString(_)
+                                | Value::ConstantBool(_)
+                                | Value::ConstantType(_)
+                                | Value::ConstantNone
+                                | Value::ConstantUninit
+                                | Value::ConstantZero
+                                | Value::ConstantError => generic_params.push((
+                                    const_generic,
+                                    self.insert_type(
+                                        Type::CompileTime(val.clone(), ty),
+                                        false,
+                                        false,
+                                    ),
+                                )),
+                                Value::Param(_) => todo!(),
+                                _ => todo!("give error: not constant"),
                             }
                         }
+                        Some(val)
                     })
                     .collect::<Option<Vec<_>>>()?;
+
+                // make sure we got all generics inferred
+                let sign = &fun.sign(&self.ir);
+                generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                if !generic_params
+                    .iter()
+                    .map(|&(idx, _)| idx)
+                    .eq(sign.generics.iter().map(|generic| generic.idx))
+                {
+                    todo!("this shouldn't occur without a type mismatch");
+                }
 
                 // get effects
                 let mut not_enough_info = false;
@@ -1420,11 +1454,64 @@ impl SemCtx<'_> {
                             });
 
                     match matching {
-                        Some((idx, &(_, block))) => effects.push((idx, block)),
+                        Some((idx, &(_, block))) => effects.push((EffectArg::Stack(idx), block)),
                         None => {
-                            let def = fun.sign(&self.ir).effect_stack[effect].empty();
-                            self.errors
-                                .push(self.ast.exprs[expr].with(Error::UnresolvedEffect(def)));
+                            // find matching implied
+                            let implied = self.ir.effects[ident.effect]
+                                .implied
+                                .clone()
+                                .into_iter()
+                                .enumerate()
+                                .find_map(|(i, idx)| {
+                                    let mut generic_params = GenericParams::new();
+
+                                    // infer implied generics
+                                    for (candidate, target) in self.ir.handlers[idx]
+                                        .generic_params
+                                        .clone()
+                                        .into_iter()
+                                        .zip(ident.generic_params.iter())
+                                    {
+                                        self.infer_generics(
+                                            &mut generic_params,
+                                            target.1,
+                                            candidate.1,
+                                        );
+                                        if !self
+                                            .translate_generics(candidate.1, &generic_params)
+                                            .is_some_and(|ty| ty == target.1)
+                                        {
+                                            return None;
+                                        }
+                                    }
+
+                                    // make sure we got all generics inferred
+                                    generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                                    if !generic_params.iter().map(|&(idx, _)| idx).eq(self
+                                        .ir
+                                        .handlers[idx]
+                                        .generics
+                                        .iter()
+                                        .map(|generic| generic.idx))
+                                    {
+                                        return None;
+                                    }
+
+                                    return Some((i, generic_params));
+                                });
+
+                            match implied {
+                                Some((idx, generic_params)) => {
+                                    effects.push((EffectArg::Implied(idx, generic_params), None));
+                                }
+                                None => {
+                                    // error
+                                    let def = fun.sign(&self.ir).effect_stack[effect].empty();
+                                    self.errors.push(
+                                        self.ast.exprs[expr].with(Error::UnresolvedEffect(def)),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1571,12 +1658,12 @@ impl SemCtx<'_> {
                     .zip(
                         sign.params
                             .values()
-                            .map(|p| (p.ty, p.type_def))
+                            .map(|p| (p.ty, p.type_def, p.const_generic))
                             .collect::<Vec<_>>(),
                     )
-                    .map(|(arg, (param_ty, param_def))| {
-                        match self.translate_generics(param_ty, &generic_params) {
-                            Some(to) => self.check_expr(ctx, arg, to, Some(param_def)),
+                    .map(|(arg, (param_ty, param_def, const_generic))| {
+                        let (val, ty) = match self.translate_generics(param_ty, &generic_params) {
+                            Some(to) => (self.check_expr(ctx, arg, to, Some(param_def))?, to),
                             None => {
                                 let (val, from) = self.synth_expr(ctx, arg)?;
                                 self.infer_generics(&mut generic_params, from, param_ty);
@@ -1594,16 +1681,48 @@ impl SemCtx<'_> {
                                         )))
                                 }
 
-                                Some(val)
+                                (val, from)
+                            }
+                        };
+                        if let Some(const_generic) = const_generic {
+                            match val {
+                                Value::ConstantAggregate(_)
+                                | Value::ConstantInt(_, _)
+                                | Value::ConstantString(_)
+                                | Value::ConstantBool(_)
+                                | Value::ConstantType(_)
+                                | Value::ConstantNone
+                                | Value::ConstantUninit
+                                | Value::ConstantZero
+                                | Value::ConstantError => generic_params.push((
+                                    const_generic,
+                                    self.insert_type(
+                                        Type::CompileTime(val.clone(), ty),
+                                        false,
+                                        false,
+                                    ),
+                                )),
+                                Value::Param(_) => todo!(),
+                                _ => todo!("give error: not constant"),
                             }
                         }
+                        Some(val)
                     })
                     .collect::<Option<Vec<_>>>()?;
 
+                // make sure we got all generics inferred
+                let sign = &fun.sign(&self.ir);
+                generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                if !generic_params
+                    .iter()
+                    .map(|&(idx, _)| idx)
+                    .eq(sign.generics.iter().map(|generic| generic.idx))
+                {
+                    todo!("this shouldn't occur without a type mismatch");
+                }
+
                 // get return type
                 let mut not_enough_info = false;
-
-                let sign = &fun.sign(&self.ir);
                 let return_type =
                     match self.translate_generics(sign.return_type.ty, &generic_params) {
                         Some(ty) => ty,
@@ -1656,11 +1775,64 @@ impl SemCtx<'_> {
                             });
 
                     match matching {
-                        Some((idx, &(_, block))) => effects.push((idx, block)),
+                        Some((idx, &(_, block))) => effects.push((EffectArg::Stack(idx), block)),
                         None => {
-                            let def = fun.sign(&self.ir).effect_stack[effect].empty();
-                            self.errors
-                                .push(self.ast.exprs[expr].with(Error::UnresolvedEffect(def)));
+                            // find matching implied
+                            let implied = self.ir.effects[ident.effect]
+                                .implied
+                                .clone()
+                                .into_iter()
+                                .enumerate()
+                                .find_map(|(i, idx)| {
+                                    let mut generic_params = GenericParams::new();
+
+                                    // infer implied generics
+                                    for (candidate, target) in self.ir.handlers[idx]
+                                        .generic_params
+                                        .clone()
+                                        .into_iter()
+                                        .zip(ident.generic_params.iter())
+                                    {
+                                        self.infer_generics(
+                                            &mut generic_params,
+                                            target.1,
+                                            candidate.1,
+                                        );
+                                        if !self
+                                            .translate_generics(candidate.1, &generic_params)
+                                            .is_some_and(|ty| ty == target.1)
+                                        {
+                                            return None;
+                                        }
+                                    }
+
+                                    // make sure we got all generics inferred
+                                    generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                                    if !generic_params.iter().map(|&(idx, _)| idx).eq(self
+                                        .ir
+                                        .handlers[idx]
+                                        .generics
+                                        .iter()
+                                        .map(|generic| generic.idx))
+                                    {
+                                        return None;
+                                    }
+
+                                    return Some((i, generic_params));
+                                });
+
+                            match implied {
+                                Some((idx, generic_params)) => {
+                                    effects.push((EffectArg::Implied(idx, generic_params), None));
+                                }
+                                None => {
+                                    // error
+                                    let def = fun.sign(&self.ir).effect_stack[effect].empty();
+                                    self.errors.push(
+                                        self.ast.exprs[expr].with(Error::UnresolvedEffect(def)),
+                                    );
+                                }
+                            }
                         }
                     }
                 }

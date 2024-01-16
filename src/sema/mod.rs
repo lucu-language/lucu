@@ -109,7 +109,7 @@ pub enum Instruction {
         // params
         Vec<Value>,
         // effect params
-        Vec<(usize, Option<BlockIdx>)>,
+        Vec<(EffectArg, Option<BlockIdx>)>,
     ),
     PopHandler,
 
@@ -128,6 +128,12 @@ pub enum Instruction {
     Trap,
     Trace(Value),
     Syscall(Value, Vec<Value>),
+}
+
+#[derive(Debug)]
+pub enum EffectArg {
+    Stack(usize),
+    Implied(usize, GenericParams),
 }
 
 #[derive(Debug, Clone)]

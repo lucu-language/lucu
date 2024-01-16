@@ -11,15 +11,15 @@ use crate::{
         self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp, AST,
     },
     error::{Error, Errors, FileIdx, Range, Ranged},
-    sema::{EffectArg, Instruction},
+    sema::{Capture, EffectArg, HandlerIdent, Instruction},
     vecmap::{VecMap, VecSet},
     Target,
 };
 
 use super::{
-    get_param, Block, BlockIdx, Effect, EffectIdent, EffectType, FunIdent, FunIdx, FunImpl,
-    FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx,
-    InstrIdx, IntSize, Lazy, LazyIdx, Param, ReturnType, SemIR, Type, TypeIdx, Value,
+    get_param, Block, BlockIdx, Effect, EffectIdent, FunIdent, FunIdx, FunImpl, FunSign, Generic,
+    GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx, HandlerType, InstrIdx,
+    IntSize, Lazy, LazyIdx, Param, ReturnType, SemIR, Type, TypeIdx, Value,
 };
 
 impl FunIdent {
@@ -57,6 +57,8 @@ struct Scope {
     types: HashMap<String, TypeIdx>,
     generics: HashMap<String, Generic>,
     values: HashMap<String, Variable>,
+
+    effect_stack: Vec<(GenericVal<EffectIdent>, Option<BlockIdx>)>,
 }
 
 impl ScopeStack {
@@ -331,7 +333,7 @@ impl SemCtx<'_> {
                 };
                 let fail_type = self.translate_generics(eft, generic_params)?;
                 self.insert_type(
-                    Type::HandlerType(EffectType { effect, fail_type }),
+                    Type::HandlerType(HandlerType { effect, fail_type }),
                     ty.is_const(),
                     ty.is_lent(),
                 )
@@ -469,7 +471,7 @@ impl SemCtx<'_> {
 
                 // create handler type
                 let typeof_handler = self.insert_type(
-                    Type::HandlerType(EffectType {
+                    Type::HandlerType(HandlerType {
                         effect: effect.map(|&effect| EffectIdent {
                             effect,
                             // TODO: error on length mismatch
@@ -539,7 +541,7 @@ impl SemCtx<'_> {
 
                 // create handler type
                 let typeof_handler = self.insert_type(
-                    Type::HandlerType(EffectType { effect, fail_type }),
+                    Type::HandlerType(HandlerType { effect, fail_type }),
                     false,
                     false,
                 );
@@ -861,6 +863,8 @@ impl SemCtx<'_> {
                     scope,
                     Some(fail),
                     None,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
                 );
 
                 match matching {
@@ -906,7 +910,8 @@ impl SemCtx<'_> {
                 generic_params,
                 fail,
 
-                captures: Vec::new(),
+                value_captures: Vec::new(),
+                effect_captures: Vec::new(),
                 funs,
             });
             self.ir.effects[effect].implied.push(handler);
@@ -1119,6 +1124,8 @@ impl SemCtx<'_> {
         scope: &mut ScopeStack,
         yeetable: Option<TypeIdx>,
         yeetable_def: Option<Range>,
+        value_captures: &mut Vec<String>,
+        effect_captures: &mut Vec<GenericVal<EffectIdent>>,
     ) -> FunImpl {
         scope.child(|scope| {
             let ir_sign = match sign {
@@ -1126,19 +1133,25 @@ impl SemCtx<'_> {
                 Either::Right(sign) => sign,
             };
 
+            scope.top().effect_stack = ir_sign
+                .effect_stack
+                .iter()
+                .map(|ident| (ident.0.clone(), None))
+                .collect();
+
             let mut blocks = VecMap::new();
             let block = blocks.push(BlockIdx, Block::default());
             let mut fun_ctx = FunCtx {
+                sign,
+                capture_boundary: scope.scopes.len() - 1,
+                value_captures,
+                effect_captures,
+
                 scope,
                 blocks,
                 block,
                 yeetable,
                 yeetable_def,
-                effect_stack: ir_sign
-                    .effect_stack
-                    .iter()
-                    .map(|ident| (ident.0.clone(), None))
-                    .collect(),
             };
 
             for (idx, param) in ir_sign.params.iter(ParamIdx) {
@@ -1149,7 +1162,16 @@ impl SemCtx<'_> {
                         Variable {
                             value,
                             ty: param.ty,
-                            mutable: param.mutable,
+                            mutable: true,
+                        },
+                    );
+                } else if let Some(idx) = param.const_generic {
+                    fun_ctx.define(
+                        param.name.clone(),
+                        Variable {
+                            value: Value::ConstantGeneric(idx),
+                            ty: param.ty,
+                            mutable: false,
                         },
                     );
                 } else {
@@ -1158,7 +1180,7 @@ impl SemCtx<'_> {
                         Variable {
                             value: Value::Param(idx),
                             ty: param.ty,
-                            mutable: param.mutable,
+                            mutable: false,
                         },
                     );
                 }
@@ -1208,7 +1230,7 @@ impl SemCtx<'_> {
         match (&self.ast.exprs[expr].0, &self.ir.types[expected]) {
             (&E::Body(ref body), _) => ctx.child(|ctx| {
                 for expr in body.main.iter().copied() {
-                    self.synth_expr(ctx, expr)?;
+                    self.check_expr(ctx, expr, TYPE_NONE, None)?;
                 }
                 body.last
                     .map(|expr| self.check_expr(ctx, expr, expected, expected_def))
@@ -1339,7 +1361,6 @@ impl SemCtx<'_> {
                 }
 
                 // get params and infer generic params
-                // TODO: const generics
                 let sign = &fun.sign(&self.ir);
                 let args = args
                     .iter()
@@ -1374,25 +1395,17 @@ impl SemCtx<'_> {
                             }
                         };
                         if let Some(const_generic) = const_generic {
-                            match val {
-                                Value::ConstantAggregate(_)
-                                | Value::ConstantInt(_, _)
-                                | Value::ConstantString(_)
-                                | Value::ConstantBool(_)
-                                | Value::ConstantType(_)
-                                | Value::ConstantNone
-                                | Value::ConstantUninit
-                                | Value::ConstantZero
-                                | Value::ConstantError => generic_params.push((
+                            if val.is_constant() {
+                                generic_params.push((
                                     const_generic,
                                     self.insert_type(
                                         Type::CompileTime(val.clone(), ty),
                                         false,
                                         false,
                                     ),
-                                )),
-                                Value::Param(_) => todo!(),
-                                _ => todo!("give error: not constant"),
+                                ))
+                            } else {
+                                todo!("give error: not constant")
                             }
                         }
                         Some(val)
@@ -1407,7 +1420,7 @@ impl SemCtx<'_> {
                     .map(|&(idx, _)| idx)
                     .eq(sign.generics.iter().map(|generic| generic.idx))
                 {
-                    todo!("this shouldn't occur without a type mismatch");
+                    println!("this shouldn't occur without a type mismatch {}", sign.name);
                 }
 
                 // get effects
@@ -1416,10 +1429,11 @@ impl SemCtx<'_> {
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ident = match fun.sign(&self.ir).effect_stack[effect].0 {
-                        GenericVal::Literal(ref ident) => ident.clone(),
+                        GenericVal::Literal(ref ident) => GenericVal::Literal(ident.clone()),
                         GenericVal::Generic(idx) => match get_param(&generic_params, idx) {
                             Some(ty) => match self.ir.types[ty] {
-                                Type::Effect(ref ident) => ident.clone(),
+                                Type::Effect(ref ident) => GenericVal::Literal(ident.clone()),
+                                Type::Generic(generic) => GenericVal::Generic(generic.idx),
                                 Type::Error => continue,
                                 _ => unreachable!(),
                             },
@@ -1429,89 +1443,35 @@ impl SemCtx<'_> {
                             }
                         },
                     };
-                    let Some(translated) = ident
-                        .generic_params
-                        .iter()
-                        .copied()
-                        .map(|(idx, ty)| Some((idx, self.translate_generics(ty, &generic_params)?)))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let ident = EffectIdent {
-                        effect: ident.effect,
-                        generic_params: translated,
+                    let ident = match ident {
+                        GenericVal::Literal(ident) => {
+                            let Some(translated) = ident
+                                .generic_params
+                                .iter()
+                                .copied()
+                                .map(|(idx, ty)| {
+                                    Some((idx, self.translate_generics(ty, &generic_params)?))
+                                })
+                                .collect::<Option<Vec<_>>>()
+                            else {
+                                continue;
+                            };
+                            GenericVal::Literal(EffectIdent {
+                                effect: ident.effect,
+                                generic_params: translated,
+                            })
+                        }
+                        ident => ident,
                     };
 
                     // find matching effect in stack
-                    let matching =
-                        ctx.effect_stack
-                            .iter()
-                            .enumerate()
-                            .rfind(|(_, (candidate, _))| match candidate {
-                                GenericVal::Literal(candidate) => ident.eq(candidate),
-                                GenericVal::Generic(_) => false,
-                            });
-
-                    match matching {
-                        Some((idx, &(_, block))) => effects.push((EffectArg::Stack(idx), block)),
+                    match ctx.get_effect(self, ident) {
+                        Some((idx, block)) => effects.push((idx, block)),
                         None => {
-                            // find matching implied
-                            let implied = self.ir.effects[ident.effect]
-                                .implied
-                                .clone()
-                                .into_iter()
-                                .enumerate()
-                                .find_map(|(i, idx)| {
-                                    let mut generic_params = GenericParams::new();
-
-                                    // infer implied generics
-                                    for (candidate, target) in self.ir.handlers[idx]
-                                        .generic_params
-                                        .clone()
-                                        .into_iter()
-                                        .zip(ident.generic_params.iter())
-                                    {
-                                        self.infer_generics(
-                                            &mut generic_params,
-                                            target.1,
-                                            candidate.1,
-                                        );
-                                        if !self
-                                            .translate_generics(candidate.1, &generic_params)
-                                            .is_some_and(|ty| ty == target.1)
-                                        {
-                                            return None;
-                                        }
-                                    }
-
-                                    // make sure we got all generics inferred
-                                    generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
-                                    if !generic_params.iter().map(|&(idx, _)| idx).eq(self
-                                        .ir
-                                        .handlers[idx]
-                                        .generics
-                                        .iter()
-                                        .map(|generic| generic.idx))
-                                    {
-                                        return None;
-                                    }
-
-                                    return Some((i, generic_params));
-                                });
-
-                            match implied {
-                                Some((idx, generic_params)) => {
-                                    effects.push((EffectArg::Implied(idx, generic_params), None));
-                                }
-                                None => {
-                                    // error
-                                    let def = fun.sign(&self.ir).effect_stack[effect].empty();
-                                    self.errors.push(
-                                        self.ast.exprs[expr].with(Error::UnresolvedEffect(def)),
-                                    );
-                                }
-                            }
+                            // error
+                            let def = fun.sign(&self.ir).effect_stack[effect].empty();
+                            self.errors
+                                .push(self.ast.exprs[expr].with(Error::UnresolvedEffect(def)));
                         }
                     }
                 }
@@ -1588,7 +1548,7 @@ impl SemCtx<'_> {
         match self.ast.exprs[expr].0 {
             E::Body(ref body) => ctx.child(|ctx| {
                 for expr in body.main.iter().copied() {
-                    self.synth_expr(ctx, expr)?;
+                    self.check_expr(ctx, expr, TYPE_NONE, None)?;
                 }
                 body.last
                     .map(|expr| self.synth_expr(ctx, expr))
@@ -1622,10 +1582,200 @@ impl SemCtx<'_> {
                 ctx.push(Instruction::Trap);
                 Some((Value::ConstantError, TYPE_ERROR))
             }
-            E::Handler(_) => {
-                ctx.push(Instruction::Trap);
-                Some((Value::ConstantError, TYPE_ERROR))
-            }
+            E::Handler(ref handler) => match handler {
+                ast::Handler::Full {
+                    effect,
+                    fail_type,
+                    functions,
+                } => {
+                    ctx.child(|ctx| {
+                        let effidx = match effect.ident.package {
+                            Some(pkg) => {
+                                ctx.scope.try_package_effect(self, pkg, effect.ident.ident)
+                            }
+                            None => ctx.scope.try_effect(self, effect.ident.ident),
+                        };
+                        let effidx = match effidx {
+                            Some(GenericVal::Literal(idx)) => idx,
+                            Some(GenericVal::Generic(_)) => todo!("give error"),
+                            None => return Some((Value::ConstantError, TYPE_ERROR)),
+                        };
+
+                        let params = match effect.params {
+                            Some(ref params) => params
+                                .iter()
+                                .copied()
+                                .map(|ty| {
+                                    self.analyze_type(
+                                        ctx.scope,
+                                        ty,
+                                        None,
+                                        false,
+                                        &mut Self::no_handler,
+                                    )
+                                })
+                                .collect(),
+                            None => Vec::new(),
+                        };
+                        let generic_params = self.ir.effects[effidx]
+                            .generics
+                            .iter()
+                            .map(|generic| generic.idx)
+                            .zip(params)
+                            .collect::<Vec<_>>();
+                        let fail = self.analyze_fail(
+                            ctx.scope,
+                            *fail_type,
+                            None,
+                            false,
+                            &mut Self::no_handler,
+                        );
+
+                        // check functions
+                        let mut value_captures = Vec::new();
+                        let mut effect_captures = Vec::new();
+                        let mut funs: VecMap<EffFunIdx, (FunSign, FunImpl)> =
+                            std::iter::repeat_with(Default::default)
+                                .take(self.ast.effects[effidx].functions.len())
+                                .collect();
+                        for function in functions {
+                            // analyze signature
+                            let name = &self.ast.idents[function.decl.name];
+                            let matching = self.ast.effects[effidx]
+                                .functions
+                                .iter(EffFunIdx)
+                                .find(|(_, decl)| self.ast.idents[decl.name].0.eq(&name.0));
+
+                            let sign = self.analyze_sign(
+                                ctx.scope,
+                                function.decl.name,
+                                Some(EffectIdent {
+                                    effect: effidx,
+                                    generic_params: generic_params.clone(),
+                                }),
+                                &function.decl.sign,
+                            );
+
+                            // analyze function
+                            let imp = self.generate_function(
+                                Either::Right(&sign),
+                                function.body,
+                                ctx.scope,
+                                Some(fail),
+                                None,
+                                &mut value_captures,
+                                &mut effect_captures,
+                            );
+
+                            match matching {
+                                Some((idx, _)) => funs[idx] = (sign, imp),
+                                None => {
+                                    self.errors.push(name.with(Error::UnknownEffectFun(
+                                        Some(
+                                            self.ast.idents[self.ast.effects[effidx].name].empty(),
+                                        ),
+                                        Some(self.ast.idents[effect.ident.ident].empty()),
+                                    )));
+                                }
+                            }
+                        }
+
+                        // check if signatures match
+                        let mut missing = Vec::new();
+                        for (idx, (sign, _)) in funs.iter(EffFunIdx) {
+                            let name = self.ast.idents
+                                [self.ast.effects[effidx].functions[idx].name]
+                                .empty();
+
+                            // check if missing
+                            if sign.def.is_none() {
+                                missing.push(name);
+                                continue;
+                            };
+
+                            // check sign mismatch
+                            self.check_sign(&sign, FunIdent::Effect(effidx, idx), &generic_params);
+                        }
+                        if !missing.is_empty() {
+                            self.errors.push(self.ast.idents[effect.ident.ident].with(
+                                Error::UnimplementedMethods(
+                                    self.ast.idents[self.ast.effects[effidx].name].empty(),
+                                    missing,
+                                ),
+                            ));
+                        }
+
+                        // add implied handler to effect
+                        println!("{:?} {}", value_captures, self.ir.effects[effidx].name);
+                        let handler = self.push_handler(Handler {
+                            debug_name: format!("H{}", self.ir.handlers.len()),
+                            generics: Vec::new(), // FIXME: clone function generics
+
+                            effect: effidx,
+                            generic_params: generic_params.clone(),
+                            fail,
+
+                            value_captures: value_captures
+                                .iter()
+                                .map(|s| Capture {
+                                    debug_name: s.into(),
+                                    ty: ctx.get_value(self, s).unwrap().ty,
+                                })
+                                .collect(),
+                            effect_captures: effect_captures.clone(),
+
+                            funs,
+                        });
+
+                        let idx = self.ir.lazy_handlers.push(
+                            LazyIdx,
+                            Some(Either::Left(GenericVal::Literal(HandlerIdent {
+                                handler,
+                                generic_params: Vec::new(), // FIXME: clone function generics
+                                fail_type: fail,
+                            }))),
+                        );
+                        let metaty = self.insert_type(
+                            Type::HandlerType(HandlerType {
+                                effect: GenericVal::Literal(EffectIdent {
+                                    effect: effidx,
+                                    generic_params,
+                                }),
+                                fail_type: fail,
+                            }),
+                            false,
+                            false,
+                        );
+                        let ty = self.insert_type(
+                            Type::Handler(Lazy {
+                                idx,
+                                typeof_handler: metaty,
+                            }),
+                            false,
+                            false,
+                        );
+                        Some((
+                            Value::ConstantHandler(
+                                value_captures
+                                    .into_iter()
+                                    .map(|s| ctx.get_value(self, &s).unwrap().value)
+                                    .collect(),
+                                effect_captures
+                                    .into_iter()
+                                    .map(|s| ctx.get_effect(self, s).unwrap())
+                                    .collect(),
+                            ),
+                            ty,
+                        ))
+                    })
+                }
+                ast::Handler::Lambda(_) => {
+                    // lambdas require type information
+                    self.errors
+                        .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
+                    Some((Value::ConstantError, TYPE_ERROR))
+                }
+            },
             E::Call(callee, ref args) => {
                 // TODO: currently we assume func is an Ident expr or Effect Member expr
                 let Some(fun) = (match self.ast.exprs[callee].0 {
@@ -1650,7 +1800,6 @@ impl SemCtx<'_> {
                 }
 
                 // get params and infer generic params
-                // TODO: const generics
                 let mut generic_params = GenericParams::new();
                 let args = args
                     .iter()
@@ -1685,25 +1834,17 @@ impl SemCtx<'_> {
                             }
                         };
                         if let Some(const_generic) = const_generic {
-                            match val {
-                                Value::ConstantAggregate(_)
-                                | Value::ConstantInt(_, _)
-                                | Value::ConstantString(_)
-                                | Value::ConstantBool(_)
-                                | Value::ConstantType(_)
-                                | Value::ConstantNone
-                                | Value::ConstantUninit
-                                | Value::ConstantZero
-                                | Value::ConstantError => generic_params.push((
+                            if val.is_constant() {
+                                generic_params.push((
                                     const_generic,
                                     self.insert_type(
                                         Type::CompileTime(val.clone(), ty),
                                         false,
                                         false,
                                     ),
-                                )),
-                                Value::Param(_) => todo!(),
-                                _ => todo!("give error: not constant"),
+                                ))
+                            } else {
+                                todo!("give error")
                             }
                         }
                         Some(val)
@@ -1718,7 +1859,7 @@ impl SemCtx<'_> {
                     .map(|&(idx, _)| idx)
                     .eq(sign.generics.iter().map(|generic| generic.idx))
                 {
-                    todo!("this shouldn't occur without a type mismatch");
+                    println!("this shouldn't occur without a type mismatch {}", sign.name);
                 }
 
                 // get return type
@@ -1737,10 +1878,11 @@ impl SemCtx<'_> {
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ident = match fun.sign(&self.ir).effect_stack[effect].0 {
-                        GenericVal::Literal(ref ident) => ident.clone(),
+                        GenericVal::Literal(ref ident) => GenericVal::Literal(ident.clone()),
                         GenericVal::Generic(idx) => match get_param(&generic_params, idx) {
                             Some(ty) => match self.ir.types[ty] {
-                                Type::Effect(ref ident) => ident.clone(),
+                                Type::Effect(ref ident) => GenericVal::Literal(ident.clone()),
+                                Type::Generic(generic) => GenericVal::Generic(generic.idx),
                                 Type::Error => continue,
                                 _ => unreachable!(),
                             },
@@ -1750,89 +1892,35 @@ impl SemCtx<'_> {
                             }
                         },
                     };
-                    let Some(translated) = ident
-                        .generic_params
-                        .iter()
-                        .copied()
-                        .map(|(idx, ty)| Some((idx, self.translate_generics(ty, &generic_params)?)))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let ident = EffectIdent {
-                        effect: ident.effect,
-                        generic_params: translated,
+                    let ident = match ident {
+                        GenericVal::Literal(ident) => {
+                            let Some(translated) = ident
+                                .generic_params
+                                .iter()
+                                .copied()
+                                .map(|(idx, ty)| {
+                                    Some((idx, self.translate_generics(ty, &generic_params)?))
+                                })
+                                .collect::<Option<Vec<_>>>()
+                            else {
+                                continue;
+                            };
+                            GenericVal::Literal(EffectIdent {
+                                effect: ident.effect,
+                                generic_params: translated,
+                            })
+                        }
+                        ident => ident,
                     };
 
                     // find matching effect in stack
-                    let matching =
-                        ctx.effect_stack
-                            .iter()
-                            .enumerate()
-                            .rfind(|(_, (candidate, _))| match candidate {
-                                GenericVal::Literal(candidate) => ident.eq(candidate),
-                                GenericVal::Generic(_) => false,
-                            });
-
-                    match matching {
-                        Some((idx, &(_, block))) => effects.push((EffectArg::Stack(idx), block)),
+                    match ctx.get_effect(self, ident) {
+                        Some((idx, block)) => effects.push((idx, block)),
                         None => {
-                            // find matching implied
-                            let implied = self.ir.effects[ident.effect]
-                                .implied
-                                .clone()
-                                .into_iter()
-                                .enumerate()
-                                .find_map(|(i, idx)| {
-                                    let mut generic_params = GenericParams::new();
-
-                                    // infer implied generics
-                                    for (candidate, target) in self.ir.handlers[idx]
-                                        .generic_params
-                                        .clone()
-                                        .into_iter()
-                                        .zip(ident.generic_params.iter())
-                                    {
-                                        self.infer_generics(
-                                            &mut generic_params,
-                                            target.1,
-                                            candidate.1,
-                                        );
-                                        if !self
-                                            .translate_generics(candidate.1, &generic_params)
-                                            .is_some_and(|ty| ty == target.1)
-                                        {
-                                            return None;
-                                        }
-                                    }
-
-                                    // make sure we got all generics inferred
-                                    generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
-                                    if !generic_params.iter().map(|&(idx, _)| idx).eq(self
-                                        .ir
-                                        .handlers[idx]
-                                        .generics
-                                        .iter()
-                                        .map(|generic| generic.idx))
-                                    {
-                                        return None;
-                                    }
-
-                                    return Some((i, generic_params));
-                                });
-
-                            match implied {
-                                Some((idx, generic_params)) => {
-                                    effects.push((EffectArg::Implied(idx, generic_params), None));
-                                }
-                                None => {
-                                    // error
-                                    let def = fun.sign(&self.ir).effect_stack[effect].empty();
-                                    self.errors.push(
-                                        self.ast.exprs[expr].with(Error::UnresolvedEffect(def)),
-                                    );
-                                }
-                            }
+                            // error
+                            let def = fun.sign(&self.ir).effect_stack[effect].empty();
+                            self.errors
+                                .push(self.ast.exprs[expr].with(Error::UnresolvedEffect(def)));
                         }
                     }
                 }
@@ -1966,25 +2054,29 @@ impl SemCtx<'_> {
                 match ctx.yeetable {
                     Some(yeet_ty) => {
                         // existing yeetable def
-                        let value = match inner {
-                            Some(inner) => {
-                                self.check_expr(ctx, inner, yeet_ty, ctx.yeetable_def)?
-                            }
-                            None => {
-                                self.check_move(
-                                    TYPE_NONE,
-                                    yeet_ty,
-                                    TypeRange {
-                                        loc: self.ast.exprs[expr].empty(),
-                                        def: ctx.yeetable_def,
-                                    },
-                                );
-                                Value::ConstantNone
-                            }
-                        };
-                        ctx.blocks[ctx.block]
-                            .instructions
-                            .push_value(Instruction::Yeet(value));
+                        if yeet_ty == TYPE_NEVER {
+                            todo!("give error");
+                        } else {
+                            let value = match inner {
+                                Some(inner) => {
+                                    self.check_expr(ctx, inner, yeet_ty, ctx.yeetable_def)?
+                                }
+                                None => {
+                                    self.check_move(
+                                        TYPE_NONE,
+                                        yeet_ty,
+                                        TypeRange {
+                                            loc: self.ast.exprs[expr].empty(),
+                                            def: ctx.yeetable_def,
+                                        },
+                                    );
+                                    Value::ConstantNone
+                                }
+                            };
+                            ctx.blocks[ctx.block]
+                                .instructions
+                                .push_value(Instruction::Yeet(value));
+                        }
                     }
                     None => {
                         // set yeetable
@@ -2087,7 +2179,7 @@ impl SemCtx<'_> {
 }
 
 struct FunCtx<'a> {
-    effect_stack: Vec<(GenericVal<EffectIdent>, Option<BlockIdx>)>,
+    sign: Either<FunIdx, &'a FunSign>,
     scope: &'a mut ScopeStack,
 
     yeetable: Option<TypeIdx>,
@@ -2095,6 +2187,10 @@ struct FunCtx<'a> {
 
     blocks: VecMap<BlockIdx, Block>,
     block: BlockIdx,
+
+    capture_boundary: usize,
+    value_captures: &'a mut Vec<String>,
+    effect_captures: &'a mut Vec<GenericVal<EffectIdent>>,
 }
 
 impl FunCtx<'_> {
@@ -2112,8 +2208,127 @@ impl FunCtx<'_> {
         let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
         Value::Reference(self.block, Some(idx))
     }
-    fn get_value(&self, ctx: &SemCtx, name: &str) -> Option<Variable> {
-        self.scope.get_value(ctx, name)
+    fn get_value(&mut self, ctx: &SemCtx, name: &str) -> Option<Variable> {
+        let mut iter = self.scope.scopes.iter().enumerate().rev().chain([
+            (usize::MAX, &ctx.packages[self.scope.package]),
+            (usize::MAX, &ctx.packages[ctx.ast.preamble]),
+        ]);
+        iter.find_map(|(n, s)| {
+            let val = s.values.get(name).cloned()?;
+            if n < self.capture_boundary && (val.mutable || !val.value.is_constant()) {
+                let idx = match self
+                    .value_captures
+                    .iter()
+                    .position(|candidate| name.eq(candidate))
+                {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = self.value_captures.len();
+                        self.value_captures.push(name.into());
+                        idx
+                    }
+                };
+                Some(Variable {
+                    value: Value::Capture(idx),
+                    ..val
+                })
+            } else {
+                Some(val)
+            }
+        })
+    }
+    fn get_effect(
+        &mut self,
+        ctx: &mut SemCtx,
+        ident: GenericVal<EffectIdent>,
+    ) -> Option<(EffectArg, Option<BlockIdx>)> {
+        // find matching effect in stack
+        let mut idx = 0;
+        for (n, s) in self.scope.scopes.iter().enumerate().rev() {
+            for &(ref candidate, block) in s.effect_stack.iter().rev() {
+                if ident.eq(candidate) {
+                    return if n < self.capture_boundary {
+                        let idx = match self
+                            .effect_captures
+                            .iter()
+                            .position(|candidate| ident.eq(candidate))
+                        {
+                            Some(idx) => idx,
+                            None => {
+                                let idx = self.effect_captures.len();
+                                self.effect_captures.push(ident);
+                                idx
+                            }
+                        };
+                        Some((EffectArg::Capture(idx), None))
+                    } else {
+                        Some((EffectArg::Stack(idx), block))
+                    };
+                }
+                idx += 1;
+            }
+        }
+
+        // find matching implied
+        match ident {
+            GenericVal::Literal(ident) => {
+                ctx.ir.effects[ident.effect]
+                    .implied
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .find_map(|(i, idx)| {
+                        let mut generic_params = GenericParams::new();
+
+                        // check if matches yeetable
+                        let fail = ctx.ir.handlers[idx].fail;
+                        if let Some(yeetable) = self.yeetable {
+                            ctx.infer_generics(&mut generic_params, yeetable, fail);
+                            if !ctx
+                                .translate_generics(fail, &generic_params)
+                                .is_some_and(|ty| ty == yeetable)
+                            {
+                                return None;
+                            }
+                        } else if fail != TYPE_NEVER {
+                            // if yeetable is unknown, assume never
+                            return None;
+                        }
+
+                        // infer implied generics
+                        for (candidate, target) in ctx.ir.handlers[idx]
+                            .generic_params
+                            .clone()
+                            .into_iter()
+                            .zip(ident.generic_params.iter())
+                        {
+                            ctx.infer_generics(&mut generic_params, target.1, candidate.1);
+                            if !ctx
+                                .translate_generics(candidate.1, &generic_params)
+                                .is_some_and(|ty| ty == target.1)
+                            {
+                                return None;
+                            }
+                        }
+
+                        // make sure we got all generics inferred
+                        generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                        if !generic_params
+                            .iter()
+                            .map(|&(idx, _)| idx)
+                            .eq(ctx.ir.handlers[idx]
+                                .generics
+                                .iter()
+                                .map(|generic| generic.idx))
+                        {
+                            return None;
+                        }
+
+                        Some((EffectArg::Implied(i, generic_params), None))
+                    })
+            }
+            _ => None,
+        }
     }
     fn define(&mut self, name: String, var: Variable) {
         self.scope.top().values.insert(name, var);
@@ -2451,6 +2666,8 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
                 &mut scope,
                 Some(TYPE_NEVER),
                 None,
+                &mut Vec::new(),
+                &mut Vec::new(),
             );
         }
     }

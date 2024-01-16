@@ -61,7 +61,10 @@ pub enum Value {
     Reg(BlockIdx, Option<InstrIdx>),
     Reference(BlockIdx, Option<InstrIdx>),
 
+    // slice, const array
     ConstantAggregate(Rc<[Value]>),
+    ConstantHandler(Rc<[Value]>, Rc<[(EffectArg, Option<BlockIdx>)]>),
+
     ConstantInt(bool, u64),
     ConstantString(Rc<[u8]>),
     ConstantBool(bool),
@@ -70,8 +73,32 @@ pub enum Value {
     ConstantUninit,
     ConstantZero,
     ConstantError,
+    ConstantGeneric(GenericIdx),
 
     Param(ParamIdx),
+    Capture(usize),
+}
+
+impl Value {
+    pub fn is_constant(&self) -> bool {
+        match self {
+            Value::Reg(_, _) => false,
+            Value::Reference(_, _) => false,
+            Value::ConstantAggregate(val) => val.iter().all(Self::is_constant),
+            Value::ConstantHandler(_, _) => false,
+            Value::ConstantInt(_, _) => true,
+            Value::ConstantString(_) => true,
+            Value::ConstantBool(_) => true,
+            Value::ConstantType(_) => true,
+            Value::ConstantNone => true,
+            Value::ConstantUninit => true,
+            Value::ConstantZero => true,
+            Value::ConstantError => true,
+            Value::ConstantGeneric(_) => true,
+            Value::Param(_) => false,
+            Value::Capture(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -130,10 +157,11 @@ pub enum Instruction {
     Syscall(Value, Vec<Value>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub enum EffectArg {
     Stack(usize),
     Implied(usize, GenericParams),
+    Capture(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -192,7 +220,7 @@ pub struct HandlerIdent {
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
-pub struct EffectType {
+pub struct HandlerType {
     pub effect: GenericVal<EffectIdent>,
     pub fail_type: TypeIdx,
 }
@@ -221,7 +249,9 @@ pub struct Handler {
     pub generic_params: GenericParams,
     pub fail: TypeIdx,
 
-    pub captures: Vec<Capture>,
+    pub value_captures: Vec<Capture>,
+    pub effect_captures: Vec<GenericVal<EffectIdent>>,
+
     pub funs: VecMap<EffFunIdx, (FunSign, FunImpl)>,
 }
 
@@ -261,7 +291,7 @@ pub enum Type {
 
     EffectType,
     DataType,
-    HandlerType(EffectType),
+    HandlerType(HandlerType),
 
     Generic(Generic),
 
@@ -578,7 +608,19 @@ impl Value {
                 write!(f, "]")?;
                 Ok(())
             }
+            Value::ConstantHandler(ref vec, _) => {
+                write!(f, "[")?;
+                for val in vec.iter() {
+                    write!(f, " ")?;
+                    val.display(ir, proc, f)?;
+                    write!(f, ",")?;
+                }
+                write!(f, "]")?;
+                Ok(())
+            }
+            Value::ConstantGeneric(idx) => write!(f, "{}", ir.generic_names[idx]),
             Value::Param(param) => write!(f, "%p{}", param.0),
+            Value::Capture(capture) => write!(f, "%c{}", capture),
         }
     }
 }
@@ -768,7 +810,7 @@ impl Handler {
         writeln!(f)?;
 
         // captures
-        for capture in self.captures.iter() {
+        for capture in self.value_captures.iter() {
             write!(f, "  {} ", capture.debug_name)?;
             capture.ty.display(ir, no_params, f)?;
         }

@@ -17,7 +17,7 @@ fun ptr_to_reg(ptr uptr) int {
 }
 
 fun exit(code int) ! / sys {
-	syscall1(60, code)
+	let _ = syscall1(60, code)
 	unreachable()
 }
 

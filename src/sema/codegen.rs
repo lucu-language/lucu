@@ -205,7 +205,7 @@ const TYPE_EFFECT: TypeIdx = TypeIdx(4 << 2);
 const TYPE_USIZE: TypeIdx = TypeIdx(5 << 2);
 const TYPE_BOOL: TypeIdx = TypeIdx(6 << 2);
 const TYPE_INT: TypeIdx = TypeIdx(7 << 2);
-const TYPE_STR: TypeIdx = TypeIdx(8 << 2);
+const TYPE_STR: TypeIdx = TypeIdx((8 << 2) | 1); // const
 const TYPE_CHAR: TypeIdx = TypeIdx(9 << 2);
 const TYPE_U8: TypeIdx = TypeIdx(10 << 2);
 
@@ -2653,7 +2653,6 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
         types.insert(name, ty);
     };
 
-    insert(Type::Str);
     insert(Type::Bool);
     insert(Type::Char);
     insert(Type::None);
@@ -2670,6 +2669,10 @@ pub fn analyze(ast: &AST, errors: &mut Errors, target: &Target) -> SemIR {
         insert(Type::Integer(false, IntSize::Bits(bits)));
         insert(Type::Integer(true, IntSize::Bits(bits)));
     }
+
+    ctx.packages[ast.preamble]
+        .types
+        .insert("str".into(), TYPE_STR);
 
     // analyze effect signatures
     for (idx, package) in ast.packages.iter(PackageIdx) {

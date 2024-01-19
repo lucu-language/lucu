@@ -8,7 +8,7 @@ use std::{
 };
 
 use analyzer::{analyze, Analysis};
-use ast::{parse_ast, AST};
+use ast::{parse_ast, Ast};
 use clap::Parser;
 use error::{Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
@@ -173,8 +173,8 @@ fn parse_from_filename(
     main_file: &Path,
     core_path: &Path,
     target: &Target,
-) -> Result<(AST, Analysis, VecMap<FileIdx, File>), Errors> {
-    let mut parsed = AST::default();
+) -> Result<(Ast, Analysis, VecMap<FileIdx, File>), Errors> {
+    let mut parsed = Ast::default();
     let mut errors = Errors::new();
 
     let preamble = core_path.join("core").join("preamble.lucu");
@@ -204,7 +204,7 @@ fn parse_from_filename(
 
         match path.extension() == Some(OsStr::new("lucu")) {
             true => {
-                let content = read_to_string(&path).unwrap().replace('\t', "  ");
+                let content = read_to_string(path).unwrap().replace('\t', "  ");
                 let idx = errors.files.push(
                     FileIdx,
                     File {
@@ -217,13 +217,13 @@ fn parse_from_filename(
                     tok,
                     pkg,
                     &mut parsed,
-                    &path.clone().parent().unwrap(),
+                    path.clone().parent().unwrap(),
                     &libs,
                     &mut files_todo,
                 );
             }
-            false => match read_dir(&path) {
-                Ok(files) => {
+            false => {
+                if let Ok(files) = read_dir(path) {
                     let iter = files.filter_map(|entry| {
                         // get lucu files
                         let path = entry.ok()?.path();
@@ -248,17 +248,16 @@ fn parse_from_filename(
                         parse_ast(tok, pkg, &mut parsed, &path, &libs, &mut files_todo);
                     }
                 }
-                Err(_) => {}
-            },
+            }
         }
     }
 
-    let ir = sema::analyze(&parsed, &mut errors, &target);
+    let ir = sema::analyze(&parsed, &mut errors);
     println!("{}", ir);
 
     if errors.is_empty() {
         // OLD ANALYZER
-        let asys = analyze(&parsed, &mut errors, &target);
+        let asys = analyze(&parsed, &mut errors, target);
         if errors.is_empty() {
             Ok((parsed, asys, errors.files))
         } else {
@@ -322,6 +321,7 @@ fn main() {
     let debug = args.debug;
     let color = !args.plaintext;
     let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
+    let output = output.as_path();
 
     let target = match args.target {
         Some(t) => {
@@ -363,34 +363,32 @@ fn main() {
             match (&os, &arch) {
                 (LucuOS::Linux, LucuArch::Amd64) => {
                     Command::new("ld")
-                        .arg(&output.with_extension("o"))
+                        .arg(output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
                         .arg("-o")
-                        .arg(&output)
+                        .arg(output)
                         .arg("-e_start")
                         .status()
                         .unwrap();
-                    Command::new(Path::new("./").join(&output))
-                        .status()
-                        .unwrap();
+                    Command::new(Path::new("./").join(output)).status().unwrap();
                 }
                 (LucuOS::Windows, LucuArch::Amd64) => {
                     Command::new("x86_64-w64-mingw32-ld")
-                        .arg(&output.with_extension("o"))
+                        .arg(output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
                         .arg("-o")
-                        .arg(&output.with_extension("exe"))
+                        .arg(output.with_extension("exe"))
                         .arg("-e_start")
                         .status()
                         .unwrap();
-                    Command::new(Path::new("./").join(&output).with_extension("exe"))
+                    Command::new(Path::new("./").join(output).with_extension("exe"))
                         .status()
                         .unwrap();
                 }
                 (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
                     let env = os.wasm_import_module();
                     Command::new("wasm-ld")
-                        .arg(&output.with_extension("o"))
+                        .arg(output.with_extension("o"))
                         .args(
                             ir.links
                                 .iter()
@@ -399,7 +397,7 @@ fn main() {
                         )
                         .arg("--import-undefined") // TODO: get list of symbols from "env" library
                         .arg("-o")
-                        .arg(&output.with_extension("wasm"))
+                        .arg(output.with_extension("wasm"))
                         .arg("-z")
                         .arg("stack-size=1048576")
                         .arg("-e_start")
@@ -408,7 +406,7 @@ fn main() {
 
                     if matches!(os, LucuOS::WASI) {
                         Command::new("wasmtime")
-                            .arg(&output.with_extension("wasm"))
+                            .arg(output.with_extension("wasm"))
                             .status()
                             .unwrap();
                     } else {
@@ -442,7 +440,7 @@ mod tests {
         let core = Path::new(env!("CARGO_MANIFEST_DIR"));
         let target = Target::host(None, None);
 
-        match parse_from_filename(Path::new(filename), &core, &target) {
+        match parse_from_filename(Path::new(filename), core, &target) {
             Ok((parsed, asys, files)) => {
                 let ir = ir::generate_ir(&parsed, &asys, &target, &files);
                 llvm::generate_ir(&ir, &output.with_extension("o"), false, &target);
@@ -450,15 +448,13 @@ mod tests {
                 match target.lucu_os() {
                     LucuOS::Linux => {
                         Command::new("ld")
-                            .arg(&output.with_extension("o"))
+                            .arg(output.with_extension("o"))
                             .arg("-o")
-                            .arg(&output)
+                            .arg(output)
                             .arg("-e_start")
                             .status()
                             .unwrap();
-                        Command::new(Path::new("./").join(&output))
-                            .status()
-                            .unwrap();
+                        Command::new(Path::new("./").join(output)).status().unwrap();
                     }
                     LucuOS::Unknown => {
                         panic!("unknown os for triple: {}", target.triple);

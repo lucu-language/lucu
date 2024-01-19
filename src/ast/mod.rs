@@ -20,12 +20,6 @@ vecmap_index!(FunIdx);
 vecmap_index!(EffIdx);
 vecmap_index!(EffFunIdx);
 
-impl Default for ExprIdx {
-    fn default() -> Self {
-        ExprIdx(0)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Assign,
@@ -80,7 +74,7 @@ pub struct Body {
     pub last: Option<ExprIdx>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Lambda {
     pub inputs: VecMap<ParamIdx, Ident>,
     pub body: ExprIdx,
@@ -226,7 +220,7 @@ pub struct Package {
     pub imports: HashMap<String, PackageIdx>,
 }
 
-pub struct AST {
+pub struct Ast {
     pub effects: VecMap<EffIdx, Effect>,
     pub functions: VecMap<FunIdx, Function>,
     pub packages: VecMap<PackageIdx, Package>,
@@ -242,7 +236,7 @@ pub struct AST {
     pub idents: VecMap<Ident, Ranged<String>>,
 }
 
-impl Default for AST {
+impl Default for Ast {
     fn default() -> Self {
         let mut packages = VecMap::new();
         let core = packages.push(PackageIdx, Package::default());
@@ -266,7 +260,7 @@ impl Default for AST {
     }
 }
 
-impl AST {
+impl Ast {
     pub fn for_each(
         &self,
         expr: ExprIdx,

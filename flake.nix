@@ -30,6 +30,7 @@
         bacon
         rust-analyzer
         rustfmt
+        clippy
 
         pkgsCross.mingwW64.buildPackages.gcc
         lld_15

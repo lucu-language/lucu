@@ -6,8 +6,8 @@ use crate::ast::AttributeValue;
 use crate::Target;
 use crate::{
     ast::{
-        self, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, FunIdx, Ident, PackageIdx,
-        PackagedIdent, ParamIdx, UnOp, AST,
+        self, Ast, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, FunIdx, Ident, PackageIdx,
+        PackagedIdent, ParamIdx, UnOp,
     },
     error::{Error, Errors, Ranged},
     vecmap::{vecmap_index, VecMap, VecSet},
@@ -360,7 +360,7 @@ pub struct Analysis {
 struct AsysContext<'a> {
     asys: Analysis,
     packages: VecMap<PackageIdx, Package>,
-    parsed: &'a AST,
+    parsed: &'a Ast,
 }
 
 struct Scope<'a> {
@@ -385,7 +385,7 @@ impl<'a> Scope<'a> {
     fn get(&self, key: &str) -> Option<Val> {
         match self.values.get(key) {
             Some(&v) => Some(v),
-            None => self.parent.map(|p| p.get(key)).flatten(),
+            None => self.parent.and_then(|p| p.get(key)),
         }
     }
     fn child(&self) -> Scope {
@@ -430,7 +430,7 @@ impl Analysis {
         val
     }
     fn insert_type(&mut self, ty: Type) -> TypeIdx {
-        self.types.insert(TypeIdx, ty).clone()
+        *self.types.insert(TypeIdx, ty)
     }
 }
 
@@ -653,7 +653,7 @@ fn analyze_expr(
                         Cow::Borrowed(_) => {
                             // TODO: check if this matches effectfun
                             analyze_return(ctx, scope, decl.sign.output, errors, &mut generics);
-                            analyze_sign(ctx, &scope, &decl.sign, errors, &mut generics);
+                            analyze_sign(ctx, scope, &decl.sign, errors, &mut generics);
                         }
                         Cow::Owned(_) => {
                             // set param types
@@ -685,7 +685,7 @@ fn analyze_expr(
                     }));
                     child.scoped_effects = &scoped;
 
-                    analyze_expr(ctx, &mut child, body, out, false, errors).0;
+                    analyze_expr(ctx, &mut child, body, out, false, errors);
 
                     // add captures
                     ctx.parsed.for_each(
@@ -736,11 +736,10 @@ fn analyze_expr(
                     Some(val) => {
                         ctx.asys.values[ident] = val;
                         let ty = TypeIdx::from_val(ctx, val);
-                        let mutable = match ctx.asys.defs[val] {
-                            Definition::Parameter(true, _, _) => true,
-                            Definition::Variable(true, _, _) => true,
-                            _ => false,
-                        };
+                        let mutable = matches!(
+                            ctx.asys.defs[val],
+                            Definition::Parameter(true, _, _) | Definition::Variable(true, _, _)
+                        );
                         (ty, mutable)
                     }
                     None => match scope.effects.get(name).copied() {
@@ -987,25 +986,17 @@ fn analyze_expr(
                 // getting a member directly with an identifier
                 // when a value is not found in scope we also check within effects
                 let name = &ctx.parsed.idents[ident].0;
-                match scope.get(name).and_then(|_val| {
-                    // TODO: currently no values can have children
-                    // when structures exist, add them here
-                    None
-                }) {
-                    Some(ty) => Some(ty),
-                    None => match ctx.parsed.packages[scope.pkg].imports.get(name) {
-                        Some(&pkg) => {
-                            let ty = ctx.asys.insert_type(Type::PackageLiteral(pkg));
-                            ctx.asys.push_val(ident, Definition::Package(pkg));
-                            ctx.asys.exprs[expr] = ty;
-                            Some(ty)
-                        }
-                        None => {
-                            errors
-                                .push(ctx.parsed.idents[ident].with(Error::UnknownValueOrPackage));
-                            None
-                        }
-                    },
+                match ctx.parsed.packages[scope.pkg].imports.get(name) {
+                    Some(&pkg) => {
+                        let ty = ctx.asys.insert_type(Type::PackageLiteral(pkg));
+                        ctx.asys.push_val(ident, Definition::Package(pkg));
+                        ctx.asys.exprs[expr] = ty;
+                        Some(ty)
+                    }
+                    None => {
+                        errors.push(ctx.parsed.idents[ident].with(Error::UnknownValueOrPackage));
+                        None
+                    }
                 }
             } else {
                 let (_ty, _mutable) = analyze_expr(ctx, scope, expr, TYPE_UNKNOWN, false, errors);
@@ -1381,7 +1372,7 @@ fn analyze_effect(
                 }
             }
         }
-        None => &scope.effects,
+        None => scope.effects,
     };
 
     let name = &ctx.parsed.idents[ident.ident].0;
@@ -1615,7 +1606,7 @@ fn scope_sign(
     // put generics in scope
     scope
         .values
-        .extend(generics.iter().map(|(k, v)| (k.clone(), v.clone())));
+        .extend(generics.iter().map(|(k, &v)| (k.clone(), v)));
 }
 
 pub const TYPE_NONE: TypeIdx = TypeIdx(1);
@@ -1633,7 +1624,7 @@ const TYPE_UINT: TypeIdx = TypeIdx(9);
 const TYPE_U16: TypeIdx = TypeIdx(10);
 const TYPE_U32: TypeIdx = TypeIdx(11);
 
-pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
+pub fn analyze(parsed: &Ast, errors: &mut Errors, target: &Target) -> Analysis {
     let os = target.lucu_os();
     let os = os.as_str();
 
@@ -1723,13 +1714,13 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
             ctx.packages[parsed.preamble]
                 .values
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
         values.extend(
             ctx.packages[idx]
                 .values
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
 
         let mut funs = HashMap::new();
@@ -1737,27 +1728,22 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
             ctx.packages[parsed.preamble]
                 .funs
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
-        funs.extend(
-            ctx.packages[idx]
-                .funs
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
+        funs.extend(ctx.packages[idx].funs.iter().map(|(k, &v)| (k.clone(), v)));
 
         let mut effects = HashMap::new();
         effects.extend(
             ctx.packages[parsed.preamble]
                 .effects
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
         effects.extend(
             ctx.packages[idx]
                 .effects
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
 
         let mut scoped_effects = HashSet::new();
@@ -1934,13 +1920,13 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
             ctx.packages[parsed.preamble]
                 .values
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
         values.extend(
             ctx.packages[idx]
                 .values
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
 
         let mut funs = HashMap::new();
@@ -1948,27 +1934,22 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
             ctx.packages[parsed.preamble]
                 .funs
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
-        funs.extend(
-            ctx.packages[idx]
-                .funs
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
+        funs.extend(ctx.packages[idx].funs.iter().map(|(k, &v)| (k.clone(), v)));
 
         let mut effects = HashMap::new();
         effects.extend(
             ctx.packages[parsed.preamble]
                 .effects
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
         effects.extend(
             ctx.packages[idx]
                 .effects
                 .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
+                .map(|(k, &v)| (k.clone(), v)),
         );
 
         let mut scoped_effects = HashSet::new();
@@ -2032,7 +2013,7 @@ pub fn analyze(parsed: &AST, errors: &mut Errors, target: &Target) -> Analysis {
                 Definition::Function(_, ref sign) => sign.return_type,
                 _ => unreachable!(),
             };
-            analyze_expr(&mut ctx, &mut scope, fun.body, expected, false, errors).0;
+            analyze_expr(&mut ctx, &mut scope, fun.body, expected, false, errors);
         }
     }
 

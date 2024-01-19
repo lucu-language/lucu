@@ -1,4 +1,7 @@
-use std::{collections::HashMap, iter};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    iter,
+};
 
 use crate::{
     lexer::{Group, Token},
@@ -207,12 +210,10 @@ fn highlight(i: usize, s: &str, color: bool, bold: bool) -> String {
         } else {
             format!("\x1b[1;{};40m{}\x1b[0m", bg, s)
         }
+    } else if bold {
+        format!("'{}'", s)
     } else {
-        if bold {
-            format!("'{}'", s)
-        } else {
-            format!("{}", s)
-        }
+        s.into()
     }
 }
 
@@ -221,15 +222,14 @@ const LINE_TOLERANCE: usize = 3;
 fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: bool) {
     let mut map = HashMap::new();
     for highlight in highlights.iter() {
-        if !map.contains_key(&highlight.file) {
-            map.insert(highlight.file, vec![highlight]);
-        } else {
-            map.get_mut(&highlight.file).unwrap().push(highlight);
+        match map.entry(highlight.file) {
+            Entry::Vacant(e) => _ = e.insert(vec![highlight]),
+            Entry::Occupied(mut e) => e.get_mut().push(highlight),
         }
     }
 
     let mut sorted_partition = Vec::new();
-    sorted_partition.extend(map.into_iter());
+    sorted_partition.extend(map);
     sorted_partition.sort_unstable_by_key(|&(f, _)| usize::from(f));
 
     for (idx, highlights) in sorted_partition.into_iter() {
@@ -309,19 +309,16 @@ fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: b
                             let select: String = match next.gravity {
                                 Gravity::Whole => {
                                     if next.color == 0 {
-                                        iter::repeat('^').take(end - start).collect()
+                                        "^".repeat(end - start)
                                     } else {
-                                        iter::repeat('-').take(end - start).collect()
+                                        "-".repeat(end - start)
                                     }
                                 }
                                 Gravity::EndPlus => {
                                     if line == next.end.line {
-                                        iter::repeat('-')
-                                            .take(end - start)
-                                            .chain(iter::once('^'))
-                                            .collect()
+                                        "-".repeat(end - start) + "^"
                                     } else {
-                                        iter::repeat('-').take(end - start).collect()
+                                        "-".repeat(end - start)
                                     }
                                 }
                             };
@@ -471,7 +468,7 @@ impl Errors {
                         format!("unclosed {}", highlight(0, str, color, true)),
                     Error::UnresolvedLibrary(ref s) => format!("unresolved library '{}'", s),
                     Error::NoSuchDirectory(ref s) => format!("directory '{}' does not exist", s),
-                    Error::NakedRange => format!("cannot use range literal as value"),
+                    Error::NakedRange => "cannot use range literal as value".into(),
 
                     Error::UnknownEffect => format!(
                         "effect {} not found in scope",
@@ -572,7 +569,7 @@ impl Errors {
                         "effect handlers may not escape try/with expressions".into(),
                     Error::ExpectedArray(ref found) =>
                         format!("expected an array type, found {}", found),
-                    Error::NotEnoughInfo => format!("cannot resolve type: type annotations needed"),
+                    Error::NotEnoughInfo => "cannot resolve type: type annotations needed".into(),
                     Error::UnresolvedEffect(def) => format!(
                         "unhandled effect {} for function call",
                         highlight(1, &self.files[def.3].content[def.1..def.2], color, true)
@@ -605,15 +602,15 @@ impl Errors {
                     Error::AssignImmutable(_) => "cannot assign to immutable variable".into(),
                     Error::AssignExpression => "cannot assign to expression".into(),
                     Error::AssignMutDowncast(_) =>
-                        format!("cannot assign to mutable variable: value is immutable and may not become mutable"),
+                        "cannot assign to mutable variable: value is immutable and may not become mutable".into(),
                     Error::MoveMutDowncast(_, _) =>
-                        format!("cannot move into mutable parameter: value is immutable and may not become mutable"),
+                        "cannot move into mutable parameter: value is immutable and may not become mutable".into(),
 
                     Error::UndefinedUnallowed(ref ty) =>
                         format!("cannot leave type {} undefined", ty),
                     Error::ZeroinitUnallowed(ref ty) =>
                         format!("cannot zero-initialize type {}", ty),
-                    Error::NeverValue => format!("cannot create a value of type never"),
+                    Error::NeverValue => "cannot create a value of type never".into(),
                 }
             );
             if color {
@@ -628,6 +625,7 @@ impl Errors {
                 color: 0,
                 gravity: err.0.gravity(),
             }];
+            #[allow(clippy::collapsible_match)]
             match err.0 {
                 Error::ExpectedType(value) => {
                     if let Some(value) = value {

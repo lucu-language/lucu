@@ -10,9 +10,9 @@ use crate::{
 };
 
 use super::{
-    Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType, FunDecl,
-    FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent, Param,
-    PolyIdent, PolyParam, Type, TypeIdx, UnOp, AST,
+    Ast, Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType,
+    FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent,
+    Param, PolyIdent, PolyParam, Type, TypeIdx, UnOp,
 };
 
 impl BinOp {
@@ -36,7 +36,7 @@ struct ParseCtx<'a> {
     iter: Tokenizer<'a>,
     peeked: Option<Option<<Tokenizer<'a> as Iterator>::Item>>,
     last: usize,
-    context: &'a mut AST,
+    context: &'a mut Ast,
     allow_lambda_args: bool,
     attributes: Option<Vec<Attribute>>,
 }
@@ -338,7 +338,7 @@ impl<T> ParseDefault for T where T: Parse + Default {}
 pub fn parse_ast<'a>(
     tk: Tokenizer<'a>,
     idx: PackageIdx,
-    parsed: &'a mut AST,
+    parsed: &'a mut Ast,
     file_path: &Path,
     lib_paths: &HashMap<&str, &Path>,
     todo_packages: &mut Vec<(PathBuf, PackageIdx)>,
@@ -360,7 +360,7 @@ pub fn parse_ast<'a>(
                 tk.next();
                 if let Some(string) = tk.string() {
                     // parse path
-                    let split = string.0.split_once(":");
+                    let split = string.0.split_once(':');
                     let (lib, path) = match split {
                         Some((lib, path)) => (Some(lib), path),
                         None => (None, string.0.as_str()),
@@ -369,7 +369,7 @@ pub fn parse_ast<'a>(
                     // get dir path
                     let path = match lib {
                         Some(lib) => match lib_paths.get(lib) {
-                            Some(root) => root.join(&path),
+                            Some(root) => root.join(path),
                             None => {
                                 tk.iter
                                     .errors
@@ -1271,7 +1271,7 @@ fn expression_post(
                 // lambda arguments
                 if tk.allow_lambda_args {
                     while tk.peek_check(Token::Open(Group::Brace)) {
-                        let lambda = Lambda::parse_or_default(tk);
+                        let lambda = Lambda::parse_or_skip(tk)?;
                         let handler = lambda.map(Handler::Lambda);
                         let expr = handler.map(Expression::Handler);
                         args.push(tk.push_expr(expr));

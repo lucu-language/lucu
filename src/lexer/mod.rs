@@ -407,14 +407,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                 let mut word = String::new();
                 word.push(char);
 
-                loop {
-                    match self.next.peek() {
-                        Some(&c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) => {
-                            self.next_char();
-                            word.push(c);
-                        }
-                        _ => break,
-                    }
+                while let Some(&c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) = self.next.peek() {
+                    self.next_char();
+                    word.push(c);
                 }
 
                 // find keyword

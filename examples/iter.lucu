@@ -24,6 +24,14 @@ handle buf(void) {
 	}
 }
 
+handle buf(never) {
+	fun push(elem never) usize { elem }
+	fun get(index usize) never { panic("index out of bounds") }
+	fun iter() handle iter(never) fails {
+		fun { fail }
+	}
+}
+
 # implementation of these effects using a constant sized array
 fun array_buffer(`cap usize) handle buf(`item) {
 	mut array [`cap]const `item = 0
@@ -53,7 +61,7 @@ fun array_buffer(`cap usize) handle buf(`item) {
 # the 'io.stdio' effect allows use of the 'io.println' function
 fun main() / io.stdio {
 
-	let buffer handle buf(const str) = array_buffer(16)
+	let buffer handle buf(str) = array_buffer(16)
 
 	# a 'with' block puts the effect handler in scope
 	# which allows us to use the defined effect functions

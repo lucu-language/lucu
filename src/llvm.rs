@@ -86,10 +86,10 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     let syscalls = match os {
         LucuOS::Linux => (0..=6)
             .map(|n| {
-                const SYS_RET: &'static str = "rax";
-                const SYS_NR: &'static str = "rax";
-                const SYS_ARGS: [&'static str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
-                const SYS_CLOBBER: [&'static str; 2] = ["rcx", "r11"];
+                const SYS_RET: &str = "rax";
+                const SYS_NR: &str = "rax";
+                const SYS_ARGS: [&str; 6] = ["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+                const SYS_CLOBBER: [&str; 2] = ["rcx", "r11"];
 
                 let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(reg_ty))
                     .take(n + 1)
@@ -667,7 +667,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
             BasicTypeEnum::FloatType(t) => format!("f{}", self.target_data.get_bit_size(&t)),
             BasicTypeEnum::IntType(t) => format!("i{}", self.target_data.get_bit_size(&t)),
-            BasicTypeEnum::PointerType(_) => format!("ptr"),
+            BasicTypeEnum::PointerType(_) => "ptr".into(),
             BasicTypeEnum::StructType(t) => t
                 .get_name()
                 .map(|c| c.to_string_lossy().into_owned())
@@ -734,7 +734,7 @@ impl<'ctx> CodeGen<'ctx> {
                 typ.set_body(&[frame_type.into(), basic], false);
                 typ.into()
             } else {
-                let typ = self.context.opaque_struct_type(&format!("tagged_void"));
+                let typ = self.context.opaque_struct_type("tagged_void");
                 typ.set_body(&[frame_type.into()], false);
                 typ.into()
             }
@@ -747,7 +747,7 @@ impl<'ctx> CodeGen<'ctx> {
             .filter_map(|&r| BasicMetadataTypeEnum::try_from(self.get_type(ir, ir.regs[r])).ok())
             .collect::<Vec<_>>();
 
-        let fn_type = match self.return_type(ir, &proc) {
+        let fn_type = match self.return_type(ir, proc) {
             AnyTypeEnum::ArrayType(t) => t.fn_type(&in_types, false),
             AnyTypeEnum::FloatType(t) => t.fn_type(&in_types, false),
             AnyTypeEnum::IntType(t) => t.fn_type(&in_types, false),
@@ -836,7 +836,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.position_at_end(blocks[0]);
 
             let struc = match captures.input {
-                Value::Value(r, _) => regmap.get(&r).map(|b| b.into_struct_value()),
+                Value::Reg(r, _) => regmap.get(&r).map(|b| b.into_struct_value()),
                 Value::Reference(ptr) => regmap.get(&ptr).map(|val| {
                     let ty =
                         BasicTypeEnum::try_from(self.get_type(ir, captures.input.get_type(ir)))
@@ -861,7 +861,7 @@ impl<'ctx> CodeGen<'ctx> {
                     let mem_ty = self.get_type(ir, ir.regs[reg]);
                     if BasicTypeEnum::try_from(mem_ty).is_ok() {
                         let val = self.builder.build_extract_value(struc, member, "").unwrap();
-                        regmap.insert(reg, val.into());
+                        regmap.insert(reg, val);
                         member += 1;
                     }
                 }
@@ -1044,10 +1044,9 @@ impl<'ctx> CodeGen<'ctx> {
                         if let Some(r) = r {
                             let typ = self.get_type(ir, ir.regs[r]);
                             if let Ok(typ) = BasicTypeEnum::try_from(typ) {
-                                let val = val.expect(&format!(
-                                    "call {} returns no value",
-                                    ir.proc_sign[p].debug_name
-                                ));
+                                let val = val.unwrap_or_else(|| {
+                                    panic!("call {} returns no value", ir.proc_sign[p].debug_name)
+                                });
                                 let cast = self.build_union_cast(val, typ);
                                 insert!(r, cast);
                             }
@@ -1449,7 +1448,7 @@ impl<'ctx> CodeGen<'ctx> {
                     I::Syscall(ret, nr, ref args) => {
                         let fargs = std::iter::once(regmap[&nr])
                             .chain(args.iter().map(|r| regmap[r]))
-                            .map(|v| BasicMetadataValueEnum::from(v))
+                            .map(BasicMetadataValueEnum::from)
                             .collect::<Vec<_>>();
 
                         let val = self
@@ -1696,40 +1695,38 @@ impl<'ctx> CodeGen<'ctx> {
     ) -> BasicValueEnum<'ctx> {
         if val.get_type() == typ {
             val
+        } else if self.size(typ) <= self.size(val.get_type()) {
+            // type is smaller than value
+            let ptr = self.builder.build_alloca(val.get_type(), "").unwrap();
+            self.builder.build_store(ptr, val).unwrap();
+
+            let reptr = match typ {
+                BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
+            };
+            let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
+
+            self.builder.build_load(typ, bitcast, "").unwrap()
         } else {
-            if self.size(typ) <= self.size(val.get_type()) {
-                // type is smaller than value
-                let ptr = self.builder.build_alloca(val.get_type(), "").unwrap();
-                self.builder.build_store(ptr, val).unwrap();
+            // type is bigger than value
+            let ptr = self.builder.build_alloca(typ, "").unwrap();
 
-                let reptr = match typ {
-                    BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
-                };
-                let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
+            let reptr = match val.get_type() {
+                BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
+                BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
+            };
+            let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
 
-                self.builder.build_load(typ, bitcast, "").unwrap()
-            } else {
-                // type is bigger than value
-                let ptr = self.builder.build_alloca(typ, "").unwrap();
-
-                let reptr = match val.get_type() {
-                    BasicTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()),
-                    BasicTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()),
-                };
-                let bitcast = self.builder.build_pointer_cast(ptr, reptr, "").unwrap();
-
-                self.builder.build_store(bitcast, val).unwrap();
-                self.builder.build_load(typ, ptr, "").unwrap()
-            }
+            self.builder.build_store(bitcast, val).unwrap();
+            self.builder.build_load(typ, ptr, "").unwrap()
         }
     }
     fn get_return(

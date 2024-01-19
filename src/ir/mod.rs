@@ -16,7 +16,7 @@ pub use codegen::*;
 // TODO: remove
 #[derive(Debug, Clone)]
 pub enum Value {
-    Value(Reg, Option<Val>),
+    Reg(Reg, Option<Val>),
     Reference(Reg),
     Global(Global),
 }
@@ -24,7 +24,7 @@ pub enum Value {
 impl Value {
     pub fn get_type(&self, ir: &IR) -> TypeIdx {
         match *self {
-            Value::Value(reg, _) => ir.regs[reg],
+            Value::Reg(reg, _) => ir.regs[reg],
             Value::Reference(reg) => ir.regs[reg].inner(ir),
             Value::Global(glob) => ir.globals[glob],
         }
@@ -133,13 +133,13 @@ impl TypeIdx {
         }
     }
     pub fn is_handler(self, ir: &IR) -> bool {
-        match ir.types[self] {
+        matches!(
+            ir.types[self],
             Type::NakedHandler(_)
-            | Type::RawHandler(_, _)
-            | Type::Handler(_)
-            | Type::HandlerOutput(_, _) => true,
-            _ => false,
-        }
+                | Type::RawHandler(_, _)
+                | Type::Handler(_)
+                | Type::HandlerOutput(_, _)
+        )
     }
 }
 
@@ -268,7 +268,7 @@ impl Display for IR {
             // write proc signature
             write!(f, "{}", sign.debug_name)?;
 
-            if sign.inputs.len() > 0 {
+            if !sign.inputs.is_empty() {
                 write!(f, " ( ")?;
                 for &r in sign.inputs.iter() {
                     if r != *sign.inputs.first().unwrap() {
@@ -279,7 +279,7 @@ impl Display for IR {
                 write!(f, " )")?;
             }
 
-            if sign.unhandled.len() > 0 {
+            if !sign.unhandled.is_empty() {
                 write!(f, " / ")?;
                 for handler in sign.unhandled.iter().copied() {
                     if handler != sign.unhandled.first().copied().unwrap() {
@@ -289,7 +289,7 @@ impl Display for IR {
                 }
             }
 
-            if sign.handled.len() > 0 {
+            if !sign.handled.is_empty() {
                 write!(f, " try ")?;
                 for handler in sign.handled.iter().copied() {
                     if handler != sign.handled.first().copied().unwrap() {
@@ -299,7 +299,7 @@ impl Display for IR {
                 }
             }
 
-            write!(f, " {{\n")?;
+            writeln!(f, " {{")?;
 
             // write blocks
             for (i, block) in imp.blocks.values().enumerate() {

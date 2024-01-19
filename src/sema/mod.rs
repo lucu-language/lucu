@@ -24,7 +24,7 @@ pub enum FunIdent {
 }
 
 impl FunIdent {
-    pub fn sign<'a>(self, ir: &'a SemIR) -> &'a FunSign {
+    pub fn sign(self, ir: &SemIR) -> &FunSign {
         match self {
             FunIdent::Top(idx) => &ir.fun_sign[idx],
             FunIdent::Effect(eff, idx) => &ir.effects[eff].funs[idx],
@@ -39,20 +39,14 @@ impl From<TypeIdx> for usize {
 }
 
 impl TypeIdx {
-    pub(crate) fn new(idx: usize, is_const: bool, is_lent: bool) -> Self {
-        Self(idx << 2 | (if is_lent { 2 } else { 0 }) | (if is_const { 1 } else { 0 }))
+    pub(crate) fn new(idx: usize, is_const: bool) -> Self {
+        Self(idx << 2 | (if is_const { 1 } else { 0 }))
     }
     pub fn is_const(self) -> bool {
         self.0 & 1 == 1
     }
-    pub fn is_lent(self) -> bool {
-        self.0 & 2 == 2
-    }
-    pub fn with(self, is_const: bool, is_lent: bool) -> Self {
-        Self::new(usize::from(self), is_const, is_lent)
-    }
     pub fn with_const(self, is_const: bool) -> Self {
-        Self::new(usize::from(self), is_const, self.is_lent())
+        Self::new(usize::from(self), is_const)
     }
 }
 
@@ -62,6 +56,8 @@ pub use codegen::analyze;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Value {
     Reg(BlockIdx, Option<InstrIdx>),
+
+    // TODO: this should be Reference(Box<Value>)
     Reference(BlockIdx, Option<InstrIdx>),
 
     // slice, const array
@@ -113,13 +109,13 @@ pub struct Block {
     pub value: Option<Vec<(Value, BlockIdx)>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum Instruction {
     Cast(Value, TypeIdx),
 
     Jump(BlockIdx),
     Branch(Value, BlockIdx, BlockIdx),
-    Phi(Vec<(Value, BlockIdx)>),
 
     Equals(Value, Value),
     Greater(Value, Value),
@@ -175,10 +171,19 @@ pub struct Param {
     pub const_generic: Option<GenericIdx>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ReturnType {
     pub type_def: Option<Range>,
     pub ty: TypeIdx,
+}
+
+impl Default for ReturnType {
+    fn default() -> Self {
+        Self {
+            type_def: None,
+            ty: TypeIdx(1),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -190,12 +195,6 @@ pub struct FunSign {
     pub params: VecMap<ParamIdx, Param>,
     pub effect_stack: Vec<Ranged<GenericVal<EffectIdent>>>,
     pub return_type: ReturnType,
-}
-
-impl Default for TypeIdx {
-    fn default() -> Self {
-        Self(0)
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -356,7 +355,7 @@ pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<Type
     get_value(generic_params, &idx).copied()
 }
 
-pub fn get_value<'a, K: PartialEq, V>(vec: &'a Vec<(K, V)>, key: &K) -> Option<&'a V> {
+pub fn get_value<'a, K: PartialEq, V>(vec: &'a [(K, V)], key: &K) -> Option<&'a V> {
     vec.iter().find(|(k, _)| k.eq(key)).map(|(_, v)| v)
 }
 
@@ -404,10 +403,7 @@ impl TypeIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        if self.is_lent() {
-            write!(f, "lent ")?;
-        }
-        if self.is_const() {
+        if self.is_const() && !matches!(ir.types[*self], Type::Str) {
             write!(f, "const ")?;
         }
         match ir.types[*self] {
@@ -460,7 +456,7 @@ impl TypeIdx {
             Type::Char => write!(f, "char"),
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),
-            Type::Never => write!(f, "!"),
+            Type::Never => write!(f, "never"),
             Type::Error => write!(f, "UNKNOWN"),
             Type::Effect(ref eff) => {
                 write!(f, "{}", ir.effects[eff.effect].name)?;
@@ -652,14 +648,6 @@ impl FunImpl {
                         cond.display(ir, proc, f)?;
                         write!(f, " B{} else B{}", yes.0, no.0)?;
                     }
-                    Instruction::Phi(vec) => {
-                        write!(f, "phi",)?;
-                        for (val, block) in vec {
-                            write!(f, " B{}: ", block.0)?;
-                            val.display(ir, proc, f)?;
-                            write!(f, ",")?;
-                        }
-                    }
                     Instruction::Equals(a, b) => {
                         write!(f, "== ")?;
                         a.display(ir, proc, f)?;
@@ -813,7 +801,7 @@ impl Handler {
         for capture in self.value_captures.iter() {
             write!(f, "  {} ", capture.debug_name)?;
             capture.ty.display(ir, no_params, f)?;
-            write!(f, "\n")?;
+            writeln!(f)?;
         }
 
         // funs

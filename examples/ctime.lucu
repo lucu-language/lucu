@@ -3,6 +3,6 @@ import "vendor:c"
 
 fun main() / io.stdio c.lib {
 	mut time = 0
-	c.time(&time)
+	do c.time(&time)
 	io.putint(time)
 }

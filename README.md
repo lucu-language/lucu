@@ -135,10 +135,10 @@ fun main() / io.stdio {
 
   # use handler
   with handler {
-    io.write("Hello")
-    io.write(", ")
-    io.write("World")
-    io.write("!\n")
+    do io.write("Hello")
+    do io.write(", ")
+    do io.write("World")
+    do io.write("!\n")
   }
 
   # print the entire buffer to the console
@@ -169,9 +169,6 @@ handle show(str) {
   }
 }
 ```
-
-> [!WARNING]  
-> Generics in lucu effects are not fully supported yet and will crash the compiler. It is being worked on
 
 ### Effects for typed exceptions
 

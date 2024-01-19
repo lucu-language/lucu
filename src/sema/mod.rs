@@ -65,20 +65,18 @@ pub use codegen::analyze;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Value {
     Reg(BlockIdx, Option<InstrIdx>),
-
-    // TODO: this should be Reference(Box<Value>)
-    Reference(BlockIdx, Option<InstrIdx>),
+    Deref(Box<Value>),
 
     // slice, const array
-    ConstantAggregate(Rc<[Value]>),
-    ConstantHandler(Rc<[Value]>, Rc<[(EffectArg, Option<BlockIdx>)]>),
+    ConstantAggregate(TypeIdx, Rc<[Value]>),
+    ConstantHandler(TypeIdx, Rc<[Value]>, Rc<[(EffectArg, Option<BlockIdx>)]>),
 
-    ConstantInt(bool, u64),
-    ConstantString(Rc<[u8]>),
+    ConstantInt(TypeIdx, bool, u64),
+    ConstantString(TypeIdx, Rc<[u8]>),
     ConstantBool(bool),
     ConstantNone,
-    ConstantUninit,
-    ConstantZero,
+    ConstantUninit(TypeIdx),
+    ConstantZero(TypeIdx),
     ConstantError,
     ConstantGeneric(GenericIdx),
 
@@ -90,15 +88,15 @@ impl Value {
     pub fn is_constant(&self) -> bool {
         match self {
             Value::Reg(_, _) => false,
-            Value::Reference(_, _) => false,
-            Value::ConstantAggregate(val) => val.iter().all(Self::is_constant),
-            Value::ConstantHandler(_, _) => false,
-            Value::ConstantInt(_, _) => true,
-            Value::ConstantString(_) => true,
+            Value::Deref(_) => false,
+            Value::ConstantAggregate(_, val) => val.iter().all(Self::is_constant),
+            Value::ConstantHandler(_, _, _) => false,
+            Value::ConstantInt(_, _, _) => true,
+            Value::ConstantString(_, _) => true,
             Value::ConstantBool(_) => true,
             Value::ConstantNone => true,
-            Value::ConstantUninit => true,
-            Value::ConstantZero => true,
+            Value::ConstantUninit(_) => true,
+            Value::ConstantZero(_) => true,
             Value::ConstantError => true,
             Value::ConstantGeneric(_) => true,
             Value::Param(_) => false,
@@ -317,7 +315,7 @@ pub enum Type {
     Never,
     Error,
 
-    CompileTime(Value, TypeIdx),
+    CompileTime(Value),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -459,7 +457,7 @@ impl TypeIdx {
                 // TODO: print params
                 Ok(())
             }
-            Type::CompileTime(ref val, _) => {
+            Type::CompileTime(ref val) => {
                 val.display(ir, &ir.fun_impl[FunIdx(0)], f)?;
                 Ok(())
             }
@@ -564,33 +562,21 @@ impl Value {
                     Ok(())
                 }
             },
-            Value::Reference(block, instr) => match instr {
-                Some(instr) => {
-                    write!(f, "%{}.{}^", block.0, instr.0)?;
-                    Ok(())
-                }
-                None => {
-                    let vec = proc.blocks[block].value.as_ref().unwrap();
-                    write!(f, "phi")?;
-                    for (val, block) in vec {
-                        write!(f, " B{}: ", block.0)?;
-                        val.display(ir, proc, f)?;
-                        write!(f, ",")?;
-                    }
-                    write!(f, "^")?;
-                    Ok(())
-                }
-            },
-            Value::ConstantInt(signed, n) => write!(f, "{}{}", if signed { "-" } else { "" }, n),
-            Value::ConstantString(ref str) => {
+            Value::Deref(ref val) => {
+                val.display(ir, proc, f)?;
+                write!(f, "^")?;
+                Ok(())
+            }
+            Value::ConstantInt(_, signed, n) => write!(f, "{}{}", if signed { "-" } else { "" }, n),
+            Value::ConstantString(_, ref str) => {
                 write!(f, "\"{}\"", std::str::from_utf8(str).unwrap())
             }
             Value::ConstantBool(b) => write!(f, "{}", b),
             Value::ConstantNone => write!(f, "{{}}"),
-            Value::ConstantUninit => write!(f, "---"),
-            Value::ConstantZero => write!(f, "0"),
+            Value::ConstantUninit(_) => write!(f, "---"),
+            Value::ConstantZero(_) => write!(f, "0"),
             Value::ConstantError => write!(f, "ERR"),
-            Value::ConstantAggregate(ref vec) => {
+            Value::ConstantAggregate(_, ref vec) => {
                 write!(f, "[")?;
                 for val in vec.iter() {
                     write!(f, " ")?;
@@ -600,7 +586,7 @@ impl Value {
                 write!(f, "]")?;
                 Ok(())
             }
-            Value::ConstantHandler(ref vec, _) => {
+            Value::ConstantHandler(_, ref vec, _) => {
                 write!(f, "[")?;
                 for val in vec.iter() {
                     write!(f, " ")?;

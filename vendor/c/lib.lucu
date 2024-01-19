@@ -17,6 +17,6 @@ effect lib {
 }
 
 @capability
-fun link() lib / foreign {
+fun link() handle lib / foreign {
 	link_effect("c")
 }

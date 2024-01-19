@@ -382,7 +382,7 @@ impl SemCtx<'_> {
                     GenericVal::Generic(idx) => match get_param(generic_params, idx) {
                         Some(ty) => match self.ir.types[ty] {
                             Type::Generic(generic) => GenericVal::Generic(generic.idx),
-                            Type::CompileTime(Value::ConstantInt(false, size), TYPE_USIZE) => {
+                            Type::CompileTime(Value::ConstantInt(TYPE_USIZE, false, size)) => {
                                 GenericVal::Literal(size)
                             }
                             _ => unreachable!(),
@@ -401,7 +401,7 @@ impl SemCtx<'_> {
             Type::EffectType
             | Type::DataType
             | Type::Integer(_, _)
-            | Type::CompileTime(_, _)
+            | Type::CompileTime(_)
             | Type::Str
             | Type::Char
             | Type::Bool
@@ -1036,7 +1036,7 @@ impl SemCtx<'_> {
                 match (sfrom, sto) {
                     (GenericVal::Literal(size), GenericVal::Generic(idx)) => {
                         let val = self.insert_type(
-                            Type::CompileTime(Value::ConstantInt(false, size), TYPE_USIZE),
+                            Type::CompileTime(Value::ConstantInt(TYPE_USIZE, false, size)),
                             false,
                         );
                         infer_generic(params, idx, val);
@@ -1085,7 +1085,7 @@ impl SemCtx<'_> {
             Type::None => true,
             Type::Never => true,
             Type::Error => true,
-            Type::CompileTime(_, _) => true,
+            Type::CompileTime(_) => true,
         }
     }
     fn test_move(&mut self, from: TypeIdx, to: TypeIdx) -> bool {
@@ -1278,10 +1278,18 @@ impl SemCtx<'_> {
                     .collect::<Option<Rc<[_]>>>()?;
                 let len = elems.len() as u64;
 
-                let arr = Value::ConstantAggregate(elems);
+                let arr = Value::ConstantAggregate(
+                    self.insert_type(
+                        Type::ConstArray(GenericVal::Literal(len), elem),
+                        expected.is_const(),
+                    ),
+                    elems,
+                );
                 let ptr = ctx.push(Instruction::Reference(arr));
-                let slice =
-                    Value::ConstantAggregate(vec![ptr, Value::ConstantInt(false, len)].into());
+                let slice = Value::ConstantAggregate(
+                    expected,
+                    vec![ptr, Value::ConstantInt(TYPE_USIZE, false, len)].into(),
+                );
                 Some(slice)
             }
             (E::Array(exprs), &Type::ConstArray(GenericVal::Literal(n), elem))
@@ -1293,28 +1301,28 @@ impl SemCtx<'_> {
                     .copied()
                     .map(|expr| self.check_expr(ctx, expr, elem, expected_def))
                     .collect::<Option<Rc<[_]>>>()?;
-                Some(Value::ConstantAggregate(elems))
+                Some(Value::ConstantAggregate(expected, elems))
             }
             (E::Uninit, _) => {
                 // TODO: test if allowed
-                Some(Value::ConstantUninit)
+                Some(Value::ConstantUninit(expected))
             }
             (E::Int(0), _) => {
                 // TODO: test if allowed
-                Some(Value::ConstantZero)
+                Some(Value::ConstantZero(expected))
             }
             (&E::Int(n), &Type::Integer(_signed, _size)) => {
                 // TODO: test if fits
-                Some(Value::ConstantInt(false, n))
+                Some(Value::ConstantInt(expected, false, n))
             }
             (E::Character(str), &Type::Integer(_signed, _size)) => {
                 // TODO: test if fits, test if single char
                 let c = str.chars().next().unwrap();
                 let c = u64::from(c);
-                Some(Value::ConstantInt(false, c))
+                Some(Value::ConstantInt(expected, false, c))
             }
             (E::String(str), &Type::Slice(elem)) if elem == TYPE_U8 => {
-                Some(Value::ConstantString(str.as_bytes().into()))
+                Some(Value::ConstantString(expected, str.as_bytes().into()))
             }
             (&E::UnOp(inner, UnOp::Cast), _) => {
                 // TODO: test if allowed
@@ -1323,10 +1331,11 @@ impl SemCtx<'_> {
                     .instructions
                     .push(InstrIdx, Instruction::Cast(value.clone(), expected));
 
-                if matches!(value, Value::Reference(_, _)) {
-                    Some(Value::Reference(ctx.block, Some(instr)))
+                let reg = Value::Reg(ctx.block, Some(instr));
+                if matches!(value, Value::Deref(_)) {
+                    Some(Value::Deref(Box::new(reg)))
                 } else {
-                    Some(Value::Reg(ctx.block, Some(instr)))
+                    Some(reg)
                 }
             }
             (&E::TryWith(body, handler_expr), _) => ctx.child(|ctx| {
@@ -1455,39 +1464,37 @@ impl SemCtx<'_> {
                             .collect::<Vec<_>>(),
                     )
                     .map(|(arg, (param_ty, param_def, const_generic))| {
-                        let (val, ty) =
-                            match self.translate_generics(param_ty, &generic_params, false) {
-                                Some(from) => {
-                                    let val = self.check_expr(ctx, arg, from, Some(param_def))?;
-                                    self.infer_generics(&mut generic_params, from, param_ty);
-                                    (val, from)
-                                }
-                                None => {
-                                    let (val, from) = self.synth_expr(ctx, arg)?;
-                                    self.infer_generics(&mut generic_params, from, param_ty);
+                        let val = match self.translate_generics(param_ty, &generic_params, false) {
+                            Some(from) => {
+                                let val = self.check_expr(ctx, arg, from, Some(param_def))?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
+                                val
+                            }
+                            None => {
+                                let (val, from) = self.synth_expr(ctx, arg)?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
 
-                                    if from != TYPE_ERROR
-                                        && !self
-                                            .translate_generics(param_ty, &generic_params, false)
-                                            .is_some_and(|to| self.test_move(from, to))
-                                    {
-                                        self.errors.push(self.ast.exprs[arg].with(
-                                            Error::TypeMismatch(
-                                                Some(param_def),
-                                                format!("{}", FmtType(&self.ir, param_ty)),
-                                                format!("{}", FmtType(&self.ir, from)),
-                                            ),
-                                        ))
-                                    }
-
-                                    (val, from)
+                                if from != TYPE_ERROR
+                                    && !self
+                                        .translate_generics(param_ty, &generic_params, false)
+                                        .is_some_and(|to| self.test_move(from, to))
+                                {
+                                    self.errors
+                                        .push(self.ast.exprs[arg].with(Error::TypeMismatch(
+                                            Some(param_def),
+                                            format!("{}", FmtType(&self.ir, param_ty)),
+                                            format!("{}", FmtType(&self.ir, from)),
+                                        )))
                                 }
-                            };
+
+                                val
+                            }
+                        };
                         if let Some(const_generic) = const_generic {
                             if val.is_constant() {
                                 generic_params.push((
                                     const_generic,
-                                    self.insert_type(Type::CompileTime(val.clone(), ty), false),
+                                    self.insert_type(Type::CompileTime(val.clone()), false),
                                 ))
                             } else {
                                 todo!("give error: not constant")
@@ -1637,6 +1644,13 @@ impl SemCtx<'_> {
                     let generics = ctx.all_generics();
                     let generic_params = self.to_generic_params(&generics);
 
+                    let value_captures_types = value_captures
+                        .iter()
+                        .map(|s| Capture {
+                            debug_name: s.into(),
+                            ty: ctx.get_value_reference(self, s).unwrap().ty,
+                        })
+                        .collect();
                     let handler = self.push_handler(Handler {
                         debug_name: format!("H{}", self.ir.handlers.len()),
                         generics,
@@ -1645,13 +1659,7 @@ impl SemCtx<'_> {
                         generic_params: eff.generic_params,
                         fail,
 
-                        value_captures: value_captures
-                            .iter()
-                            .map(|s| Capture {
-                                debug_name: s.into(),
-                                ty: ctx.get_value(self, s).unwrap().ty,
-                            })
-                            .collect(),
+                        value_captures: value_captures_types,
                         effect_captures: effect_captures.clone(),
 
                         funs: vec![(sign, imp)].into(),
@@ -1675,9 +1683,10 @@ impl SemCtx<'_> {
                     self.check_move(ty, expected, error_loc);
 
                     Some(Value::ConstantHandler(
+                        ty,
                         value_captures
                             .into_iter()
-                            .map(|s| ctx.get_value(self, &s).unwrap().value)
+                            .map(|s| ctx.get_value_reference(self, &s).unwrap().value)
                             .collect(),
                         effect_captures
                             .into_iter()
@@ -2026,6 +2035,13 @@ impl SemCtx<'_> {
                         let generics = ctx.all_generics();
                         let generic_params = self.to_generic_params(&generics);
 
+                        let value_captures_types = value_captures
+                            .iter()
+                            .map(|s| Capture {
+                                debug_name: s.into(),
+                                ty: ctx.get_value_reference(self, s).unwrap().ty,
+                            })
+                            .collect();
                         let handler = self.push_handler(Handler {
                             debug_name: format!("H{}", self.ir.handlers.len()),
                             generics,
@@ -2034,13 +2050,7 @@ impl SemCtx<'_> {
                             generic_params: eff.generic_params.clone(),
                             fail,
 
-                            value_captures: value_captures
-                                .iter()
-                                .map(|s| Capture {
-                                    debug_name: s.into(),
-                                    ty: ctx.get_value(self, s).unwrap().ty,
-                                })
-                                .collect(),
+                            value_captures: value_captures_types,
                             effect_captures: effect_captures.clone(),
 
                             funs,
@@ -2073,9 +2083,10 @@ impl SemCtx<'_> {
                         );
                         Some((
                             Value::ConstantHandler(
+                                ty,
                                 value_captures
                                     .into_iter()
-                                    .map(|s| ctx.get_value(self, &s).unwrap().value)
+                                    .map(|s| ctx.get_value_reference(self, &s).unwrap().value)
                                     .collect(),
                                 effect_captures
                                     .into_iter()
@@ -2128,39 +2139,37 @@ impl SemCtx<'_> {
                             .collect::<Vec<_>>(),
                     )
                     .map(|(arg, (param_ty, param_def, const_generic))| {
-                        let (val, ty) =
-                            match self.translate_generics(param_ty, &generic_params, false) {
-                                Some(from) => {
-                                    let val = self.check_expr(ctx, arg, from, Some(param_def))?;
-                                    self.infer_generics(&mut generic_params, from, param_ty);
-                                    (val, from)
-                                }
-                                None => {
-                                    let (val, from) = self.synth_expr(ctx, arg)?;
-                                    self.infer_generics(&mut generic_params, from, param_ty);
+                        let val = match self.translate_generics(param_ty, &generic_params, false) {
+                            Some(from) => {
+                                let val = self.check_expr(ctx, arg, from, Some(param_def))?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
+                                val
+                            }
+                            None => {
+                                let (val, from) = self.synth_expr(ctx, arg)?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
 
-                                    if from != TYPE_ERROR
-                                        && !self
-                                            .translate_generics(param_ty, &generic_params, false)
-                                            .is_some_and(|to| self.test_move(from, to))
-                                    {
-                                        self.errors.push(self.ast.exprs[arg].with(
-                                            Error::TypeMismatch(
-                                                Some(param_def),
-                                                format!("{}", FmtType(&self.ir, param_ty)),
-                                                format!("{}", FmtType(&self.ir, from)),
-                                            ),
-                                        ))
-                                    }
-
-                                    (val, from)
+                                if from != TYPE_ERROR
+                                    && !self
+                                        .translate_generics(param_ty, &generic_params, false)
+                                        .is_some_and(|to| self.test_move(from, to))
+                                {
+                                    self.errors
+                                        .push(self.ast.exprs[arg].with(Error::TypeMismatch(
+                                            Some(param_def),
+                                            format!("{}", FmtType(&self.ir, param_ty)),
+                                            format!("{}", FmtType(&self.ir, from)),
+                                        )))
                                 }
-                            };
+
+                                val
+                            }
+                        };
                         if let Some(const_generic) = const_generic {
                             if val.is_constant() {
                                 generic_params.push((
                                     const_generic,
-                                    self.insert_type(Type::CompileTime(val.clone(), ty), false),
+                                    self.insert_type(Type::CompileTime(val.clone()), false),
                                 ))
                             } else {
                                 todo!("give error: not constant")
@@ -2294,8 +2303,8 @@ impl SemCtx<'_> {
                     let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone()));
                     let len = ctx.push(Instruction::Sub(rright, rleft));
 
-                    let slice = Value::ConstantAggregate(vec![ptr, len].into());
                     let slice_ty = self.insert_type(Type::Slice(elem_ty), false);
+                    let slice = Value::ConstantAggregate(slice_ty, vec![ptr, len].into());
                     Some((slice, slice_ty))
                 } else {
                     let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
@@ -2341,30 +2350,31 @@ impl SemCtx<'_> {
             }
             E::UnOp(inner, UnOp::PostIncrement) => {
                 let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-
-                // TODO: check if integer type
-                let loaded = ctx.push(Instruction::Load(value.clone()));
-                let incremented = ctx.push(Instruction::Add(
-                    loaded.clone(),
-                    Value::ConstantInt(false, 1),
-                ));
-
-                if mutable {
-                    ctx.push(Instruction::Store(value, incremented));
-                } else {
+                if !mutable {
                     todo!("give error")
                 }
 
-                Some((loaded, ty))
+                // TODO: check if integer type
+                match value {
+                    Value::Deref(val) => {
+                        let loaded = ctx.push(Instruction::Load((*val).clone()));
+                        let incremented = ctx.push(Instruction::Add(
+                            loaded.clone(),
+                            Value::ConstantInt(ty, false, 1),
+                        ));
+                        ctx.push(Instruction::Store(*val, incremented));
+                        Some((loaded, ty))
+                    }
+                    Value::ConstantError => Some((value, ty)),
+                    _ => unreachable!(),
+                }
             }
             E::UnOp(inner, UnOp::Reference) => {
-                // TODO: also make this work for non-mutable variables? (const pointer)
-
                 let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
                 match value {
-                    Value::Reference(block, instr) => {
+                    Value::Deref(val) => {
                         let ptr_ty = self.insert_type(Type::Pointer(ty), !mutable);
-                        Some((Value::Reg(block, instr), ptr_ty))
+                        Some((*val, ptr_ty))
                     }
                     Value::ConstantError => Some((value, ty)),
                     _ => unreachable!(),
@@ -2470,7 +2480,7 @@ impl SemCtx<'_> {
                             Type::ConstArray(GenericVal::Literal(elems.len() as u64), ty),
                             false,
                         );
-                        Some((Value::ConstantAggregate(elems), arr_ty))
+                        Some((Value::ConstantAggregate(arr_ty, elems), arr_ty))
                     }
                     None => {
                         self.errors
@@ -2479,12 +2489,15 @@ impl SemCtx<'_> {
                     }
                 }
             }
-            E::String(ref str) => Some((Value::ConstantString(str.as_bytes().into()), TYPE_STR)),
+            E::String(ref str) => Some((
+                Value::ConstantString(TYPE_STR, str.as_bytes().into()),
+                TYPE_STR,
+            )),
             E::Character(ref str) => {
                 // TODO: test if fits, test if single char (otherwise test if rune)
                 let c = str.chars().next().unwrap();
                 let c = u64::from(c);
-                Some((Value::ConstantInt(false, c), TYPE_CHAR))
+                Some((Value::ConstantInt(TYPE_CHAR, false, c), TYPE_CHAR))
             }
             E::Ident(id) => {
                 let name = &self.ast.idents[id].0;
@@ -2497,7 +2510,7 @@ impl SemCtx<'_> {
                     }
                 }
             }
-            E::Int(n) => Some((Value::ConstantInt(false, n), TYPE_INT)),
+            E::Int(n) => Some((Value::ConstantInt(TYPE_INT, false, n), TYPE_INT)),
             E::Uninit => {
                 self.errors
                     .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
@@ -2548,8 +2561,7 @@ impl FunCtx<'_> {
         Value::Reg(self.block, Some(idx))
     }
     fn push_ref(&mut self, instr: Instruction) -> Value {
-        let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
-        Value::Reference(self.block, Some(idx))
+        Value::Deref(Box::new(self.push(instr)))
     }
     fn all_generics(&self) -> Generics {
         let mut generics = Vec::new();
@@ -2579,14 +2591,32 @@ impl FunCtx<'_> {
                         idx
                     }
                 };
-                Some(Variable {
-                    value: Value::Capture(idx),
-                    ..val
-                })
+                if matches!(val.value, Value::Deref(_)) {
+                    Some(Variable {
+                        value: Value::Deref(Box::new(Value::Capture(idx))),
+                        ..val
+                    })
+                } else {
+                    Some(Variable {
+                        value: Value::Capture(idx),
+                        ..val
+                    })
+                }
             } else {
                 Some(val)
             }
         })
+    }
+    fn get_value_reference(&mut self, ctx: &mut SemCtx, name: &str) -> Option<Variable> {
+        let val = self.get_value(ctx, name)?;
+        match val.value {
+            Value::Deref(value) => Some(Variable {
+                value: *value,
+                ty: ctx.insert_type(Type::Pointer(val.ty), !val.mutable),
+                mutable: val.mutable,
+            }),
+            _ => Some(val),
+        }
     }
     fn get_effect(
         &mut self,
@@ -2776,9 +2806,9 @@ impl FunCtx<'_> {
         } else {
             match (yval, nval) {
                 (Value::ConstantNone, Value::ConstantNone) => Some((Value::ConstantNone, common)),
-                (Value::Reference(_, _), Value::Reference(_, _)) => {
+                (Value::Deref(_), Value::Deref(_)) => {
                     self.blocks[self.block].value = Some(phi);
-                    Some((Value::Reference(self.block, None), common))
+                    Some((Value::Deref(Box::new(Value::Reg(self.block, None))), common))
                 }
                 _ => {
                     self.blocks[self.block].value = Some(phi);

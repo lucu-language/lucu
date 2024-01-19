@@ -18,11 +18,11 @@ effect conn {
 @foreign(prefix = "xcb_")
 effect lib {
 	# TODO: cstring, ^cint
-	fun connect(displayname uptr, screenp uptr) conn
+	fun connect(displayname uptr, screenp uptr) handle conn
 }
 
 @capability
-fun link() lib / foreign {
-	c.link()
+fun link() handle lib / foreign {
+	do c.link()
 	link_effect("xcb")
 }

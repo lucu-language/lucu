@@ -12,7 +12,7 @@ fun skip_line() usize / reader {
 			break()
 		}
 
-		total = total + 1
+		do total++
 		if buf[0] == '\n' {
 			break()
 		}

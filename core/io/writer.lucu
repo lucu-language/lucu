@@ -10,7 +10,7 @@ fun write_int(n int) usize / writer {
 	mut remaining = n
 
 	try loop {
-		let digit = '0' + cast mod(remaining, 10)
+		let digit u8 = '0' + cast mod(remaining, 10)
 		remaining = remaining / 10
 
 		current = current - 1

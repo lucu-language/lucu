@@ -578,7 +578,11 @@ impl Parse for Type {
 impl Parse for FailType {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk.check(Token::Yeets).is_some() {
-            if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
+            if tk
+                .peek()
+                .map(|t| t.0.continues_statement() || matches!(t.0, Token::Loop))
+                .unwrap_or(true)
+            {
                 Some(FailType::None)
             } else {
                 let t = Type::parse_or_default(tk);
@@ -935,11 +939,22 @@ impl Parse for Expression {
                 Some(Expression::Uninit)
             }
 
+            // loop
             Some(Ranged(Token::Loop, ..)) => {
                 tk.next();
                 let body = Body::parse_or_default(tk);
                 let body = tk.push_expr(body);
                 Some(Expression::Loop(body))
+            }
+
+            // do expr
+            Some(Ranged(Token::Do, ..)) => {
+                tk.next();
+
+                let right = Expression::parse_or_default(tk);
+                let right = tk.push_expr(right);
+
+                Some(Expression::Do(right))
             }
 
             // try-with expression
@@ -1222,6 +1237,18 @@ fn expression_post(
 ) -> Option<Expression> {
     loop {
         match tk.peek() {
+            // as type
+            Some(Ranged(Token::As, ..)) => {
+                tk.next();
+                let ty = Type::parse_or_default(tk);
+                expr = Ranged(
+                    Expression::As(tk.push_expr(expr), tk.push_type(ty)),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                );
+            }
+
             // member
             Some(Ranged(Token::Dot, ..)) => {
                 tk.next();

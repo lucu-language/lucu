@@ -1208,6 +1208,14 @@ fn analyze_expr(
             scope.values.insert(ctx.parsed.idents[name].0.clone(), val);
             (TYPE_NONE, false)
         }
+        Expression::As(left, ty) => {
+            let ty = analyze_type(ctx, scope, ty, errors, None);
+            analyze_expr(ctx, scope, left, ty, false, errors)
+        }
+        Expression::Do(right) => {
+            analyze_expr(ctx, scope, right, TYPE_UNKNOWN, false, errors);
+            (TYPE_NONE, false)
+        }
 
         // these have no identifiers
         Expression::String(_) => (

@@ -10,7 +10,7 @@ effect throwstr {
 
 fun main() / io.stdio {
 	io.putint(try {
-		try {
+		do try {
 			throwint()
 			"unexpected"
 		} with handle throwstr fails str {
@@ -26,11 +26,11 @@ fun main() / io.stdio {
 		fun throwint() ! {
 			fail 42
 		}
-		
+
 	})
 
 	io.putstr(try {
-		try {
+		do try {
 			throwstr()
 			69
 		} with handle throwint fails int {
@@ -38,7 +38,7 @@ fun main() / io.stdio {
 			fun throwint() ! {
 				fail 42
 			}
-	
+
 		}
 		"unexpected"
 	} with handle throwstr fails str {

@@ -68,13 +68,13 @@ fun main() / io.stdio {
 	with buffer {
 
 		# we push some elements
-		push("Hello")
-		push("world")
+		do push("Hello")
+		do push("world")
 
 		# a 'with loop' block is the same as a regular 'with',
 		# but it loops until it gets a failure
 		# this way we can iterate over all pushed elements and print them
-		with iter() loop {
+		with iter() as handle iter(str) fails loop {
 			io.putstr(next())
 		}
 

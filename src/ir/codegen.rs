@@ -3165,6 +3165,10 @@ fn generate_expr(
             Ok(Some(Value::Reg(reg, None)))
         }
         E::Error => unreachable!(),
+        E::As(expr, _) => generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo),
+        E::Do(expr) => {
+            generate_expr(ir, ctx.with_expr(expr), blocks, block, proc_todo).and(Ok(None))
+        }
     }
 }
 

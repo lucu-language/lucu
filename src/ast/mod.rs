@@ -54,6 +54,9 @@ pub enum Expression {
     Yeet(Option<ExprIdx>),
     Let(bool, Ident, Option<TypeIdx>, ExprIdx),
 
+    As(ExprIdx, TypeIdx),
+    Do(ExprIdx),
+
     TryWith(ExprIdx, Option<ExprIdx>),
     Handler(Handler),
 
@@ -339,6 +342,8 @@ impl Ast {
                     }
                 }
             }
+            Expression::As(expr, _) => self.for_each(expr, do_try, do_handler, f),
+            Expression::Do(expr) => self.for_each(expr, do_try, do_handler, f),
             Expression::String(_) => {}
             Expression::Character(_) => {}
             Expression::Int(_) => {}

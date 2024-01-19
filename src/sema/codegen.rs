@@ -1160,6 +1160,7 @@ impl SemCtx<'_> {
                 block,
                 yeetable,
                 yeetable_def,
+                yeetable_ret: None,
             };
 
             for (idx, param) in ir_sign.params.iter(ParamIdx) {
@@ -1328,7 +1329,79 @@ impl SemCtx<'_> {
                     Some(Value::Reg(ctx.block, Some(instr)))
                 }
             }
+            (&E::TryWith(body, handler_expr), _) => ctx.child(|ctx| {
+                let handler = match handler_expr {
+                    Some(handler) => Some(self.synth_expr(ctx, handler)?),
+                    None => None,
+                };
 
+                let end = ctx.blocks.push(
+                    BlockIdx,
+                    Block {
+                        instructions: VecMap::new(),
+                        value: None,
+                    },
+                );
+
+                ctx.jump();
+                let old_yeet = ctx.yeetable;
+                let old_def = ctx.yeetable_def;
+                let old_ret = ctx.yeetable_ret;
+
+                ctx.yeetable = Some(expected);
+                ctx.yeetable_def = expected_def;
+                ctx.yeetable_ret = Some(end);
+                if let Some((ref handler, ty)) = handler {
+                    if ty != TYPE_ERROR {
+                        let Type::Handler(lazy) = self.ir.types[ty] else {
+                            unreachable!()
+                        };
+                        let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
+                            unreachable!()
+                        };
+
+                        ctx.scope
+                            .top()
+                            .effect_stack
+                            .push((ty.effect.clone(), ctx.yeetable_ret));
+                        self.check_move(
+                            ty.fail_type,
+                            expected,
+                            TypeRange {
+                                loc: self.ast.exprs[handler_expr.unwrap()].empty(),
+                                def: expected_def,
+                            },
+                        );
+                    }
+
+                    ctx.push(Instruction::PushHandler(handler.clone()));
+                }
+
+                let body_synth = self.synth_expr(ctx, body);
+                if handler.is_some() {
+                    ctx.push(Instruction::PopHandler);
+                }
+
+                if body_synth.is_none() && ctx.yeetable.is_none() {
+                    ctx.yeetable = old_yeet;
+                    ctx.yeetable_def = old_def;
+                    ctx.yeetable_ret = old_ret;
+                    None?;
+                }
+
+                let last = ctx.jump_to(end);
+                ctx.blocks[end].value = Some(
+                    body_synth
+                        .into_iter()
+                        .map(|(value, _)| (value, last))
+                        .collect(),
+                );
+
+                ctx.yeetable = old_yeet;
+                ctx.yeetable_def = old_def;
+                ctx.yeetable_ret = old_ret;
+                Some(Value::Reg(end, None))
+            }),
             (&E::Call(callee, ref args), _) => {
                 // TODO: currently we assume func is an Ident expr or Effect Member expr
                 let Some(fun) = (match self.ast.exprs[callee].0 {
@@ -1433,7 +1506,7 @@ impl SemCtx<'_> {
                     .eq(fun.generic_indices(&self.ir))
                 {
                     // FIXME: fix this (infer using effect stack)
-                    panic!(
+                    println!(
                         "this occurs when an effect param doesn't appear in its function {}",
                         sign.name
                     );
@@ -1613,6 +1686,27 @@ impl SemCtx<'_> {
                     ))
                 })
             }
+            (
+                &E::BinOp(
+                    left,
+                    op @ (BinOp::Divide | BinOp::Multiply | BinOp::Subtract | BinOp::Add),
+                    right,
+                ),
+                _,
+            ) => {
+                let left = self.check_expr(ctx, left, expected, expected_def)?;
+                let right = self.check_expr(ctx, right, expected, expected_def)?;
+
+                let res = ctx.push(match op {
+                    BinOp::Divide => Instruction::Div(left, right),
+                    BinOp::Multiply => Instruction::Mul(left, right),
+                    BinOp::Subtract => Instruction::Sub(left, right),
+                    BinOp::Add => Instruction::Add(left, right),
+                    _ => unreachable!(),
+                });
+
+                Some(res)
+            }
 
             _ => {
                 let (found, found_ty) = self.synth_expr(ctx, expr)?;
@@ -1709,12 +1803,88 @@ impl SemCtx<'_> {
                     },
                 )
             }
+            E::TryWith(body, handler) => ctx.child(|ctx| {
+                let handler = match handler {
+                    Some(handler) => Some(self.synth_expr(ctx, handler)?),
+                    None => None,
+                };
 
-            E::TryWith(_, _) => {
-                // TODO: plz do this
-                ctx.push(Instruction::Trap);
-                Some((Value::ConstantError, TYPE_ERROR))
-            }
+                let end = ctx.blocks.push(
+                    BlockIdx,
+                    Block {
+                        instructions: VecMap::new(),
+                        value: None,
+                    },
+                );
+
+                ctx.jump();
+                let old_yeet = ctx.yeetable;
+                let old_def = ctx.yeetable_def;
+                let old_ret = ctx.yeetable_ret;
+
+                ctx.yeetable = None;
+                ctx.yeetable_def = None;
+                ctx.yeetable_ret = Some(end);
+                if let Some((ref handler, ty)) = handler {
+                    if ty != TYPE_ERROR {
+                        let Type::Handler(lazy) = self.ir.types[ty] else {
+                            unreachable!()
+                        };
+                        let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
+                            unreachable!()
+                        };
+
+                        ctx.yeetable = Some(ty.fail_type);
+                        ctx.scope
+                            .top()
+                            .effect_stack
+                            .push((ty.effect.clone(), ctx.yeetable_ret));
+                    }
+
+                    ctx.push(Instruction::PushHandler(handler.clone()));
+                }
+
+                let body_synth = self.synth_expr(ctx, body);
+                if handler.is_some() {
+                    ctx.push(Instruction::PopHandler);
+                }
+
+                if body_synth.is_none() && ctx.yeetable.is_none() {
+                    ctx.yeetable = old_yeet;
+                    ctx.yeetable_def = old_def;
+                    ctx.yeetable_ret = old_ret;
+                    None?;
+                }
+                let ty = body_synth
+                    .as_ref()
+                    .map(|&(_, ty)| ty)
+                    .or(ctx.yeetable)
+                    .unwrap();
+
+                if let Some(yeet_ty) = ctx.yeetable {
+                    self.check_move(
+                        yeet_ty,
+                        ty,
+                        TypeRange {
+                            loc: self.ast.exprs[body].empty(),
+                            def: None,
+                        },
+                    );
+                }
+
+                let last = ctx.jump_to(end);
+                ctx.blocks[end].value = Some(
+                    body_synth
+                        .into_iter()
+                        .map(|(value, _)| (value, last))
+                        .collect(),
+                );
+
+                ctx.yeetable = old_yeet;
+                ctx.yeetable_def = old_def;
+                ctx.yeetable_ret = old_ret;
+                Some((Value::Reg(end, None), ty))
+            }),
             E::Handler(ref handler) => match handler {
                 ast::Handler::Full {
                     effect,
@@ -2000,22 +2170,8 @@ impl SemCtx<'_> {
                     })
                     .collect::<Option<Vec<_>>>()?;
 
-                // make sure we got all generics inferred
-                let sign = &fun.sign(&self.ir);
-                generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
-                if !generic_params
-                    .iter()
-                    .map(|&(idx, _)| idx)
-                    .eq(fun.generic_indices(&self.ir))
-                {
-                    // FIXME: fix this (infer using effect stack)
-                    panic!(
-                        "this occurs when an effect param doesn't appear in its function {}",
-                        sign.name
-                    );
-                }
-
                 // get return type
+                let sign = &fun.sign(&self.ir);
                 let mut not_enough_info = false;
                 let return_type =
                     match self.translate_generics(sign.return_type.ty, &generic_params, true) {
@@ -2025,6 +2181,21 @@ impl SemCtx<'_> {
                             TYPE_ERROR
                         }
                     };
+
+                // make sure we got all generics inferred
+                let sign = &fun.sign(&self.ir);
+                generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                if !generic_params
+                    .iter()
+                    .map(|&(idx, _)| idx)
+                    .eq(fun.generic_indices(&self.ir))
+                {
+                    // FIXME: fix this (infer using effect stack)
+                    println!(
+                        "this occurs when an effect param doesn't appear in its function {}",
+                        sign.name
+                    );
+                }
 
                 // get effects
                 let mut effects = Vec::new();
@@ -2332,6 +2503,18 @@ impl SemCtx<'_> {
                     .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 Some((Value::ConstantError, TYPE_ERROR))
             }
+            E::As(left, ty) => {
+                let expected =
+                    self.analyze_type(&mut ctx.scope, ty, None, false, &mut Self::lazy_handler);
+                Some((
+                    self.check_expr(ctx, left, expected, Some(self.ast.types[ty].empty()))?,
+                    expected,
+                ))
+            }
+            E::Do(right) => {
+                self.synth_expr(ctx, right)?;
+                Some((Value::ConstantNone, TYPE_NONE))
+            }
             E::Error => Some((Value::ConstantError, TYPE_ERROR)),
             E::Member(_, _) => todo!(),
         }
@@ -2343,6 +2526,7 @@ struct FunCtx<'a> {
 
     yeetable: Option<TypeIdx>,
     yeetable_def: Option<Range>,
+    yeetable_ret: Option<BlockIdx>,
 
     blocks: VecMap<BlockIdx, Block>,
     block: BlockIdx,
@@ -2453,7 +2637,7 @@ impl FunCtx<'_> {
                             ctx.infer_generics(&mut generic_params, yeetable, fail);
                             if !ctx
                                 .translate_generics(fail, &generic_params, false)
-                                .is_some_and(|ty| ty == yeetable)
+                                .is_some_and(|ty| ctx.test_move(ty, yeetable))
                             {
                                 return None;
                             }
@@ -2491,7 +2675,7 @@ impl FunCtx<'_> {
                             return None;
                         }
 
-                        Some((EffectArg::Implied(i, generic_params), None))
+                        Some((EffectArg::Implied(i, generic_params), self.yeetable_ret))
                     })
             }
             _ => None,
@@ -2508,6 +2692,9 @@ impl FunCtx<'_> {
                 value: None,
             },
         );
+        self.jump_to(block)
+    }
+    fn jump_to(&mut self, block: BlockIdx) -> BlockIdx {
         self.push(Instruction::Jump(block));
 
         let old = self.block;
@@ -2890,8 +3077,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
                     LazyValue::Some(GenericVal::Generic(genericidx)) => match params {
                         Some(params) => {
                             match ctx.ir.types[get_param(params, genericidx).unwrap()] {
-                                Type::Generic(g) => LazyValue::Some(GenericVal::Generic(g.idx)),
                                 Type::Handler(lazy) => ctx.ir.lazy_handlers[lazy.idx].clone(),
+                                Type::Error => LazyValue::None,
                                 _ => unreachable!(),
                             }
                         }

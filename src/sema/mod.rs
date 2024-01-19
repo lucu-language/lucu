@@ -453,7 +453,7 @@ impl TypeIdx {
             Type::Bool => write!(f, "bool"),
             Type::None => write!(f, "void"),
             Type::Never => write!(f, "never"),
-            Type::Error => write!(f, "UNKNOWN"),
+            Type::Error => write!(f, "ERROR"),
             Type::Effect(ref eff) => {
                 write!(f, "{}", ir.effects[eff.effect].name)?;
                 // TODO: print params
@@ -740,8 +740,13 @@ impl FunImpl {
                         write!(f, ")")?;
                     }
 
-                    Instruction::PushHandler(_) => todo!(),
-                    Instruction::PopHandler => todo!(),
+                    Instruction::PushHandler(ref val) => {
+                        write!(f, "push ")?;
+                        val.display(ir, proc, f)?;
+                    }
+                    Instruction::PopHandler => {
+                        write!(f, "pop")?;
+                    }
                     Instruction::Trace(_) => todo!(),
                     Instruction::Syscall(_, _) => todo!(),
                 }

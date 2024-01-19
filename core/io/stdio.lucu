@@ -9,29 +9,29 @@ effect stdio {
 }
 
 fun print(s str) / stdio {
-	write(cast s) with stdout();
+	do write(cast s) with stdout()
 }
 
 fun printerr(s str) / stdio {
-	write(cast s) with stderr();
+	do write(cast s) with stderr()
 }
 
 fun putint(n int) / stdio {
 	with stdout() {
-		write_int(n)
-		write("\n")
-	};
+		do write_int(n)
+		do write("\n")
+	}
 }
 
 fun putstr(s str) / stdio {
 	with stdout() {
-		write(cast s)
-		write("\n")
-	};
+		do write(cast s)
+		do write("\n")
+	}
 }
 
 fun wait() / stdio {
-	skip_line() with stdin();
+	do skip_line() with stdin()
 }
 
 @capability(os = "linux")
@@ -68,7 +68,7 @@ fun wasi() handle stdio / wasi.sys2 {
 			fun {
 				buf ->
 				mut read u32 = 0
-				let _ = wasi.fd_read(0, [buf], &read)
+				do wasi.fd_read(0, [buf], &read)
 				cast read
 			}
 		}
@@ -76,7 +76,7 @@ fun wasi() handle stdio / wasi.sys2 {
 			handle writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
-					let _ = wasi.fd_write(1, [buf], &written)
+					do wasi.fd_write(1, [buf], &written)
 					cast written
 				}
 				fun flush() {
@@ -87,7 +87,7 @@ fun wasi() handle stdio / wasi.sys2 {
 			handle writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
-					let _ = wasi.fd_write(2, [buf], &written)
+					do wasi.fd_write(2, [buf], &written)
 					cast written
 				}
 				fun flush() {
@@ -105,7 +105,7 @@ fun windows() handle stdio / win32.sys {
 			fun {
 				buf ->
 				mut read u32 = 0
-				let _ = win32.ReadConsoleA(stdin, &buf[0], cast len(buf), &read, 0)
+				do win32.ReadConsoleA(stdin, &buf[0], cast len(buf), &read, 0)
 				cast read
 			}
 		}
@@ -114,7 +114,7 @@ fun windows() handle stdio / win32.sys {
 			handle writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
-					let _ = win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
+					do win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
 					cast written
 				}
 				fun flush() {
@@ -126,7 +126,7 @@ fun windows() handle stdio / win32.sys {
 			handle writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
-					let _ = win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
+					do win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
 					cast written
 				}
 				fun flush() {

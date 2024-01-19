@@ -1,5 +1,6 @@
-use either::Either;
 use std::{fmt, rc::Rc};
+
+use either::Either;
 
 use crate::{
     ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
@@ -29,6 +30,14 @@ impl FunIdent {
             FunIdent::Top(idx) => &ir.fun_sign[idx],
             FunIdent::Effect(eff, idx) => &ir.effects[eff].funs[idx],
         }
+    }
+    pub fn generic_indices(self, ir: &SemIR) -> impl Iterator<Item = GenericIdx> + '_ {
+        (match self {
+            FunIdent::Top(_) => Either::Left(std::iter::empty()),
+            FunIdent::Effect(eff, _) => Either::Right(ir.effects[eff].generics.iter()),
+        })
+        .chain(self.sign(ir).generics.iter())
+        .map(|generic| generic.idx)
     }
 }
 
@@ -317,6 +326,13 @@ pub struct Lazy {
     pub typeof_handler: TypeIdx,
 }
 
+#[derive(Debug, Clone)]
+pub enum LazyValue {
+    None,
+    Some(GenericVal<HandlerIdent>),
+    Refer(LazyIdx, Option<GenericParams>),
+}
+
 #[derive(Debug)]
 pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
@@ -326,29 +342,9 @@ pub struct SemIR {
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,
-    pub lazy_handlers: VecMap<LazyIdx, Option<Either<GenericVal<HandlerIdent>, LazyIdx>>>,
+    pub lazy_handlers: VecMap<LazyIdx, LazyValue>,
 
     pub generic_names: VecMap<GenericIdx, String>,
-}
-
-impl SemIR {
-    pub fn lazy_last(&self, lazy: LazyIdx) -> &Option<Either<GenericVal<HandlerIdent>, LazyIdx>> {
-        if let Some(Either::Right(idx)) = self.lazy_handlers[lazy] {
-            self.lazy_last(idx)
-        } else {
-            &self.lazy_handlers[lazy]
-        }
-    }
-    pub fn lazy_last_mut(
-        &mut self,
-        lazy: LazyIdx,
-    ) -> &mut Option<Either<GenericVal<HandlerIdent>, LazyIdx>> {
-        if let Some(Either::Right(idx)) = self.lazy_handlers[lazy] {
-            self.lazy_last_mut(idx)
-        } else {
-            &mut self.lazy_handlers[lazy]
-        }
-    }
 }
 
 pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<TypeIdx> {

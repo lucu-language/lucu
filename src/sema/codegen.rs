@@ -2402,7 +2402,7 @@ impl SemCtx<'_> {
                             };
                             ctx.blocks[ctx.block]
                                 .instructions
-                                .push_value(Instruction::Yeet(value));
+                                .push_value(Instruction::Yeet(value, ctx.yeetable_ret));
                         }
                     }
                     None => {
@@ -2420,7 +2420,7 @@ impl SemCtx<'_> {
                         };
                         ctx.blocks[ctx.block]
                             .instructions
-                            .push_value(Instruction::Yeet(value));
+                            .push_value(Instruction::Yeet(value, ctx.yeetable_ret));
                     }
                 }
                 None

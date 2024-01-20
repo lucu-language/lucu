@@ -149,7 +149,7 @@ pub enum Instruction {
         Vec<(Value, Option<BlockIdx>)>,
     ),
 
-    Yeet(Value),
+    Yeet(Value, Option<BlockIdx>),
     Return(Value),
     Unreachable,
 
@@ -674,7 +674,7 @@ impl FunImpl {
                     Instruction::Trap => {
                         write!(f, "trap")?;
                     }
-                    Instruction::Yeet(v) => {
+                    Instruction::Yeet(v, _) => {
                         write!(f, "fail ")?;
                         v.display(ir, proc, f)?;
                     }

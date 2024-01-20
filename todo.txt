@@ -1,29 +1,18 @@
-typechecking todo:
-- fail type in handlers
-- fail type of implicit handlers/naked handler calls (and only allowed in try blocks if they fail!)
-- functions must not be (mutually) recursive through try blocks
-- use global GenericIdx and global AssocIdx instead of the wacky stuff we have right now
-
 parser todo:
 - operator precedence
 
 todo:
 - !!! deallocate stuff in loops
-- separate types in sema::Type according to their Kind
+- reference parameters / variables / outputs
 - unbounded ranges
-- fail in try blocks
 - error if core library not found
 - effect associated types
 - effect associated handlers
 - dynamic effects (less powerfull, but are ONE type for every handler)
 - anonymous effects (are always dynamic)
-- reference parameters / variables / outputs
+- separate types in sema::Type according to their Kind
 
 would be nice:
 - tokenizer matches brackets
 - seperate token from data
 - custom anchor tokens per Parse instance
-
-working on:
-- sema::Capture should do move captures by default
-- sema::Capture should always be a pointer

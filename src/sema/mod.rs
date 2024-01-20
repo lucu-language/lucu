@@ -718,8 +718,10 @@ impl FunImpl {
                         }
                         write!(f, ")")?;
                     }
-
-                    Instruction::Trace(_) => todo!(),
+                    Instruction::Trace(ref val) => {
+                        write!(f, "trace ")?;
+                        val.display(ir, proc, f)?;
+                    }
                     Instruction::Syscall(_, _) => todo!(),
                 }
                 writeln!(f)?;

@@ -717,7 +717,7 @@ pub fn generate_ir(
     let srcloc_ty = ir.insert_type(Type::Handler(srcloc));
     let input = ir.next_reg(srcloc_ty);
     let output = ir.next_reg(TYPE_STR_SLICE);
-    let srcloc_proc = define_function(
+    define_function(
         &mut ir,
         Either::Right((srcloc, EffFunIdx(0))),
         vec![],
@@ -744,28 +744,15 @@ pub fn generate_ir(
     );
 
     // define trap
-    let trap_fun = get_function(ctx, ctx.preamble, "trap");
-    let input = ir.next_reg(srcloc_ty);
-    let str1 = ir.next_reg(TYPE_STR_SLICE);
-    let str2 = ir.next_reg(TYPE_STR_SLICE);
-    let str3 = ir.next_reg(TYPE_STR_SLICE);
+    let trap_fun = get_function(ctx, ctx.preamble, "_trap");
     define_function(
         &mut ir,
         Either::Left(asys.values[trap_fun.decl.name]),
-        vec![srcloc],
-        "trap".into(),
-        vec![input],
+        vec![],
+        "_trap".into(),
+        vec![],
         TYPE_NEVER,
-        vec![
-            Instruction::InitString(str1, "trapped at ".into()),
-            Instruction::Call(srcloc_proc, Some(str2), vec![input]),
-            Instruction::InitString(str3, "\n".into()),
-            Instruction::Trace(str1),
-            Instruction::Trace(str2),
-            Instruction::Trace(str3),
-            Instruction::Trap,
-            Instruction::Unreachable,
-        ],
+        vec![Instruction::Trap, Instruction::Unreachable],
     );
 
     // define trace

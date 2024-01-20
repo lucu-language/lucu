@@ -3,6 +3,7 @@ parser todo:
 
 todo:
 - !!! deallocate stuff in loops
+- "with" for pushing handlers, "try" for yeeting inside regular functions
 - reference parameters / variables / outputs
 - unbounded ranges
 - error if core library not found

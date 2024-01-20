@@ -10,7 +10,7 @@ use crate::{
     ast::{
         self, Ast, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp,
     },
-    error::{Error, Errors, FileIdx, Range, Ranged},
+    error::{get_lines, Error, Errors, FileIdx, Range, Ranged},
     sema::{Capture, HandlerIdent, Instruction},
     vecmap::{VecMap, VecSet},
 };
@@ -45,6 +45,7 @@ struct SemCtx<'a> {
     ast: &'a Ast,
     errors: &'a mut Errors,
     packages: VecMap<PackageIdx, Scope>,
+    srcloc: HandlerIdx,
 }
 
 struct ScopeStack {
@@ -227,6 +228,50 @@ impl fmt::Display for FmtType<'_> {
 }
 
 impl SemCtx<'_> {
+    fn get_preamble_handler(&mut self, name: &str) -> &mut Handler {
+        let idx = *self.packages[self.ast.preamble]
+            .effects
+            .get(name)
+            .expect("missing preamble function")
+            .literal()
+            .unwrap();
+        let handler = *self.ir.effects[idx]
+            .implied
+            .get(0)
+            .expect("missing preamble implied");
+        &mut self.ir.handlers[handler]
+    }
+    fn get_preamble_fun(&mut self, name: &str) -> &mut FunImpl {
+        match *self.packages[self.ast.preamble]
+            .funs
+            .get(name)
+            .expect("missing preamble function")
+        {
+            FunIdent::Top(idx) => &mut self.ir.fun_impl[idx],
+            FunIdent::Effect(eff, idx) => {
+                let handler = *self.ir.effects[eff]
+                    .implied
+                    .get(0)
+                    .expect("missing preamble implied");
+                &mut self.ir.handlers[handler].funs[idx].1
+            }
+        }
+    }
+    fn define_preamble_fun(&mut self, name: &str, f: impl FnOnce(&mut Self, &mut FunCtx)) {
+        let mut fun_ctx = FunCtx {
+            scope: &mut ScopeStack::new(self.ast.preamble),
+            yeetable: None,
+            yeetable_def: None,
+            yeetable_ret: None,
+            blocks: vec![Block::default()].into(),
+            block: BlockIdx(0),
+            capture_boundary: 0,
+            value_captures: &mut Vec::new(),
+            effect_captures: &mut Vec::new(),
+        };
+        f(self, &mut fun_ctx);
+        self.get_preamble_fun(name).blocks = fun_ctx.blocks;
+    }
     fn to_generic_params(&mut self, generics: &[Generic]) -> GenericParams {
         generics
             .iter()
@@ -1568,7 +1613,7 @@ impl SemCtx<'_> {
                     };
 
                     // find matching effect in stack
-                    match ctx.get_effect(self, ident) {
+                    match ctx.get_effect(self, ident, error_loc.loc) {
                         Some((idx, block)) => effects.push((idx, block)),
                         None => {
                             // error
@@ -1698,7 +1743,7 @@ impl SemCtx<'_> {
                             .collect(),
                         effect_captures
                             .into_iter()
-                            .map(|s| ctx.get_effect(self, s).unwrap())
+                            .map(|s| ctx.get_effect(self, s, error_loc.loc).unwrap())
                             .collect(),
                     ))
                 })
@@ -2094,7 +2139,10 @@ impl SemCtx<'_> {
                                     .collect(),
                                 effect_captures
                                     .into_iter()
-                                    .map(|s| ctx.get_effect(self, s).unwrap())
+                                    .map(|s| {
+                                        ctx.get_effect(self, s, self.ast.exprs[expr].empty())
+                                            .unwrap()
+                                    })
                                     .collect(),
                             ),
                             ty,
@@ -2251,7 +2299,7 @@ impl SemCtx<'_> {
                     };
 
                     // find matching effect in stack
-                    match ctx.get_effect(self, ident) {
+                    match ctx.get_effect(self, ident, self.ast.exprs[expr].empty()) {
                         Some((idx, block)) => effects.push((idx, block)),
                         None => {
                             // error
@@ -2602,6 +2650,7 @@ impl FunCtx<'_> {
         &mut self,
         ctx: &mut SemCtx,
         ident: GenericVal<EffectIdent>,
+        loc: Range,
     ) -> Option<(Value, Option<BlockIdx>)> {
         // find matching effect in stack
         for (n, s) in self.scope.scopes.iter().enumerate().rev() {
@@ -2682,18 +2731,45 @@ impl FunCtx<'_> {
                             return None;
                         }
 
-                        Some((
-                            Value::ConstantHandler(
-                                HandlerIdent {
-                                    handler: idx,
-                                    generic_params,
-                                    fail_type: fail,
-                                },
-                                Rc::new([]),
-                                Rc::new([]),
-                            ),
-                            self.yeetable_ret,
-                        ))
+                        if idx == ctx.srcloc {
+                            let (start, _end) = get_lines(&ctx.errors.files[loc.3].content, loc);
+                            let srcloc = [Value::ConstantString(
+                                TYPE_STR,
+                                format!(
+                                    "{}:{}:{}",
+                                    ctx.errors.files[loc.3].name,
+                                    start.line + 1,
+                                    start.column + 1
+                                )
+                                .into_bytes()
+                                .into(),
+                            )];
+                            Some((
+                                Value::ConstantHandler(
+                                    HandlerIdent {
+                                        handler: idx,
+                                        generic_params,
+                                        fail_type: fail,
+                                    },
+                                    Rc::new(srcloc),
+                                    Rc::new([]),
+                                ),
+                                self.yeetable_ret,
+                            ))
+                        } else {
+                            Some((
+                                Value::ConstantHandler(
+                                    HandlerIdent {
+                                        handler: idx,
+                                        generic_params,
+                                        fail_type: fail,
+                                    },
+                                    Rc::new([]),
+                                    Rc::new([]),
+                                ),
+                                self.yeetable_ret,
+                            ))
+                        }
                     })
             }
             _ => None,
@@ -2803,7 +2879,7 @@ impl FunCtx<'_> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct TypeRange {
     loc: Range,
     def: Option<Range>,
@@ -2834,6 +2910,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
         packages: std::iter::repeat_with(Scope::default)
             .take(ast.packages.len())
             .collect(),
+        srcloc: HandlerIdx(0),
     };
 
     ctx.insert_type(Type::Error, false);
@@ -3034,6 +3111,13 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
             ctx.analyze_implied(&mut scope, handler);
         }
     }
+    ctx.srcloc = ctx.ir.effects[*ctx.packages[ctx.ast.preamble]
+        .effects
+        .get("srcloc")
+        .unwrap()
+        .literal()
+        .unwrap()]
+    .implied[0];
 
     // analyze functions
     for (idx, package) in ast.packages.iter(PackageIdx) {
@@ -3055,6 +3139,34 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
             );
         }
     }
+
+    // define internal effects / functions
+    ctx.define_preamble_fun("unreachable", |_, fun| {
+        fun.push(Instruction::Unreachable);
+    });
+    ctx.define_preamble_fun("len", |_, fun| {
+        let slice = Value::Param(ParamIdx(0));
+        let len = fun.push(Instruction::Member(slice, 1));
+        fun.push(Instruction::Return(len));
+    });
+    ctx.define_preamble_fun("trace", |_, fun| {
+        let msg = Value::Param(ParamIdx(0));
+        fun.push(Instruction::Trace(msg));
+        fun.push(Instruction::Return(Value::ConstantNone));
+    });
+    ctx.define_preamble_fun("_trap", |_, fun| {
+        fun.push(Instruction::Trap);
+        fun.push(Instruction::Unreachable);
+    });
+
+    ctx.get_preamble_handler("srcloc").value_captures = vec![Capture {
+        debug_name: "source_location".into(),
+        ty: TYPE_STR,
+    }];
+    ctx.define_preamble_fun("source_location", |_, fun| {
+        let capture = Value::Deref(Box::new(Value::Capture(0)));
+        fun.push(Instruction::Return(capture));
+    });
 
     // remove LazyValue::Refer
     let mut modified = true;

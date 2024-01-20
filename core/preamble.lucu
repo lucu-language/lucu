@@ -115,6 +115,13 @@ fun panic(msg str) ! / srcloc {
 	trap()
 }
 
+fun trap() ! / srcloc {
+	trace("trapped at ")
+	trace(source_location())
+	trace("\n")
+	_trap()
+}
+
 ##
 # exits the program and displays an error message
 # marks code paths that aren't implemented yet
@@ -203,9 +210,6 @@ fun trace(s str) {
 #  - throw an exception / interrupt
 #  - spin forever
 ##
-fun trap() ! / srcloc {
-	trace("trapped at ")
-	trace(source_location())
-	trace("\n")
+fun _trap() ! {
 	loop {}
 }

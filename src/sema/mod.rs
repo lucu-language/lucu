@@ -68,10 +68,13 @@ pub enum Value {
     Deref(Box<Value>),
 
     // slice, const array
+    // TODO: split these into ConstantSlice, ConstantArray
     ConstantAggregate(TypeIdx, Rc<[Value]>),
-    ConstantHandler(TypeIdx, Rc<[Value]>, Rc<[(EffectArg, Option<BlockIdx>)]>),
+    ConstantHandler(HandlerIdent, Rc<[Value]>, Rc<[(Value, Option<BlockIdx>)]>),
 
+    // TODO: use (bool, IntSize) instead of TypeIdx
     ConstantInt(TypeIdx, bool, u64),
+    // TODO: use bool instead of TypeIdx
     ConstantString(TypeIdx, Rc<[u8]>),
     ConstantBool(bool),
     ConstantNone,
@@ -81,7 +84,9 @@ pub enum Value {
     ConstantGeneric(GenericIdx),
 
     Param(ParamIdx),
+    EffectParam(usize),
     Capture(usize),
+    EffectCapture(usize),
 }
 
 impl Value {
@@ -100,7 +105,9 @@ impl Value {
             Value::ConstantError => true,
             Value::ConstantGeneric(_) => true,
             Value::Param(_) => false,
+            Value::EffectParam(_) => false,
             Value::Capture(_) => false,
+            Value::EffectCapture(_) => false,
         }
     }
 }
@@ -132,7 +139,6 @@ pub enum Instruction {
     Add(Value, Value),
     Sub(Value, Value),
 
-    PushHandler(Value), // handler -> bound handler
     Call(
         FunIdent,
         // generics
@@ -140,9 +146,8 @@ pub enum Instruction {
         // params
         Vec<Value>,
         // effect params
-        Vec<(EffectArg, Option<BlockIdx>)>,
+        Vec<(Value, Option<BlockIdx>)>,
     ),
-    PopHandler,
 
     Yeet(Value),
     Return(Value),
@@ -153,19 +158,11 @@ pub enum Instruction {
     Store(Value, Value),
 
     Member(Value, u32),
-    ElementPtr(Value, Value),
-    AdjacentPtr(Value, Value),
+    AdjacentPtr(Value, Value, TypeIdx),
 
     Trap,
     Trace(Value),
     Syscall(Value, Vec<Value>),
-}
-
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub enum EffectArg {
-    Stack(usize),
-    Implied(usize, GenericParams),
-    Capture(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -598,7 +595,9 @@ impl Value {
             }
             Value::ConstantGeneric(idx) => write!(f, "{}", ir.generic_names[idx]),
             Value::Param(param) => write!(f, "%p{}", param.0),
+            Value::EffectParam(param) => write!(f, "%e{}", param),
             Value::Capture(capture) => write!(f, "%c{}", capture),
+            Value::EffectCapture(capture) => write!(f, "%ec{}", capture),
         }
     }
 }
@@ -705,13 +704,7 @@ impl FunImpl {
                         v.display(ir, proc, f)?;
                         write!(f, " {}", n)?;
                     }
-                    Instruction::ElementPtr(a, b) => {
-                        write!(f, "elemptr ")?;
-                        a.display(ir, proc, f)?;
-                        write!(f, " ")?;
-                        b.display(ir, proc, f)?;
-                    }
-                    Instruction::AdjacentPtr(a, b) => {
+                    Instruction::AdjacentPtr(a, b, _) => {
                         write!(f, "adjptr ")?;
                         a.display(ir, proc, f)?;
                         write!(f, " ")?;
@@ -726,13 +719,6 @@ impl FunImpl {
                         write!(f, ")")?;
                     }
 
-                    Instruction::PushHandler(ref val) => {
-                        write!(f, "push ")?;
-                        val.display(ir, proc, f)?;
-                    }
-                    Instruction::PopHandler => {
-                        write!(f, "pop")?;
-                    }
                     Instruction::Trace(_) => todo!(),
                     Instruction::Syscall(_, _) => todo!(),
                 }

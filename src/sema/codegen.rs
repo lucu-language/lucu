@@ -11,7 +11,7 @@ use crate::{
         self, Ast, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp,
     },
     error::{Error, Errors, FileIdx, Range, Ranged},
-    sema::{Capture, EffectArg, HandlerIdent, Instruction},
+    sema::{Capture, HandlerIdent, Instruction},
     vecmap::{VecMap, VecSet},
 };
 
@@ -26,6 +26,16 @@ impl FunIdent {
         match self {
             FunIdent::Top(idx) => ctx.ast.functions[idx].decl.name,
             FunIdent::Effect(eff, idx) => ctx.ast.effects[eff].functions[idx].name,
+        }
+    }
+}
+
+impl Value {
+    fn inner_ptr(self) -> Value {
+        match self {
+            Value::Deref(value) => *value,
+            Value::ConstantError => self,
+            _ => unreachable!(),
         }
     }
 }
@@ -57,7 +67,7 @@ struct Scope {
     generics: HashMap<String, Generic>,
     values: HashMap<String, Variable>,
 
-    effect_stack: Vec<(GenericVal<EffectIdent>, Option<BlockIdx>)>,
+    effect_stack: Vec<(GenericVal<EffectIdent>, Value, Option<BlockIdx>)>,
 }
 
 impl ScopeStack {
@@ -1145,7 +1155,8 @@ impl SemCtx<'_> {
             scope.top().effect_stack = ir_sign
                 .effect_stack
                 .iter()
-                .map(|ident| (ident.0.clone(), None))
+                .enumerate()
+                .map(|(i, ident)| (ident.0.clone(), Value::EffectParam(i), None))
                 .collect();
 
             let mut blocks = VecMap::new();
@@ -1165,7 +1176,7 @@ impl SemCtx<'_> {
 
             for (idx, param) in ir_sign.params.iter(ParamIdx) {
                 if param.mutable {
-                    let value = fun_ctx.push_ref(Instruction::Reference(Value::Param(idx)));
+                    let value = fun_ctx.push_deref(Instruction::Reference(Value::Param(idx)));
                     fun_ctx.define(
                         param.name.clone(),
                         Variable {
@@ -1360,7 +1371,7 @@ impl SemCtx<'_> {
                 ctx.yeetable = Some(expected);
                 ctx.yeetable_def = expected_def;
                 ctx.yeetable_ret = Some(end);
-                if let Some((ref handler, ty)) = handler {
+                if let Some((handler, ty)) = handler {
                     if ty != TYPE_ERROR {
                         let Type::Handler(lazy) = self.ir.types[ty] else {
                             unreachable!()
@@ -1369,10 +1380,11 @@ impl SemCtx<'_> {
                             unreachable!()
                         };
 
-                        ctx.scope
-                            .top()
-                            .effect_stack
-                            .push((ty.effect.clone(), ctx.yeetable_ret));
+                        ctx.scope.top().effect_stack.push((
+                            ty.effect.clone(),
+                            handler,
+                            ctx.yeetable_ret,
+                        ));
                         self.check_move(
                             ty.fail_type,
                             expected,
@@ -1382,14 +1394,9 @@ impl SemCtx<'_> {
                             },
                         );
                     }
-
-                    ctx.push(Instruction::PushHandler(handler.clone()));
                 }
 
                 let body_synth = self.synth_expr(ctx, body);
-                if handler.is_some() {
-                    ctx.push(Instruction::PopHandler);
-                }
 
                 if body_synth.is_none() && ctx.yeetable.is_none() {
                     ctx.yeetable = old_yeet;
@@ -1648,7 +1655,7 @@ impl SemCtx<'_> {
                         .iter()
                         .map(|s| Capture {
                             debug_name: s.into(),
-                            ty: ctx.get_value_reference(self, s).unwrap().ty,
+                            ty: ctx.get_value(self, s).unwrap().ty,
                         })
                         .collect();
                     let handler = self.push_handler(Handler {
@@ -1665,13 +1672,14 @@ impl SemCtx<'_> {
                         funs: vec![(sign, imp)].into(),
                     });
 
+                    let handler_ident = HandlerIdent {
+                        handler,
+                        generic_params,
+                        fail_type: fail,
+                    };
                     let idx = self.ir.lazy_handlers.push(
                         LazyIdx,
-                        LazyValue::Some(GenericVal::Literal(HandlerIdent {
-                            handler,
-                            generic_params,
-                            fail_type: fail,
-                        })),
+                        LazyValue::Some(GenericVal::Literal(handler_ident.clone())),
                     );
                     let ty = self.insert_type(
                         Type::Handler(Lazy {
@@ -1683,10 +1691,10 @@ impl SemCtx<'_> {
                     self.check_move(ty, expected, error_loc);
 
                     Some(Value::ConstantHandler(
-                        ty,
+                        handler_ident,
                         value_captures
                             .into_iter()
-                            .map(|s| ctx.get_value_reference(self, &s).unwrap().value)
+                            .map(|s| ctx.get_value(self, &s).unwrap().value)
                             .collect(),
                         effect_captures
                             .into_iter()
@@ -1738,10 +1746,9 @@ impl SemCtx<'_> {
                 let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
 
                 let (ptr, elem_ty) = match self.ir.types[ty] {
-                    Type::ConstArray(_, inner) => (value, inner),
+                    Type::ConstArray(_, inner) => (value.inner_ptr(), inner),
                     Type::Slice(inner) => {
-                        let slice = ctx.push(Instruction::Load(value));
-                        let ptr = ctx.push(Instruction::Member(slice, 0));
+                        let ptr = ctx.push(Instruction::Member(value, 0));
                         (ptr, inner)
                     }
                     Type::Error => {
@@ -1751,7 +1758,7 @@ impl SemCtx<'_> {
                 };
                 let elem_ty = self.child_ty(elem_ty, ty);
 
-                let elem = ctx.push_ref(Instruction::AdjacentPtr(ptr, right));
+                let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
                 Some((elem, elem_ty, mutable && !ty.is_const()))
             }
             E::Ident(id) => {
@@ -1763,7 +1770,7 @@ impl SemCtx<'_> {
                             Some((var.value, var.ty, true))
                         } else {
                             // immutable reference time
-                            let val = ctx.push_ref(Instruction::Reference(var.value));
+                            let val = ctx.as_deref(var.value);
                             Some((val, var.ty, false))
                         }
                     }
@@ -1834,7 +1841,7 @@ impl SemCtx<'_> {
                 ctx.yeetable = None;
                 ctx.yeetable_def = None;
                 ctx.yeetable_ret = Some(end);
-                if let Some((ref handler, ty)) = handler {
+                if let Some((handler, ty)) = handler {
                     if ty != TYPE_ERROR {
                         let Type::Handler(lazy) = self.ir.types[ty] else {
                             unreachable!()
@@ -1844,19 +1851,15 @@ impl SemCtx<'_> {
                         };
 
                         ctx.yeetable = Some(ty.fail_type);
-                        ctx.scope
-                            .top()
-                            .effect_stack
-                            .push((ty.effect.clone(), ctx.yeetable_ret));
+                        ctx.scope.top().effect_stack.push((
+                            ty.effect.clone(),
+                            handler,
+                            ctx.yeetable_ret,
+                        ));
                     }
-
-                    ctx.push(Instruction::PushHandler(handler.clone()));
                 }
 
                 let body_synth = self.synth_expr(ctx, body);
-                if handler.is_some() {
-                    ctx.push(Instruction::PopHandler);
-                }
 
                 if body_synth.is_none() && ctx.yeetable.is_none() {
                     ctx.yeetable = old_yeet;
@@ -2039,7 +2042,7 @@ impl SemCtx<'_> {
                             .iter()
                             .map(|s| Capture {
                                 debug_name: s.into(),
-                                ty: ctx.get_value_reference(self, s).unwrap().ty,
+                                ty: ctx.get_value(self, s).unwrap().ty,
                             })
                             .collect();
                         let handler = self.push_handler(Handler {
@@ -2056,13 +2059,14 @@ impl SemCtx<'_> {
                             funs,
                         });
 
+                        let handler_ident = HandlerIdent {
+                            handler,
+                            generic_params,
+                            fail_type: fail,
+                        };
                         let idx = self.ir.lazy_handlers.push(
                             LazyIdx,
-                            LazyValue::Some(GenericVal::Literal(HandlerIdent {
-                                handler,
-                                generic_params,
-                                fail_type: fail,
-                            })),
+                            LazyValue::Some(GenericVal::Literal(handler_ident.clone())),
                         );
                         let metaty = self.insert_type(
                             Type::HandlerType(HandlerType {
@@ -2083,10 +2087,10 @@ impl SemCtx<'_> {
                         );
                         Some((
                             Value::ConstantHandler(
-                                ty,
+                                handler_ident,
                                 value_captures
                                     .into_iter()
-                                    .map(|s| ctx.get_value_reference(self, &s).unwrap().value)
+                                    .map(|s| ctx.get_value(self, &s).unwrap().value)
                                     .collect(),
                                 effect_captures
                                     .into_iter()
@@ -2269,12 +2273,12 @@ impl SemCtx<'_> {
 
             E::BinOp(left, BinOp::Assign, right) => {
                 let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
-                if mutable {
-                    let right = self.check_expr(ctx, right, ty, None)?;
-                    ctx.push(Instruction::Store(value, right));
-                } else {
+                if !mutable {
                     todo!("give error")
                 }
+
+                let right = self.check_expr(ctx, right, ty, None)?;
+                ctx.push(Instruction::Store(value.inner_ptr(), right));
 
                 Some((Value::ConstantNone, TYPE_NONE))
             }
@@ -2286,7 +2290,7 @@ impl SemCtx<'_> {
                         (ptr, elem)
                     }
                     Type::ConstArray(_, elem) => {
-                        let ptr = ctx.push(Instruction::Reference(left));
+                        let ptr = ctx.as_deref(left).inner_ptr();
                         (ptr, elem)
                     }
                     Type::Error => {
@@ -2300,7 +2304,7 @@ impl SemCtx<'_> {
                     let rleft = self.check_expr(ctx, rleft, TYPE_USIZE, None)?;
                     let rright = self.check_expr(ctx, rright, TYPE_USIZE, None)?;
 
-                    let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone()));
+                    let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone(), elem_ty));
                     let len = ctx.push(Instruction::Sub(rright, rleft));
 
                     let slice_ty = self.insert_type(Type::Slice(elem_ty), false);
@@ -2308,7 +2312,7 @@ impl SemCtx<'_> {
                     Some((slice, slice_ty))
                 } else {
                     let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-                    let elem = ctx.push(Instruction::AdjacentPtr(ptr, right));
+                    let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
                     Some((elem, elem_ty))
                 }
             }
@@ -2354,31 +2358,19 @@ impl SemCtx<'_> {
                     todo!("give error")
                 }
 
-                // TODO: check if integer type
-                match value {
-                    Value::Deref(val) => {
-                        let loaded = ctx.push(Instruction::Load((*val).clone()));
-                        let incremented = ctx.push(Instruction::Add(
-                            loaded.clone(),
-                            Value::ConstantInt(ty, false, 1),
-                        ));
-                        ctx.push(Instruction::Store(*val, incremented));
-                        Some((loaded, ty))
-                    }
-                    Value::ConstantError => Some((value, ty)),
-                    _ => unreachable!(),
-                }
+                let ptr = value.inner_ptr();
+                let loaded = ctx.push(Instruction::Load(ptr.clone()));
+                let incremented = ctx.push(Instruction::Add(
+                    loaded.clone(),
+                    Value::ConstantInt(ty, false, 1),
+                ));
+                ctx.push(Instruction::Store(ptr, incremented));
+                Some((loaded, ty))
             }
             E::UnOp(inner, UnOp::Reference) => {
                 let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-                match value {
-                    Value::Deref(val) => {
-                        let ptr_ty = self.insert_type(Type::Pointer(ty), !mutable);
-                        Some((*val, ptr_ty))
-                    }
-                    Value::ConstantError => Some((value, ty)),
-                    _ => unreachable!(),
-                }
+                let ptr_ty = self.insert_type(Type::Pointer(ty), !mutable);
+                Some((value.inner_ptr(), ptr_ty))
             }
             E::UnOp(_, UnOp::Cast) => {
                 self.errors
@@ -2446,7 +2438,7 @@ impl SemCtx<'_> {
                 let name = self.ast.idents[id].0.clone();
 
                 if mutable {
-                    let ptr = ctx.push_ref(Instruction::Reference(value));
+                    let ptr = ctx.push_deref(Instruction::Reference(value));
                     ctx.define(
                         name,
                         Variable {
@@ -2556,11 +2548,17 @@ impl FunCtx<'_> {
         self.scope.pop();
         t
     }
+    fn as_deref(&mut self, value: Value) -> Value {
+        match value {
+            Value::Deref(_) => value,
+            _ => self.push_deref(Instruction::Reference(value)),
+        }
+    }
     fn push(&mut self, instr: Instruction) -> Value {
         let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
         Value::Reg(self.block, Some(idx))
     }
-    fn push_ref(&mut self, instr: Instruction) -> Value {
+    fn push_deref(&mut self, instr: Instruction) -> Value {
         Value::Deref(Box::new(self.push(instr)))
     }
     fn all_generics(&self) -> Generics {
@@ -2591,42 +2589,23 @@ impl FunCtx<'_> {
                         idx
                     }
                 };
-                if matches!(val.value, Value::Deref(_)) {
-                    Some(Variable {
-                        value: Value::Deref(Box::new(Value::Capture(idx))),
-                        ..val
-                    })
-                } else {
-                    Some(Variable {
-                        value: Value::Capture(idx),
-                        ..val
-                    })
-                }
+                Some(Variable {
+                    value: Value::Deref(Box::new(Value::Capture(idx))),
+                    ..val
+                })
             } else {
                 Some(val)
             }
         })
     }
-    fn get_value_reference(&mut self, ctx: &mut SemCtx, name: &str) -> Option<Variable> {
-        let val = self.get_value(ctx, name)?;
-        match val.value {
-            Value::Deref(value) => Some(Variable {
-                value: *value,
-                ty: ctx.insert_type(Type::Pointer(val.ty), !val.mutable),
-                mutable: val.mutable,
-            }),
-            _ => Some(val),
-        }
-    }
     fn get_effect(
         &mut self,
         ctx: &mut SemCtx,
         ident: GenericVal<EffectIdent>,
-    ) -> Option<(EffectArg, Option<BlockIdx>)> {
+    ) -> Option<(Value, Option<BlockIdx>)> {
         // find matching effect in stack
-        let mut idx = 0;
         for (n, s) in self.scope.scopes.iter().enumerate().rev() {
-            for &(ref candidate, block) in s.effect_stack.iter().rev() {
+            for &(ref candidate, ref value, block) in s.effect_stack.iter().rev() {
                 if ident.eq(candidate) {
                     return if n < self.capture_boundary {
                         let idx = match self
@@ -2641,12 +2620,11 @@ impl FunCtx<'_> {
                                 idx
                             }
                         };
-                        Some((EffectArg::Capture(idx), None))
+                        Some((Value::Deref(Box::new(Value::EffectCapture(idx))), None))
                     } else {
-                        Some((EffectArg::Stack(idx), block))
+                        Some((value.clone(), block))
                     };
                 }
-                idx += 1;
             }
         }
 
@@ -2657,8 +2635,7 @@ impl FunCtx<'_> {
                     .implied
                     .clone()
                     .into_iter()
-                    .enumerate()
-                    .find_map(|(i, idx)| {
+                    .find_map(|idx| {
                         let mut generic_params = GenericParams::new();
 
                         // check if matches yeetable
@@ -2705,7 +2682,18 @@ impl FunCtx<'_> {
                             return None;
                         }
 
-                        Some((EffectArg::Implied(i, generic_params), self.yeetable_ret))
+                        Some((
+                            Value::ConstantHandler(
+                                HandlerIdent {
+                                    handler: idx,
+                                    generic_params,
+                                    fail_type: fail,
+                                },
+                                Rc::new([]),
+                                Rc::new([]),
+                            ),
+                            self.yeetable_ret,
+                        ))
                     })
             }
             _ => None,
@@ -2806,10 +2794,6 @@ impl FunCtx<'_> {
         } else {
             match (yval, nval) {
                 (Value::ConstantNone, Value::ConstantNone) => Some((Value::ConstantNone, common)),
-                (Value::Deref(_), Value::Deref(_)) => {
-                    self.blocks[self.block].value = Some(phi);
-                    Some((Value::Deref(Box::new(Value::Reg(self.block, None))), common))
-                }
                 _ => {
                     self.blocks[self.block].value = Some(phi);
                     Some((Value::Reg(self.block, None), common))

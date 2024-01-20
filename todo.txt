@@ -25,5 +25,5 @@ would be nice:
 - custom anchor tokens per Parse instance
 
 working on:
-- analyzer gives semantic IR
-- try blocks no longer their own function
+- sema::Capture should do move captures by default
+- sema::Capture should always be a pointer

@@ -214,6 +214,22 @@ pub struct Effect {
 
     pub funs: VecMap<EffFunIdx, FunSign>,
     pub implied: Vec<HandlerIdx>,
+
+    pub capabilities: Vec<Capability>,
+    pub foreign: Option<Foreign>,
+}
+
+#[derive(Debug)]
+pub struct Capability {
+    pub fun: FunIdent,
+    pub generic_params: GenericParams,
+    pub os: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct Foreign {
+    pub prefix: String,
+    pub handler: TypeIdx,
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]

@@ -1,6 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, matches};
-
-use either::Either;
+use std::collections::HashMap;
 
 use crate::{
     error::{FileIdx, Ranged},
@@ -91,34 +89,6 @@ pub enum Handler {
         functions: Vec<Function>,
     },
     Lambda(Lambda),
-}
-
-impl Handler {
-    pub fn functions(
-        &self,
-        effect: &Effect,
-    ) -> Either<
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-    > {
-        match *self {
-            Handler::Full { ref functions, .. } => {
-                Either::Left(functions.iter().map(|f| (Cow::Borrowed(&f.decl), f.body)))
-            }
-            Handler::Lambda(Lambda {
-                body, ref inputs, ..
-            }) => {
-                let mut decl: FunDecl = effect.functions.values().next().unwrap().clone();
-
-                // set signature input names
-                for (idx, &input) in inputs.iter(ParamIdx) {
-                    decl.sign.inputs[idx].name = input;
-                }
-
-                Either::Right(std::iter::once((Cow::Owned(decl), body)))
-            }
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -260,109 +230,5 @@ impl Default for Ast {
             types: VecMap::new(),
             idents: VecMap::new(),
         }
-    }
-}
-
-impl Ast {
-    pub fn for_each(
-        &self,
-        expr: ExprIdx,
-        do_try: bool,
-        do_handler: bool,
-        f: &mut impl FnMut(ExprIdx),
-    ) {
-        f(expr);
-        match self.exprs[expr].0 {
-            Expression::Body(ref b) => {
-                for expr in b.main.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(expr) = b.last {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Loop(expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Call(expr, ref args) => {
-                self.for_each(expr, do_try, do_handler, f);
-                for expr in args.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Array(ref elems) => {
-                for expr in elems.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Member(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::IfElse(cond, yes, no) => {
-                self.for_each(cond, do_try, do_handler, f);
-                self.for_each(yes, do_try, do_handler, f);
-                if let Some(no) = no {
-                    self.for_each(no, do_try, do_handler, f);
-                }
-            }
-            Expression::BinOp(left, _, right) => {
-                self.for_each(left, do_try, do_handler, f);
-                self.for_each(right, do_try, do_handler, f);
-            }
-            Expression::Yeet(expr) => {
-                if let Some(expr) = expr {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::TryWith(expr, handler) => {
-                if do_try {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(handler) = handler {
-                    self.for_each(handler, do_try, do_handler, f);
-                }
-            }
-            Expression::Let(_, _, _, expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::UnOp(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Handler(ref h) => {
-                if do_handler {
-                    match *h {
-                        Handler::Full { ref functions, .. } => {
-                            for fun in functions.iter() {
-                                self.for_each(fun.body, do_try, do_handler, f);
-                            }
-                        }
-                        Handler::Lambda(Lambda { body, .. }) => {
-                            self.for_each(body, do_try, do_handler, f);
-                        }
-                    }
-                }
-            }
-            Expression::As(expr, _) => self.for_each(expr, do_try, do_handler, f),
-            Expression::Do(expr) => self.for_each(expr, do_try, do_handler, f),
-            Expression::String(_) => {}
-            Expression::Character(_) => {}
-            Expression::Int(_) => {}
-            Expression::Ident(_) => {}
-            Expression::Error => {}
-            Expression::Uninit => {}
-        }
-    }
-    pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
-        let mut acc = Some(acc);
-        self.for_each(expr, true, false, &mut |e| {
-            acc = Some(f(acc.take().unwrap(), e))
-        });
-        acc.unwrap()
-    }
-    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(ExprIdx) -> bool) -> bool {
-        self.fold(expr, false, |n, e| n || f(e))
-    }
-    pub fn yeets(&self, expr: ExprIdx) -> bool {
-        self.any(expr, |e| matches!(self.exprs[e].0, Expression::Yeet(_)))
     }
 }

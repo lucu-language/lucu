@@ -8,7 +8,8 @@ use either::Either;
 
 use crate::{
     ast::{
-        self, Ast, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident, PackageIdx, ParamIdx, UnOp,
+        self, Ast, AttributeValue, BinOp, EffFunIdx, EffIdx, ExprIdx, Expression, Ident,
+        PackageIdx, ParamIdx, UnOp,
     },
     error::{get_lines, Error, Errors, FileIdx, Range, Ranged},
     sema::{Capture, HandlerIdent, Instruction},
@@ -16,9 +17,10 @@ use crate::{
 };
 
 use super::{
-    get_param, Block, BlockIdx, Effect, EffectIdent, FunIdent, FunIdx, FunImpl, FunSign, Generic,
-    GenericIdx, GenericParams, GenericVal, Generics, Handler, HandlerIdx, HandlerType, InstrIdx,
-    IntSize, Lazy, LazyIdx, LazyValue, Param, ReturnType, SemIR, Type, TypeIdx, Value,
+    get_param, Block, BlockIdx, Capability, Effect, EffectIdent, Foreign, FunIdent, FunIdx,
+    FunImpl, FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler,
+    HandlerIdx, HandlerType, InstrIdx, IntSize, Lazy, LazyIdx, LazyValue, Param, ReturnType, SemIR,
+    Type, TypeIdx, Value,
 };
 
 impl FunIdent {
@@ -272,7 +274,7 @@ impl SemCtx<'_> {
         f(self, &mut fun_ctx);
         self.get_preamble_fun(name).blocks = fun_ctx.blocks;
     }
-    fn to_generic_params(&mut self, generics: &[Generic]) -> GenericParams {
+    fn params_from_generics(&mut self, generics: &[Generic]) -> GenericParams {
         generics
             .iter()
             .map(|&g| (g.idx, self.insert_type(Type::Generic(g), false)))
@@ -703,6 +705,51 @@ impl SemCtx<'_> {
             None => scope.try_effect(self, effect.ident).map(|t| def.with(t)),
         }
     }
+    fn analyze_decl(&mut self, decl: &ast::FunDecl, sign: &FunSign, fun: FunIdent) {
+        // check if capability
+        if let Some(attr) = decl
+            .attributes
+            .iter()
+            .find(|a| self.ast.idents[a.name].0.eq("capability"))
+        {
+            let os = attr
+                .settings
+                .iter()
+                .find(|&&(i, _)| self.ast.idents[i].0.eq("os"))
+                .map(|o| match &o.1 {
+                    AttributeValue::String(s) => s.0.clone(),
+                    AttributeValue::Type(_) => todo!("give error"),
+                });
+
+            if !sign.params.is_empty() {
+                todo!("give error");
+            }
+
+            match self.ir.types[sign.return_type.ty] {
+                Type::Handler(lazy) => match &self.ir.types[lazy.typeof_handler] {
+                    Type::HandlerType(ty) => {
+                        if ty.fail_type != TYPE_NEVER {
+                            todo!("give error");
+                        }
+                        match &ty.effect {
+                            GenericVal::Literal(effect) => self.ir.effects[effect.effect]
+                                .capabilities
+                                .push(Capability {
+                                    fun,
+                                    generic_params: effect.generic_params.clone(),
+                                    os,
+                                }),
+                            GenericVal::Generic(_) => todo!("give error"),
+                        }
+                    }
+                    Type::Error => {}
+                    _ => todo!("give error"),
+                },
+                Type::Error => {}
+                _ => todo!("give error"),
+            }
+        }
+    }
     fn analyze_sign(
         &mut self,
         scope: &mut ScopeStack,
@@ -803,7 +850,7 @@ impl SemCtx<'_> {
                     ty,
                     Some(&mut generics),
                     false,
-                    &mut SemCtx::lazy_handler, // TODO
+                    &mut SemCtx::lazy_handler,
                 ),
                 None => TYPE_NONE,
             };
@@ -1694,7 +1741,7 @@ impl SemCtx<'_> {
 
                     // create handler
                     let generics = ctx.all_generics();
-                    let generic_params = self.to_generic_params(&generics);
+                    let generic_params = self.params_from_generics(&generics);
 
                     let value_captures_types = value_captures
                         .iter()
@@ -2081,7 +2128,7 @@ impl SemCtx<'_> {
 
                         // create handler
                         let generics = ctx.all_generics();
-                        let generic_params = self.to_generic_params(&generics);
+                        let generic_params = self.params_from_generics(&generics);
 
                         let value_captures_types = value_captures
                             .iter()
@@ -2558,7 +2605,7 @@ impl SemCtx<'_> {
             }
             E::As(left, ty) => {
                 let expected =
-                    self.analyze_type(&mut ctx.scope, ty, None, false, &mut Self::lazy_handler);
+                    self.analyze_type(ctx.scope, ty, None, false, &mut Self::lazy_handler);
                 Some((
                     self.check_expr(ctx, left, expected, Some(self.ast.types[ty].empty()))?,
                     expected,
@@ -3029,7 +3076,40 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
                     generics,
                     funs: VecMap::new(),
                     implied: Vec::new(),
+                    capabilities: Vec::new(),
+                    foreign: None,
                 };
+
+                // check if foreign
+                if let Some(attr) = effect
+                    .attributes
+                    .iter()
+                    .find(|a| ctx.ast.idents[a.name].0.eq("foreign"))
+                {
+                    let prefix = match attr
+                        .settings
+                        .iter()
+                        .find(|&&(i, _)| ctx.ast.idents[i].0.eq("prefix"))
+                    {
+                        Some((_, AttributeValue::String(s))) => s.0.clone(),
+                        Some((_, AttributeValue::Type(_))) => todo!("give error"),
+                        None => String::new(),
+                    };
+
+                    let handler = match attr
+                        .settings
+                        .iter()
+                        .find(|&&(i, _)| ctx.ast.idents[i].0.eq("handler"))
+                    {
+                        Some((_, AttributeValue::String(_))) => todo!("give error"),
+                        Some((_, AttributeValue::Type(ty))) => {
+                            ctx.analyze_type(scope, *ty, None, false, &mut SemCtx::no_handler)
+                        }
+                        None => TYPE_NONE,
+                    };
+
+                    ctx.ir.effects[i].foreign = Some(Foreign { prefix, handler });
+                }
 
                 // add functions to scope
                 for (fi, decl) in effect.functions.iter(EffFunIdx) {
@@ -3049,6 +3129,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
                         }),
                         &decl.sign,
                     );
+                    ctx.analyze_decl(decl, &sign, FunIdent::Effect(i, fi));
                     ctx.ir.effects[i].funs.push_value(sign);
 
                     let name = &ast.idents[decl.name];
@@ -3076,6 +3157,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
         {
             // add function to scope
             let sign = ctx.analyze_sign(&mut scope, fun.decl.name, None, &fun.decl.sign);
+            ctx.analyze_decl(&fun.decl, &sign, FunIdent::Top(i));
             ctx.ir.fun_sign[i] = sign;
 
             let name = &ast.idents[fun.decl.name];
@@ -3154,7 +3236,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors) -> SemIR {
         fun.push(Instruction::Trace(msg));
         fun.push(Instruction::Return(Value::ConstantNone));
     });
-    ctx.define_preamble_fun("_trap", |_, fun| {
+    ctx.define_preamble_fun("trap_silent", |_, fun| {
         fun.push(Instruction::Trap);
         fun.push(Instruction::Unreachable);
     });

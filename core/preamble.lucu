@@ -119,7 +119,7 @@ fun trap() ! / srcloc {
 	trace("trapped at ")
 	trace(source_location())
 	trace("\n")
-	_trap()
+	trap_silent()
 }
 
 ##
@@ -169,12 +169,10 @@ fun len(slice []`elem) usize {
 # when used as an effect parameter inside a function, it returns the location of the caller
 ##
 effect srcloc {
-	# let `source_location str
 	fun source_location() str
 }
 
 handle srcloc {
-	# let `source_location = internal()
 	fun source_location() str {
 		internal()
 	}
@@ -210,6 +208,6 @@ fun trace(s str) {
 #  - throw an exception / interrupt
 #  - spin forever
 ##
-fun _trap() ! {
+fun trap_silent() ! {
 	loop {}
 }

@@ -1,54 +1,20 @@
 use std::{
     collections::HashSet,
     fmt::{self, Display},
-    rc::Rc,
     write,
 };
 
-use crate::{
-    analyzer::Val,
-    vecmap::{vecmap_index, VecMap, VecSet},
-};
+use crate::vecmap::{vecmap_index, VecMap, VecSet};
 
 mod codegen;
 pub use codegen::*;
 
-// TODO: remove
-#[derive(Debug, Clone)]
-pub enum Value {
-    Reg(Reg, Option<Val>),
-    Reference(Reg),
-    Global(Global),
-}
-
-impl Value {
-    pub fn get_type(&self, ir: &IR) -> TypeIdx {
-        match *self {
-            Value::Reg(reg, _) => ir.regs[reg],
-            Value::Reference(reg) => ir.regs[reg].inner(ir),
-            Value::Global(glob) => ir.globals[glob],
-        }
-    }
-}
-
-// TODO: remove
-#[derive(Debug)]
-pub struct Captures {
-    pub input: Value,
-    pub members: Vec<Reg>,
-}
-
 #[derive(Debug)]
 pub struct ProcSign {
-    pub inputs: Vec<Reg>,
-    pub captures: Option<Captures>,
-
-    pub output: TypeIdx,
     pub debug_name: String,
-
+    pub inputs: Vec<Reg>,
+    pub output: TypeIdx,
     pub unhandled: Vec<HandlerIdx>,
-    pub handled: Vec<HandlerIdx>,
-    pub redirect: Vec<(HandlerIdx, HandlerIdx)>,
 }
 
 #[derive(Debug)]
@@ -61,18 +27,6 @@ pub struct ProcForeign {
 #[derive(Debug)]
 pub struct ProcImpl {
     pub blocks: VecMap<BlockIdx, Block>,
-}
-
-impl ProcImpl {
-    pub fn calls(&self) -> impl Iterator<Item = ProcIdx> + '_ {
-        self.blocks
-            .values()
-            .flat_map(|b| b.instructions.iter())
-            .filter_map(|i| match i {
-                &Instruction::Call(p, _, _) => Some(p),
-                _ => None,
-            })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,57 +43,21 @@ pub enum Type {
     Pointer(TypeIdx),
     ConstArray(u64, TypeIdx),
     Slice(TypeIdx),
-
     Aggregate(AggrIdx),
-
-    // Handler without a try-with block purther up the stack
-    NakedHandler(HandlerIdx),
-    RawHandler(HandlerIdx, Rc<[usize]>),
-
-    // Handler from a try-with block
-    Handler(HandlerIdx),
-
-    // TODO: remove
-    // Temporary output value of functions that return handlers, includes eff val and failure type
-    HandlerOutput(Val, TypeIdx),
 
     Never,
     None,
 }
 
 impl TypeIdx {
-    pub fn is_never(self) -> bool {
-        self == TYPE_NEVER
-    }
     pub fn inner(self, ir: &IR) -> TypeIdx {
         match ir.types[self] {
             Type::Pointer(ty) => ty,
             Type::ConstArray(_, ty) => ty,
             Type::Slice(ty) => ty,
-            Type::HandlerOutput(_, ty) => ty,
-            Type::Handler(idx) | Type::NakedHandler(idx) | Type::RawHandler(idx, _) => {
-                ir.handler_type[idx].break_ty
-            }
-            Type::Never => TYPE_NEVER,
+            Type::Never => self,
             _ => unreachable!(),
         }
-    }
-    pub fn is_handler_of(self, ir: &IR, handler_idx: HandlerIdx) -> bool {
-        match ir.types[self] {
-            Type::NakedHandler(idx) | Type::RawHandler(idx, _) | Type::Handler(idx) => {
-                idx == handler_idx
-            }
-            _ => false,
-        }
-    }
-    pub fn is_handler(self, ir: &IR) -> bool {
-        matches!(
-            ir.types[self],
-            Type::NakedHandler(_)
-                | Type::RawHandler(_, _)
-                | Type::Handler(_)
-                | Type::HandlerOutput(_, _)
-        )
     }
 }
 
@@ -152,17 +70,10 @@ vecmap_index!(BlockIdx);
 vecmap_index!(TypeIdx);
 vecmap_index!(AggrIdx);
 vecmap_index!(Reg);
-vecmap_index!(Global);
 
 impl Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "R{:02}", self.0)
-    }
-}
-
-impl Display for Global {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "G{:02}", self.0)
     }
 }
 
@@ -174,6 +85,7 @@ impl Display for BlockIdx {
 
 #[derive(Debug, Default)]
 pub struct Block {
+    pub phis: Vec<(Reg, Vec<(Reg, BlockIdx)>)>,
     pub instructions: Vec<Instruction>,
     pub next: Option<BlockIdx>,
 }
@@ -187,14 +99,8 @@ pub enum Instruction {
     Zeroinit(Reg),
     Cast(Reg, Reg),
 
-    // globals
-    SetScopedGlobal(Global, Reg, BlockIdx),
-    GetGlobal(Reg, Global),
-    GetGlobalPtr(Reg, Global),
-
     // conditionals
     Branch(Reg, BlockIdx, BlockIdx),
-    Phi(Reg, Vec<(Reg, BlockIdx)>),
 
     // operations (r0 = r1 op r2)
     Equals(Reg, Reg, Reg),
@@ -206,23 +112,18 @@ pub enum Instruction {
     Sub(Reg, Reg, Reg),
 
     // call procedure, put return into reg, call with arguments
-    Call(ProcIdx, Option<Reg>, Vec<Reg>),
+    Call(ProcIdx, Option<Reg>, Vec<Reg>, Vec<(HandlerIdx, BlockIdx)>),
     CallForeign(ProcForeignIdx, Option<Reg>, Vec<Reg>),
 
     // return statements
-    Yeet(Option<Reg>, HandlerIdx), // break with optional value to handler
-    Return(Option<Reg>),           // return with optional value
+    Yeet(Option<Reg>, HandlerIdx, Option<BlockIdx>), // break with optional value to handler
+    Return(Option<Reg>),                             // return with optional value
     Unreachable,
 
     // pointers
     Reference(Reg, Reg),
     Load(Reg, Reg),
     Store(Reg, Reg),
-
-    // handler types
-    Handler(Reg, Vec<Reg>),
-    RawHandler(Reg, Reg),
-    UnrawHandler(Reg, Reg),
 
     // aggregate types
     Aggregate(Reg, Vec<Reg>),
@@ -234,18 +135,12 @@ pub enum Instruction {
     Trap,
     Trace(Reg),
     Syscall(Option<Reg>, Reg, Vec<Reg>),
-    GS(Reg, u64), // read value at GS register with offset into reg
 }
 
 vecmap_index!(ProcIdx);
 vecmap_index!(ProcForeignIdx);
 vecmap_index!(HandlerIdx);
 
-#[derive(Debug, Clone)]
-pub struct HandlerType {
-    pub captures: Vec<TypeIdx>,
-    pub break_ty: TypeIdx,
-}
 pub struct IR {
     pub proc_sign: VecMap<ProcIdx, ProcSign>,
     pub proc_impl: VecMap<ProcIdx, ProcImpl>,
@@ -253,10 +148,9 @@ pub struct IR {
     pub entry: ProcIdx,
 
     pub regs: VecMap<Reg, TypeIdx>,
-    pub globals: VecMap<Global, TypeIdx>,
 
     pub types: VecSet<TypeIdx, Type>,
-    pub handler_type: VecMap<HandlerIdx, HandlerType>,
+    pub break_types: VecMap<HandlerIdx, TypeIdx>,
     pub aggregates: VecMap<AggrIdx, AggregateType>,
 
     pub links: HashSet<String>,
@@ -277,26 +171,6 @@ impl Display for IR {
                     write!(f, "{}", r)?;
                 }
                 write!(f, " )")?;
-            }
-
-            if !sign.unhandled.is_empty() {
-                write!(f, " / ")?;
-                for handler in sign.unhandled.iter().copied() {
-                    if handler != sign.unhandled.first().copied().unwrap() {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", usize::from(handler))?
-                }
-            }
-
-            if !sign.handled.is_empty() {
-                write!(f, " try ")?;
-                for handler in sign.handled.iter().copied() {
-                    if handler != sign.handled.first().copied().unwrap() {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", usize::from(handler))?
-                }
             }
 
             writeln!(f, " {{")?;
@@ -321,15 +195,6 @@ impl Display for IR {
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
                         }
-                        Instruction::Phi(r, ref v) => writeln!(
-                            f,
-                            "{} <- phi {}",
-                            r,
-                            v.iter()
-                                .map(|(r, b)| format!("[ {}, {} ]", r, b))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )?,
                         Instruction::Equals(out, left, right) => {
                             writeln!(f, "{} <- {} == {}", out, left, right)?
                         }
@@ -351,7 +216,7 @@ impl Display for IR {
                         Instruction::Sub(out, left, right) => {
                             writeln!(f, "{} <- {} - {}", out, left, right)?
                         }
-                        Instruction::Call(proc, out, ref args) => writeln!(
+                        Instruction::Call(proc, out, ref args, _) => writeln!(
                             f,
                             "{}cal {}{}",
                             match out {
@@ -397,7 +262,7 @@ impl Display for IR {
                                 None => "".into(),
                             },
                         )?,
-                        Instruction::Yeet(r, h) => writeln!(
+                        Instruction::Yeet(r, h, _) => writeln!(
                             f,
                             "       brk {}{}",
                             usize::from(h),
@@ -406,29 +271,20 @@ impl Display for IR {
                                 None => "".into(),
                             },
                         )?,
-                        Instruction::Aggregate(r, ref v) | Instruction::Handler(r, ref v) => {
-                            writeln!(
-                                f,
-                                "{} <- {{ {} }}",
-                                r,
-                                v.iter()
-                                    .map(|r| r.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                            )?
-                        }
+                        Instruction::Aggregate(r, ref v) => writeln!(
+                            f,
+                            "{} <- {{ {} }}",
+                            r,
+                            v.iter()
+                                .map(|r| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )?,
                         Instruction::Member(r, a, m) => writeln!(f, "{} <- {}.{}", r, a, m)?,
                         Instruction::Unreachable => writeln!(f, "       unreachable")?,
-                        Instruction::SetScopedGlobal(g, r, e) => {
-                            writeln!(f, "{} <- ssg {}, {}", g, r, e)?
-                        }
-                        Instruction::GetGlobal(r, g) => writeln!(f, "{} <- ggl {}", r, g)?,
-                        Instruction::GetGlobalPtr(r, g) => writeln!(f, "{} <- &ggl {}", r, g)?,
                         Instruction::Reference(ptr, r) => writeln!(f, "{} <- &{}", ptr, r)?,
                         Instruction::Load(r, ptr) => writeln!(f, "{} <- load {}", r, ptr)?,
                         Instruction::Store(ptr, r) => writeln!(f, "       store {}, {}", ptr, r)?,
-                        Instruction::RawHandler(r, h) => writeln!(f, "{} <- raw {}", r, h)?,
-                        Instruction::UnrawHandler(r, h) => writeln!(f, "{} <- unraw {}", r, h)?,
                         Instruction::ElementPtr(r, a, m) => {
                             writeln!(f, "{} <- gep {}, 0, {}", r, a, m)?
                         }
@@ -456,7 +312,6 @@ impl Display for IR {
                                 a => format!(" ( {} )", a),
                             },
                         )?,
-                        Instruction::GS(reg, offset) => writeln!(f, "{} <- GS:{}", reg, offset)?,
                     }
                 }
 
@@ -474,9 +329,3 @@ impl Display for IR {
         Ok(())
     }
 }
-
-const TYPE_NEVER: TypeIdx = TypeIdx(0);
-const TYPE_NONE: TypeIdx = TypeIdx(1);
-
-const TYPE_STR_SLICE: TypeIdx = TypeIdx(5);
-const TYPE_BOOL: TypeIdx = TypeIdx(7);

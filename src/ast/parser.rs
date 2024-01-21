@@ -1377,32 +1377,38 @@ impl Parse for Body {
         let mut main = Vec::new();
         let mut last = None;
 
-        tk.group(Group::Brace, false, |tk| {
-            // skip semicolons
-            while tk.check(Token::Semicolon).is_some() {}
-            if tk.peek_check(Token::Close(Group::Brace)) {
-                return Some(());
-            }
-
-            // parse expression
+        if tk.peek_check(Token::Do) {
             let expr = Expression::parse_or_default(tk);
             let n = tk.push_expr(expr);
-
-            if tk.check(Token::Semicolon).is_none() {
-                last = Some(n);
-                if !tk.peek_check(Token::Close(Group::Brace)) {
-                    // TODO: error
-                    None
-                } else {
-                    Some(())
-                }
-            } else {
+            last = Some(n);
+        } else {
+            tk.group(Group::Brace, false, |tk| {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
-                main.push(n);
-                Some(())
-            }
-        })?;
+                if tk.peek_check(Token::Close(Group::Brace)) {
+                    return Some(());
+                }
+
+                // parse expression
+                let expr = Expression::parse_or_default(tk);
+                let n = tk.push_expr(expr);
+
+                if tk.check(Token::Semicolon).is_none() {
+                    last = Some(n);
+                    if !tk.peek_check(Token::Close(Group::Brace)) {
+                        // TODO: error
+                        None
+                    } else {
+                        Some(())
+                    }
+                } else {
+                    // skip semicolons
+                    while tk.check(Token::Semicolon).is_some() {}
+                    main.push(n);
+                    Some(())
+                }
+            })?;
+        }
 
         Some(Body { main, last })
     }

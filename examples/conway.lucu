@@ -46,30 +46,15 @@ fun next_state(old []u8, mut new []u8) {
 		for(range(0, 16)) {
 			x ->
 			mut neighbors = 0
-			if old[index(dec(x), dec(y))] > 0 {
-				do neighbors++
-			}
-			if old[index(x, dec(y))] > 0 {
-				do neighbors++
-			}
-			if old[index(inc(x), dec(y))] > 0 {
-				do neighbors++
-			}
-			if old[index(dec(x), y)] > 0 {
-				do neighbors++
-			}
-			if old[index(inc(x), y)] > 0 {
-				do neighbors++
-			}
-			if old[index(dec(x), inc(y))] > 0 {
-				do neighbors++
-			}
-			if old[index(x, inc(y))] > 0 {
-				do neighbors++
-			}
-			if old[index(inc(x), inc(y))] > 0 {
-				do neighbors++
-			}
+
+			if old[index(dec(x), dec(y))] > 0 do neighbors++
+			if old[index(    x , dec(y))] > 0 do neighbors++
+			if old[index(inc(x), dec(y))] > 0 do neighbors++
+			if old[index(dec(x),     y )] > 0 do neighbors++
+			if old[index(inc(x),     y )] > 0 do neighbors++
+			if old[index(dec(x), inc(y))] > 0 do neighbors++
+			if old[index(    x , inc(y))] > 0 do neighbors++
+			if old[index(inc(x), inc(y))] > 0 do neighbors++
 
 			let cell = index(x, y)
 			if old[cell] > 0 {

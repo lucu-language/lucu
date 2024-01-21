@@ -170,7 +170,9 @@ impl srcloc {
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
 effect foreign {
-	fun link_effect(`lib str) impl `effect
+	fun impl_link(`lib str) impl `effect
+	fun impl_asm(`assembly str, `constraints str, `sideeffects bool) impl `effect
+	fun syscall(nr int, args [`N]int) int
 }
 
 ##

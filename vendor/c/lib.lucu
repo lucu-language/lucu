@@ -18,5 +18,5 @@ effect lib {
 
 @capability
 fun link() impl lib / foreign {
-	link_effect("c")
+	impl_link("c")
 }

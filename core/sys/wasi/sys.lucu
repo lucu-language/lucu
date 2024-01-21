@@ -7,5 +7,5 @@ effect sys {
 
 @capability(os = "wasi")
 fun link() impl sys / foreign {
-	link_effect("wasi_snapshot_preview1")
+	impl_link("wasi_snapshot_preview1")
 }

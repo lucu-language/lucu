@@ -89,6 +89,9 @@ impl LucuArch {
             LucuArch::Wasm64 => 64,
         }
     }
+    pub fn is_wasm(&self) -> bool {
+        matches!(self, LucuArch::Wasm32 | LucuArch::Wasm64)
+    }
 }
 
 impl LucuOS {
@@ -166,26 +169,22 @@ impl Target {
     }
 }
 
-fn parse_from_filename(
-    main_file: &Path,
-    core_path: &Path,
-    target: &Target,
-) -> Result<ir::IR, Errors> {
+fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<ir::IR, Errors> {
     let mut parsed = Ast::default();
     let mut errors = Errors::new();
 
-    let preamble = core_path.join("core").join("preamble.lucu");
-    let system = match target.lucu_os() {
-        LucuOS::Linux => Some(core_path.join("core").join("sys/linux")),
-        LucuOS::Windows => Some(core_path.join("core").join("sys/nt")),
-        LucuOS::WASI => Some(core_path.join("core").join("sys/wasi")),
-        LucuOS::Unknown => None,
-    };
+    let preamble = core_path.join("core/preamble.lucu");
+    let system = core_path.join("core/os/process.lucu");
+
+    if !preamble.exists() {
+        todo!("give error");
+    }
+
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
         (preamble, parsed.preamble),
     ];
-    if let Some(system) = system {
+    if system.exists() {
         files_todo.push((system, parsed.system));
     }
 
@@ -336,7 +335,7 @@ fn main() {
     };
 
     // analyze
-    match parse_from_filename(&args.main, &core, &target) {
+    match parse_from_filename(&args.main, &core) {
         Ok(ir) => {
             // generate ir
             if debug {
@@ -436,7 +435,7 @@ mod tests {
         let core = Path::new(env!("CARGO_MANIFEST_DIR"));
         let target = Target::host(None, None);
 
-        match parse_from_filename(Path::new(filename), core, &target) {
+        match parse_from_filename(Path::new(filename), core) {
             Ok(ir) => {
                 llvm::generate_ir(&ir, &output.with_extension("o"), false, &target);
 

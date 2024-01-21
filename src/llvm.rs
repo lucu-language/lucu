@@ -43,8 +43,6 @@ struct CodeGen<'ctx> {
     foreign: VecMap<ProcForeignIdx, FunctionValue<'ctx>>,
 
     syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
-    trap: FunctionValue<'ctx>,
-    trace: FunctionValue<'ctx>,
 
     os: LucuOS,
     arch: LucuArch,
@@ -163,187 +161,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         _ => vec![],
     };
 
-    let trap_ty = context.void_type().fn_type(&[], false);
-    let trap = module.add_function("$exit", trap_ty, Some(Linkage::Internal));
-    let trap_block = context.append_basic_block(trap, "");
-
     let builder = context.create_builder();
-    builder.position_at_end(trap_block);
-    match (&os, &arch) {
-        (LucuOS::Linux, _) => {
-            builder
-                .build_indirect_call(
-                    syscalls[1].unwrap().0,
-                    syscalls[1].unwrap().1,
-                    &[
-                        reg_ty.const_int(60, false).into(),
-                        reg_ty.const_int(1, false).into(),
-                    ],
-                    "",
-                )
-                .unwrap();
-            builder.build_unreachable().unwrap();
-        }
-        (LucuOS::Windows, _) => {
-            builder
-                .build_indirect_call(
-                    syscalls[2].unwrap().0,
-                    syscalls[2].unwrap().1,
-                    &[
-                        reg_ty.const_int(44, true).into(),
-                        reg_ty
-                            .const_int_from_string("-1", StringRadix::Decimal)
-                            .unwrap()
-                            .into(),
-                        reg_ty.const_int(1, false).into(),
-                    ],
-                    "",
-                )
-                .unwrap();
-            builder.build_unreachable().unwrap();
-        }
-        (LucuOS::WASI, _) | // TODO
-        (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
-            let asm_ty = context.void_type().fn_type(&[], false);
-            let asm = context.create_inline_asm(asm_ty, "unreachable".into(), "".into(), true, false, None, false);
-            builder.build_indirect_call(asm_ty, asm, &[], "").unwrap();
-            builder.build_unreachable().unwrap();
-        }
-        _ => {
-            // loop forever
-            let block = context.append_basic_block(trap, "");
-            builder.build_unconditional_branch(block).unwrap();
-
-            builder.position_at_end(block);
-            builder.build_unconditional_branch(block).unwrap();
-        }
-    }
-
-    let arrsize = context.custom_width_int_type(arch.array_len_size());
-    let string = context.struct_type(
-        &[
-            context.i8_type().ptr_type(AddressSpace::default()).into(),
-            arrsize.into(),
-        ],
-        false,
-    );
-    let trace_ty = context.void_type().fn_type(&[string.into()], false);
-    let trace = module.add_function("$trace", trace_ty, Some(Linkage::Internal));
-    let trace_block = context.append_basic_block(trace, "");
-
-    builder.position_at_end(trace_block);
-    match os {
-        LucuOS::Linux => {
-            // get data
-            let slice = trace.get_nth_param(0).unwrap().into_struct_value();
-            let ptr = builder
-                .build_extract_value(slice, 0, "ptr")
-                .unwrap()
-                .into_pointer_value();
-            let ptr = builder.build_ptr_to_int(ptr, reg_ty, "").unwrap();
-            let len = builder.build_extract_value(slice, 1, "len").unwrap();
-
-            // syscall 1
-            builder
-                .build_indirect_call(
-                    syscalls[3].unwrap().0,
-                    syscalls[3].unwrap().1,
-                    &[
-                        reg_ty.const_int(1, false).into(),
-                        reg_ty.const_int(2, false).into(),
-                        ptr.into(),
-                        len.into(),
-                    ],
-                    "",
-                )
-                .unwrap();
-
-            builder.build_return(None).unwrap();
-        }
-        LucuOS::Windows => {
-            // get data
-            let slice = trace.get_nth_param(0).unwrap().into_struct_value();
-            let ptr = builder
-                .build_extract_value(slice, 0, "ptr")
-                .unwrap()
-                .into_pointer_value();
-            let ptr = builder.build_ptr_to_int(ptr, reg_ty, "").unwrap();
-            let len = builder.build_extract_value(slice, 1, "len").unwrap();
-
-            // get stderr
-            let reg_ptr = reg_ty.ptr_type(AddressSpace::default());
-
-            let asm_ty = reg_ty.fn_type(&[], false);
-            let asm = context.create_inline_asm(
-                asm_ty,
-                format!("movq %gs:{}, $0", 0x60),
-                "=r".into(),
-                false,
-                false,
-                None,
-                false,
-            );
-
-            let peb_int = builder
-                .build_indirect_call(asm_ty, asm, &[], "")
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_left()
-                .into_int_value();
-            let peb_ptr = builder.build_int_to_ptr(peb_int, reg_ptr, "").unwrap();
-
-            let params_int_ptr = unsafe {
-                builder
-                    .build_in_bounds_gep(reg_ty, peb_ptr, &[reg_ty.const_int(4, false)], "")
-                    .unwrap()
-            };
-            let params_int = builder
-                .build_load(reg_ty, params_int_ptr, "")
-                .unwrap()
-                .into_int_value();
-            let params_ptr = builder.build_int_to_ptr(params_int, reg_ptr, "").unwrap();
-
-            let stderr_ptr = unsafe {
-                builder
-                    .build_in_bounds_gep(reg_ty, params_ptr, &[reg_ty.const_int(6, false)], "")
-                    .unwrap()
-            };
-            let stderr = builder.build_load(reg_ty, stderr_ptr, "").unwrap();
-
-            // syscall 8
-            let zero = reg_ty.const_int(0, false).into();
-            let status = builder.build_alloca(reg_ty.array_type(2), "").unwrap();
-            let status = builder.build_ptr_to_int(status, reg_ty, "").unwrap();
-
-            builder
-                .build_indirect_call(
-                    syscalls[9].unwrap().0,
-                    syscalls[9].unwrap().1,
-                    &[
-                        reg_ty.const_int(8, false).into(),
-                        stderr.into(),
-                        zero,
-                        zero,
-                        zero,
-                        status.into(),
-                        ptr.into(),
-                        len.into(),
-                        zero,
-                        zero,
-                    ],
-                    "",
-                )
-                .unwrap();
-
-            builder.build_return(None).unwrap();
-        }
-        LucuOS::WASI | // TODO
-        LucuOS::Unknown => {
-            // do nothing
-            builder.build_return(None).unwrap();
-        }
-    };
-
     let mut codegen = CodeGen {
         context: &context,
         module,
@@ -353,8 +171,6 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         procs: VecMap::new(),
         foreign: VecMap::new(),
         syscalls,
-        trap,
-        trace,
         os,
         arch,
     };
@@ -464,7 +280,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
 
     let fail_block = context.append_basic_block(fail, "");
     codegen.builder.position_at_end(fail_block);
-    codegen.builder.build_call(trap, &[], "").unwrap();
+    // codegen.builder.build_call(trap, &[], "").unwrap();
     codegen.builder.build_unreachable().unwrap();
 
     // memset
@@ -1241,8 +1057,21 @@ impl<'ctx> CodeGen<'ctx> {
                             regmap.insert(ret, val);
                         }
                     }
-                    I::Trap => {
-                        self.builder.build_call(self.trap, &[], "").unwrap();
+                    I::WasmTrap => {
+                        assert!(self.arch.is_wasm());
+                        let asm_ty = self.context.void_type().fn_type(&[], false);
+                        let asm = self.context.create_inline_asm(
+                            asm_ty,
+                            "unreachable".into(),
+                            "".into(),
+                            true,
+                            false,
+                            None,
+                            false,
+                        );
+                        self.builder
+                            .build_indirect_call(asm_ty, asm, &[], "")
+                            .unwrap();
                         self.builder.build_unreachable().unwrap();
                         continue 'outer;
                     }
@@ -1260,12 +1089,6 @@ impl<'ctx> CodeGen<'ctx> {
                                 },
                             );
                         }
-                    }
-                    I::Trace(r) => {
-                        let val = regmap[&r];
-                        self.builder
-                            .build_call(self.trace, &[val.into()], "")
-                            .unwrap();
                     }
                 }
             }

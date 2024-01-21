@@ -4,12 +4,15 @@
 @foreign
 effect sys {
 	# TODO: u32 -> DWORD
-	# TODO: uptr -> LPVOID
+	# TODO: uptr -> HANDLE
 	fun GetStdHandle(nStdHandle u32) uptr
 	fun ReadConsoleA(hConsoleInput uptr, mut lpBuffer ^u8, nNumberOfCharsToRead u32, mut lpNumberOfCharsRead ^u32, pInputControl uptr) bool
 	fun WriteConsoleA(hConsoleOutput uptr, lpBuffer ^u8, nNumberOfCharsToWrite u32, mut lpNumberOfCharsWritten ^u32, lpReserved uptr) bool
 
 	# TODO: u32 -> UINT
+	# TODO: uptr -> HANDLE
+	fun GetCurrentProcess() uptr
+	fun TerminateProcess(hProcess uptr, uExitCode u32) bool
 	fun ExitProcess(uExitCode u32) !
 }
 
@@ -27,5 +30,5 @@ fun stderr() uptr / sys {
 
 @capability(os = "windows")
 fun link() impl sys / foreign {
-	link_effect("kernel32")
+	impl_link("kernel32")
 }

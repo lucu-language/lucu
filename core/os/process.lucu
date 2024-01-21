@@ -1,0 +1,63 @@
+import "../sys/linux"
+import "../sys/win32"
+
+import "../sys/wasm"
+import "../sys/wasi"
+
+import "../io"
+
+effect process {
+	fun abort() !
+	fun exit(code int) !
+	fun stdio() impl io.stdio
+}
+
+@capability(os = "linux")
+fun linux() impl process / linux.sys {
+	impl process {
+		fun abort() ! {
+			mut handle int = ---
+			handle = linux.set_tid_address(&handle)
+			do linux.tkill(handle, 6) # SIGABRT
+			unreachable()
+		}
+		fun exit(code int) ! {
+			linux.exit(code)
+		}
+		fun stdio() impl io.stdio {
+			io.linux()
+		}
+	}
+}
+
+@capability(os = "windows")
+fun windows() impl process / win32.sys {
+	impl process {
+		fun abort() ! {
+			let handle = win32.GetCurrentProcess()
+			do win32.TerminateProcess(handle, 3)
+			unreachable()
+		}
+		fun exit(code int) ! {
+			win32.ExitProcess(cast code)
+		}
+		fun stdio() impl io.stdio {
+			io.windows()
+		}
+	}
+}
+
+@capability(os = "wasi")
+fun wasi() impl process / wasm.sys wasi.sys {
+	impl process {
+		fun abort() ! {
+			wasm.unreachable()
+		}
+		fun exit(code int) ! {
+			wasi.proc_exit(cast code)
+		}
+		fun stdio() impl io.stdio {
+			io.wasi()
+		}
+	}
+}

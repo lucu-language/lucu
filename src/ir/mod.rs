@@ -129,10 +129,9 @@ pub enum Instruction {
     ElementPtr(Reg, Reg, Reg),
     AdjacentPtr(Reg, Reg, Reg),
 
-    // kernel operations
-    Trap,
-    Trace(Reg),
+    // architecture-specific operations
     Syscall(Option<Reg>, Reg, Vec<Reg>),
+    WasmTrap,
 }
 
 vecmap_index!(ProcIdx);
@@ -289,8 +288,6 @@ impl Display for IR {
                         Instruction::AdjacentPtr(r, a, m) => {
                             writeln!(f, "{} <- gep {}, {}", r, a, m)?
                         }
-                        Instruction::Trap => writeln!(f, "       trap")?,
-                        Instruction::Trace(r) => writeln!(f, "       trace {}", r)?,
                         Instruction::Syscall(out, nr, ref args) => writeln!(
                             f,
                             "{}syscall {}{}",
@@ -310,6 +307,7 @@ impl Display for IR {
                                 a => format!(" ( {} )", a),
                             },
                         )?,
+                        Instruction::WasmTrap => writeln!(f, "       wasm: unreachable")?,
                     }
                 }
 

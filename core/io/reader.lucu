@@ -9,12 +9,12 @@ fun skip_line() usize / reader {
 	try loop {
 		let read = read(buf)
 		if read == 0 {
-			break()
+			break
 		}
 
 		do total++
 		if buf[0] == '\n' {
-			break()
+			break
 		}
 	}
 
@@ -27,14 +27,14 @@ fun read_line(mut buf []u8) usize / reader {
 	try loop {
 		let read = read(buf[total..total + 1])
 		if read == 0 {
-			break()
+			break
 		}
 
 		if buf[total++] == '\n' {
-			break()
+			break
 		}
 		if total == len(buf) {
-			break()
+			break
 		}
 	}
 

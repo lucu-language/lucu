@@ -3,9 +3,9 @@ import "../sys/win32"
 import "../sys/wasi"
 
 effect stdio {
-	fun stdin () handle reader
-	fun stdout() handle writer
-	fun stderr() handle writer
+	fun stdin () impl reader
+	fun stdout() impl writer
+	fun stderr() impl writer
 }
 
 fun print(s str) / stdio {
@@ -35,13 +35,13 @@ fun wait() / stdio {
 }
 
 @capability(os = "linux")
-fun linux() handle stdio / linux.sys {
-	handle stdio {
-		fun stdin() handle reader {
+fun linux() impl stdio / linux.sys {
+	impl stdio {
+		fun stdin() impl reader {
 			fun { buf -> linux.read(0, buf) }
 		}
-		fun stdout() handle writer {
-			handle writer {
+		fun stdout() impl writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					linux.write(1, buf)
 				}
@@ -49,8 +49,8 @@ fun linux() handle stdio / linux.sys {
 				}
 			}
 		}
-		fun stderr() handle writer {
-			handle writer {
+		fun stderr() impl writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					linux.write(2, buf)
 				}
@@ -62,9 +62,9 @@ fun linux() handle stdio / linux.sys {
 }
 
 @capability(os = "wasi")
-fun wasi() handle stdio / wasi.sys2 {
-	handle stdio {
-		fun stdin() handle reader {
+fun wasi() impl stdio / wasi.sys {
+	impl stdio {
+		fun stdin() impl reader {
 			fun {
 				buf ->
 				mut read u32 = 0
@@ -72,8 +72,8 @@ fun wasi() handle stdio / wasi.sys2 {
 				cast read
 			}
 		}
-		fun stdout() handle writer {
-			handle writer {
+		fun stdout() impl writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
 					do wasi.fd_write(1, [buf], &written)
@@ -83,8 +83,8 @@ fun wasi() handle stdio / wasi.sys2 {
 				}
 			}
 		}
-		fun stderr() handle writer {
-			handle writer {
+		fun stderr() impl writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
 					do wasi.fd_write(2, [buf], &written)
@@ -98,9 +98,9 @@ fun wasi() handle stdio / wasi.sys2 {
 }
 
 @capability(os = "windows")
-fun windows() handle stdio / win32.sys {
-	handle stdio {
-		fun stdin() handle reader {
+fun windows() impl stdio / win32.sys {
+	impl stdio {
+		fun stdin() impl reader {
 			let stdin = win32.stdin()
 			fun {
 				buf ->
@@ -109,9 +109,9 @@ fun windows() handle stdio / win32.sys {
 				cast read
 			}
 		}
-		fun stdout() handle writer {
+		fun stdout() impl writer {
 			let stdout = win32.stdout()
-			handle writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
 					do win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
@@ -121,9 +121,9 @@ fun windows() handle stdio / win32.sys {
 				}
 			}
 		}
-		fun stderr() handle writer {
+		fun stderr() impl writer {
 			let stderr = win32.stderr()
-			handle writer {
+			impl writer {
 				fun write(buf []u8) usize {
 					mut written u32 = 0
 					do win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)

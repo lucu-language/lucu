@@ -577,18 +577,10 @@ impl Parse for Type {
 
 impl Parse for FailType {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
-        if tk.check(Token::Yeets).is_some() {
-            if tk
-                .peek()
-                .map(|t| t.0.continues_statement() || matches!(t.0, Token::Loop))
-                .unwrap_or(true)
-            {
-                Some(FailType::None)
-            } else {
-                let t = Type::parse_or_default(tk);
-                let t = tk.push_type(t);
-                Some(FailType::Some(t))
-            }
+        if tk.check(Token::Arrow).is_some() {
+            let t = Type::parse_or_default(tk);
+            let t = tk.push_type(t);
+            Some(FailType::Some(t))
         } else {
             Some(FailType::Never)
         }
@@ -961,9 +953,47 @@ impl Parse for Expression {
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
 
-                // allow for try-loop
+                // allow try-with
                 let loop_start = tk.pos_start();
-                let inner = if tk.check(Token::Loop).is_some() {
+                let inner = if tk.check(Token::With).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    let mut handlers = vec![handler];
+
+                    while tk.check(Token::Comma).is_some() {
+                        let handler = Expression::parse_or_skip(tk)?;
+                        let handler = tk.push_expr(handler);
+                        handlers.push(handler)
+                    }
+
+                    // allow try-with-loop
+                    let loop_start = tk.pos_start();
+                    let inner = if tk.check(Token::Loop).is_some() {
+                        let body = Body::parse_or_default(tk);
+                        let body = tk.push_expr(body);
+                        Ranged(
+                            Expression::Loop(body),
+                            loop_start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        )
+                    } else {
+                        Body::parse_or_default(tk)
+                    };
+
+                    let mut expr = inner;
+                    for handler in handlers.into_iter().rev() {
+                        expr = Ranged(
+                            Expression::With(handler, tk.push_expr(expr)),
+                            start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        );
+                    }
+
+                    expr
+                } else if tk.check(Token::Loop).is_some() {
+                    // allow try-loop
                     let body = Body::parse_or_default(tk);
                     let body = tk.push_expr(body);
                     Ranged(
@@ -976,30 +1006,7 @@ impl Parse for Expression {
                     Body::parse_or_default(tk)
                 };
 
-                if tk.check(Token::With).is_some() {
-                    let handler = Expression::parse_or_skip(tk)?;
-                    let handler = tk.push_expr(handler);
-                    let mut handlers = vec![handler];
-
-                    while tk.check(Token::Comma).is_some() {
-                        let handler = Expression::parse_or_skip(tk)?;
-                        let handler = tk.push_expr(handler);
-                        handlers.push(handler)
-                    }
-
-                    let mut expr = inner;
-                    for handler in handlers.into_iter().rev() {
-                        expr = Ranged(
-                            Expression::TryWith(tk.push_expr(expr), Some(handler)),
-                            start,
-                            tk.pos_end(),
-                            tk.iter.file,
-                        );
-                    }
-                    Some(expr.0)
-                } else {
-                    Some(Expression::TryWith(tk.push_expr(inner), None))
-                }
+                Some(Expression::Try(tk.push_expr(inner)))
             }
 
             // with block
@@ -1038,7 +1045,7 @@ impl Parse for Expression {
                 let mut expr = inner;
                 for handler in handlers.into_iter().rev() {
                     expr = Ranged(
-                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        Expression::With(handler, tk.push_expr(expr)),
                         start,
                         tk.pos_end(),
                         tk.iter.file,
@@ -1276,7 +1283,7 @@ fn expression_post(
 
                 for handler in handlers.into_iter().rev() {
                     expr = Ranged(
-                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        Expression::With(handler, tk.push_expr(expr)),
                         start,
                         tk.pos_end(),
                         tk.iter.file,

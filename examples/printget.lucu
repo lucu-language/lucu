@@ -8,7 +8,7 @@ effect get {
 	fun get() str
 }
 
-fun getter(s str) handle get {
+fun getter(s str) impl get {
 	fun { s }
 }
  
@@ -19,7 +19,7 @@ fun main() / io.stdio {
 		print() with getter("two")
 		print() with getter("tea")
 		
-	} with handle printget {
+	} with impl printget {
 
 		fun print() / get {
 			io.print(get())

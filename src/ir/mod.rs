@@ -7,7 +7,6 @@ use std::{
 use crate::vecmap::{vecmap_index, VecMap, VecSet};
 
 mod codegen;
-pub use codegen::*;
 
 #[derive(Debug)]
 pub struct ProcSign {
@@ -37,12 +36,12 @@ pub enum Type {
     Int8,
     Int16,
     Int32,
+    Int64,
 
     Bool,
 
     Pointer(TypeIdx),
     ConstArray(u64, TypeIdx),
-    Slice(TypeIdx),
     Aggregate(AggrIdx),
 
     Never,
@@ -54,7 +53,6 @@ impl TypeIdx {
         match ir.types[self] {
             Type::Pointer(ty) => ty,
             Type::ConstArray(_, ty) => ty,
-            Type::Slice(ty) => ty,
             Type::Never => self,
             _ => unreachable!(),
         }

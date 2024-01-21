@@ -12,7 +12,6 @@ pub enum Token {
     If,
     Else,
     Yeet,
-    Yeets,
     Handle,
     Let,
     Mut,
@@ -72,8 +71,7 @@ impl fmt::Display for Token {
                 Token::If => "'if'".into(),
                 Token::Else => "'else'".into(),
                 Token::Yeet => "'fail'".into(),
-                Token::Yeets => "'fails'".into(),
-                Token::Handle => "'handle'".into(),
+                Token::Handle => "'impl'".into(),
                 Token::Let => "'let'".into(),
                 Token::Mut => "'mut'".into(),
                 Token::Loop => "'loop'".into(),
@@ -168,8 +166,7 @@ impl Token {
     pub fn continues_statement(&self) -> bool {
         matches!(
             self,
-            Token::Yeets
-                | Token::Else
+            Token::Else
                 | Token::Comma
                 | Token::Close(_)
                 | Token::Open(Group::Brace)
@@ -427,9 +424,8 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "with" => Token::With,
                     "if" => Token::If,
                     "else" => Token::Else,
-                    "yeet" | "fail" => Token::Yeet,
-                    "yeets" | "fails" => Token::Yeets,
-                    "handle" => Token::Handle,
+                    "yeet" | "break" => Token::Yeet,
+                    "impl" => Token::Handle,
                     "let" => Token::Let,
                     "mut" => Token::Mut,
                     "loop" => Token::Loop,

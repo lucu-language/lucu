@@ -326,7 +326,6 @@ impl SemCtx<'_> {
     ) -> TypeIdx {
         match fail {
             ast::FailType::Never => TYPE_NEVER,
-            ast::FailType::None => TYPE_NONE,
             ast::FailType::Some(ty) => {
                 self.analyze_type(scope, ty, generics, generic_handler, handler_output)
             }
@@ -1441,11 +1440,8 @@ impl SemCtx<'_> {
                     Some(reg)
                 }
             }
-            (&E::TryWith(body, handler_expr), _) => ctx.child(|ctx| {
-                let handler = match handler_expr {
-                    Some(handler) => Some(self.synth_expr(ctx, handler)?),
-                    None => None,
-                };
+            (&E::With(handler_expr, body), _) => ctx.child(|ctx| {
+                let (handler, ty) = self.synth_expr(ctx, handler_expr)?;
 
                 let end = ctx.blocks.push(
                     BlockIdx,
@@ -1455,7 +1451,46 @@ impl SemCtx<'_> {
                     },
                 );
 
-                ctx.jump();
+                if ty != TYPE_ERROR {
+                    let Type::Handler(lazy) = self.ir.types[ty] else {
+                        unreachable!()
+                    };
+                    let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
+                        unreachable!()
+                    };
+
+                    ctx.scope.top().effect_stack.push((
+                        ty.effect.clone(),
+                        handler,
+                        ctx.yeetable_ret,
+                    ));
+                    self.check_move(
+                        ty.fail_type,
+                        expected,
+                        TypeRange {
+                            loc: self.ast.exprs[handler_expr].empty(),
+                            def: expected_def,
+                        },
+                    );
+                }
+
+                let body_check = self.check_expr(ctx, body, expected, expected_def);
+
+                let last = ctx.jump_to(end);
+                ctx.blocks[end].value =
+                    Some(body_check.into_iter().map(|value| (value, last)).collect());
+
+                Some(Value::Reg(end, None))
+            }),
+            (&E::Try(body), _) => ctx.child(|ctx| {
+                let end = ctx.blocks.push(
+                    BlockIdx,
+                    Block {
+                        instructions: VecMap::new(),
+                        value: None,
+                    },
+                );
+
                 let old_yeet = ctx.yeetable;
                 let old_def = ctx.yeetable_def;
                 let old_ret = ctx.yeetable_ret;
@@ -1463,47 +1498,12 @@ impl SemCtx<'_> {
                 ctx.yeetable = Some(expected);
                 ctx.yeetable_def = expected_def;
                 ctx.yeetable_ret = Some(end);
-                if let Some((handler, ty)) = handler {
-                    if ty != TYPE_ERROR {
-                        let Type::Handler(lazy) = self.ir.types[ty] else {
-                            unreachable!()
-                        };
-                        let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
-                            unreachable!()
-                        };
 
-                        ctx.scope.top().effect_stack.push((
-                            ty.effect.clone(),
-                            handler,
-                            ctx.yeetable_ret,
-                        ));
-                        self.check_move(
-                            ty.fail_type,
-                            expected,
-                            TypeRange {
-                                loc: self.ast.exprs[handler_expr.unwrap()].empty(),
-                                def: expected_def,
-                            },
-                        );
-                    }
-                }
-
-                let body_synth = self.synth_expr(ctx, body);
-
-                if body_synth.is_none() && ctx.yeetable.is_none() {
-                    ctx.yeetable = old_yeet;
-                    ctx.yeetable_def = old_def;
-                    ctx.yeetable_ret = old_ret;
-                    None?;
-                }
+                let body_check = self.check_expr(ctx, body, expected, expected_def);
 
                 let last = ctx.jump_to(end);
-                ctx.blocks[end].value = Some(
-                    body_synth
-                        .into_iter()
-                        .map(|(value, _)| (value, last))
-                        .collect(),
-                );
+                ctx.blocks[end].value =
+                    Some(body_check.into_iter().map(|value| (value, last)).collect());
 
                 ctx.yeetable = old_yeet;
                 ctx.yeetable_def = old_def;
@@ -1911,11 +1911,8 @@ impl SemCtx<'_> {
                     },
                 )
             }
-            E::TryWith(body, handler) => ctx.child(|ctx| {
-                let handler = match handler {
-                    Some(handler) => Some(self.synth_expr(ctx, handler)?),
-                    None => None,
-                };
+            E::With(handler, body) => ctx.child(|ctx| {
+                let (handler, ty) = self.synth_expr(ctx, handler)?;
 
                 let end = ctx.blocks.push(
                     BlockIdx,
@@ -1925,7 +1922,55 @@ impl SemCtx<'_> {
                     },
                 );
 
-                ctx.jump();
+                let yeet_ty = if ty != TYPE_ERROR {
+                    let Type::Handler(lazy) = self.ir.types[ty] else {
+                        unreachable!()
+                    };
+                    let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
+                        unreachable!()
+                    };
+
+                    ctx.scope.top().effect_stack.push((
+                        ty.effect.clone(),
+                        handler,
+                        ctx.yeetable_ret,
+                    ));
+                    ty.fail_type
+                } else {
+                    TYPE_ERROR
+                };
+
+                let body_synth = self.synth_expr(ctx, body);
+                if let Some((_, ty)) = body_synth {
+                    self.check_move(
+                        yeet_ty,
+                        ty,
+                        TypeRange {
+                            loc: self.ast.exprs[body].empty(),
+                            def: None,
+                        },
+                    );
+                }
+
+                let last = ctx.jump_to(end);
+                ctx.blocks[end].value = Some(
+                    body_synth
+                        .into_iter()
+                        .map(|(value, _)| (value, last))
+                        .collect(),
+                );
+
+                Some((Value::Reg(end, None), ty))
+            }),
+            E::Try(body) => ctx.child(|ctx| {
+                let end = ctx.blocks.push(
+                    BlockIdx,
+                    Block {
+                        instructions: VecMap::new(),
+                        value: None,
+                    },
+                );
+
                 let old_yeet = ctx.yeetable;
                 let old_def = ctx.yeetable_def;
                 let old_ret = ctx.yeetable_ret;
@@ -1933,32 +1978,15 @@ impl SemCtx<'_> {
                 ctx.yeetable = None;
                 ctx.yeetable_def = None;
                 ctx.yeetable_ret = Some(end);
-                if let Some((handler, ty)) = handler {
-                    if ty != TYPE_ERROR {
-                        let Type::Handler(lazy) = self.ir.types[ty] else {
-                            unreachable!()
-                        };
-                        let Type::HandlerType(ref ty) = self.ir.types[lazy.typeof_handler] else {
-                            unreachable!()
-                        };
-
-                        ctx.yeetable = Some(ty.fail_type);
-                        ctx.scope.top().effect_stack.push((
-                            ty.effect.clone(),
-                            handler,
-                            ctx.yeetable_ret,
-                        ));
-                    }
-                }
 
                 let body_synth = self.synth_expr(ctx, body);
-
-                if body_synth.is_none() && ctx.yeetable.is_none() {
+                if body_synth.is_none() {
                     ctx.yeetable = old_yeet;
                     ctx.yeetable_def = old_def;
                     ctx.yeetable_ret = old_ret;
                     None?;
                 }
+
                 let ty = body_synth
                     .as_ref()
                     .map(|&(_, ty)| ty)
@@ -2477,7 +2505,8 @@ impl SemCtx<'_> {
                     Some(yeet_ty) => {
                         // existing yeetable def
                         if yeet_ty == TYPE_NEVER {
-                            todo!("give error");
+                            self.errors
+                                .push(self.ast.exprs[expr].with(Error::UnresolvedTry));
                         } else {
                             let value = match inner {
                                 Some(inner) => {
@@ -2849,14 +2878,6 @@ impl FunCtx<'_> {
         yes: impl FnOnce(&mut SemCtx, &mut Self) -> Option<(Value, TypeIdx, Option<Range>)>,
         no: impl FnOnce(&mut SemCtx, &mut Self) -> Option<(Value, TypeIdx, Option<Range>)>,
     ) -> Option<(Value, TypeIdx)> {
-        let end_block = self.blocks.push(
-            BlockIdx,
-            Block {
-                instructions: VecMap::new(),
-                value: None,
-            },
-        );
-
         let yes_block = self.blocks.push(
             BlockIdx,
             Block {
@@ -2875,7 +2896,19 @@ impl FunCtx<'_> {
         self.push(Instruction::Branch(cond, yes_block, no_block));
 
         self.block = yes_block;
-        let (yval, yty, yloc) = match yes(ctx, self) {
+        let yes = yes(ctx, self);
+        self.block = no_block;
+        let no = no(ctx, self);
+
+        let end_block = self.blocks.push(
+            BlockIdx,
+            Block {
+                instructions: VecMap::new(),
+                value: None,
+            },
+        );
+
+        let (yval, yty, yloc) = match yes {
             Some((a, b, c)) => {
                 self.push(Instruction::Jump(end_block));
                 (a, b, c)
@@ -2883,8 +2916,7 @@ impl FunCtx<'_> {
             None => (Value::ConstantError, TYPE_NEVER, None),
         };
 
-        self.block = no_block;
-        let (nval, nty, nloc) = match no(ctx, self) {
+        let (nval, nty, nloc) = match no {
             Some((a, b, c)) => {
                 self.push(Instruction::Jump(end_block));
                 (a, b, c)

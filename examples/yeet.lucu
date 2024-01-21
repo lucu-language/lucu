@@ -13,18 +13,18 @@ fun main() / io.stdio {
 		do try {
 			throwint()
 			"unexpected"
-		} with handle throwstr fails str {
+		} with impl throwstr -> str {
 
 			fun throwstr() ! {
-				fail "Hello, World!"
+				break "Hello, World!"
 			}
 
 		}
 		69
-	} with handle throwint fails int {
+	} with impl throwint -> int {
 
 		fun throwint() ! {
-			fail 42
+			break 42
 		}
 
 	})
@@ -33,18 +33,18 @@ fun main() / io.stdio {
 		do try {
 			throwstr()
 			69
-		} with handle throwint fails int {
+		} with impl throwint -> int {
 
 			fun throwint() ! {
-				fail 42
+				break 42
 			}
 
 		}
 		"unexpected"
-	} with handle throwstr fails str {
+	} with impl throwstr -> str {
 
 		fun throwstr() ! {
-			fail "Hello, World!"
+			break "Hello, World!"
 		}
 
 	})

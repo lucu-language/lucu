@@ -1096,35 +1096,6 @@ impl<'ctx> CodeGen<'ctx> {
                                     regmap.insert(r, member);
                                 }
                             }
-                            Type::Slice(_) => {
-                                // get slice data
-                                let slice = self.get_type(ir, ir.regs[a]).into_struct_type();
-                                match n {
-                                    0 => {
-                                        // ptr
-                                        if slice.count_fields() > 1 {
-                                            let aggr = regmap[&a].into_struct_value();
-                                            let member = self
-                                                .builder
-                                                .build_extract_value(aggr, 0, "member")
-                                                .unwrap();
-                                            regmap.insert(r, member);
-                                        }
-                                    }
-                                    1 => {
-                                        // len
-                                        let idx = slice.count_fields() - 1;
-
-                                        let aggr = regmap[&a].into_struct_value();
-                                        let member = self
-                                            .builder
-                                            .build_extract_value(aggr, idx, "member")
-                                            .unwrap();
-                                        regmap.insert(r, member);
-                                    }
-                                    _ => unreachable!(),
-                                }
-                            }
                             _ => panic!(),
                         }
                     }
@@ -1488,27 +1459,6 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int => self.int_type().into(),
             Type::IntSize => self.isize_type().into(),
             Type::IntPtr => self.iptr_type().into(),
-            Type::Slice(ty) => {
-                let ptr: AnyTypeEnum = match self.get_type(ir, ty) {
-                    AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
-                    AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
-                };
-                if let Ok(ptr) = BasicTypeEnum::try_from(ptr) {
-                    self.context
-                        .struct_type(&[ptr, self.isize_type().into()], false)
-                        .into()
-                } else {
-                    self.context
-                        .struct_type(&[self.isize_type().into()], false)
-                        .into()
-                }
-            }
             Type::Aggregate(idx) => match self.structs[idx] {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),
@@ -1517,6 +1467,7 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int8 => self.context.i8_type().into(),
             Type::Int16 => self.context.i16_type().into(),
             Type::Int32 => self.context.i32_type().into(),
+            Type::Int64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::Pointer(ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),

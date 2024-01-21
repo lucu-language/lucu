@@ -4,10 +4,10 @@ effect nonzero {
 	fun nz(n int) int
 }
 
-handle nonzero fails {
+impl nonzero -> unit {
 	fun nz(n int) int {
 		if n == 0 {
-			fail
+			break
 		} else {
 			n
 		}

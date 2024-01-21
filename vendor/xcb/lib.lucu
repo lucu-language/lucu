@@ -2,7 +2,7 @@ import "vendor:c"
 
 @foreign(prefix = "xcb_", handler = uptr)
 effect conn {
-	# handle lib
+	# impl lib
 
 	# TODO: cint, GetAtomNameCookie
 	fun get_atom_name(atom int) int
@@ -18,11 +18,11 @@ effect conn {
 @foreign(prefix = "xcb_")
 effect lib {
 	# TODO: cstring, ^cint
-	fun connect(displayname uptr, screenp uptr) handle conn
+	fun connect(displayname uptr, screenp uptr) impl conn
 }
 
 @capability
-fun link() handle lib / foreign {
+fun link() impl lib / foreign {
 	do c.link()
 	link_effect("xcb")
 }

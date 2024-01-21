@@ -17,7 +17,7 @@ fun write_int(n int) usize / writer {
 		buf[current] = digit
 
 		if remaining == 0 {
-			break()
+			break
 		}
 	}
 

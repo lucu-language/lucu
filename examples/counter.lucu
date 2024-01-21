@@ -4,7 +4,7 @@ effect counter {
 	fun count() int
 }
 
-fun init_counter(start int) handle counter {
+fun init_counter(start int) impl counter {
 	mut n = start
 	fun { n++ }
 }

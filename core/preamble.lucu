@@ -21,46 +21,28 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
-# implicit break effect
-# breaks up to the nearest try block
-##
-effect break {
-	fun break() !
-}
-
-handle break fails {
-	fun break() ! {
-		fail
-	}
-}
-
-##
 # basic ranged for loop
 ##
-fun for(start usize, end usize, fn handle consume fails) {
+fun for(start usize, end usize, fn impl consume -> unit) {
 	mut n = start
-	with fn loop {
+	try with fn loop {
 		if n == end {
-			break()
+			break
 		} else {
 			consume(n++)
 		}
 	}
 }
 
-effect consume {
-	fun consume(n usize)
-}
-
 ##
 # while loop
 ##
-fun while(cond handle test, fn handle run fails) {
-	with fn loop {
+fun while(cond impl test, fn impl run -> unit) {
+	try with fn loop {
 		if test() with cond {
 			run()
 		} else {
-			break()
+			break
 		}
 	}
 }
@@ -68,10 +50,10 @@ fun while(cond handle test, fn handle run fails) {
 ##
 # until loop
 ##
-fun until(cond handle test, fn handle run fails) {
-	with fn loop {
+fun until(cond impl test, fn impl run -> unit) {
+	try with fn loop {
 		if test() with cond {
-			break()
+			break
 		} else {
 			run()
 		}
@@ -81,10 +63,14 @@ fun until(cond handle test, fn handle run fails) {
 ##
 # repeat loop
 ##
-fun repeat(fn handle run fails `t) `t {
+fun repeat(fn impl run -> `t) `t {
 	with fn loop {
 		run()
 	}
+}
+
+effect consume {
+	fun consume(n usize)
 }
 
 effect test {
@@ -100,7 +86,7 @@ fun and(a bool, b bool) bool {
 	if a {
 		b
 	} else {
-		0 == 1
+		false
 	}
 }
 
@@ -172,7 +158,7 @@ effect srcloc {
 	fun source_location() str
 }
 
-handle srcloc {
+impl srcloc {
 	fun source_location() str {
 		internal()
 	}
@@ -184,7 +170,7 @@ handle srcloc {
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
 effect foreign {
-	fun link_effect(`lib str) handle `effect
+	fun link_effect(`lib str) impl `effect
 }
 
 ##

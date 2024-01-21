@@ -397,7 +397,7 @@ impl LazyIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        write!(f, "handle ")?;
+        write!(f, "impl ")?;
         typeof_handler.display(ir, generic_params, f)?;
         Ok(())
     }
@@ -427,9 +427,8 @@ impl TypeIdx {
                 }
                 match ir.types[eff.fail_type] {
                     Type::Never => {}
-                    Type::None => write!(f, " fails")?,
                     _ => {
-                        write!(f, " fails ")?;
+                        write!(f, " -> ")?;
                         eff.fail_type.display(ir, generic_params, f)?;
                     }
                 }
@@ -462,7 +461,7 @@ impl TypeIdx {
             Type::Str => write!(f, "str"),
             Type::Char => write!(f, "char"),
             Type::Bool => write!(f, "bool"),
-            Type::None => write!(f, "void"),
+            Type::None => write!(f, "unit"),
             Type::Never => write!(f, "never"),
             Type::Error => write!(f, "ERROR"),
             Type::Effect(ref eff) => {

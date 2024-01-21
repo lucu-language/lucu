@@ -55,7 +55,8 @@ pub enum Expression {
     As(ExprIdx, TypeIdx),
     Do(ExprIdx),
 
-    TryWith(ExprIdx, Option<ExprIdx>),
+    Try(ExprIdx),
+    With(ExprIdx, ExprIdx),
     Handler(Handler),
 
     Array(Vec<ExprIdx>),
@@ -115,7 +116,6 @@ pub enum Type {
 #[derive(Debug, Clone, Copy)]
 pub enum FailType {
     Never,
-    None,
     Some(TypeIdx),
 }
 

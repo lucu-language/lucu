@@ -79,12 +79,12 @@ fun main() / io.stdio {
         io.putint(divide_throw(56, 0))      # 56 / 0
         io.putint(divide_throw(56, 8))      # 56 / 8
 
-    } with handle catch fails {
+    } with impl catch -> unit {
 
         fun throw() ! {
             # this may not return a value
             # we end the entire try block early
-            fail
+            break
         }
 
     }

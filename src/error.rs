@@ -84,6 +84,7 @@ pub enum Error {
     TryReturnsHandler,
     NotEnoughInfo,
     UnresolvedEffect(Range),
+    UnresolvedTry,
 
     // handlers
     UnknownEffectFun(Option<Range>, Option<Range>),
@@ -574,6 +575,7 @@ impl Errors {
                         "unhandled effect {} for function call",
                         highlight(1, &self.files[def.3].content[def.1..def.2], color, true)
                     ),
+                    Error::UnresolvedTry => "'break' outside of a try block".into(),
 
                     Error::UnknownEffectFun(effect, _) => {
                         format!(

@@ -25,9 +25,9 @@ fun inc(n usize) usize {
 }
 
 fun print_state(state []u8) / io.stdio {
-	for(0, 16) {
+	for(range(0, 16)) {
 		y ->
-		for (0, 16) {
+		for(range(0, 16)) {
 			x ->
 			let cell = index(x, y)
 			if state[cell] == 0 {
@@ -41,34 +41,34 @@ fun print_state(state []u8) / io.stdio {
 }
 
 fun next_state(old []u8, mut new []u8) {
-	for(0, 16) {
+	for(range(0, 16)) {
 		y ->
-		for(0, 16) {
+		for(range(0, 16)) {
 			x ->
 			mut neighbors = 0
 			if old[index(dec(x), dec(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(x, dec(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(inc(x), dec(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(dec(x), y)] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(inc(x), y)] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(dec(x), inc(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(x, inc(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 			if old[index(inc(x), inc(y))] > 0 {
-				neighbors++
+				do neighbors++
 			}
 
 			let cell = index(x, y)

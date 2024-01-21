@@ -21,16 +21,34 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
-# basic ranged for loop
+# iterator
 ##
-fun for(start usize, end usize, fn impl consume -> unit) {
+effect iter(`t) {
+	fun next() `t
+}
+
+fun range(start usize, end usize) impl iter(usize) -> unit {
 	mut n = start
-	try with fn loop {
+	fun {
 		if n == end {
 			break
 		} else {
-			consume(n++)
+			n++
 		}
+	}
+}
+
+fun from(start usize) impl iter(usize) {
+	mut n = start
+	fun { n++ }
+}
+
+##
+# basic ranged for loop
+##
+fun for(it impl iter(`e) -> `t, fn impl consume(`e) -> `t) `t {
+	with it, fn loop {
+		consume(next() as `e)
 	}
 }
 
@@ -69,8 +87,8 @@ fun repeat(fn impl run -> `t) `t {
 	}
 }
 
-effect consume {
-	fun consume(n usize)
+effect consume(`t) {
+	fun consume(t `t)
 }
 
 effect test {

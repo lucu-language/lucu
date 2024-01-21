@@ -5,9 +5,9 @@ fun main() / io.stdio {
 	mut size usize = 0
 
 	let program []u8 = repeat() {
-		io.read(program_buffer[size .. size + 1]) with io.stdin()
+		do io.read(program_buffer[size .. size + 1]) with io.stdin()
 		if program_buffer[size] == '!' {
-			fail program_buffer[0 .. size]
+			break program_buffer[0 .. size]
 		} else {
 			size = size + 1
 		}
@@ -30,9 +30,9 @@ fun main() / io.stdio {
 		} else if char == '-' {
 			buf[ptr] = buf[ptr] - 1
 		} else if char == '.' {
-			io.write(buf[ptr .. ptr + 1]) with io.stdout()
+			do io.write(buf[ptr .. ptr + 1]) with io.stdout()
 		} else if char == ',' {
-			io.read(buf[ptr .. ptr + 1]) with io.stdin()
+			do io.read(buf[ptr .. ptr + 1]) with io.stdin()
 		} else if char == '[' {
 			if buf[ptr] == 0 {
 				ip = ip + 1

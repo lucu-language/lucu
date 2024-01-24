@@ -26,5 +26,5 @@ fun main() / io.stdio {
   }
 
   # print the entire buffer to the console
-  io.write(buf[0 .. ptr]) with io.stdout();
+  do io.write(buf[0 .. ptr]) with io.stdout();
 }

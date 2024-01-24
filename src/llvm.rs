@@ -11,10 +11,7 @@ use inkwell::{
     targets::{
         CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetData, TargetTriple,
     },
-    types::{
-        AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, IntType, StringRadix,
-        StructType,
-    },
+    types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, IntType, StructType},
     values::{
         AggregateValueEnum, BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue,
         FunctionValue, IntValue, PhiValue, PointerValue,
@@ -122,42 +119,6 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
                 Some((ty, asm))
             })
             .collect::<Vec<_>>(),
-        LucuOS::Windows => (0..=9)
-            .map(|n| {
-                let inputs = std::iter::repeat(BasicMetadataTypeEnum::from(reg_ty))
-                    .take(n + 1)
-                    .collect::<Vec<_>>();
-                let ty = reg_ty.fn_type(&inputs, false);
-
-                match n {
-                    2 => {
-                        let asm = context.create_inline_asm(
-                            ty,
-                            "syscall".into(),
-                            "={rax},{rax},{r10},{rdx},~{rcx},~{r11}".into(),
-                            true,
-                            false,
-                            None,
-                            false,
-                        );
-                        Some((ty, asm))
-                    }
-                    9 => {
-                        let asm = context.create_inline_asm(
-                            ty,
-                            "subq $$80, %rsp\nmovq $6, 40(%rsp)\nmovq $7, 48(%rsp)\nmovq $8, 56(%rsp)\nmovq $9, 64(%rsp)\nmovq $10, 72(%rsp)\nsyscall\naddq $$80, %rsp".into(),
-                            "={rax},{rax},{r10},{rdx},{r8},{r9},r,r,r,r,r,~{rcx},~{r11}".into(),
-                            true,
-                            true,
-                            None,
-                            false,
-                        );
-                        Some((ty, asm))
-                    }
-                    _ => None,
-                }
-            })
-            .collect::<Vec<_>>(),
         _ => vec![],
     };
 
@@ -185,8 +146,8 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         codegen.foreign.push_value(func);
     }
 
-    for proc in ir.proc_sign.values() {
-        let func = codegen.generate_proc_sign(ir, proc);
+    for (idx, proc) in ir.proc_sign.iter(ProcIdx) {
+        let func = codegen.generate_proc_sign(ir, proc, idx == ir.entry);
         codegen.procs.push_value(func);
     }
 
@@ -200,11 +161,7 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     }
 
     // set main func
-    let start = codegen.module.add_function(
-        "_start",
-        context.void_type().fn_type(&[], false),
-        Some(Linkage::External),
-    );
+    let start = codegen.procs[ir.entry];
     start.add_attribute(
         AttributeLoc::Function,
         context.create_enum_attribute(Attribute::get_named_enum_kind_id("sspstrong"), 0),
@@ -217,53 +174,6 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
         AttributeLoc::Function,
         context.create_string_attribute("stackrealign", ""),
     );
-
-    let block = codegen.context.append_basic_block(start, "");
-    codegen.builder.position_at_end(block);
-    codegen
-        .builder
-        .build_call(codegen.procs[ir.entry], &[], "")
-        .unwrap();
-    match codegen.os {
-        LucuOS::Linux => {
-            codegen
-                .builder
-                .build_indirect_call(
-                    codegen.syscalls[1].unwrap().0,
-                    codegen.syscalls[1].unwrap().1,
-                    &[
-                        reg_ty.const_int(60, true).into(),
-                        reg_ty.const_int(1, true).into(),
-                    ],
-                    "",
-                )
-                .unwrap();
-            codegen.builder.build_unreachable().unwrap();
-        }
-        LucuOS::Windows => {
-            codegen
-                .builder
-                .build_indirect_call(
-                    codegen.syscalls[2].unwrap().0,
-                    codegen.syscalls[2].unwrap().1,
-                    &[
-                        reg_ty.const_int(44, true).into(),
-                        reg_ty
-                            .const_int_from_string("-1", StringRadix::Decimal)
-                            .unwrap()
-                            .into(),
-                        reg_ty.const_int(1, true).into(),
-                    ],
-                    "",
-                )
-                .unwrap();
-            codegen.builder.build_unreachable().unwrap();
-        }
-        _ => {
-            // just return
-            codegen.builder.build_return(None).unwrap();
-        }
-    }
 
     // __stack_chk_guard and __stack_chk_fail
     let guard = codegen
@@ -523,7 +433,7 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
     }
-    fn generate_proc_sign(&self, ir: &IR, proc: &ProcSign) -> FunctionValue<'ctx> {
+    fn generate_proc_sign(&self, ir: &IR, proc: &ProcSign, entry: bool) -> FunctionValue<'ctx> {
         let in_types = proc
             .inputs
             .iter()
@@ -542,10 +452,15 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // TODO: add parameter names names to fun
+        let fn_name = &format!("${}", proc.debug_name);
         let func = self.module.add_function(
-            format!("${}", proc.debug_name).as_str(),
+            if entry { "_start" } else { &fn_name },
             fn_type,
-            Some(Linkage::Internal),
+            Some(if entry {
+                Linkage::External
+            } else {
+                Linkage::Internal
+            }),
         );
 
         func
@@ -628,6 +543,7 @@ impl<'ctx> CodeGen<'ctx> {
                     if let Ok(ty) = BasicTypeEnum::try_from(ty) {
                         let phi = self.builder.build_phi(ty, "").unwrap();
                         phis.push(phi);
+                        regmap.insert(reg, phi.as_basic_value());
                     }
                 }
 
@@ -671,6 +587,12 @@ impl<'ctx> CodeGen<'ctx> {
                         ]);
 
                         regmap.insert(r, const_str_slice.into());
+                    }
+                    I::Jump(b) => {
+                        self.builder
+                            .build_unconditional_branch(blocks[usize::from(b)])
+                            .unwrap();
+                        continue 'outer;
                     }
                     I::Branch(r, yes, no) => {
                         self.builder
@@ -766,7 +688,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     phis[usize::from(b)].get(0).copied(),
                                 )
                             });
-                            blocks[idx] = self.handle_break(ir, function, frame, val, handlers);
+                            blocks[idx] = self.handle_break(
+                                ir,
+                                function,
+                                frame,
+                                val,
+                                handlers,
+                                !proc.unhandled.is_empty(),
+                            );
                         }
 
                         if let Some(r) = r {
@@ -795,7 +724,9 @@ impl<'ctx> CodeGen<'ctx> {
                             continue 'outer;
                         }
                         None => {
-                            let frame = self.frame_type().const_int(usize::from(h) as u64, false);
+                            let frame = self
+                                .frame_type()
+                                .const_int(usize::from(h.unwrap()) as u64, false);
                             let val = r.and_then(|r| regmap.get(&r)).copied();
 
                             let ret_type = function
@@ -912,6 +843,15 @@ impl<'ctx> CodeGen<'ctx> {
                                     regmap.insert(r, member);
                                 }
                             }
+                            Type::ConstArray(_, _) => {
+                                if let Some(aggr) = regmap.get(&a).map(|v| v.into_array_value()) {
+                                    let member = self
+                                        .builder
+                                        .build_extract_value(aggr, n as u32, "member")
+                                        .unwrap();
+                                    regmap.insert(r, member);
+                                }
+                            }
                             _ => panic!(),
                         }
                     }
@@ -996,32 +936,47 @@ impl<'ctx> CodeGen<'ctx> {
                             );
                         }
                     }
-                    I::ElementPtr(r, a, m) => {
-                        if let Some(&ptr) = regmap.get(&a) {
-                            let array_ty =
-                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
-                                    .unwrap();
-                            let ptr = ptr.into_pointer_value();
+                    I::ElementPtr(r, a, n) => {
+                        // skip over empty children that are uncounted
+                        match ir.types[ir.regs[a].inner(ir)] {
+                            Type::Handler(_, t) => {
+                                // get member
+                                if BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).is_ok() {
+                                    let mut mem = [n];
+                                    self.get_actual_indices(
+                                        ir,
+                                        &ir.aggregates[t].children,
+                                        &mut mem,
+                                    );
+                                    let n = mem[0];
 
-                            let mem = regmap[&m].into_int_value();
-                            let elem_ptr = unsafe {
-                                self.builder
-                                    .build_in_bounds_gep(
-                                        array_ty,
-                                        ptr,
-                                        &[self.isize_type().const_int(0, false), mem],
-                                        "",
-                                    )
-                                    .unwrap()
-                            };
+                                    let ptr = regmap[&a].into_pointer_value();
+                                    let elem_ptr = unsafe {
+                                        self.builder
+                                            .build_in_bounds_gep(
+                                                self.structs[t].unwrap(),
+                                                ptr,
+                                                &[
+                                                    self.context.i64_type().const_int(0, false),
+                                                    self.context
+                                                        .i32_type()
+                                                        .const_int(n as u64, false),
+                                                ],
+                                                "",
+                                            )
+                                            .unwrap()
+                                    };
 
-                            regmap.insert(r, elem_ptr.into());
+                                    regmap.insert(r, elem_ptr.into());
+                                }
+                            }
+                            _ => panic!(),
                         }
                     }
                     I::AdjacentPtr(r, a, m) => {
                         if let Some(&ptr) = regmap.get(&a) {
                             let pointee_ty =
-                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[a].inner(ir)))
+                                BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r].inner(ir)))
                                     .unwrap();
                             let ptr = ptr.into_pointer_value();
 
@@ -1092,12 +1047,6 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
             }
-
-            if let Some(block) = block.next {
-                self.builder
-                    .build_unconditional_branch(blocks[usize::from(block)])
-                    .unwrap();
-            }
         }
 
         // populate phi values
@@ -1125,6 +1074,7 @@ impl<'ctx> CodeGen<'ctx> {
         frame: IntValue<'ctx>,
         val: Option<BasicValueEnum<'ctx>>,
         handlers: impl Iterator<Item = (HandlerIdx, BasicBlock<'ctx>, Option<PhiValue<'ctx>>)>,
+        bubble_break: bool,
     ) -> BasicBlock<'ctx> {
         // branch handled breaks
         for (handler, block, phi) in handlers {
@@ -1159,47 +1109,50 @@ impl<'ctx> CodeGen<'ctx> {
         }
 
         // bubble up unhandled breaks
-        let cmp_zero = self
-            .builder
-            .build_int_compare(
-                IntPredicate::EQ,
-                frame,
-                self.frame_type().const_int(0, false),
-                "",
-            )
-            .unwrap();
+        if bubble_break {
+            let cmp_zero = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    frame,
+                    self.frame_type().const_int(0, false),
+                    "",
+                )
+                .unwrap();
 
-        let branch_next = self.context.append_basic_block(function, "");
-        let branch_return = self.context.append_basic_block(function, "unhandled");
-        self.builder
-            .build_conditional_branch(cmp_zero, branch_next, branch_return)
-            .unwrap();
+            let branch_next = self.context.append_basic_block(function, "");
+            let branch_return = self.context.append_basic_block(function, "unhandled");
+            self.builder
+                .build_conditional_branch(cmp_zero, branch_next, branch_return)
+                .unwrap();
 
-        self.builder.position_at_end(branch_return);
-        let ret_type = function
-            .get_type()
-            .get_return_type()
-            .unwrap()
-            .into_struct_type();
+            self.builder.position_at_end(branch_return);
+            let ret_type = function
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_struct_type();
 
-        let mut ret = ret_type.get_poison();
-        ret = self
-            .builder
-            .build_insert_value(ret, frame, 0, "bubble")
-            .unwrap()
-            .into_struct_value();
-        if let (Some(val), Some(field)) = (val, ret.get_type().get_field_type_at_index(1)) {
-            let cast = self.build_union_cast(val, field);
+            let mut ret = ret_type.get_poison();
             ret = self
                 .builder
-                .build_insert_value(ret, cast, 1, "")
+                .build_insert_value(ret, frame, 0, "bubble")
                 .unwrap()
                 .into_struct_value();
-        }
-        self.builder.build_return(Some(&ret)).unwrap();
+            if let (Some(val), Some(field)) = (val, ret.get_type().get_field_type_at_index(1)) {
+                let cast = self.build_union_cast(val, field);
+                ret = self
+                    .builder
+                    .build_insert_value(ret, cast, 1, "")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_return(Some(&ret)).unwrap();
 
-        self.builder.position_at_end(branch_next);
-        branch_next
+            self.builder.position_at_end(branch_next);
+        }
+
+        self.builder.get_insert_block().unwrap()
     }
     fn build_union_cast(
         &self,
@@ -1282,11 +1235,11 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int => self.int_type().into(),
             Type::IntSize => self.isize_type().into(),
             Type::IntPtr => self.iptr_type().into(),
-            Type::Aggregate(idx) => match self.structs[idx] {
+            Type::Aggregate(idx) | Type::Handler(_, idx) => match self.structs[idx] {
                 Some(t) => t.into(),
                 None => self.context.void_type().into(),
             },
-            Type::Never | Type::None => self.context.void_type().into(),
+            Type::Unit | Type::Never => self.context.void_type().into(),
             Type::Int8 => self.context.i8_type().into(),
             Type::Int16 => self.context.i16_type().into(),
             Type::Int32 => self.context.i32_type().into(),

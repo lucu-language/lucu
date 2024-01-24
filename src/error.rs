@@ -10,7 +10,7 @@ use crate::{
 
 vecmap_index!(FileIdx);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ranged<T>(pub T, pub usize, pub usize, pub FileIdx);
 
 impl<T> Ranged<T> {
@@ -39,7 +39,6 @@ impl<T> Ranged<T> {
 
 pub type Range = Ranged<()>;
 
-#[allow(dead_code)]
 pub enum Error {
     // lexer
     UnknownEscape,

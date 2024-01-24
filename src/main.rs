@@ -169,7 +169,11 @@ impl Target {
     }
 }
 
-fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<ir::IR, Errors> {
+fn parse_from_filename(
+    main_file: &Path,
+    core_path: &Path,
+    target: &Target,
+) -> Result<ir::IR, Errors> {
     let mut parsed = Ast::default();
     let mut errors = Errors::new();
 
@@ -248,11 +252,10 @@ fn parse_from_filename(main_file: &Path, core_path: &Path) -> Result<ir::IR, Err
         }
     }
 
-    let ir = sema::analyze(&parsed, &mut errors);
-    println!("{}", ir);
+    let ir = sema::analyze(&parsed, &mut errors, target);
 
     if errors.is_empty() {
-        let ir = todo!();
+        let ir = ir::codegen(&ir, &mut errors, target);
 
         if errors.is_empty() {
             Ok(ir)
@@ -335,7 +338,7 @@ fn main() {
     };
 
     // analyze
-    match parse_from_filename(&args.main, &core) {
+    match parse_from_filename(&args.main, &core, &target) {
         Ok(ir) => {
             // generate ir
             if debug {
@@ -435,7 +438,7 @@ mod tests {
         let core = Path::new(env!("CARGO_MANIFEST_DIR"));
         let target = Target::host(None, None);
 
-        match parse_from_filename(Path::new(filename), core) {
+        match parse_from_filename(Path::new(filename), core, &target) {
             Ok(ir) => {
                 llvm::generate_ir(&ir, &output.with_extension("o"), false, &target);
 

@@ -4,15 +4,15 @@ effect get {
     fun get() int
 }
 
-fun getter(n int) handle get {
+fun getter(n int) impl get {
 	fun { n }
 }
 
-fun getter_indirect(n int) handle get {
+fun getter_indirect(n int) impl get {
 	getter(n)
 }
 
-fun ident(h handle get) handle get {
+fun ident(h impl get) impl get {
 	h
 }
 

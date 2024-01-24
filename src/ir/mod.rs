@@ -4,9 +4,13 @@ use std::{
     write,
 };
 
-use crate::vecmap::{vecmap_index, VecMap, VecSet};
+use crate::{
+    sema::BlockIdx,
+    vecmap::{vecmap_index, VecMap, VecSet},
+};
 
 mod codegen;
+pub use codegen::codegen;
 
 #[derive(Debug)]
 pub struct ProcSign {
@@ -23,7 +27,7 @@ pub struct ProcForeign {
     pub symbol: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ProcImpl {
     pub blocks: VecMap<BlockIdx, Block>,
 }
@@ -43,9 +47,10 @@ pub enum Type {
     Pointer(TypeIdx),
     ConstArray(u64, TypeIdx),
     Aggregate(AggrIdx),
+    Handler(HandlerIdx, AggrIdx),
 
+    Unit,
     Never,
-    None,
 }
 
 impl TypeIdx {
@@ -64,7 +69,6 @@ pub struct AggregateType {
     pub debug_name: String,
 }
 
-vecmap_index!(BlockIdx);
 vecmap_index!(TypeIdx);
 vecmap_index!(AggrIdx);
 vecmap_index!(Reg);
@@ -85,7 +89,6 @@ impl Display for BlockIdx {
 pub struct Block {
     pub phis: Vec<(Reg, Vec<(Reg, BlockIdx)>)>,
     pub instructions: Vec<Instruction>,
-    pub next: Option<BlockIdx>,
 }
 
 #[derive(Debug)]
@@ -98,6 +101,7 @@ pub enum Instruction {
     Cast(Reg, Reg),
 
     // conditionals
+    Jump(BlockIdx),
     Branch(Reg, BlockIdx, BlockIdx),
 
     // operations (r0 = r1 op r2)
@@ -114,8 +118,8 @@ pub enum Instruction {
     CallForeign(ProcForeignIdx, Option<Reg>, Vec<Reg>),
 
     // return statements
-    Yeet(Option<Reg>, HandlerIdx, Option<BlockIdx>), // break with optional value to handler
-    Return(Option<Reg>),                             // return with optional value
+    Yeet(Option<Reg>, Option<HandlerIdx>, Option<BlockIdx>), // break with optional value to handler
+    Return(Option<Reg>),                                     // return with optional value
     Unreachable,
 
     // pointers
@@ -126,7 +130,7 @@ pub enum Instruction {
     // aggregate types
     Aggregate(Reg, Vec<Reg>),
     Member(Reg, Reg, usize),
-    ElementPtr(Reg, Reg, Reg),
+    ElementPtr(Reg, Reg, usize),
     AdjacentPtr(Reg, Reg, Reg),
 
     // architecture-specific operations
@@ -179,6 +183,19 @@ impl Display for IR {
                     writeln!(f, "{}:", BlockIdx(i))?;
                 }
 
+                // write phi
+                for (r, phi) in block.phis.iter() {
+                    writeln!(
+                        f,
+                        "{} <- phi {}",
+                        r,
+                        phi.iter()
+                            .map(|(r, b)| format!("[ {}, {}, ]", r, b))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )?;
+                }
+
                 // write instructions
                 for instr in block.instructions.iter() {
                     write!(f, "  ")?;
@@ -188,7 +205,8 @@ impl Display for IR {
                         Instruction::Copy(r, v) => writeln!(f, "{} <- {}", r, v)?,
                         Instruction::Cast(r, v) => writeln!(f, "{} <- cast {}", r, v)?,
                         Instruction::Uninit(r) => writeln!(f, "{} <- ---", r)?,
-                        Instruction::Zeroinit(r) => writeln!(f, "{} <- {0}", r)?,
+                        Instruction::Zeroinit(r) => writeln!(f, "{} <- {{0}}", r)?,
+                        Instruction::Jump(b) => writeln!(f, "       jmp {}", b)?,
                         Instruction::Branch(r, y, n) => {
                             writeln!(f, "       jnz {}, {}, {}", r, y, n)?
                         }
@@ -261,8 +279,8 @@ impl Display for IR {
                         )?,
                         Instruction::Yeet(r, h, _) => writeln!(
                             f,
-                            "       brk {}{}",
-                            usize::from(h),
+                            "       brk {:?}{}",
+                            h.map(|h| usize::from(h)),
                             match r {
                                 Some(r) => format!(", {}", r),
                                 None => "".into(),
@@ -308,13 +326,6 @@ impl Display for IR {
                             },
                         )?,
                         Instruction::WasmTrap => writeln!(f, "       wasm: unreachable")?,
-                    }
-                }
-
-                // write next
-                if let Some(b) = block.next {
-                    if usize::from(b) != i + 1 {
-                        writeln!(f, "         jmp L{}", usize::from(b))?;
                     }
                 }
             }

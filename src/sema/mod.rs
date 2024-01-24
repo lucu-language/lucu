@@ -15,10 +15,21 @@ vecmap_index!(LazyIdx);
 vecmap_index!(BlockIdx);
 vecmap_index!(InstrIdx);
 
+pub struct FmtType<'a>(pub &'a SemIR, pub TypeIdx);
+
+impl fmt::Display for FmtType<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'")?;
+        self.1.display(self.0, &GenericParams::default(), f)?;
+        write!(f, "'")?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct TypeIdx(usize);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunIdent {
     Top(FunIdx),
     Effect(EffIdx, EffFunIdx),
@@ -70,7 +81,7 @@ pub enum Value {
     // slice, const array
     // TODO: split these into ConstantSlice, ConstantArray
     ConstantAggregate(TypeIdx, Rc<[Value]>),
-    ConstantHandler(HandlerIdent, Rc<[Value]>, Rc<[(Value, Option<BlockIdx>)]>),
+    ConstantHandler(TypeIdx, Rc<[Value]>),
 
     // TODO: use (bool, IntSize) instead of TypeIdx
     ConstantInt(TypeIdx, bool, u64),
@@ -86,7 +97,6 @@ pub enum Value {
     Param(ParamIdx),
     EffectParam(usize),
     Capture(usize),
-    EffectCapture(usize),
 }
 
 impl Value {
@@ -95,7 +105,7 @@ impl Value {
             Value::Reg(_, _) => false,
             Value::Deref(_) => false,
             Value::ConstantAggregate(_, val) => val.iter().all(Self::is_constant),
-            Value::ConstantHandler(_, _, _) => false,
+            Value::ConstantHandler(_, _) => false,
             Value::ConstantInt(_, _, _) => true,
             Value::ConstantString(_, _) => true,
             Value::ConstantBool(_) => true,
@@ -107,7 +117,6 @@ impl Value {
             Value::Param(_) => false,
             Value::EffectParam(_) => false,
             Value::Capture(_) => false,
-            Value::EffectCapture(_) => false,
         }
     }
 }
@@ -117,14 +126,14 @@ pub struct FunImpl {
     pub blocks: VecMap<BlockIdx, Block>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Block {
     pub instructions: VecMap<InstrIdx, Instruction>,
-    pub value: Option<Vec<(Value, BlockIdx)>>,
+    pub value: Option<(TypeIdx, Vec<(Value, BlockIdx)>)>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Cast(Value, TypeIdx),
 
@@ -134,10 +143,11 @@ pub enum Instruction {
     Equals(Value, Value),
     Greater(Value, Value),
     Less(Value, Value),
-    Div(Value, Value),
-    Mul(Value, Value),
-    Add(Value, Value),
-    Sub(Value, Value),
+
+    Div(TypeIdx, Value, Value),
+    Mul(TypeIdx, Value, Value),
+    Add(TypeIdx, Value, Value),
+    Sub(TypeIdx, Value, Value),
 
     Call(
         FunIdent,
@@ -146,6 +156,7 @@ pub enum Instruction {
         // params
         Vec<Value>,
         // effect params
+        // TODO: Vec<Value>, Vec<(TypeIdx, BlockIdx)>,
         Vec<(Value, Option<BlockIdx>)>,
     ),
 
@@ -153,16 +164,22 @@ pub enum Instruction {
     Return(Value),
     Unreachable,
 
-    Reference(Value),
-    Load(Value),
+    Reference(Value, TypeIdx),
+    Load(TypeIdx, Value),
     Store(Value, Value),
 
-    Member(Value, u32),
+    Member(Value, u32, TypeIdx),
     AdjacentPtr(Value, Value, TypeIdx),
 
-    Trap,
-    Trace(Value),
-    Syscall(Value, Vec<Value>),
+    LinkHandler(GenericVal<EffectIdent>, GenericVal<String>),
+    AsmHandler(
+        GenericVal<EffectIdent>,
+        GenericVal<String>,
+        GenericVal<String>,
+        GenericVal<bool>,
+    ),
+    CompileError(GenericVal<String>),
+    Syscall(Value, Value),
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +214,7 @@ pub struct FunSign {
     pub generics: Generics,
 
     pub params: VecMap<ParamIdx, Param>,
-    pub effect_stack: Vec<Ranged<GenericVal<EffectIdent>>>,
+    pub effect_stack: Vec<Ranged<(TypeIdx, GenericVal<EffectIdent>)>>,
     pub return_type: ReturnType,
 }
 
@@ -219,7 +236,7 @@ pub struct Effect {
     pub foreign: Option<Foreign>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Capability {
     pub fun: FunIdent,
     pub generic_params: GenericParams,
@@ -255,12 +272,6 @@ pub type Generics = Vec<Generic>;
 pub type GenericParams = Vec<(GenericIdx, TypeIdx)>;
 
 #[derive(Debug)]
-pub struct Capture {
-    pub debug_name: String,
-    pub ty: TypeIdx,
-}
-
-#[derive(Debug)]
 pub struct Handler {
     pub debug_name: String,
     pub generics: Generics,
@@ -269,8 +280,7 @@ pub struct Handler {
     pub generic_params: GenericParams,
     pub fail: TypeIdx,
 
-    pub value_captures: Vec<Capture>,
-    pub effect_captures: Vec<GenericVal<EffectIdent>>,
+    pub captures: Vec<TypeIdx>,
 
     pub funs: VecMap<EffFunIdx, (FunSign, FunImpl)>,
 }
@@ -342,6 +352,7 @@ pub enum LazyValue {
     None,
     Some(GenericVal<HandlerIdent>),
     Refer(LazyIdx, Option<GenericParams>),
+    EffectFunOutput(LazyIdx, EffFunIdx, GenericParams),
 }
 
 #[derive(Debug)]
@@ -349,7 +360,7 @@ pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
     pub fun_sign: VecMap<FunIdx, FunSign>,
     pub fun_impl: VecMap<FunIdx, FunImpl>,
-    pub entry: Option<FunIdx>,
+    pub entry: FunIdx,
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,
@@ -533,7 +544,7 @@ impl FunSign {
             let mut iter = self.effect_stack.iter();
 
             let first = iter.next().unwrap();
-            match first.0 {
+            match first.0 .1 {
                 GenericVal::Literal(ref eff) => {
                     write!(f, "{}", ir.effects[eff.effect].name)?;
                     // TODO: print params
@@ -542,7 +553,7 @@ impl FunSign {
             }
             for next in iter {
                 write!(f, " ")?;
-                match next.0 {
+                match next.0 .1 {
                     GenericVal::Literal(ref eff) => {
                         write!(f, "{}", ir.effects[eff.effect].name)?;
                         // TODO: print params
@@ -566,7 +577,7 @@ impl Value {
                 None => {
                     let vec = proc.blocks[block].value.as_ref().unwrap();
                     write!(f, "phi")?;
-                    for (val, block) in vec {
+                    for (val, block) in &vec.1 {
                         write!(f, " B{}: ", block.0)?;
                         val.display(ir, proc, f)?;
                         write!(f, ",")?;
@@ -598,7 +609,7 @@ impl Value {
                 write!(f, "]")?;
                 Ok(())
             }
-            Value::ConstantHandler(_, ref vec, _) => {
+            Value::ConstantHandler(_, ref vec) => {
                 write!(f, "[")?;
                 for val in vec.iter() {
                     write!(f, " ")?;
@@ -612,7 +623,15 @@ impl Value {
             Value::Param(param) => write!(f, "%p{}", param.0),
             Value::EffectParam(param) => write!(f, "%e{}", param),
             Value::Capture(capture) => write!(f, "%c{}", capture),
-            Value::EffectCapture(capture) => write!(f, "%ec{}", capture),
+        }
+    }
+}
+
+impl<T: fmt::Display> GenericVal<T> {
+    fn display(&self, ir: &SemIR, f: &mut impl fmt::Write) -> fmt::Result {
+        match self {
+            GenericVal::Literal(s) => write!(f, "{}", s),
+            &GenericVal::Generic(idx) => write!(f, "{}", ir.generic_names[idx]),
         }
     }
 }
@@ -662,32 +681,29 @@ impl FunImpl {
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Div(a, b) => {
+                    Instruction::Div(_, a, b) => {
                         write!(f, "/ ")?;
                         a.display(ir, proc, f)?;
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Mul(a, b) => {
+                    Instruction::Mul(_, a, b) => {
                         write!(f, "* ")?;
                         a.display(ir, proc, f)?;
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Add(a, b) => {
+                    Instruction::Add(_, a, b) => {
                         write!(f, "+ ")?;
                         a.display(ir, proc, f)?;
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Sub(a, b) => {
+                    Instruction::Sub(_, a, b) => {
                         write!(f, "- ")?;
                         a.display(ir, proc, f)?;
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
-                    }
-                    Instruction::Trap => {
-                        write!(f, "trap")?;
                     }
                     Instruction::Yeet(v, _) => {
                         write!(f, "fail ")?;
@@ -700,11 +716,11 @@ impl FunImpl {
                     Instruction::Unreachable => {
                         write!(f, "unreachable")?;
                     }
-                    Instruction::Reference(v) => {
+                    Instruction::Reference(v, _) => {
                         write!(f, "alloca ")?;
                         v.display(ir, proc, f)?;
                     }
-                    Instruction::Load(v) => {
+                    Instruction::Load(_, v) => {
                         write!(f, "load ")?;
                         v.display(ir, proc, f)?;
                     }
@@ -714,7 +730,7 @@ impl FunImpl {
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Member(v, n) => {
+                    Instruction::Member(v, n, _) => {
                         write!(f, "member ")?;
                         v.display(ir, proc, f)?;
                         write!(f, " {}", n)?;
@@ -733,11 +749,28 @@ impl FunImpl {
                         }
                         write!(f, ")")?;
                     }
-                    Instruction::Trace(ref val) => {
-                        write!(f, "trace ")?;
-                        val.display(ir, proc, f)?;
+                    Instruction::Syscall(ref a, ref b) => {
+                        write!(f, "syscall ")?;
+                        a.display(ir, proc, f)?;
+                        write!(f, ", ")?;
+                        b.display(ir, proc, f)?;
                     }
-                    Instruction::Syscall(_, _) => todo!(),
+                    Instruction::LinkHandler(_, ref s) => {
+                        write!(f, "link ")?;
+                        s.display(ir, f)?;
+                    }
+                    Instruction::AsmHandler(_, ref a, ref b, c) => {
+                        write!(f, "asm ")?;
+                        a.display(ir, f)?;
+                        write!(f, ", ")?;
+                        b.display(ir, f)?;
+                        write!(f, ", ")?;
+                        c.display(ir, f)?;
+                    }
+                    Instruction::CompileError(ref s) => {
+                        write!(f, "err ")?;
+                        s.display(ir, f)?;
+                    }
                 }
                 writeln!(f)?;
             }
@@ -788,9 +821,8 @@ impl Handler {
         writeln!(f)?;
 
         // captures
-        for capture in self.value_captures.iter() {
-            write!(f, "  {} ", capture.debug_name)?;
-            capture.ty.display(ir, no_params, f)?;
+        for capture in self.captures.iter() {
+            capture.display(ir, no_params, f)?;
             writeln!(f)?;
         }
 

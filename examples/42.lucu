@@ -1,0 +1,7 @@
+import "core:io"
+
+fun main() / io.stdio {
+	io.putint(42)
+	trap()
+}
+

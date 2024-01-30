@@ -28,7 +28,7 @@ impl buf(unit) {
 fun array_buffer(`cap usize) impl buf(`item) {
 	mut array [`cap]const `item = 0
 	mut size  usize             = 0
-	impl buf(`item) {
+	impl buf(`item) move {
 		fun push(elem `item) usize {
 			array[size] = elem
 			size++
@@ -37,7 +37,6 @@ fun array_buffer(`cap usize) impl buf(`item) {
 			array[index]
 		}
 		fun iter() impl iter(const `item) -> unit {
-			mut array = array[0..size]
 			mut current usize = 0
 			move {
 				if current < size {

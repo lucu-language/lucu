@@ -1647,6 +1647,10 @@ impl SemCtx<'_> {
                 ctx.yeetable_ret = Some(end);
 
                 let body_check = self.check_expr(ctx, body, expected, expected_def);
+                if matches!(self.ir.types[expected], Type::Handler(_)) {
+                    self.errors
+                        .push(self.ast.exprs[body].with(Error::TryReturnsHandler));
+                }
 
                 let last = ctx.jump_to(end);
                 ctx.blocks[end].value = Some((
@@ -2126,12 +2130,15 @@ impl SemCtx<'_> {
                 ctx.yeetable_ret = Some(end);
 
                 let body_synth = self.synth_expr(ctx, body);
-
                 let ty = body_synth
                     .as_ref()
                     .map(|&(_, ty)| ty)
                     .or(ctx.yeetable)
                     .unwrap();
+                if matches!(self.ir.types[ty], Type::Handler(_)) {
+                    self.errors
+                        .push(self.ast.exprs[body].with(Error::TryReturnsHandler));
+                }
 
                 if let Some(yeet_ty) = ctx.yeetable {
                     self.check_move(

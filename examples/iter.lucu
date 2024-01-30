@@ -27,7 +27,7 @@ impl buf(unit) {
 # implementation of these effects using a constant sized array
 fun array_buffer(`cap usize) impl buf(`item) {
 	mut array [`cap]const `item = 0
-	mut size  usize       = 0
+	mut size  usize             = 0
 	impl buf(`item) {
 		fun push(elem `item) usize {
 			array[size] = elem
@@ -64,8 +64,8 @@ fun main() / io.stdio {
 		do push("Hello")
 		do push("world")
 
-		# a 'with loop' block is the same as a regular 'with',
-		# but it loops until it gets a failure
+		# a 'try with loop' block is the same as a regular 'with',
+		# but it loops until it gets a 'break'
 		# this way we can iterate over all pushed elements and print them
 		try with iter() as impl iter(str) -> unit loop {
 			io.putstr(next())

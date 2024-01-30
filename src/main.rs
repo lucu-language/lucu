@@ -36,8 +36,8 @@ pub enum LucuOS {
 }
 
 pub enum LucuArch {
-    I386,
-    Amd64,
+    X86_32,
+    X86_64,
     Arm32,
     Arm64,
     Wasm32,
@@ -47,8 +47,8 @@ pub enum LucuArch {
 impl LucuArch {
     pub fn as_str(&self) -> &'static str {
         match self {
-            LucuArch::I386 => "i386",
-            LucuArch::Amd64 => "amd64",
+            LucuArch::X86_32 => "x86-32",
+            LucuArch::X86_64 => "x86-64",
             LucuArch::Arm32 => "arm32",
             LucuArch::Arm64 => "arm64",
             LucuArch::Wasm32 => "wasm32",
@@ -57,8 +57,8 @@ impl LucuArch {
     }
     pub fn register_size(&self) -> u32 {
         match self {
-            LucuArch::I386 => 32,
-            LucuArch::Amd64 => 64,
+            LucuArch::X86_32 => 32,
+            LucuArch::X86_64 => 64,
             LucuArch::Arm32 => 32,
             LucuArch::Arm64 => 64,
 
@@ -71,8 +71,8 @@ impl LucuArch {
     }
     pub fn ptr_size(&self) -> u32 {
         match self {
-            LucuArch::I386 => 32,
-            LucuArch::Amd64 => 64,
+            LucuArch::X86_32 => 32,
+            LucuArch::X86_64 => 64,
             LucuArch::Arm32 => 32,
             LucuArch::Arm64 => 64,
             LucuArch::Wasm32 => 32,
@@ -81,8 +81,8 @@ impl LucuArch {
     }
     pub fn array_len_size(&self) -> u32 {
         match self {
-            LucuArch::I386 => 32,
-            LucuArch::Amd64 => 64,
+            LucuArch::X86_32 => 32,
+            LucuArch::X86_64 => 64,
             LucuArch::Arm32 => 32,
             LucuArch::Arm64 => 64,
             LucuArch::Wasm32 => 32,
@@ -131,12 +131,12 @@ impl Target {
             || self.triple.starts_with("x86_64")
             || self.triple.starts_with("x64")
         {
-            LucuArch::Amd64
+            LucuArch::X86_64
         } else if self.triple.starts_with("i386") || self.triple.starts_with("x86") {
-            LucuArch::I386
+            LucuArch::X86_32
         } else if self.triple.starts_with("arm64") || self.triple.starts_with("aarch64") {
             LucuArch::Arm64
-        } else if self.triple.starts_with("arm") {
+        } else if self.triple.starts_with("arm") || self.triple.starts_with("aarch") {
             LucuArch::Arm32
         } else if self.triple.starts_with("wasm64") {
             LucuArch::Wasm64
@@ -359,7 +359,7 @@ fn main() {
             let os = target.lucu_os();
             let arch = target.lucu_arch();
             match (&os, &arch) {
-                (LucuOS::Linux, LucuArch::Amd64) => {
+                (LucuOS::Linux, LucuArch::X86_64) => {
                     Command::new("ld")
                         .arg(output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
@@ -370,7 +370,7 @@ fn main() {
                         .unwrap();
                     Command::new(Path::new("./").join(output)).status().unwrap();
                 }
-                (LucuOS::Windows, LucuArch::Amd64) => {
+                (LucuOS::Windows, LucuArch::X86_64) => {
                     Command::new("x86_64-w64-mingw32-ld")
                         .arg(output.with_extension("o"))
                         .args(ir.links.iter().map(|lib| format!("-l{}", lib)))

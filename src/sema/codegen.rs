@@ -711,15 +711,24 @@ impl SemCtx<'_> {
     }
     fn analyze_decl(&mut self, decl: &ast::FunDecl, sign: &FunSign, fun: FunIdent) {
         // check if capability
-        if let Some(attr) = decl
+        for attr in decl
             .attributes
             .iter()
-            .find(|a| self.ast.idents[a.name].0.eq("capability"))
+            .filter(|a| self.ast.idents[a.name].0.eq("capability"))
         {
             let os = attr
                 .settings
                 .iter()
                 .find(|&&(i, _)| self.ast.idents[i].0.eq("os"))
+                .map(|o| match &o.1 {
+                    AttributeValue::String(s) => s.0.clone(),
+                    AttributeValue::Type(_) => todo!("give error"),
+                });
+
+            let arch = attr
+                .settings
+                .iter()
+                .find(|&&(i, _)| self.ast.idents[i].0.eq("arch"))
                 .map(|o| match &o.1 {
                     AttributeValue::String(s) => s.0.clone(),
                     AttributeValue::Type(_) => todo!("give error"),
@@ -742,6 +751,7 @@ impl SemCtx<'_> {
                                     fun,
                                     generic_params: effect.generic_params.clone(),
                                     os,
+                                    arch,
                                 }),
                             GenericVal::Generic(_) => todo!("give error"),
                         }
@@ -2797,6 +2807,12 @@ impl SemCtx<'_> {
             .into_iter()
             .filter_map(|cap| {
                 if cap.os.is_some_and(|os| !os.eq(target.lucu_os().as_str())) {
+                    None?
+                }
+                if cap.arch.is_some_and(|arch| {
+                    !((arch.eq("wasm") && target.lucu_arch().is_wasm())
+                        || arch.eq(target.lucu_arch().as_str()))
+                }) {
                     None?
                 }
 

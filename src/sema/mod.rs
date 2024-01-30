@@ -241,6 +241,7 @@ pub struct Capability {
     pub fun: FunIdent,
     pub generic_params: GenericParams,
     pub os: Option<String>,
+    pub arch: Option<String>,
 }
 
 #[derive(Debug)]

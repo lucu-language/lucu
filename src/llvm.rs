@@ -51,8 +51,8 @@ struct CodeGen<'ctx> {
 pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     let config = &InitializationConfig::default();
     match target.lucu_arch() {
-        LucuArch::I386 => Target::initialize_x86(config),
-        LucuArch::Amd64 => Target::initialize_x86(config),
+        LucuArch::X86_32 => Target::initialize_x86(config),
+        LucuArch::X86_64 => Target::initialize_x86(config),
         LucuArch::Arm32 => Target::initialize_arm(config),
         LucuArch::Arm64 => Target::initialize_aarch64(config),
         LucuArch::Wasm32 => Target::initialize_webassembly(config),

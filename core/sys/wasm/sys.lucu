@@ -2,7 +2,7 @@ effect sys {
 	fun unreachable() !
 }
 
-@capability(os = "wasi") # TODO: match "wasm32" / "wasm64" architecture
+@capability(arch = "wasm")
 fun link() impl sys / foreign {
 	impl_asm("unreachable", "", true)
 }

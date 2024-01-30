@@ -513,12 +513,13 @@ impl<'ctx> CodeGen<'ctx> {
                 .create_string_attribute("no-stack-arg-probe", ""),
         );
 
-        let mut blocks: Vec<_> = (0..imp.blocks.len())
+        let blocks: Vec<_> = (0..imp.blocks.len())
             .map(|idx| {
                 self.context
                     .append_basic_block(function, &format!("L{}", idx))
             })
             .collect();
+        let mut blocks_end = blocks.clone();
 
         let mut regmap = HashMap::new();
         for (n, &reg) in proc
@@ -688,7 +689,7 @@ impl<'ctx> CodeGen<'ctx> {
                                     phis[usize::from(b)].get(0).copied(),
                                 )
                             });
-                            blocks[idx] = self.handle_break(
+                            blocks_end[idx] = self.handle_break(
                                 ir,
                                 function,
                                 frame,
@@ -1060,7 +1061,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 let phi = phis.next().unwrap();
                 for (val, from) in regs.iter().filter_map(|&(reg, from)| {
-                    Some((regmap.get(&reg).copied()?, blocks[usize::from(from)]))
+                    Some((regmap.get(&reg).copied()?, blocks_end[usize::from(from)]))
                 }) {
                     phi.add_incoming(&[(&val, from)])
                 }

@@ -242,7 +242,6 @@ impl<'a> IRCtx<'a> {
         fun: FunIdent,
         mut params: GenericParams<'a>,
         inputs: Vec<TypeIdx>,
-        effect_tys: Vec<TypeIdx>,
         return_type: TypeIdx,
     ) -> ProcType {
         let (imp, handler) = match fun {
@@ -272,18 +271,6 @@ impl<'a> IRCtx<'a> {
         }
         let (fun, params) = ident;
 
-        // TODO: recursrively add captured handlers as well
-        let unhandled = effect_tys
-            .iter()
-            .filter_map(|&ty| match self.ir.types[ty] {
-                Type::Handler(idx, _) => match self.ir.types[self.ir.break_types[idx]] {
-                    Type::Never => None,
-                    _ => Some(idx),
-                },
-                _ => unreachable!(),
-            })
-            .collect();
-
         let inputs = inputs.into_iter().map(|ty| self.next_reg(ty)).collect();
         let output = return_type;
 
@@ -294,7 +281,7 @@ impl<'a> IRCtx<'a> {
                 debug_name: sign.name.clone(),
                 inputs,
                 output,
-                unhandled,
+                unhandled: vec![],
             },
         );
         self.ir.proc_impl.push_value(ProcImpl::default());
@@ -549,7 +536,6 @@ impl<'a> IRCtx<'a> {
                             })
                             .collect::<Vec<_>>();
 
-                        // TODO: captured handlers?
                         let handled = effects
                             .iter()
                             .filter_map(|&(e, b)| {
@@ -575,7 +561,7 @@ impl<'a> IRCtx<'a> {
                         let args = args
                             .iter()
                             .map(|arg| self.get_value_reg(&mut ctx, arg))
-                            .chain(effects.iter().map(|&(e, _)| e))
+                            .chain(effects.into_iter().map(|(e, _)| e))
                             .collect::<Vec<_>>();
 
                         let params = params
@@ -586,10 +572,6 @@ impl<'a> IRCtx<'a> {
                             *fun,
                             params,
                             args.iter().map(|&r| self.ir.regs[r]).collect(),
-                            effects
-                                .iter()
-                                .map(|&(r, _)| self.ir.regs[r].inner(&self.ir))
-                                .collect(),
                             self.ir.regs[ireg.unwrap()],
                         );
                         match proc {
@@ -713,15 +695,47 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
     };
 
     let unit = ctx.insert_type(Type::Unit);
-    ctx.lower_sign(
-        FunIdent::Top(sema.entry),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        unit,
-    );
+    ctx.lower_sign(FunIdent::Top(sema.entry), Vec::new(), Vec::new(), unit);
     while let Some((idx, pctx)) = ctx.proc_todo.pop() {
         ctx.lower_impl(idx, pctx);
+    }
+
+    // calculate unhandled from yeet
+    for idx in ctx.ir.proc_impl.keys(ProcIdx) {
+        for instr in ctx.ir.proc_impl[idx].instructions() {
+            if let Instruction::Yeet(_, Some(handler), None) = *instr {
+                let unhandled = &mut ctx.ir.proc_sign[idx].unhandled;
+                if !unhandled.contains(&handler) {
+                    unhandled.push(handler);
+                }
+            }
+        }
+    }
+
+    // bubble up unhandled
+    let mut bubbled = true;
+    while bubbled {
+        bubbled = false;
+        for idx1 in ctx.ir.proc_impl.keys(ProcIdx) {
+            for instr in ctx.ir.proc_impl[idx1].instructions() {
+                if let Instruction::Call(idx2, _, _, ref handled) = *instr {
+                    let unhandled1 = &ctx.ir.proc_sign[idx1].unhandled;
+                    let unhandled2 = ctx.ir.proc_sign[idx2]
+                        .unhandled
+                        .iter()
+                        .copied()
+                        .filter(|h| {
+                            !handled.iter().any(|(h2, _)| h2 == h) && !unhandled1.contains(h)
+                        })
+                        .collect::<Vec<_>>();
+
+                    if !unhandled2.is_empty() {
+                        ctx.ir.proc_sign[idx1].unhandled.extend(unhandled2);
+                        bubbled = true;
+                    }
+                }
+            }
+        }
     }
 
     ctx.ir

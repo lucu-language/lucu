@@ -9,7 +9,7 @@ fun main() / io.stdio {
   let handler = impl io.writer {
     fun write(bytes []u8) usize {
       mut written usize = 0
-      while() { and(ptr < 1024, written < len(bytes)) } {
+      while({ and(ptr < 1024, written < len(bytes)) }) {
         buf[ptr++] = bytes[written++]
       }
       written

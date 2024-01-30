@@ -32,6 +32,12 @@ pub struct ProcImpl {
     pub blocks: VecMap<BlockIdx, Block>,
 }
 
+impl ProcImpl {
+    pub fn instructions(&self) -> impl Iterator<Item = &Instruction> {
+        self.blocks.values().flat_map(|b| b.instructions.iter())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,

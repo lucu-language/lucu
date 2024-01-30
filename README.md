@@ -125,7 +125,7 @@ fun main() / io.stdio {
   let handler = impl io.writer {
     fun write(bytes []u8) usize {
       mut written usize = 0
-      while() { and(ptr < 1024, written < len(bytes)) } {
+      while({ and(ptr < 1024, written < len(bytes)) }) {
         buf[ptr++] = bytes[written++]
       }
       written
@@ -157,13 +157,13 @@ effect show(`t) {
   fun show(t `t) / io.writer
 }
 
-handle show(int) {
+impl show(int) {
   fun show(i int) / io.writer {
     io.write_int(i)
   }
 }
 
-handle show(str) {
+impl show(str) {
   fun show(s str) / io.writer {
     io.write(cast s)
   }

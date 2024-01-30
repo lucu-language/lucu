@@ -272,7 +272,7 @@ impl SemCtx<'_> {
             yeetable_ret: None,
             blocks: vec![Block::default()].into(),
             block: BlockIdx(0),
-            capture_boundary: 0,
+            capture_boundary: (true, 0),
             captures: &mut Vec::new(),
         };
         f(self, &mut fun_ctx);
@@ -725,7 +725,6 @@ impl SemCtx<'_> {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 self.insert_type(Type::Slice(inner), false)
             }
-            T::ConstExpr(_) => todo!(),
         }
     }
     fn analyze_effect(
@@ -1059,12 +1058,13 @@ impl SemCtx<'_> {
         scope.child(|scope| {
             let mut generics = Generics::default();
 
-            let (id, fail, functions) = match *implied {
+            let (id, fail, functions, moved) = match *implied {
                 ast::Handler::Full {
                     ref effect,
                     fail_type,
                     ref functions,
-                } => (effect, fail_type, functions),
+                    moved,
+                } => (effect, fail_type, functions, moved),
                 ast::Handler::Lambda(_) => unreachable!(),
             };
 
@@ -1147,6 +1147,7 @@ impl SemCtx<'_> {
                             Some(fail),
                             None,
                             &mut Vec::new(),
+                            moved,
                         );
 
                         funs[idx] = (sign, imp)
@@ -1391,6 +1392,7 @@ impl SemCtx<'_> {
         yeetable: Option<TypeIdx>,
         yeetable_def: Option<Range>,
         captures: &mut Vec<Either<String, GenericVal<EffectIdent>>>,
+        moved: bool,
     ) -> FunImpl {
         scope.child(|scope| {
             let ir_sign = match sign {
@@ -1408,7 +1410,7 @@ impl SemCtx<'_> {
             let mut blocks = VecMap::new();
             let block = blocks.push(BlockIdx, Block::default());
             let mut fun_ctx = FunCtx {
-                capture_boundary: scope.scopes.len() - 1,
+                capture_boundary: (moved, scope.scopes.len() - 1),
                 captures,
 
                 scope,
@@ -1592,14 +1594,6 @@ impl SemCtx<'_> {
             (&E::With(handler_expr, body), _) => ctx.child(|ctx| {
                 let (handler, handler_ty) = self.synth_expr(ctx, handler_expr)?;
 
-                let end = ctx.blocks.push(
-                    BlockIdx,
-                    Block {
-                        instructions: VecMap::new(),
-                        value: None,
-                    },
-                );
-
                 if handler_ty != TYPE_ERROR {
                     let Type::Handler(lazy) = self.ir.types[handler_ty] else {
                         unreachable!()
@@ -1616,27 +1610,24 @@ impl SemCtx<'_> {
                         handler_ty,
                         generic_val,
                         handler_ref,
-                        Some(end),
+                        ctx.yeetable_ret,
                     ));
-                    self.check_move(
-                        fail,
-                        expected,
-                        TypeRange {
-                            loc: self.ast.exprs[handler_expr].empty(),
-                            def: expected_def,
-                        },
-                    );
+
+                    if let Some(yeetable) = ctx.yeetable {
+                        self.check_move(
+                            fail,
+                            yeetable,
+                            TypeRange {
+                                loc: self.ast.exprs[handler_expr].empty(),
+                                def: ctx.yeetable_def,
+                            },
+                        );
+                    } else {
+                        ctx.yeetable = Some(fail);
+                    }
                 }
 
-                let body_check = self.check_expr(ctx, body, expected, expected_def);
-
-                let last = ctx.jump_to(end);
-                ctx.blocks[end].value = Some((
-                    expected,
-                    body_check.into_iter().map(|value| (value, last)).collect(),
-                ));
-
-                Some(Value::Reg(end, None))
+                self.check_expr(ctx, body, expected, expected_def)
             }),
             (&E::Try(body), _) => ctx.child(|ctx| {
                 let end = ctx.blocks.push(
@@ -1902,6 +1893,7 @@ impl SemCtx<'_> {
                         Some(fail),
                         None,
                         &mut captures,
+                        lambda.moved,
                     );
 
                     // create handler
@@ -1911,7 +1903,7 @@ impl SemCtx<'_> {
                     let capture_types = captures
                         .iter()
                         .map(|s| match s {
-                            Either::Left(s) => ctx.get_value(self, s).unwrap().ty,
+                            Either::Left(s) => ctx.get_capture(self, s, lambda.moved).unwrap().ty,
                             Either::Right(s) => ctx.get_effect(self, s, error_loc.loc).unwrap().0,
                         })
                         .collect();
@@ -1949,7 +1941,9 @@ impl SemCtx<'_> {
                         captures
                             .iter()
                             .map(|s| match s {
-                                Either::Left(s) => ctx.get_value(self, s).unwrap().value,
+                                Either::Left(s) => {
+                                    ctx.get_capture(self, s, lambda.moved).unwrap().value
+                                }
                                 Either::Right(s) => {
                                     ctx.get_effect(self, s, error_loc.loc).unwrap().1
                                 }
@@ -2076,18 +2070,10 @@ impl SemCtx<'_> {
                     },
                 )
             }
-            E::With(handler, body) => ctx.child(|ctx| {
-                let (handler, handler_ty) = self.synth_expr(ctx, handler)?;
+            E::With(handler_expr, body) => ctx.child(|ctx| {
+                let (handler, handler_ty) = self.synth_expr(ctx, handler_expr)?;
 
-                let end = ctx.blocks.push(
-                    BlockIdx,
-                    Block {
-                        instructions: VecMap::new(),
-                        value: None,
-                    },
-                );
-
-                let yeet_ty = if handler_ty != TYPE_ERROR {
+                if handler_ty != TYPE_ERROR {
                     let Type::Handler(lazy) = self.ir.types[handler_ty] else {
                         unreachable!()
                     };
@@ -2103,37 +2089,24 @@ impl SemCtx<'_> {
                         handler_ty,
                         generic_val,
                         handler_ref,
-                        Some(end),
+                        ctx.yeetable_ret,
                     ));
-                    fail
-                } else {
-                    TYPE_ERROR
+
+                    if let Some(yeetable) = ctx.yeetable {
+                        self.check_move(
+                            fail,
+                            yeetable,
+                            TypeRange {
+                                loc: self.ast.exprs[handler_expr].empty(),
+                                def: ctx.yeetable_def,
+                            },
+                        );
+                    } else {
+                        ctx.yeetable = Some(fail);
+                    }
                 };
 
-                let body_synth = self.synth_expr(ctx, body);
-                let ty = body_synth.as_ref().map(|&(_, ty)| ty).unwrap_or(yeet_ty);
-
-                if let Some((_, ty)) = body_synth {
-                    self.check_move(
-                        yeet_ty,
-                        ty,
-                        TypeRange {
-                            loc: self.ast.exprs[body].empty(),
-                            def: None,
-                        },
-                    );
-                }
-
-                let last = ctx.jump_to(end);
-                ctx.blocks[end].value = Some((
-                    ty,
-                    body_synth
-                        .into_iter()
-                        .map(|(value, _)| (value, last))
-                        .collect(),
-                ));
-
-                Some((Value::Reg(end, None), ty))
+                self.synth_expr(ctx, body)
             }),
             E::Try(body) => ctx.child(|ctx| {
                 let end = ctx.blocks.push(
@@ -2153,12 +2126,6 @@ impl SemCtx<'_> {
                 ctx.yeetable_ret = Some(end);
 
                 let body_synth = self.synth_expr(ctx, body);
-                if body_synth.is_none() {
-                    ctx.yeetable = old_yeet;
-                    ctx.yeetable_def = old_def;
-                    ctx.yeetable_ret = old_ret;
-                    None?;
-                }
 
                 let ty = body_synth
                     .as_ref()
@@ -2196,6 +2163,7 @@ impl SemCtx<'_> {
                     effect,
                     fail_type,
                     functions,
+                    moved,
                 } => {
                     ctx.child(|ctx| {
                         let eff = {
@@ -2291,6 +2259,7 @@ impl SemCtx<'_> {
                                         Some(fail),
                                         None,
                                         &mut captures,
+                                        *moved,
                                     );
 
                                     funs[idx] = (sign, imp)
@@ -2337,7 +2306,7 @@ impl SemCtx<'_> {
                         let capture_types = captures
                             .iter()
                             .map(|s| match s {
-                                Either::Left(s) => ctx.get_value(self, s).unwrap().ty,
+                                Either::Left(s) => ctx.get_capture(self, s, *moved).unwrap().ty,
                                 Either::Right(s) => {
                                     ctx.get_effect(self, s, self.ast.exprs[expr].empty())
                                         .unwrap()
@@ -2388,7 +2357,9 @@ impl SemCtx<'_> {
                                 captures
                                     .iter()
                                     .map(|s| match s {
-                                        Either::Left(s) => ctx.get_value(self, s).unwrap().value,
+                                        Either::Left(s) => {
+                                            ctx.get_capture(self, s, *moved).unwrap().value
+                                        }
                                         Either::Right(s) => {
                                             ctx.get_effect(self, s, self.ast.exprs[expr].empty())
                                                 .unwrap()
@@ -2928,7 +2899,7 @@ struct FunCtx<'a> {
     blocks: VecMap<BlockIdx, Block>,
     block: BlockIdx,
 
-    capture_boundary: usize,
+    capture_boundary: (bool, usize),
     captures: &'a mut Vec<Either<String, GenericVal<EffectIdent>>>,
 }
 
@@ -2967,7 +2938,7 @@ impl FunCtx<'_> {
         ]);
         iter.find_map(|(n, s)| {
             let val = s.values.get(name).cloned()?;
-            if n < self.capture_boundary && (val.mutable || !val.value.is_constant()) {
+            if n < self.capture_boundary.1 && (val.mutable || !val.value.is_constant()) {
                 let idx = match self.captures.iter().position(|candidate| {
                     candidate
                         .as_ref()
@@ -2981,12 +2952,42 @@ impl FunCtx<'_> {
                         idx
                     }
                 };
-                Some(Variable {
-                    value: Value::Deref(Box::new(Value::Capture(idx))),
-                    ..val
-                })
+                if val.mutable && !self.capture_boundary.0 {
+                    // capture by reference
+                    Some(Variable {
+                        value: Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                        ..val
+                    })
+                } else {
+                    // capture by value
+                    Some(Variable {
+                        value: Value::Deref(Box::new(Value::Capture(idx))),
+                        ..val
+                    })
+                }
             } else {
                 Some(val)
+            }
+        })
+    }
+    fn get_capture(&mut self, ctx: &mut SemCtx, name: &str, moved: bool) -> Option<Variable> {
+        self.get_value(ctx, name).map(|v| {
+            if v.mutable && !moved {
+                // capture by reference
+                match v.value {
+                    Value::Deref(b) => {
+                        let ptr_ty = ctx.insert_type(Type::Pointer(v.ty), false);
+                        Variable {
+                            value: *b,
+                            mutable: false,
+                            ty: ptr_ty,
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                // capture by value
+                v
             }
         })
     }
@@ -3000,7 +3001,7 @@ impl FunCtx<'_> {
         for (n, s) in self.scope.scopes.iter().enumerate().rev() {
             for &(ty, ref candidate, ref value, block) in s.effect_stack.iter().rev() {
                 if ident.eq(candidate) {
-                    return if n < self.capture_boundary {
+                    return if n < self.capture_boundary.1 {
                         let idx = match self.captures.iter().position(|candidate| {
                             candidate
                                 .as_ref()
@@ -3531,6 +3532,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 Some(TYPE_NEVER),
                 None,
                 &mut Vec::new(),
+                true,
             );
         }
     }
@@ -3618,7 +3620,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
         yeetable_ret: None,
         blocks: vec![Block::default()].into(),
         block: BlockIdx(0),
-        capture_boundary: 0,
+        capture_boundary: (true, 0),
         captures: &mut Vec::new(),
     };
 

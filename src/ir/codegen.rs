@@ -4,8 +4,8 @@ use crate::{
     ast::EffIdx,
     error::Errors,
     sema::{
-        self, get_value, BlockIdx, FmtType, FunIdent, FunImpl, FunSign, GenericIdx, GenericVal,
-        InstrIdx, IntSize, LazyIdx, LazyValue, SemIR, Value,
+        self, get_value, BlockIdx, FunIdent, FunImpl, FunSign, GenericIdx, GenericVal, InstrIdx,
+        IntSize, LazyIdx, LazyValue, SemIR, Value,
     },
     vecmap::{VecMap, VecSet},
     Target,

@@ -4,7 +4,7 @@ fun main() / io.stdio {
 	mut program_buffer [65536]u8 = ---
 	mut size usize = 0
 
-	let program []u8 = repeat() {
+	let program []u8 = repeat {
 		do io.read(program_buffer[size .. size + 1]) with io.stdin()
 		if program_buffer[size] == '!' {
 			break program_buffer[0 .. size]
@@ -18,7 +18,7 @@ fun main() / io.stdio {
 	mut buf [65536]u8 = 0
 	mut ptr usize = 0
 
-	until() { ip == len(program) } {
+	until({ ip == len(program) }) {
 
 		let char = program[ip]
 		if char == '>' {
@@ -37,7 +37,7 @@ fun main() / io.stdio {
 			if buf[ptr] == 0 {
 				ip = ip + 1
 				mut layer = 0
-				until() { and(layer == 0, program[ip] == ']') } {
+				until({ and(layer == 0, program[ip] == ']') }) {
 
 					let char = program[ip]
 					if char == '[' {
@@ -57,7 +57,7 @@ fun main() / io.stdio {
 			} else {
 				ip = ip - 1
 				mut layer = 0
-				until() { and(layer == 0, program[ip] == '[') } {
+				until({ and(layer == 0, program[ip] == '[') }) {
 
 					let char = program[ip]
 					if char == '[' {

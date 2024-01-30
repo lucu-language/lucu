@@ -5,7 +5,7 @@ effect get {
 }
 
 fun getter(n int) impl get {
-	fun { n }
+	{ n }
 }
 
 fun getter_indirect(n int) impl get {

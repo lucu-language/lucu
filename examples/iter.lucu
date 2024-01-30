@@ -20,7 +20,7 @@ impl buf(unit) {
 	fun push(elem unit) usize { 0 }
 	fun get(index usize) unit { 0 }
 	fun iter() impl iter(unit) {
-		fun {}
+		move {}
 	}
 }
 
@@ -37,8 +37,9 @@ fun array_buffer(`cap usize) impl buf(`item) {
 			array[index]
 		}
 		fun iter() impl iter(const `item) -> unit {
+			mut array = array[0..size]
 			mut current usize = 0
-			fun {
+			move {
 				if current < size {
 					array[current++]
 				} else {
@@ -66,7 +67,7 @@ fun main() / io.stdio {
 		# a 'with loop' block is the same as a regular 'with',
 		# but it loops until it gets a failure
 		# this way we can iterate over all pushed elements and print them
-		with iter() as impl iter(str) -> unit loop {
+		try with iter() as impl iter(str) -> unit loop {
 			io.putstr(next())
 		}
 

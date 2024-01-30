@@ -80,6 +80,7 @@ pub struct Body {
 pub struct Lambda {
     pub inputs: VecMap<ParamIdx, Ident>,
     pub body: ExprIdx,
+    pub moved: bool,
 }
 
 #[derive(Debug)]
@@ -88,6 +89,7 @@ pub enum Handler {
         effect: PolyIdent,
         fail_type: FailType,
         functions: Vec<Function>,
+        moved: bool,
     },
     Lambda(Lambda),
 }
@@ -101,8 +103,6 @@ pub enum Type {
 
     Handler(PolyIdent, FailType),
     GenericHandler(Ident, FailType),
-
-    ConstExpr(ExprIdx),
 
     Pointer(TypeIdx),
     Const(TypeIdx),

@@ -9,7 +9,7 @@ effect get {
 }
 
 fun getter(s str) impl get {
-	fun { s }
+	{ s }
 }
  
 fun main() / io.stdio {

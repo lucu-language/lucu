@@ -39,6 +39,7 @@ impl<T> Ranged<T> {
 
 pub type Range = Ranged<()>;
 
+#[derive(Debug)]
 pub enum Error {
     // lexer
     UnknownEscape,
@@ -102,6 +103,7 @@ pub enum Error {
     NeverValue,
 }
 
+#[derive(Debug)]
 pub enum Expected {
     Token(Token),
     Identifier,
@@ -132,6 +134,7 @@ impl Error {
     }
 }
 
+#[derive(Debug)]
 pub struct Errors {
     pub files: VecMap<FileIdx, File>,
     vec: Vec<Ranged<Error>>,
@@ -404,6 +407,7 @@ fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: b
     }
 }
 
+#[derive(Debug)]
 pub struct File {
     pub content: String,
     pub name: String,

@@ -29,7 +29,7 @@ effect iter(`t) {
 
 fun range(start usize, end usize) impl iter(usize) -> unit {
 	mut n = start
-	fun {
+	move {
 		if n == end {
 			break
 		} else {
@@ -40,14 +40,14 @@ fun range(start usize, end usize) impl iter(usize) -> unit {
 
 fun from(start usize) impl iter(usize) {
 	mut n = start
-	fun { n++ }
+	move { n++ }
 }
 
 ##
 # basic ranged for loop
 ##
-fun for(it impl iter(`e) -> `t, fn impl consume(`e) -> `t) `t {
-	with it, fn loop {
+fun for(it impl iter(`e) -> unit, fn impl consume(`e)) {
+	try with it, fn loop {
 		consume(next() as `e)
 	}
 }
@@ -55,10 +55,10 @@ fun for(it impl iter(`e) -> `t, fn impl consume(`e) -> `t) `t {
 ##
 # while loop
 ##
-fun while(cond impl test, fn impl run -> unit) {
+fun while(cond impl test, fn impl perform) {
 	try with fn loop {
 		if test() with cond {
-			run()
+			perform()
 		} else {
 			break
 		}
@@ -68,22 +68,31 @@ fun while(cond impl test, fn impl run -> unit) {
 ##
 # until loop
 ##
-fun until(cond impl test, fn impl run -> unit) {
+fun until(cond impl test, fn impl perform) {
 	try with fn loop {
 		if test() with cond {
 			break
 		} else {
-			run()
+			perform()
 		}
+	}
+}
+
+##
+# run
+##
+fun run(fn impl supply(`t)) `t {
+	with fn {
+		supply()
 	}
 }
 
 ##
 # repeat loop
 ##
-fun repeat(fn impl run -> `t) `t {
-	with fn loop {
-		run()
+fun repeat(fn impl perform -> `t) `t {
+	try with fn loop {
+		perform()
 	}
 }
 
@@ -95,8 +104,12 @@ effect test {
 	fun test() bool
 }
 
-effect run {
-	fun run()
+effect perform {
+	fun perform()
+}
+
+effect supply(`t) {
+	fun supply() `t
 }
 
 # TODO: && operator

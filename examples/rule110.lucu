@@ -35,8 +35,8 @@ fun rule(l u8, m u8, r u8) u8 {
 }
 
 fun next_state(original []u8, mut next []u8) {
-	assert(len(next) == len(original), "states do not have the same length")
-	assert(len(next) > 1,              "states must have at least two cells")
+	#assert(len(next) == len(original), "states do not have the same length")
+	#assert(len(next) > 1,              "states must have at least two cells")
 	let len = len(next)
 
 	# first index

@@ -21,6 +21,7 @@ pub enum Token {
     Const,
     As,
     Do,
+    Move,
 
     // Symbols
     Semicolon,
@@ -80,6 +81,7 @@ impl fmt::Display for Token {
                 Token::Const => "'const'".into(),
                 Token::As => "'as'".into(),
                 Token::Do => "'do'".into(),
+                Token::Move => "'move'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Dot => "'.'".into(),
                 Token::DoubleDot => "'..'".into(),
@@ -154,6 +156,7 @@ impl Token {
                 | Token::Cast
                 | Token::As
                 | Token::Do
+                | Token::Move
                 | Token::Open(_)
 
                 // prevents double semicolons
@@ -169,7 +172,6 @@ impl Token {
             Token::Else
                 | Token::Comma
                 | Token::Close(_)
-                | Token::Open(Group::Brace)
                 | Token::Dot
                 | Token::Slash
                 | Token::Equals
@@ -434,6 +436,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "const" => Token::Const,
                     "as" => Token::As,
                     "do" => Token::Do,
+                    "move" => Token::Move,
                     _ => Token::Ident(word),
                 }
             }

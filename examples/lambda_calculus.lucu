@@ -5,18 +5,18 @@ effect run {
 }
 
 effect choose {
-	fun choose(t run, f run)
+	fun choose(t impl run, f impl run)
 }
 
-fun truly() choose {
-	fun { t, f -> run() with t }
+fun truly() impl choose {
+	{ t, f -> run() with t }
 }
 
-fun falsy() choose {
-	fun { t, f -> run() with f }
+fun falsy() impl choose {
+	{ t, f -> run() with f }
 }
 
-fun ify(c choose, t run, f run) {
+fun ify(c impl choose, t impl run, f impl run) {
 	choose(t, f) with c
 }
 

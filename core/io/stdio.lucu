@@ -38,7 +38,7 @@ fun wait() / stdio {
 fun linux() impl stdio / linux.sys {
 	impl stdio {
 		fun stdin() impl reader {
-			fun { buf -> linux.read(0, buf) }
+			{ buf -> linux.read(0, buf) }
 		}
 		fun stdout() impl writer {
 			impl writer {
@@ -66,7 +66,7 @@ fun windows() impl stdio / win32.sys {
 	impl stdio {
 		fun stdin() impl reader {
 			let stdin = win32.stdin()
-			fun {
+			{
 				buf ->
 				mut read u32 = 0
 				do win32.ReadConsoleA(stdin, &buf[0], cast len(buf), &read, 0)
@@ -104,7 +104,7 @@ fun windows() impl stdio / win32.sys {
 fun wasi() impl stdio / wasi.sys {
 	impl stdio {
 		fun stdin() impl reader {
-			fun {
+			{
 				buf ->
 				mut read u32 = 0
 				do wasi.fd_read(0, [buf], &read)

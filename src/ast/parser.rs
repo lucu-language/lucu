@@ -560,11 +560,6 @@ impl Parse for Type {
                     Some(Type::Path(id))
                 }
             }
-            Some(Ranged(Token::Open(Group::Brace), ..)) => {
-                let expr = Body::parse_or_default(tk);
-                let expr = tk.push_expr(expr);
-                Some(Type::ConstExpr(expr))
-            }
             _ => {
                 let err = tk.peek_range().with(Error::Unexpected(Expected::Type));
                 tk.next();
@@ -591,7 +586,9 @@ impl Parse for Option<TypeIdx> {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk
             .peek()
-            .map(|t| t.0.continues_statement() || t.0 == Token::Loop)
+            .map(|t| {
+                t.0.continues_statement() || t.0 == Token::Loop || t.0 == Token::Open(Group::Brace)
+            })
             .unwrap_or(true)
         {
             Some(None)
@@ -796,12 +793,14 @@ impl Parse for Function {
 
 impl Parse for Handler {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
-        if tk.check(Token::Fun).is_some() {
+        if tk.peek_check(Token::Open(Group::Brace)) || tk.peek_check(Token::Move) {
             Some(Handler::Lambda(Lambda::parse_or_skip(tk)?.0))
         } else {
             tk.expect(Token::Handle)?;
             let effect = PolyIdent::parse_or_skip(tk)?.0;
             let fail_type = FailType::parse_or_skip(tk)?.0;
+
+            let moved = tk.check(Token::Move).is_some();
 
             let mut functions = Vec::new();
             tk.group(Group::Brace, false, |tk| {
@@ -822,6 +821,7 @@ impl Parse for Handler {
                 effect,
                 functions,
                 fail_type,
+                moved,
             })
         }
     }
@@ -830,6 +830,8 @@ impl Parse for Handler {
 impl Parse for Lambda {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
+
+        let moved = tk.check(Token::Move).is_some();
 
         let mut inputs = VecMap::new();
         let mut main = Vec::new();
@@ -917,7 +919,11 @@ impl Parse for Lambda {
             tk.iter.file,
         ));
 
-        Some(Lambda { inputs, body })
+        Some(Lambda {
+            inputs,
+            body,
+            moved,
+        })
     }
 }
 
@@ -954,7 +960,7 @@ impl Parse for Expression {
                 tk.next();
 
                 // allow try-with
-                let loop_start = tk.pos_start();
+                let with_start = tk.pos_start();
                 let inner = if tk.check(Token::With).is_some() {
                     let handler = Expression::parse_or_skip(tk)?;
                     let handler = tk.push_expr(handler);
@@ -985,7 +991,7 @@ impl Parse for Expression {
                     for handler in handlers.into_iter().rev() {
                         expr = Ranged(
                             Expression::With(handler, tk.push_expr(expr)),
-                            start,
+                            with_start,
                             tk.pos_end(),
                             tk.iter.file,
                         );
@@ -998,12 +1004,39 @@ impl Parse for Expression {
                     let body = tk.push_expr(body);
                     Ranged(
                         Expression::Loop(body),
-                        loop_start,
+                        with_start,
                         tk.pos_end(),
                         tk.iter.file,
                     )
                 } else {
                     Body::parse_or_default(tk)
+                };
+
+                // allow try {}-with
+                let with_start = tk.pos_start();
+                let inner = if tk.check(Token::With).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    let mut handlers = vec![handler];
+
+                    while tk.check(Token::Comma).is_some() {
+                        let handler = Expression::parse_or_skip(tk)?;
+                        let handler = tk.push_expr(handler);
+                        handlers.push(handler)
+                    }
+
+                    let mut expr = inner;
+                    for handler in handlers.into_iter().rev() {
+                        expr = Ranged(
+                            Expression::With(handler, tk.push_expr(expr)),
+                            with_start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        );
+                    }
+                    expr
+                } else {
+                    inner
                 };
 
                 Some(Expression::Try(tk.push_expr(inner)))
@@ -1170,7 +1203,7 @@ impl Parse for Expression {
             }
 
             // handler
-            Some(Ranged(Token::Handle | Token::Fun, ..)) => {
+            Some(Ranged(Token::Handle | Token::Open(Group::Brace) | Token::Move, ..)) => {
                 let handler = Handler::parse_or_skip(tk)?;
                 Some(Expression::Handler(handler.0))
             }
@@ -1194,9 +1227,6 @@ impl Parse for Expression {
                 tk.next();
                 Some(Expression::Int(num?))
             }
-
-            // block
-            Some(Ranged(Token::Open(Group::Brace), ..)) => Some(Body::parse_or_default(tk).0),
 
             // array
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
@@ -1291,6 +1321,29 @@ fn expression_post(
                 }
             }
 
+            // call with lambda
+            Some(Ranged(Token::Open(Group::Brace) | Token::Move, ..)) => {
+                if tk.allow_lambda_args {
+                    let mut args = Vec::new();
+
+                    while tk.peek_check(Token::Open(Group::Brace)) {
+                        let lambda = Lambda::parse_or_skip(tk)?;
+                        let handler = lambda.map(Handler::Lambda);
+                        let expr = handler.map(Expression::Handler);
+                        args.push(tk.push_expr(expr));
+                    }
+
+                    expr = Ranged(
+                        Expression::Call(tk.push_expr(expr), args),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
+                } else {
+                    break Some(expr.0);
+                }
+            }
+
             // call
             Some(Ranged(Token::Open(Group::Paren), ..)) => {
                 let mut args = Vec::new();
@@ -1304,7 +1357,7 @@ fn expression_post(
 
                 // lambda arguments
                 if tk.allow_lambda_args {
-                    while tk.peek_check(Token::Open(Group::Brace)) {
+                    while tk.peek_check(Token::Open(Group::Brace)) || tk.peek_check(Token::Move) {
                         let lambda = Lambda::parse_or_skip(tk)?;
                         let handler = lambda.map(Handler::Lambda);
                         let expr = handler.map(Expression::Handler);

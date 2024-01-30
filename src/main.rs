@@ -379,7 +379,8 @@ fn main() {
                         .arg("-e_start")
                         .status()
                         .unwrap();
-                    Command::new(Path::new("./").join(output).with_extension("exe"))
+                    Command::new("wine")
+                        .arg(output.with_extension("exe"))
                         .status()
                         .unwrap();
                 }
@@ -416,7 +417,7 @@ fn main() {
                 }
                 _ => {
                     println!(
-                        "unknown linker setup for triple: {}\nplease link the program manually",
+                        "unknown linker for triple: {}\nplease link the program manually",
                         target.triple
                     );
                 }

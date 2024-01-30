@@ -1,19 +1,19 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use crate::{
-    ast::EffIdx,
+    ast::{EffFunIdx, EffIdx},
     error::Errors,
     sema::{
-        self, get_value, BlockIdx, FunIdent, FunImpl, FunSign, GenericIdx, GenericVal, InstrIdx,
-        IntSize, LazyIdx, LazyValue, SemIR, Value,
+        self, get_value, BlockIdx, EffectIdent, FunIdent, FunImpl, FunSign, GenericIdx, GenericVal,
+        InstrIdx, IntSize, LazyIdx, LazyValue, SemIR, Value,
     },
     vecmap::{VecMap, VecSet},
     Target,
 };
 
 use super::{
-    AggrIdx, AggregateType, Block, HandlerIdx, Instruction, ProcForeignIdx, ProcIdx, ProcImpl,
-    ProcSign, Reg, Type, TypeIdx, IR,
+    AggrIdx, AggregateType, Block, HandlerIdx, Instruction, ProcForeign, ProcForeignIdx, ProcIdx,
+    ProcImpl, ProcSign, Reg, Type, TypeIdx, ASM, IR,
 };
 
 struct IRCtx<'a> {
@@ -21,12 +21,14 @@ struct IRCtx<'a> {
     sema: &'a SemIR,
     errors: &'a mut Errors,
 
-    slice_types: HashMap<TypeIdx, AggrIdx>,
     proc_todo: Vec<(ProcIdx, ProcCtx<'a>)>,
-
-    handler_types: HashMap<(sema::HandlerIdx, GenericParams<'a>), TypeIdx>,
     functions: HashMap<(FunIdent, GenericParams<'a>), ProcType>,
-    handlers: VecMap<HandlerIdx, (sema::HandlerIdx, GenericParams<'a>)>,
+
+    handlers: VecMap<HandlerIdx, (Option<sema::HandlerIdx>, GenericParams<'a>)>,
+
+    slice_types: HashMap<TypeIdx, AggrIdx>,
+    handler_types: HashMap<(sema::HandlerIdx, GenericParams<'a>), TypeIdx>,
+    foreign_types: HashMap<(EffIdx, GenericParams<'a>, Option<ASM>), TypeIdx>,
 }
 
 #[derive(Clone, Copy)]
@@ -78,6 +80,13 @@ fn get_type<'a>(params: &GenericParams<'a>, idx: GenericIdx) -> TypeIdx {
 fn get_constant<'a>(params: &GenericParams<'a>, idx: GenericIdx) -> &'a Value {
     match get_param(params, idx).unwrap() {
         Generic::Const(val) => val,
+        _ => unreachable!(),
+    }
+}
+
+fn get_effect<'a, 'b>(params: &GenericParams<'a>, idx: GenericIdx) -> (EffIdx, GenericParams<'a>) {
+    match get_param(params, idx).unwrap() {
+        Generic::Effect(idx, params) => (idx, params),
         _ => unreachable!(),
     }
 }
@@ -152,6 +161,85 @@ impl<'a> IRCtx<'a> {
             T::Error => unreachable!(),
         })
     }
+    fn foreign_handler(
+        &mut self,
+        e: &GenericVal<EffectIdent>,
+        asm: Option<ASM>,
+        params: &GenericParams<'a>,
+    ) -> TypeIdx {
+        let (effect, params) = match *e {
+            GenericVal::Literal(ref ident) => (
+                ident.effect,
+                ident
+                    .generic_params
+                    .iter()
+                    .map(|&(idx, ty)| (idx, self.lower_generic(ty, params)))
+                    .collect(),
+            ),
+            GenericVal::Generic(idx) => get_effect(params, idx),
+        };
+
+        let ident = (effect, params, asm);
+        if let Some(ty) = self.foreign_types.get(&ident).copied() {
+            return ty;
+        }
+        let (effect, params, asm) = ident;
+
+        let sema_effect = &self.sema.effects[effect];
+        let prefix = sema_effect
+            .foreign
+            .as_ref()
+            .map(|f| f.prefix.as_str())
+            .unwrap_or("");
+
+        let ty = self.new_implicit_handler(effect);
+
+        for (idx, fun) in sema_effect.funs.iter(EffFunIdx) {
+            let symbol = format!("{}{}", prefix, fun.name);
+            let inputs = fun
+                .params
+                .values()
+                .map(|p| self.lower_type(p.ty, &params))
+                .collect::<Vec<_>>();
+            let output = self.lower_type(fun.return_type.ty, &params);
+
+            let mut fun_params = params.clone();
+            fun_params.push((fun.generics.last().unwrap().idx, Generic::Type(ty)));
+
+            let proc = self.ir.proc_foreign.push(
+                ProcForeignIdx,
+                ProcForeign {
+                    inputs,
+                    output,
+                    symbol,
+                    asm: asm.clone(),
+                },
+            );
+            self.functions.insert(
+                (FunIdent::Effect(effect, idx), fun_params),
+                ProcType::Foreign(proc),
+            );
+        }
+
+        self.foreign_types.insert((effect, params, asm), ty);
+        ty
+    }
+    fn new_implicit_handler(&mut self, effect: EffIdx) -> TypeIdx {
+        let aggr = self.ir.aggregates.push(
+            AggrIdx,
+            AggregateType {
+                children: Vec::new(),
+                debug_name: format!("F{}", effect.0),
+            },
+        );
+
+        let idx = self.handlers.push(HandlerIdx, (None, Vec::new()));
+
+        let never = self.insert_type(Type::Never);
+        self.ir.break_types.push_value(never);
+
+        self.insert_type(Type::Handler(idx, aggr))
+    }
     fn lower_lazy(&mut self, lazy: LazyIdx, params: &GenericParams<'a>) -> TypeIdx {
         match &self.sema.lazy_handlers[lazy] {
             LazyValue::Some(GenericVal::Literal(ident)) => {
@@ -179,14 +267,16 @@ impl<'a> IRCtx<'a> {
                     },
                 );
 
-                let idx = self.handlers.push(HandlerIdx, ident.clone());
+                let idx = self
+                    .handlers
+                    .push(HandlerIdx, (Some(ident.0), ident.1.clone()));
                 self.ir.break_types.push_value(break_type);
 
                 let ty = self.insert_type(Type::Handler(idx, aggr));
                 self.handler_types.insert(ident, ty);
                 ty
             }
-            LazyValue::Some(GenericVal::Generic(idx)) => get_type(&params, *idx),
+            LazyValue::Some(GenericVal::Generic(idx)) => get_type(params, *idx),
             LazyValue::EffectFunOutput(idx, fun, ps) => {
                 let handler = self.lower_lazy(*idx, params);
                 let handler = match self.ir.types[handler] {
@@ -194,15 +284,80 @@ impl<'a> IRCtx<'a> {
                     _ => unreachable!(),
                 };
                 let (idx, ref handler_params) = self.handlers[handler];
-                let params = handler_params
-                    .clone()
-                    .into_iter()
-                    .chain(
-                        ps.iter()
-                            .map(|&(idx, ty)| (idx, self.lower_generic(ty, &params))),
-                    )
-                    .collect::<Vec<_>>();
-                self.lower_type(self.sema.handlers[idx].funs[*fun].0.return_type.ty, &params)
+                let params = Iterator::chain(
+                    handler_params.clone().into_iter(),
+                    ps.iter()
+                        .map(|&(idx, ty)| (idx, self.lower_generic(ty, &params))),
+                )
+                .collect::<Vec<_>>();
+
+                let idx = idx.unwrap();
+                if self.sema.foreign_handler == idx {
+                    match fun {
+                        EffFunIdx(0) => {
+                            // link handler
+                            let lib = GenericVal::Generic(ps[0].0);
+                            let lib = match lib {
+                                GenericVal::Literal(s) => s,
+                                GenericVal::Generic(g) => match get_constant(&params, g) {
+                                    Value::ConstantString(_, s) => {
+                                        String::from_utf8_lossy(s).into_owned()
+                                    }
+                                    _ => unreachable!(),
+                                },
+                            };
+                            self.ir.links.insert(lib);
+
+                            let effect = GenericVal::Generic(ps[1].0);
+                            self.foreign_handler(&effect, None, &params)
+                        }
+                        EffFunIdx(1) => {
+                            // link asm
+                            let assembly = GenericVal::Generic(ps[0].0);
+                            let assembly = match assembly.clone() {
+                                GenericVal::Literal(s) => s,
+                                GenericVal::Generic(g) => match get_constant(&params, g) {
+                                    Value::ConstantString(_, s) => {
+                                        String::from_utf8_lossy(s).into_owned()
+                                    }
+                                    _ => unreachable!(),
+                                },
+                            };
+                            let constraints = GenericVal::Generic(ps[1].0);
+                            let constraints = match constraints.clone() {
+                                GenericVal::Literal(s) => s,
+                                GenericVal::Generic(g) => match get_constant(&params, g) {
+                                    Value::ConstantString(_, s) => {
+                                        String::from_utf8_lossy(s).into_owned()
+                                    }
+                                    _ => unreachable!(),
+                                },
+                            };
+                            let sideeffects = GenericVal::Generic(ps[2].0);
+                            let sideeffects = match sideeffects {
+                                GenericVal::Literal(b) => b,
+                                GenericVal::Generic(g) => match get_constant(&params, g) {
+                                    &Value::ConstantBool(b) => b,
+                                    _ => unreachable!(),
+                                },
+                            };
+
+                            let effect = GenericVal::Generic(ps[3].0);
+                            self.foreign_handler(
+                                &effect,
+                                Some(ASM {
+                                    assembly,
+                                    constraints,
+                                    sideeffects,
+                                }),
+                                &params,
+                            )
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    self.lower_type(self.sema.handlers[idx].funs[*fun].0.return_type.ty, &params)
+                }
             }
             LazyValue::None => todo!(),
             LazyValue::Refer(_, _) => unreachable!(),
@@ -245,7 +400,7 @@ impl<'a> IRCtx<'a> {
         return_type: TypeIdx,
     ) -> ProcType {
         let (imp, handler) = match fun {
-            FunIdent::Top(idx) => (&self.sema.fun_impl[idx], None),
+            FunIdent::Top(idx) => (Some(&self.sema.fun_impl[idx]), None),
             FunIdent::Effect(_, idx) => {
                 let handler = match params.last().unwrap().1 {
                     Generic::Type(ty) => ty,
@@ -259,7 +414,7 @@ impl<'a> IRCtx<'a> {
                 params.extend(handler.1.iter().cloned());
 
                 (
-                    &self.sema.handlers[handler.0].funs[idx].1,
+                    handler.0.map(|h| &self.sema.handlers[h].funs[idx].1),
                     Some(handler_idx),
                 )
             }
@@ -271,6 +426,7 @@ impl<'a> IRCtx<'a> {
         }
         let (fun, params) = ident;
 
+        let imp = imp.unwrap();
         let inputs = inputs.into_iter().map(|ty| self.next_reg(ty)).collect();
         let output = return_type;
 
@@ -377,7 +533,7 @@ impl<'a> IRCtx<'a> {
             Value::Capture(n) => {
                 let aggr = self.ir.proc_sign[ctx.idx].inputs.last().copied().unwrap();
 
-                let handler = self.handlers[ctx.handler.unwrap()].0;
+                let handler = self.handlers[ctx.handler.unwrap()].0.unwrap();
                 let handler = &self.sema.handlers[handler];
 
                 let inner = self.lower_type(handler.captures[n], &ctx.params);
@@ -429,15 +585,41 @@ impl<'a> IRCtx<'a> {
                     }
 
                     I::Call(id, ref params, _, _) => {
-                        let params = params
+                        let mut params = params
                             .iter()
                             .map(|&(idx, ty)| (idx, self.lower_generic(ty, &ctx.params)))
-                            .collect();
+                            .collect::<Vec<_>>();
+                        let sign = match id {
+                            FunIdent::Top(idx) => &self.sema.fun_sign[idx],
+                            FunIdent::Effect(eff, idx) => {
+                                let handler = match params.last().unwrap().1 {
+                                    Generic::Type(ty) => ty,
+                                    _ => unreachable!(),
+                                };
+                                let handler_idx = match self.ir.types[handler] {
+                                    Type::Handler(idx, _) => idx,
+                                    _ => unreachable!(),
+                                };
+                                let handler = &self.handlers[handler_idx];
+                                params.extend(handler.1.iter().cloned());
 
-                        self.lower_type(id.sign(self.sema).return_type.ty, &params)
+                                match handler.0 {
+                                    Some(h) => {
+                                        // handler
+                                        &self.sema.handlers[h].funs[idx].0
+                                    }
+                                    None => {
+                                        // foreign
+                                        &self.sema.effects[eff].funs[idx]
+                                    }
+                                }
+                            }
+                        };
+                        self.lower_type(sign.return_type.ty, &params)
                     }
-                    I::LinkHandler(_, _) => todo!(),
-                    I::AsmHandler(_, _, _, _) => todo!(),
+                    I::LinkHandler(_, _) | I::AsmHandler(_, _, _, _) => {
+                        self.ir.proc_sign[ctx.idx].output
+                    }
                     I::Syscall(_, _) => self.insert_type(Type::Int),
 
                     I::Jump(_)
@@ -620,8 +802,9 @@ impl<'a> IRCtx<'a> {
                         let n = self.get_value_reg(&mut ctx, n);
                         ctx.push(Instruction::AdjacentPtr(ireg.unwrap(), p, n));
                     }
-                    I::LinkHandler(_, _) => todo!(),
-                    I::AsmHandler(_, _, _, _) => todo!(),
+                    I::LinkHandler(_, _) | I::AsmHandler(_, _, _, _) => {
+                        ctx.push(Instruction::Aggregate(ireg.unwrap(), Vec::new()));
+                    }
                     I::CompileError(_) => todo!(),
                     I::Syscall(nr, args) => {
                         let nr = self.get_value_reg(&mut ctx, nr);
@@ -690,6 +873,7 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
         slice_types: HashMap::new(),
         proc_todo: Vec::new(),
         handler_types: HashMap::new(),
+        foreign_types: HashMap::new(),
         functions: HashMap::new(),
         handlers: VecMap::new(),
     };

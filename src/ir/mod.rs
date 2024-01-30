@@ -25,6 +25,14 @@ pub struct ProcForeign {
     pub inputs: Vec<TypeIdx>,
     pub output: TypeIdx,
     pub symbol: String,
+    pub asm: Option<ASM>,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ASM {
+    pub assembly: String,
+    pub constraints: String,
+    pub sideeffects: bool,
 }
 
 #[derive(Debug, Default)]

@@ -7,7 +7,7 @@
 effect lib {
 	# TODO: maybe ptr
 	# TODO: opaque time type
-	fun time(t ^int) int
+	fun time(mut t ^int) int
 
 	# TODO: cstring, cint
 	fun puts(s ^u8) int

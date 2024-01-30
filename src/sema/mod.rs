@@ -246,7 +246,6 @@ pub struct Capability {
 #[derive(Debug)]
 pub struct Foreign {
     pub prefix: String,
-    pub handler: TypeIdx,
 }
 
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
@@ -360,7 +359,9 @@ pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
     pub fun_sign: VecMap<FunIdx, FunSign>,
     pub fun_impl: VecMap<FunIdx, FunImpl>,
+
     pub entry: FunIdx,
+    pub foreign_handler: HandlerIdx,
 
     pub types: VecSet<TypeIdx, Type>,
     pub handlers: VecMap<HandlerIdx, Handler>,

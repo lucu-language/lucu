@@ -37,7 +37,10 @@ struct CodeGen<'ctx> {
     structs: VecMap<AggrIdx, Option<StructType<'ctx>>>,
 
     procs: VecMap<ProcIdx, FunctionValue<'ctx>>,
-    foreign: VecMap<ProcForeignIdx, FunctionValue<'ctx>>,
+    foreign: VecMap<
+        ProcForeignIdx,
+        Either<FunctionValue<'ctx>, (FunctionType<'ctx>, PointerValue<'ctx>)>,
+    >,
 
     syscalls: Vec<Option<(FunctionType<'ctx>, PointerValue<'ctx>)>>,
 
@@ -465,7 +468,11 @@ impl<'ctx> CodeGen<'ctx> {
 
         func
     }
-    fn generate_foreign_proc_sign(&self, ir: &IR, proc: &ProcForeign) -> FunctionValue<'ctx> {
+    fn generate_foreign_proc_sign(
+        &self,
+        ir: &IR,
+        proc: &ProcForeign,
+    ) -> Either<FunctionValue<'ctx>, (FunctionType<'ctx>, PointerValue<'ctx>)> {
         let in_types = proc
             .inputs
             .iter()
@@ -484,19 +491,37 @@ impl<'ctx> CodeGen<'ctx> {
         };
 
         // TODO: add parameter names names to fun
-        let func = self
-            .module
-            .add_function(&proc.symbol, fn_type, Some(Linkage::External));
+        match &proc.asm {
+            Some(asm) => {
+                let func = self.context.create_inline_asm(
+                    fn_type,
+                    asm.assembly.clone(),
+                    asm.constraints.clone(),
+                    asm.sideeffects,
+                    false,
+                    None,
+                    false,
+                );
+                Either::Right((fn_type, func))
+            }
+            None => {
+                let func = self
+                    .module
+                    .add_function(&proc.symbol, fn_type, Some(Linkage::External));
 
-        if matches!(self.arch, LucuArch::Wasm32 | LucuArch::Wasm64) {
-            func.add_attribute(
-                AttributeLoc::Function,
-                self.context
-                    .create_string_attribute("wasm-import-module", self.os.wasm_import_module()),
-            );
+                if matches!(self.arch, LucuArch::Wasm32 | LucuArch::Wasm64) {
+                    func.add_attribute(
+                        AttributeLoc::Function,
+                        self.context.create_string_attribute(
+                            "wasm-import-module",
+                            self.os.wasm_import_module(),
+                        ),
+                    );
+                }
+
+                Either::Left(func)
+            }
         }
-
-        func
     }
     fn generate_proc(
         &self,
@@ -663,7 +688,13 @@ impl<'ctx> CodeGen<'ctx> {
                             .filter_map(|r| regmap.get(r).map(|&v| v.into()))
                             .collect();
 
-                        let ret = self.builder.build_call(func, &args, "").unwrap();
+                        let ret = match func {
+                            Either::Left(func) => self.builder.build_call(func, &args, "").unwrap(),
+                            Either::Right((ty, ptr)) => self
+                                .builder
+                                .build_indirect_call(ty, ptr, &args, "")
+                                .unwrap(),
+                        };
 
                         if let Some(r) = r {
                             if let Either::Left(v) = ret.try_as_basic_value() {

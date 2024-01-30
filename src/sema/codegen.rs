@@ -943,7 +943,6 @@ impl SemCtx<'_> {
         let mut generic_params = self.params_from_generics(&generics);
         generic_params.extend(gparams.iter().cloned());
 
-        // FIXME: can fail to translate its own generics (which should be untranslated)
         let generics = generics
             .into_iter()
             .map(|g| Generic {
@@ -1846,6 +1845,10 @@ impl SemCtx<'_> {
 
                     // analyze signature
                     let mut sign = self.ir.effects[eff.effect].funs[EffFunIdx(0)].clone();
+
+                    let mut generic_params = eff.generic_params.clone();
+                    generic_params.extend(self.params_from_generics(&sign.generics));
+
                     for (param, ident) in sign
                         .params
                         .values_mut()
@@ -1855,16 +1858,14 @@ impl SemCtx<'_> {
                         param.name_def = self.ast.idents[ident].empty();
                         param.name = self.ast.idents[ident].0.clone();
 
-                        // FIXME: can fail to translate its own generics (which should be untranslated)
                         param.ty = self
-                            .translate_generics(param.ty, &eff.generic_params, true)
+                            .translate_generics(param.ty, &generic_params, true)
                             .unwrap();
                     }
                     // FIXME: translate effect_stack
 
-                    // FIXME: can fail to translate its own generics (which should be untranslated)
                     sign.return_type.ty = self
-                        .translate_generics(sign.return_type.ty, &eff.generic_params, true)
+                        .translate_generics(sign.return_type.ty, &generic_params, true)
                         .unwrap();
 
                     // analyze function

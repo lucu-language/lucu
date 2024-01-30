@@ -122,7 +122,7 @@ fun main() / io.stdio {
 
   # define a handler for writing to the buffer
   mut ptr usize = 0
-  let handler = handle io.writer {
+  let handler = impl io.writer {
     fun write(bytes []u8) usize {
       mut written usize = 0
       while() { and(ptr < 1024, written < len(bytes)) } {

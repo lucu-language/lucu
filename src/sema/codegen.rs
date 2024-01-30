@@ -460,7 +460,9 @@ impl SemCtx<'_> {
                 )
             }
             Type::Generic(generic) => match get_param(generic_params, generic.idx) {
-                Some(ty) => ty,
+                Some(genty) => {
+                    genty.with_const((genty.is_const() || ty.is_const()) && !self.is_copy(genty))
+                }
                 None => None?,
             },
             Type::Pointer(inner) => {

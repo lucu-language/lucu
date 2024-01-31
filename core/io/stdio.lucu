@@ -41,22 +41,10 @@ fun linux() impl stdio / linux.sys {
 			{ buf -> linux.read(0, buf) }
 		}
 		fun stdout() impl writer {
-			impl writer {
-				fun write(buf []u8) usize {
-					linux.write(1, buf)
-				}
-				fun flush() {
-				}
-			}
+			{ buf -> linux.write(1, buf) }
 		}
 		fun stderr() impl writer {
-			impl writer {
-				fun write(buf []u8) usize {
-					linux.write(2, buf)
-				}
-				fun flush() {
-				}
-			}
+			{ buf -> linux.write(2, buf) }
 		}
 	}
 }
@@ -75,26 +63,20 @@ fun windows() impl stdio / win32.sys {
 		}
 		fun stdout() impl writer {
 			let stdout = win32.stdout()
-			impl writer {
-				fun write(buf []u8) usize {
-					mut written u32 = 0
-					do win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
-					cast written
-				}
-				fun flush() {
-				}
+			{
+				buf ->
+				mut written u32 = 0
+				do win32.WriteConsoleA(stdout, &buf[0], cast len(buf), &written, 0)
+				cast written
 			}
 		}
 		fun stderr() impl writer {
 			let stderr = win32.stderr()
-			impl writer {
-				fun write(buf []u8) usize {
-					mut written u32 = 0
-					do win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
-					cast written
-				}
-				fun flush() {
-				}
+			{
+				buf ->
+				mut written u32 = 0
+				do win32.WriteConsoleA(stderr, &buf[0], cast len(buf), &written, 0)
+				cast written
 			}
 		}
 	}
@@ -112,25 +94,19 @@ fun wasi() impl stdio / wasi.sys {
 			}
 		}
 		fun stdout() impl writer {
-			impl writer {
-				fun write(buf []u8) usize {
-					mut written u32 = 0
-					do wasi.fd_write(1, [buf], &written)
-					cast written
-				}
-				fun flush() {
-				}
+			{
+				buf ->
+				mut written u32 = 0
+				do wasi.fd_write(1, [buf], &written)
+				cast written
 			}
 		}
 		fun stderr() impl writer {
-			impl writer {
-				fun write(buf []u8) usize {
-					mut written u32 = 0
-					do wasi.fd_write(2, [buf], &written)
-					cast written
-				}
-				fun flush() {
-				}
+			{
+				buf ->
+				mut written u32 = 0
+				do wasi.fd_write(2, [buf], &written)
+				cast written
 			}
 		}
 	}

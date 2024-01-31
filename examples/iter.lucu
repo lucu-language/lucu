@@ -66,7 +66,7 @@ fun main() / io.stdio {
 		# a 'try with loop' block is the same as a regular 'with',
 		# but it loops until it gets a 'break'
 		# this way we can iterate over all pushed elements and print them
-		try with iter() as impl iter(str) -> unit loop {
+		try with iter() as impl iter(const str) -> unit loop {
 			io.putstr(next())
 		}
 

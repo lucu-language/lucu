@@ -110,7 +110,6 @@ Of course, this example does not include defining a handler for `fs`. An effect 
 # inside core/io/write.lucu
 effect writer {
   fun write(bytes []u8) usize
-  fun flush()
 }
 
 # inside examples/write_buffer.lucu (try it yourself!)
@@ -130,7 +129,6 @@ fun main() / io.stdio {
       }
       written
     }
-    fun flush() {}
   }
 
   # use handler

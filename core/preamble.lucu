@@ -21,10 +21,72 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
+# sink
+##
+effect sink(`t) {
+	fun push(t `t)
+}
+
+fun sink_slice(mut buf []const `e) impl sink(`e) -> unit {
+	mut n usize = 0
+	move {
+		t ->
+		if n == len(buf) {
+			break
+		} else {
+			buf[n++] = t
+		}
+	}
+}
+
+fun sink_buffer() impl sink(`t) / buf(`t) {
+	{ t -> buf_push(t) }
+}
+
+##
+# buffer
+##
+effect buf(`t) {
+	fun buf_push(t `t)
+	fun buf_len() usize
+	fun buf_slice() []const `t
+}
+
+fun buffer_slice(mut buf[]const `t) impl buf(`t) -> unit {
+	mut n usize = 0
+	impl buf(`t) -> unit move {
+		fun buf_push(t `t) {
+			if n == len(buf) {
+				break
+			} else {
+				buf[n++] = t
+			}
+		}
+		fun buf_len() usize {
+			n
+		}
+		fun buf_slice() []const `t {
+			buf[0..n]
+		}
+	}
+}
+
+##
 # iterator
 ##
 effect iter(`t) {
 	fun next() `t
+}
+
+fun iter_slice(mut buf []`e) impl iter(`e) -> unit {
+	mut n usize = 0
+	move {
+		if n == len(buf) {
+			break
+		} else {
+			buf[n++]
+		}
+	}
 }
 
 fun range(start usize, end usize) impl iter(usize) -> unit {

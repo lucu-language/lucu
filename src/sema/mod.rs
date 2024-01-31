@@ -423,7 +423,7 @@ impl TypeIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        if self.is_const() && !matches!(ir.types[*self], Type::Str) {
+        if self.is_const() {
             write!(f, "const ")?;
         }
         match ir.types[*self] {

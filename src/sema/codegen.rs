@@ -211,7 +211,7 @@ const TYPE_EFFECT: TypeIdx = TypeIdx(4 << 2);
 const TYPE_USIZE: TypeIdx = TypeIdx(5 << 2);
 const TYPE_BOOL: TypeIdx = TypeIdx(6 << 2);
 const TYPE_INT: TypeIdx = TypeIdx(7 << 2);
-const TYPE_STR: TypeIdx = TypeIdx((8 << 2) | 1); // const
+const TYPE_STR: TypeIdx = TypeIdx(8 << 2);
 const TYPE_CHAR: TypeIdx = TypeIdx(9 << 2);
 const TYPE_U8: TypeIdx = TypeIdx(10 << 2);
 
@@ -1201,18 +1201,19 @@ impl SemCtx<'_> {
         if from == to {
             return;
         }
-        let infer_generic = move |params: &mut GenericParams, idx: GenericIdx, val: TypeIdx| {
-            if get_param(params, idx).is_none() {
-                params.push((idx, val));
-            }
-        };
+        let infer_generic =
+            move |params: &mut GenericParams, idx: GenericIdx, is_const: bool, val: TypeIdx| {
+                if get_param(params, idx).is_none() {
+                    params.push((idx, val.with_const(val.is_const() && !is_const)));
+                }
+            };
         match (&self.ir.types[from], &self.ir.types[to]) {
             (_, Type::Generic(generic)) => {
-                infer_generic(params, generic.idx, from);
+                infer_generic(params, generic.idx, to.is_const(), from);
             }
             (Type::Handler(inner), Type::Handler(to)) => {
                 if let LazyValue::Some(GenericVal::Generic(idx)) = self.ir.lazy_handlers[to.idx] {
-                    infer_generic(params, idx, from);
+                    infer_generic(params, idx, false, from);
                 }
                 self.infer_generics(params, inner.typeof_handler, to.typeof_handler);
             }
@@ -1222,7 +1223,7 @@ impl SemCtx<'_> {
                 match (&from.effect, &to.effect) {
                     (GenericVal::Literal(effect), &GenericVal::Generic(idx)) => {
                         let val = self.insert_type(Type::Effect(effect.clone()), false);
-                        infer_generic(params, idx, val);
+                        infer_generic(params, idx, false, val);
                     }
                     (GenericVal::Literal(from), GenericVal::Literal(to))
                         if from.effect == to.effect =>
@@ -1245,7 +1246,7 @@ impl SemCtx<'_> {
                             }),
                             false,
                         );
-                        infer_generic(params, to, val);
+                        infer_generic(params, to, false, val);
                     }
                     _ => {}
                 }
@@ -1275,7 +1276,7 @@ impl SemCtx<'_> {
                             Type::CompileTime(Value::ConstantInt(TYPE_USIZE, false, size)),
                             false,
                         );
-                        infer_generic(params, idx, val);
+                        infer_generic(params, idx, false, val);
                     }
                     (GenericVal::Generic(from), GenericVal::Generic(to)) => {
                         let val = self.insert_type(
@@ -1285,7 +1286,7 @@ impl SemCtx<'_> {
                             }),
                             false,
                         );
-                        infer_generic(params, to, val);
+                        infer_generic(params, to, false, val);
                     }
                     _ => {}
                 }
@@ -1862,8 +1863,50 @@ impl SemCtx<'_> {
                             .translate_generics(param.ty, &generic_params, true)
                             .unwrap();
                     }
-                    // FIXME: translate effect_stack
-
+                    sign.effect_stack = sign
+                        .effect_stack
+                        .iter()
+                        .map(|e| {
+                            e.as_ref().map(|(ty, id)| {
+                                let ty =
+                                    self.translate_generics(*ty, &generic_params, true).unwrap();
+                                let id = match id {
+                                    GenericVal::Literal(id) => {
+                                        let effect = id.effect;
+                                        let generic_params = id
+                                            .generic_params
+                                            .iter()
+                                            .map(|&(idx, ty)| {
+                                                (
+                                                    idx,
+                                                    self.translate_generics(
+                                                        ty,
+                                                        &generic_params,
+                                                        true,
+                                                    )
+                                                    .unwrap(),
+                                                )
+                                            })
+                                            .collect();
+                                        GenericVal::Literal(EffectIdent {
+                                            effect,
+                                            generic_params,
+                                        })
+                                    }
+                                    GenericVal::Generic(idx) => {
+                                        match self.ir.types
+                                            [get_param(&generic_params, *idx).unwrap()]
+                                        {
+                                            Type::Effect(ref id) => GenericVal::Literal(id.clone()),
+                                            Type::Generic(g) => GenericVal::Generic(g.idx),
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                };
+                                (ty, id)
+                            })
+                        })
+                        .collect();
                     sign.return_type.ty = self
                         .translate_generics(sign.return_type.ty, &generic_params, true)
                         .unwrap();
@@ -3777,19 +3820,21 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
     ctx.ir.entry = start;
 
     // remove LazyValue::Refer
-    let mut modified = true;
-    while modified {
-        modified = false;
-        for idx in (0..ctx.ir.lazy_handlers.len()).map(LazyIdx) {
-            if let LazyValue::Refer(refidx, ref params) = ctx.ir.lazy_handlers[idx] {
-                let params = params.clone();
-                let handler = match get_lazy_reg(&mut ctx, refidx, params) {
-                    Some(value) => value,
-                    None => continue,
-                };
+    if ctx.errors.is_empty() {
+        let mut modified = true;
+        while modified {
+            modified = false;
+            for idx in (0..ctx.ir.lazy_handlers.len()).map(LazyIdx) {
+                if let LazyValue::Refer(refidx, ref params) = ctx.ir.lazy_handlers[idx] {
+                    let params = params.clone();
+                    let handler = match get_lazy_reg(&mut ctx, refidx, params) {
+                        Some(value) => value,
+                        None => continue,
+                    };
 
-                ctx.ir.lazy_handlers[idx] = handler;
-                modified = true;
+                    ctx.ir.lazy_handlers[idx] = handler;
+                    modified = true;
+                }
             }
         }
     }

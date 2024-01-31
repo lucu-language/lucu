@@ -5,7 +5,7 @@ effect printget {
 }
 
 effect get {
-	fun get() str
+	fun get() const str
 }
 
 fun getter(s str) impl get {

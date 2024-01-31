@@ -19,6 +19,10 @@ impl<T> Ranged<T> {
         Ranged(f(self.0), self.1, self.2, self.3)
     }
     #[must_use]
+    pub fn as_ref(&self) -> Ranged<&T> {
+        Ranged(&self.0, self.1, self.2, self.3)
+    }
+    #[must_use]
     pub fn empty(&self) -> Range {
         Ranged((), self.1, self.2, self.3)
     }

@@ -21,18 +21,33 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
+# error effects
+##
+effect no_such_element(`t) {
+	fun no_such_element() `t
+}
+
+effect fail {
+	fun fail() !
+}
+
+##
 # sink
 ##
 effect sink(`t) {
 	fun push(t `t)
 }
 
-fun sink_slice(mut buf []const `e) impl sink(`e) -> unit {
+fun push_slice(buf []`t) / sink(`t) {
+	for(iter_slice(buf)) { t -> push(t) }
+}
+
+fun sink_slice(mut buf []const `e) impl sink(`e) / fail {
 	mut n usize = 0
 	move {
 		t ->
 		if n == len(buf) {
-			break
+			fail()
 		} else {
 			buf[n++] = t
 		}
@@ -52,12 +67,16 @@ effect buf(`t) {
 	fun buf_slice() []const `t
 }
 
-fun buffer_slice(mut buf[]const `t) impl buf(`t) -> unit {
+fun buf_push_slice(buf []`t) / buf(`t) {
+	for(iter_slice(buf)) { t -> buf_push(t) }
+}
+
+fun buffer_slice(mut buf[]const `t) impl buf(`t) / fail {
 	mut n usize = 0
-	impl buf(`t) -> unit move {
+	impl buf(`t) move {
 		fun buf_push(t `t) {
 			if n == len(buf) {
-				break
+				fail()
 			} else {
 				buf[n++] = t
 			}
@@ -75,25 +94,25 @@ fun buffer_slice(mut buf[]const `t) impl buf(`t) -> unit {
 # iterator
 ##
 effect iter(`t) {
-	fun next() `t
+	fun next() `t / no_such_element(`t)
 }
 
-fun iter_slice(mut buf []`e) impl iter(`e) -> unit {
+fun iter_slice(buf []`e) impl iter(const `e) {
 	mut n usize = 0
 	move {
 		if n == len(buf) {
-			break
+			no_such_element()
 		} else {
 			buf[n++]
 		}
 	}
 }
 
-fun range(start usize, end usize) impl iter(usize) -> unit {
+fun range(start usize, end usize) impl iter(usize) {
 	mut n = start
 	move {
 		if n == end {
-			break
+			no_such_element()
 		} else {
 			n++
 		}
@@ -108,8 +127,9 @@ fun from(start usize) impl iter(usize) {
 ##
 # basic ranged for loop
 ##
-fun for(it impl iter(`e) -> unit, fn impl consume(`e)) {
-	try with it, fn loop {
+fun for(it impl iter(`e), fn impl consume(`e)) {
+	let on_nse impl no_such_element(`e) -> unit = { break }
+	try with on_nse, it, fn loop {
 		consume(next() as `e)
 	}
 }

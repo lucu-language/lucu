@@ -1,18 +1,13 @@
 # we import 'io' from the core library to interact with the console
 import "core:io"
 
-# we define an effect for iterating over a collection
-effect iter(`item) {
-	fun next() `item
-}
-
 # we define an effect for interacting with a buffer
 effect buf(`item) {
 	fun push(elem `item) usize
 	fun get(index usize) const `item
 
-	# the iterator fails when next() is called if it is done
-	fun iter() impl iter(const `item) -> unit
+	# the 'iter' effect is defined within the preamble
+	fun iter() impl iter(const `item)
 }
 
 # default implementation for unit buffer
@@ -36,13 +31,13 @@ fun array_buffer(`cap usize) impl buf(`item) {
 		fun get(index usize) const `item {
 			array[index]
 		}
-		fun iter() impl iter(const `item) -> unit {
+		fun iter() impl iter(const `item) {
 			mut current usize = 0
 			move {
 				if current < size {
 					array[current++]
 				} else {
-					break
+					no_such_element()
 				}
 			}
 		}
@@ -63,11 +58,11 @@ fun main() / io.stdio {
 		do push("Hello")
 		do push("world")
 
-		# a 'try with loop' block is the same as a regular 'with',
-		# but it loops until it gets a 'break'
-		# this way we can iterate over all pushed elements and print them
-		try with iter() as impl iter(const str) -> unit loop {
-			io.putstr(next())
+		# we print all elements
+		# 'for' is just a function defined within the preamble!
+		for(iter() as impl iter(const str)) {
+			elem ->
+			io.putstr(elem)
 		}
 
 	}

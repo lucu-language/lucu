@@ -3532,13 +3532,15 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             ctx.analyze_implied(&mut scope, handler);
         }
     }
-    ctx.srcloc = ctx.ir.effects[*ctx.packages[ctx.ast.preamble]
-        .effects
-        .get("srcloc")
-        .unwrap()
-        .literal()
-        .unwrap()]
-    .implied[0];
+    if ctx.errors.is_empty() {
+        ctx.srcloc = ctx.ir.effects[*ctx.packages[ctx.ast.preamble]
+            .effects
+            .get("srcloc")
+            .unwrap()
+            .literal()
+            .unwrap()]
+        .implied[0];
+    }
 
     // analyze functions
     for (idx, package) in ast.packages.iter(PackageIdx) {
@@ -3561,266 +3563,266 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
         }
     }
 
-    // define internal effects / functions
-    ctx.define_preamble_fun("unreachable", |_, fun| {
-        fun.push(Instruction::Unreachable);
-    });
-    ctx.define_preamble_fun("len", |ctx, fun| {
-        let slice = Value::Param(ParamIdx(0));
-        let slice_ty = ctx.get_preamble_sign("len").params[ParamIdx(0)].ty;
-        let len = fun.push(Instruction::Member(slice, 1, slice_ty));
-        fun.push(Instruction::Return(len));
-    });
-
-    ctx.get_preamble_handler("srcloc").captures = vec![TYPE_STR];
-    ctx.define_preamble_fun("source_location", |_, fun| {
-        let capture = Value::Deref(Box::new(Value::Capture(0)));
-        fun.push(Instruction::Return(capture));
-    });
-    ctx.define_preamble_fun("compile_error", |ctx, fun| {
-        let idx = ctx.get_preamble_sign("compile_error").generics[0].idx;
-        fun.push(Instruction::CompileError(GenericVal::Generic(idx)));
-        fun.push(Instruction::Unreachable);
-    });
-
-    let foreign = ctx.get_preamble_effect("foreign");
-    let foreign_handler = ctx.push_handler(Handler {
-        debug_name: "foreign_impl".into(),
-        generics: Vec::new(),
-        effect: foreign,
-        generic_params: Vec::new(),
-        fail: TYPE_NEVER,
-        captures: Vec::new(),
-        funs: vec![
-            (
-                ctx.ir.effects[foreign].funs[EffFunIdx(0)].clone(),
-                FunImpl::default(),
-            ),
-            (
-                ctx.ir.effects[foreign].funs[EffFunIdx(1)].clone(),
-                FunImpl::default(),
-            ),
-            (
-                ctx.ir.effects[foreign].funs[EffFunIdx(2)].clone(),
-                FunImpl::default(),
-            ),
-        ]
-        .into(),
-    });
-    ctx.ir.foreign_handler = foreign_handler;
-
-    ctx.ir.effects[foreign].implied.push(foreign_handler);
-    ctx.define_preamble_fun("impl_link", |ctx, fun| {
-        let gen = &ctx.get_preamble_sign("impl_link").generics;
-        let handler = fun.push(Instruction::LinkHandler(
-            GenericVal::Generic(gen[1].idx),
-            GenericVal::Generic(gen[0].idx),
-        ));
-        fun.push(Instruction::Return(handler));
-    });
-    ctx.define_preamble_fun("impl_asm", |ctx, fun| {
-        let gen = &ctx.get_preamble_sign("impl_asm").generics;
-        let handler = fun.push(Instruction::AsmHandler(
-            GenericVal::Generic(gen[3].idx),
-            GenericVal::Generic(gen[0].idx),
-            GenericVal::Generic(gen[1].idx),
-            GenericVal::Generic(gen[2].idx),
-        ));
-        fun.push(Instruction::Return(handler));
-    });
-    ctx.define_preamble_fun("syscall", |_, fun| {
-        let ret = fun.push(Instruction::Syscall(
-            Value::Param(ParamIdx(0)),
-            Value::Param(ParamIdx(1)),
-        ));
-        fun.push(Instruction::Return(ret));
-    });
-    ctx.ir.effects[foreign].implied.clear();
-
-    // Implement trace/trap_silent via os.process
-    let mut cap_fun = FunCtx {
-        scope: &mut ScopeStack::new(ctx.ast.preamble),
-        yeetable: None,
-        yeetable_def: None,
-        yeetable_ret: None,
-        blocks: vec![Block::default()].into(),
-        block: BlockIdx(0),
-        capture_boundary: (true, 0),
-        captures: &mut Vec::new(),
-    };
-
-    let mut cache = HashMap::new();
-    let metaty = ctx.insert_type(
-        Type::HandlerType(HandlerType {
-            effect: GenericVal::Literal(EffectIdent {
-                effect: foreign,
-                generic_params: Vec::new(),
-            }),
-            fail_type: TYPE_NEVER,
-        }),
-        false,
-    );
-    let foreign_lazy = ctx.ir.lazy_handlers.push(
-        LazyIdx,
-        LazyValue::Some(GenericVal::Literal(HandlerIdent {
-            handler: foreign_handler,
-            generic_params: Vec::new(),
-            fail_type: TYPE_NEVER,
-        })),
-    );
-    let ty = ctx.insert_type(
-        Type::Handler(Lazy {
-            idx: foreign_lazy,
-            typeof_handler: metaty,
-        }),
-        false,
-    );
-    cache.insert(
-        EffectIdent {
-            effect: foreign,
-            generic_params: Vec::new(),
-        },
-        (ty, Value::ConstantHandler(ty, Rc::new([]))),
-    );
-
-    let process_idx = ctx.packages[ctx.ast.system]
-        .effects
-        .get("process")
-        .map(|s| *s.literal().unwrap());
-    let process = process_idx.and_then(|idx| {
-        Some((
-            idx,
-            ctx.get_capability(
-                target,
-                &mut cap_fun,
-                &mut cache,
-                EffectIdent {
-                    effect: idx,
-                    generic_params: Vec::new(),
-                },
-            )?,
-        ))
-    });
-    if let Some((idx, val)) = process.clone() {
-        ctx.define_preamble_fun("trap_silent", |ctx, fun| {
-            fun.blocks = cap_fun.blocks.clone();
-            fun.block = cap_fun.block;
-
-            let gen = ctx.ir.effects[idx].funs[EffFunIdx(0)].generics[0].idx;
-            fun.push(Instruction::Call(
-                // os.abort
-                FunIdent::Effect(idx, EffFunIdx(0)),
-                vec![(gen, val.0)],
-                Vec::new(),
-                vec![(val.1.clone(), None)],
-            ));
+    if ctx.errors.is_empty() {
+        // define internal effects / functions
+        ctx.define_preamble_fun("unreachable", |_, fun| {
             fun.push(Instruction::Unreachable);
         });
-        ctx.define_preamble_fun("trace", |ctx, fun| {
-            fun.blocks = cap_fun.blocks.clone();
-            fun.block = cap_fun.block;
-
-            let gen = ctx.ir.effects[idx].funs[EffFunIdx(2)].generics[0].idx;
-            let handler = fun.push(Instruction::Call(
-                // os.stdio
-                FunIdent::Effect(idx, EffFunIdx(2)),
-                vec![(gen, val.0)],
-                Vec::new(),
-                vec![(val.1.clone(), None)],
-            ));
-            let ty = ctx.ir.effects[idx].funs[EffFunIdx(2)].return_type.ty;
-            let ty = ctx
-                .translate_generics(ty, &vec![(gen, val.0)], true)
-                .unwrap();
-            let handler = fun.push_deref(Instruction::Reference(handler, ty));
-
-            let io = ctx.ast.packages[ctx.ast.system].imports["io"];
-            let print = ctx.packages[io].funs["print"];
-
-            let gen = print.sign(&ctx.ir).generics[0].idx;
-            fun.push(Instruction::Call(
-                // stdio.print
-                print,
-                vec![(gen, ty)],
-                vec![Value::Param(ParamIdx(0))],
-                vec![(handler, None)],
-            ));
-            fun.push(Instruction::Return(Value::ConstantNone));
+        ctx.define_preamble_fun("len", |ctx, fun| {
+            let slice = Value::Param(ParamIdx(0));
+            let slice_ty = ctx.get_preamble_sign("len").params[ParamIdx(0)].ty;
+            let len = fun.push(Instruction::Member(slice, 1, slice_ty));
+            fun.push(Instruction::Return(len));
         });
-    }
 
-    // Main function
-    let main = ctx.packages[ctx.ast.main].funs.get("main").copied();
-    match main {
-        Some(main) => {
-            let stack = main
-                .sign(&ctx.ir)
-                .effect_stack
-                .clone()
-                .into_iter()
-                .map(|ident| {
-                    let ident = ident.0 .1.literal().unwrap();
-                    ctx.get_capability(target, &mut cap_fun, &mut cache, ident.clone())
-                })
-                .collect::<Option<Vec<_>>>();
+        ctx.get_preamble_handler("srcloc").captures = vec![TYPE_STR];
+        ctx.define_preamble_fun("source_location", |_, fun| {
+            let capture = Value::Deref(Box::new(Value::Capture(0)));
+            fun.push(Instruction::Return(capture));
+        });
+        ctx.define_preamble_fun("compile_error", |ctx, fun| {
+            let idx = ctx.get_preamble_sign("compile_error").generics[0].idx;
+            fun.push(Instruction::CompileError(GenericVal::Generic(idx)));
+            fun.push(Instruction::Unreachable);
+        });
 
-            match stack {
-                Some(stack) => {
-                    let generics = &main.sign(&ctx.ir).generics;
-                    cap_fun.push(Instruction::Call(
-                        main,
-                        generics
-                            .iter()
-                            .zip(stack.iter())
-                            .map(|(gen, v)| (gen.idx, v.0))
-                            .collect(),
-                        Vec::new(),
-                        stack.into_iter().map(|v| (v.1, None)).collect(),
-                    ));
+        let foreign = ctx.get_preamble_effect("foreign");
+        let foreign_handler = ctx.push_handler(Handler {
+            debug_name: "foreign_impl".into(),
+            generics: Vec::new(),
+            effect: foreign,
+            generic_params: Vec::new(),
+            fail: TYPE_NEVER,
+            captures: Vec::new(),
+            funs: vec![
+                (
+                    ctx.ir.effects[foreign].funs[EffFunIdx(0)].clone(),
+                    FunImpl::default(),
+                ),
+                (
+                    ctx.ir.effects[foreign].funs[EffFunIdx(1)].clone(),
+                    FunImpl::default(),
+                ),
+                (
+                    ctx.ir.effects[foreign].funs[EffFunIdx(2)].clone(),
+                    FunImpl::default(),
+                ),
+            ]
+            .into(),
+        });
+        ctx.ir.foreign_handler = foreign_handler;
+
+        ctx.ir.effects[foreign].implied.push(foreign_handler);
+        ctx.define_preamble_fun("impl_link", |ctx, fun| {
+            let gen = &ctx.get_preamble_sign("impl_link").generics;
+            let handler = fun.push(Instruction::LinkHandler(
+                GenericVal::Generic(gen[1].idx),
+                GenericVal::Generic(gen[0].idx),
+            ));
+            fun.push(Instruction::Return(handler));
+        });
+        ctx.define_preamble_fun("impl_asm", |ctx, fun| {
+            let gen = &ctx.get_preamble_sign("impl_asm").generics;
+            let handler = fun.push(Instruction::AsmHandler(
+                GenericVal::Generic(gen[3].idx),
+                GenericVal::Generic(gen[0].idx),
+                GenericVal::Generic(gen[1].idx),
+                GenericVal::Generic(gen[2].idx),
+            ));
+            fun.push(Instruction::Return(handler));
+        });
+        ctx.define_preamble_fun("syscall", |_, fun| {
+            let ret = fun.push(Instruction::Syscall(
+                Value::Param(ParamIdx(0)),
+                Value::Param(ParamIdx(1)),
+            ));
+            fun.push(Instruction::Return(ret));
+        });
+        ctx.ir.effects[foreign].implied.clear();
+
+        // Implement trace/trap_silent via os.process
+        let mut cap_fun = FunCtx {
+            scope: &mut ScopeStack::new(ctx.ast.preamble),
+            yeetable: None,
+            yeetable_def: None,
+            yeetable_ret: None,
+            blocks: vec![Block::default()].into(),
+            block: BlockIdx(0),
+            capture_boundary: (true, 0),
+            captures: &mut Vec::new(),
+        };
+
+        let mut cache = HashMap::new();
+        let metaty = ctx.insert_type(
+            Type::HandlerType(HandlerType {
+                effect: GenericVal::Literal(EffectIdent {
+                    effect: foreign,
+                    generic_params: Vec::new(),
+                }),
+                fail_type: TYPE_NEVER,
+            }),
+            false,
+        );
+        let foreign_lazy = ctx.ir.lazy_handlers.push(
+            LazyIdx,
+            LazyValue::Some(GenericVal::Literal(HandlerIdent {
+                handler: foreign_handler,
+                generic_params: Vec::new(),
+                fail_type: TYPE_NEVER,
+            })),
+        );
+        let ty = ctx.insert_type(
+            Type::Handler(Lazy {
+                idx: foreign_lazy,
+                typeof_handler: metaty,
+            }),
+            false,
+        );
+        cache.insert(
+            EffectIdent {
+                effect: foreign,
+                generic_params: Vec::new(),
+            },
+            (ty, Value::ConstantHandler(ty, Rc::new([]))),
+        );
+
+        let process_idx = ctx.packages[ctx.ast.system]
+            .effects
+            .get("process")
+            .map(|s| *s.literal().unwrap());
+        let process = process_idx.and_then(|idx| {
+            Some((
+                idx,
+                ctx.get_capability(
+                    target,
+                    &mut cap_fun,
+                    &mut cache,
+                    EffectIdent {
+                        effect: idx,
+                        generic_params: Vec::new(),
+                    },
+                )?,
+            ))
+        });
+        if let Some((idx, val)) = process.clone() {
+            ctx.define_preamble_fun("trap_silent", |ctx, fun| {
+                fun.blocks = cap_fun.blocks.clone();
+                fun.block = cap_fun.block;
+
+                let gen = ctx.ir.effects[idx].funs[EffFunIdx(0)].generics[0].idx;
+                fun.push(Instruction::Call(
+                    // os.abort
+                    FunIdent::Effect(idx, EffFunIdx(0)),
+                    vec![(gen, val.0)],
+                    Vec::new(),
+                    vec![(val.1.clone(), None)],
+                ));
+                fun.push(Instruction::Unreachable);
+            });
+            ctx.define_preamble_fun("trace", |ctx, fun| {
+                fun.blocks = cap_fun.blocks.clone();
+                fun.block = cap_fun.block;
+
+                let gen = ctx.ir.effects[idx].funs[EffFunIdx(2)].generics[0].idx;
+                let handler = fun.push(Instruction::Call(
+                    // os.stdio
+                    FunIdent::Effect(idx, EffFunIdx(2)),
+                    vec![(gen, val.0)],
+                    Vec::new(),
+                    vec![(val.1.clone(), None)],
+                ));
+                let ty = ctx.ir.effects[idx].funs[EffFunIdx(2)].return_type.ty;
+                let ty = ctx
+                    .translate_generics(ty, &vec![(gen, val.0)], true)
+                    .unwrap();
+                let handler = fun.push_deref(Instruction::Reference(handler, ty));
+
+                let io = ctx.ast.packages[ctx.ast.system].imports["io"];
+                let print = ctx.packages[io].funs["print"];
+
+                let gen = print.sign(&ctx.ir).generics[0].idx;
+                fun.push(Instruction::Call(
+                    // stdio.print
+                    print,
+                    vec![(gen, ty)],
+                    vec![Value::Param(ParamIdx(0))],
+                    vec![(handler, None)],
+                ));
+                fun.push(Instruction::Return(Value::ConstantNone));
+            });
+        }
+
+        // Main function
+        let main = ctx.packages[ctx.ast.main].funs.get("main").copied();
+        match main {
+            Some(main) => {
+                let stack = main
+                    .sign(&ctx.ir)
+                    .effect_stack
+                    .clone()
+                    .into_iter()
+                    .map(|ident| {
+                        let ident = ident.0 .1.literal().unwrap();
+                        ctx.get_capability(target, &mut cap_fun, &mut cache, ident.clone())
+                    })
+                    .collect::<Option<Vec<_>>>();
+
+                match stack {
+                    Some(stack) => {
+                        let generics = &main.sign(&ctx.ir).generics;
+                        cap_fun.push(Instruction::Call(
+                            main,
+                            generics
+                                .iter()
+                                .zip(stack.iter())
+                                .map(|(gen, v)| (gen.idx, v.0))
+                                .collect(),
+                            Vec::new(),
+                            stack.into_iter().map(|v| (v.1, None)).collect(),
+                        ));
+                    }
+                    None => panic!("give error"),
                 }
-                None => panic!("give error"),
+            }
+            None => {
+                panic!("give error");
             }
         }
-        None => {
-            panic!("give error");
+
+        if let Some((idx, val)) = process {
+            // os.exit
+            let gen = ctx.ir.effects[idx].funs[EffFunIdx(2)].generics[0].idx;
+            cap_fun.push(Instruction::Call(
+                FunIdent::Effect(idx, EffFunIdx(1)),
+                vec![(gen, val.0)],
+                vec![Value::ConstantInt(TYPE_INT, false, 0)],
+                vec![(val.1, None)],
+            ));
+            cap_fun.push(Instruction::Unreachable);
+        } else {
+            cap_fun.push(Instruction::Return(Value::ConstantNone));
         }
-    }
 
-    if let Some((idx, val)) = process {
-        // os.exit
-        let gen = ctx.ir.effects[idx].funs[EffFunIdx(2)].generics[0].idx;
-        cap_fun.push(Instruction::Call(
-            FunIdent::Effect(idx, EffFunIdx(1)),
-            vec![(gen, val.0)],
-            vec![Value::ConstantInt(TYPE_INT, false, 0)],
-            vec![(val.1, None)],
-        ));
-        cap_fun.push(Instruction::Unreachable);
-    } else {
-        cap_fun.push(Instruction::Return(Value::ConstantNone));
-    }
-
-    let start = ctx.ir.fun_sign.push(
-        FunIdx,
-        FunSign {
-            def: None,
-            name: "_start".into(),
-            generics: Vec::new(),
-            params: Vec::new().into(),
-            effect_stack: Vec::new(),
-            return_type: ReturnType {
-                type_def: None,
-                ty: TYPE_NONE,
+        let start = ctx.ir.fun_sign.push(
+            FunIdx,
+            FunSign {
+                def: None,
+                name: "_start".into(),
+                generics: Vec::new(),
+                params: Vec::new().into(),
+                effect_stack: Vec::new(),
+                return_type: ReturnType {
+                    type_def: None,
+                    ty: TYPE_NONE,
+                },
             },
-        },
-    );
-    ctx.ir.fun_impl.push_value(FunImpl {
-        blocks: cap_fun.blocks,
-    });
-    ctx.ir.entry = start;
+        );
+        ctx.ir.fun_impl.push_value(FunImpl {
+            blocks: cap_fun.blocks,
+        });
+        ctx.ir.entry = start;
 
-    // remove LazyValue::Refer
-    if ctx.errors.is_empty() {
+        // remove LazyValue::Refer
         let mut modified = true;
         while modified {
             modified = false;
@@ -3837,10 +3839,10 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 }
             }
         }
-    }
-    for value in ctx.ir.lazy_handlers.values_mut() {
-        if matches!(value, LazyValue::Refer(_, _)) {
-            *value = LazyValue::None;
+        for value in ctx.ir.lazy_handlers.values_mut() {
+            if matches!(value, LazyValue::Refer(_, _)) {
+                *value = LazyValue::None;
+            }
         }
     }
 

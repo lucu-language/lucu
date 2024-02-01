@@ -140,8 +140,11 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
     };
 
     for typ in ir.aggregates.values() {
-        let struc = codegen.generate_struct(ir, typ);
+        let struc = codegen.generate_struct(typ);
         codegen.structs.push_value(struc);
+    }
+    for idx in ir.aggregates.keys(AggrIdx) {
+        codegen.fill_struct(ir, idx);
     }
 
     for proc in ir.proc_foreign.values() {
@@ -329,8 +332,14 @@ pub fn generate_ir(ir: &IR, path: &Path, debug: bool, target: &crate::Target) {
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    fn generate_struct(&self, ir: &IR, typ: &AggregateType) -> Option<StructType<'ctx>> {
-        // TODO: set struct name
+    fn generate_struct(&self, typ: &AggregateType) -> Option<StructType<'ctx>> {
+        let struc = self.context.opaque_struct_type(&typ.debug_name);
+        Some(struc)
+    }
+    fn fill_struct(&self, ir: &IR, idx: AggrIdx) {
+        let typ = &ir.aggregates[idx];
+        let struc = self.structs[idx].unwrap();
+
         let fields: Vec<BasicTypeEnum> = typ
             .children
             .iter()
@@ -338,13 +347,7 @@ impl<'ctx> CodeGen<'ctx> {
             .filter_map(|typ| BasicTypeEnum::try_from(self.get_type(ir, typ)).ok())
             .collect();
 
-        if fields.is_empty() {
-            None
-        } else {
-            let struc = self.context.opaque_struct_type(&typ.debug_name);
-            struc.set_body(&fields, false);
-            Some(struc)
-        }
+        struc.set_body(&fields, false);
     }
     fn frame_type(&self) -> IntType<'ctx> {
         self.isize_type()

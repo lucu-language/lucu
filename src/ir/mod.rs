@@ -78,6 +78,7 @@ impl TypeIdx {
     }
 }
 
+#[derive(Default)]
 pub struct AggregateType {
     pub children: Vec<TypeIdx>,
     pub debug_name: String,

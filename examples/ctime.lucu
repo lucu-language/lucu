@@ -3,5 +3,5 @@ import "vendor:c"
 
 fun main() / io.stdio c.lib {
 	let time = c.time(0)
-	io.putint(time.timestamp._)
+	io.putint(cast time._timestamp)
 }

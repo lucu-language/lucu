@@ -25,13 +25,13 @@ fun free_t(ptr ?^`t) / lib {
 }
 
 # opaque types
-struct int    (_ core.int)
-struct size_t (_ core.usize)
-struct time_t (timestamp int)
+struct time_t (_timestamp int)
 struct void   (_ u8)
 
 # type aliases
 type string = ^u8
+type int    = core.i32
+type size_t = core.usize
 
 @capability
 fun link() impl lib / foreign {

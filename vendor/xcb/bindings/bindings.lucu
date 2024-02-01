@@ -1,11 +1,13 @@
 import "vendor:c"
 
-struct connection(_ c.void)
-
 @foreign(prefix = "xcb_")
 effect lib {
 	fun connect(displayname ?c.string, screenp ?^c.int) ^connection
 	fun disconnect(c ^connection)
+
+	fun get_setup(c ^connection) ^setup
+	fun setup_roots_iterator(R ^setup) screen_iterator
+	fun screen_next(mut i ^screen_iterator)
 }
 
 @capability

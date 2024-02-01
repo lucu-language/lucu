@@ -1,12 +1,23 @@
 import "vendor:c"
 import "bindings"
 
+# re-export binding types
+type keycode = u8
+type window = bindings.window
+type colormap = bindings.colormap
+type visualid = bindings.visualid
+type setup = bindings.setup
+type screen_iterator = bindings.screen_iterator
+type screen = bindings.screen
+
 effect lib {
 	fun connect(displayname ?c.string, screenp ?^c.int) impl conn
+	fun roots_iterator(setup ^setup) impl iter(^screen)
 }
 
 effect conn {
 	fun disconnect()
+	fun get_setup() ^setup
 }
 
 @capability
@@ -16,6 +27,19 @@ fun link() impl lib / foreign {
 			let conn = bindings.connect(displayname, screenp)
 			impl conn {
 				fun disconnect() { bindings.disconnect(conn) }
+				fun get_setup () { bindings.get_setup(conn)  }
+			}
+		}
+		fun roots_iterator(setup ^setup) impl iter(^screen) {
+			mut iter = bindings.setup_roots_iterator(setup)
+			move {
+				if iter.rem < 0 {
+					no_such_element()
+				} else {
+					mut screen = iter.data
+					bindings.screen_next(&iter)
+					screen
+				}
 			}
 		}
 	} with bindings.link()

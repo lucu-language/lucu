@@ -698,10 +698,6 @@ impl<'a> IRCtx<'a> {
                             .map(|&(ref effect, block)| {
                                 (
                                     match effect {
-                                        Value::EffectParam(_) => {
-                                            // should already be a pointer
-                                            self.get_value_reg(&mut ctx, effect)
-                                        }
                                         Value::Deref(effectptr) => {
                                             self.get_value_reg(&mut ctx, effectptr)
                                         }
@@ -745,6 +741,7 @@ impl<'a> IRCtx<'a> {
                             })
                             .collect::<Vec<_>>();
 
+                        let arg_count = args.len();
                         let args = args
                             .iter()
                             .map(|arg| self.get_value_reg(&mut ctx, arg))
@@ -765,9 +762,11 @@ impl<'a> IRCtx<'a> {
                             ProcType::Top(idx) => {
                                 ctx.push(Instruction::Call(idx, ireg, args, handled))
                             }
-                            ProcType::Foreign(idx) => {
-                                ctx.push(Instruction::CallForeign(idx, ireg, args))
-                            }
+                            ProcType::Foreign(idx) => ctx.push(Instruction::CallForeign(
+                                idx,
+                                ireg,
+                                args.into_iter().take(arg_count).collect(),
+                            )),
                         }
                     }
                     I::Yeet(p, b) => {
@@ -870,8 +869,10 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
             regs: VecMap::new(),
             types: VecSet::new(),
             break_types: VecMap::new(),
-            aggregates: VecMap::new(),
             links: HashSet::new(),
+            aggregates: std::iter::repeat_with(AggregateType::default)
+                .take(sema.structs.len())
+                .collect(),
         },
         sema,
         errors,
@@ -881,23 +882,23 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
         foreign_types: HashMap::new(),
         functions: HashMap::new(),
         handlers: VecMap::new(),
-        struct_types: VecMap::new(),
+        struct_types: sema
+            .structs
+            .keys(StructIdx)
+            .map(|idx| AggrIdx(idx.0))
+            .collect(),
     };
 
-    for struc in sema.structs.values() {
+    for (idx, struc) in sema.structs.iter(StructIdx) {
         let children = struc
             .elems
             .iter()
             .map(|&(_, ty)| ctx.lower_type(ty, &Vec::new()))
             .collect();
-        let idx = ctx.ir.aggregates.push(
-            AggrIdx,
-            AggregateType {
-                children,
-                debug_name: struc.name.clone(),
-            },
-        );
-        ctx.struct_types.push_value(idx);
+
+        let idx = ctx.struct_types[idx];
+        ctx.ir.aggregates[idx].children = children;
+        ctx.ir.aggregates[idx].debug_name = struc.name.clone();
     }
 
     let unit = ctx.insert_type(Type::Unit);

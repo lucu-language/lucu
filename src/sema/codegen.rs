@@ -1402,7 +1402,14 @@ impl SemCtx<'_> {
                 .effect_stack
                 .iter()
                 .enumerate()
-                .map(|(i, ident)| (ident.0 .0, ident.0 .1.clone(), Value::EffectParam(i), None))
+                .map(|(i, ident)| {
+                    (
+                        ident.0 .0,
+                        ident.0 .1.clone(),
+                        Value::Deref(Box::new(Value::EffectParam(i))),
+                        None,
+                    )
+                })
                 .collect();
 
             let mut blocks = VecMap::new();
@@ -1837,7 +1844,11 @@ impl SemCtx<'_> {
                 }
 
                 let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
-                Some(val)
+                if ret == TYPE_NEVER {
+                    None
+                } else {
+                    Some(val)
+                }
             }
             (E::Handler(ast::Handler::Lambda(lambda)), &Type::Handler(lazy)) => {
                 ctx.child(|ctx| {
@@ -1882,6 +1893,7 @@ impl SemCtx<'_> {
                             .translate_generics(param.ty, &generic_params, true)
                             .unwrap();
                     }
+                    println!("{}", sign.name);
                     sign.effect_stack = sign
                         .effect_stack
                         .iter()
@@ -1950,7 +1962,10 @@ impl SemCtx<'_> {
                         .iter()
                         .map(|s| match s {
                             Either::Left(s) => ctx.get_capture(self, s, lambda.moved).unwrap().ty,
-                            Either::Right(s) => ctx.get_effect(self, s, error_loc.loc).unwrap().0,
+                            Either::Right(s) => {
+                                let ty = ctx.get_effect(self, s, error_loc.loc).unwrap().0;
+                                self.insert_type(Type::Pointer(ty), false)
+                            }
                         })
                         .collect();
                     let handler = self.push_handler(Handler {
@@ -1991,7 +2006,15 @@ impl SemCtx<'_> {
                                     ctx.get_capture(self, s, lambda.moved).unwrap().value
                                 }
                                 Either::Right(s) => {
-                                    ctx.get_effect(self, s, error_loc.loc).unwrap().1
+                                    let (ty, val, _) =
+                                        ctx.get_effect(self, s, error_loc.loc).unwrap();
+                                    match val {
+                                        Value::Deref(val) => *val,
+                                        _ => {
+                                            let ty = self.insert_type(Type::Pointer(ty), false);
+                                            ctx.push(Instruction::Reference(val, ty))
+                                        }
+                                    }
                                 }
                             })
                             .collect(),
@@ -2357,9 +2380,11 @@ impl SemCtx<'_> {
                             .map(|s| match s {
                                 Either::Left(s) => ctx.get_capture(self, s, *moved).unwrap().ty,
                                 Either::Right(s) => {
-                                    ctx.get_effect(self, s, self.ast.exprs[expr].empty())
+                                    let ty = ctx
+                                        .get_effect(self, s, self.ast.exprs[expr].empty())
                                         .unwrap()
-                                        .0
+                                        .0;
+                                    self.insert_type(Type::Pointer(ty), false)
                                 }
                             })
                             .collect();
@@ -2410,9 +2435,17 @@ impl SemCtx<'_> {
                                             ctx.get_capture(self, s, *moved).unwrap().value
                                         }
                                         Either::Right(s) => {
-                                            ctx.get_effect(self, s, self.ast.exprs[expr].empty())
-                                                .unwrap()
-                                                .1
+                                            let (ty, val, _) = ctx
+                                                .get_effect(self, s, self.ast.exprs[expr].empty())
+                                                .unwrap();
+                                            match val {
+                                                Value::Deref(val) => *val,
+                                                _ => {
+                                                    let ty =
+                                                        self.insert_type(Type::Pointer(ty), false);
+                                                    ctx.push(Instruction::Reference(val, ty))
+                                                }
+                                            }
                                         }
                                     })
                                     .collect(),
@@ -2436,7 +2469,25 @@ impl SemCtx<'_> {
                         _ => todo!(),
                     },
                     E::Ident(ident) => ctx.scope.try_function(self, ident),
-                    _ => todo!(),
+                    E::Body(_) => todo!(),
+                    E::Loop(_) => todo!(),
+                    E::Call(_, _) => todo!(),
+                    E::IfElse(_, _, _) => todo!(),
+                    E::BinOp(_, _, _) => todo!(),
+                    E::UnOp(_, _) => todo!(),
+                    E::Yeet(_) => todo!(),
+                    E::Let(_, _, _, _) => todo!(),
+                    E::As(_, _) => todo!(),
+                    E::Do(_) => todo!(),
+                    E::Try(_) => todo!(),
+                    E::With(_, _) => todo!(),
+                    E::Handler(_) => todo!(),
+                    E::Array(_) => todo!(),
+                    E::String(_) => todo!(),
+                    E::Character(_) => todo!(),
+                    E::Int(_) => todo!(),
+                    E::Uninit => todo!(),
+                    E::Error => todo!(),
                 }) else {
                     return Some((Value::ConstantError, TYPE_ERROR));
                 };
@@ -2597,7 +2648,11 @@ impl SemCtx<'_> {
                 }
 
                 let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
-                Some((val, return_type))
+                if return_type == TYPE_NEVER {
+                    None
+                } else {
+                    Some((val, return_type))
+                }
             }
 
             E::BinOp(left, BinOp::Assign, right) => {
@@ -3100,7 +3155,11 @@ impl FunCtx<'_> {
                                 idx
                             }
                         };
-                        Some((ty, Value::Deref(Box::new(Value::Capture(idx))), None))
+                        Some((
+                            ty,
+                            Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                            None,
+                        ))
                     } else {
                         Some((ty, value.clone(), block))
                     };

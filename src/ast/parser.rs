@@ -992,15 +992,19 @@ impl Parse for Expression {
                 // allow try-with
                 let with_start = tk.pos_start();
                 let inner = if tk.check(Token::With).is_some() {
-                    let handler = Expression::parse_or_skip(tk)?;
-                    let handler = tk.push_expr(handler);
-                    let mut handlers = vec![handler];
-
-                    while tk.check(Token::Comma).is_some() {
+                    let mut handlers = Vec::new();
+                    tk.lambdas(false, |tk| {
                         let handler = Expression::parse_or_skip(tk)?;
                         let handler = tk.push_expr(handler);
-                        handlers.push(handler)
-                    }
+                        handlers.push(handler);
+
+                        while tk.check(Token::Comma).is_some() {
+                            let handler = Expression::parse_or_skip(tk)?;
+                            let handler = tk.push_expr(handler);
+                            handlers.push(handler)
+                        }
+                        Some(())
+                    })?;
 
                     // allow try-with-loop
                     let loop_start = tk.pos_start();

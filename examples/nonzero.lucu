@@ -4,10 +4,10 @@ effect nonzero {
 	fun nz(n int) int
 }
 
-handle nonzero fails {
+impl nonzero -> unit {
 	fun nz(n int) int {
 		if n == 0 {
-			fail
+			break
 		} else {
 			n
 		}
@@ -15,8 +15,10 @@ handle nonzero fails {
 }
 
 fun main() / io.stdio {
-	io.putint(nz(7))
-	io.putint(nz(2))
-	io.putint(nz(0))
-	io.putint(nz(8))
+	try {
+		io.putint(nz(7))
+		io.putint(nz(2))
+		io.putint(nz(0))
+		io.putint(nz(8))
+	}
 }

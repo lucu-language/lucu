@@ -4,7 +4,7 @@ effect get {
 	fun get() int
 }
 
-handle get {
+impl get {
 	fun get() int {
 		69
 	}
@@ -14,16 +14,16 @@ effect return {
 	fun return(n int) !
 }
 
-handle return fails int {
+impl return -> int {
 	fun return(n int) ! {
-		fail n
+		break n
 	}
 }
 
 fun main() / io.stdio {
 	io.putint(try {
 		io.putint(get())
-		io.putint(get()) with handle get {
+		io.putint(get()) with impl get {
 			fun get() int {
 				420
 			}

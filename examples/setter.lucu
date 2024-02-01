@@ -4,7 +4,7 @@ effect set {
 	fun set(n int)
 }
 
-fun set_setter(n int, setter set) {
+fun set_setter(n int, setter impl set) {
 	set(n) with setter
 }
 
@@ -16,7 +16,7 @@ fun main() / io.stdio {
 	mut num = 69
 	io.putint(num)
 
-	let setter set = fun { n -> num = n }
+	let setter impl set = { n -> num = n }
 
 	set(420) with setter
 	io.putint(num)

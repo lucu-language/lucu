@@ -1,4 +1,7 @@
-use std::{collections::HashMap, iter};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    iter,
+};
 
 use crate::{
     lexer::{Group, Token},
@@ -7,7 +10,7 @@ use crate::{
 
 vecmap_index!(FileIdx);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ranged<T>(pub T, pub usize, pub usize, pub FileIdx);
 
 impl<T> Ranged<T> {
@@ -16,7 +19,11 @@ impl<T> Ranged<T> {
         Ranged(f(self.0), self.1, self.2, self.3)
     }
     #[must_use]
-    pub fn empty(&self) -> Ranged<()> {
+    pub fn as_ref(&self) -> Ranged<&T> {
+        Ranged(&self.0, self.1, self.2, self.3)
+    }
+    #[must_use]
+    pub fn empty(&self) -> Range {
         Ranged((), self.1, self.2, self.3)
     }
     #[must_use]
@@ -36,7 +43,7 @@ impl<T> Ranged<T> {
 
 pub type Range = Ranged<()>;
 
-#[allow(dead_code)]
+#[derive(Debug)]
 pub enum Error {
     // lexer
     UnknownEscape,
@@ -51,31 +58,42 @@ pub enum Error {
     NakedRange,
 
     // name resolution
-    UnknownEffectFun(Option<Ranged<()>>, Option<Ranged<()>>),
-    UnknownField(Option<Ranged<()>>, Option<Ranged<()>>),
+    UnknownField(Option<Range>, Option<Range>),
     UnknownPackageValue(Range),
     UnknownPackageEffect(Range),
     UnknownPackageFunction(Range),
+    UnknownPackageType(Range),
     UnknownValue,
     UnknownFunction,
     UnknownValueOrPackage,
     UnknownEffect,
     UnknownPackage,
     UnknownType,
+    UnknownGeneric,
     UnhandledEffect,
-    MultipleEffects(Vec<Ranged<()>>),
+    MultipleEffects(Vec<Range>),
+    MultipleFunctionDefinitions(Range),
+    MultipleEffectDefinitions(Range),
 
     // type analysis
-    ExpectedType(Option<Ranged<()>>),
+    ExpectedType(Option<Range>),
     ExpectedHandler(String),
     ExpectedFunction(String),
-    ExpectedEffect(String, Option<Ranged<()>>),
+    ExpectedEffect(String, Option<Range>),
     ExpectedArray(String),
-    TypeMismatch(String, String),
-    ParameterMismatch(usize, usize),
+    TypeMismatch(Option<Range>, String, String),
+    ExtendedTypeMismatch(Option<Range>, String, String, Vec<(String, String)>),
+    ParameterMismatch(Option<Range>, usize, usize),
     NestedHandlers,
     TryReturnsHandler,
     NotEnoughInfo,
+    UnresolvedEffect(Range),
+    UnresolvedTry,
+
+    // handlers
+    UnknownEffectFun(Option<Range>, Option<Range>),
+    SignatureMismatch(Range, Range),
+    UnimplementedMethods(Range, Vec<Range>),
 
     // borrow checker
     AssignImmutable(Option<Range>),
@@ -89,6 +107,7 @@ pub enum Error {
     NeverValue,
 }
 
+#[derive(Debug)]
 pub enum Expected {
     Token(Token),
     Identifier,
@@ -119,6 +138,7 @@ impl Error {
     }
 }
 
+#[derive(Debug)]
 pub struct Errors {
     pub files: VecMap<FileIdx, File>,
     vec: Vec<Ranged<Error>>,
@@ -130,7 +150,7 @@ pub struct LinePos {
     pub column: usize,
 }
 
-pub fn get_lines(file: &str, range: Ranged<()>) -> (LinePos, LinePos) {
+pub fn get_lines(file: &str, range: Range) -> (LinePos, LinePos) {
     let start = file
         .chars()
         .take(range.1)
@@ -173,7 +193,7 @@ struct Highlight {
 }
 
 impl Highlight {
-    fn from_file(files: &VecMap<FileIdx, File>, range: Ranged<()>, color: usize) -> Self {
+    fn from_file(files: &VecMap<FileIdx, File>, range: Range, color: usize) -> Self {
         let file = &files[range.3].content;
         let (start, end) = get_lines(file, range);
         Self {
@@ -197,12 +217,10 @@ fn highlight(i: usize, s: &str, color: bool, bold: bool) -> String {
         } else {
             format!("\x1b[1;{};40m{}\x1b[0m", bg, s)
         }
+    } else if bold {
+        format!("'{}'", s)
     } else {
-        if bold {
-            format!("'{}'", s)
-        } else {
-            format!("{}", s)
-        }
+        s.into()
     }
 }
 
@@ -211,15 +229,14 @@ const LINE_TOLERANCE: usize = 3;
 fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: bool) {
     let mut map = HashMap::new();
     for highlight in highlights.iter() {
-        if !map.contains_key(&highlight.file) {
-            map.insert(highlight.file, vec![highlight]);
-        } else {
-            map.get_mut(&highlight.file).unwrap().push(highlight);
+        match map.entry(highlight.file) {
+            Entry::Vacant(e) => _ = e.insert(vec![highlight]),
+            Entry::Occupied(mut e) => e.get_mut().push(highlight),
         }
     }
 
     let mut sorted_partition = Vec::new();
-    sorted_partition.extend(map.into_iter());
+    sorted_partition.extend(map);
     sorted_partition.sort_unstable_by_key(|&(f, _)| usize::from(f));
 
     for (idx, highlights) in sorted_partition.into_iter() {
@@ -299,19 +316,16 @@ fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: b
                             let select: String = match next.gravity {
                                 Gravity::Whole => {
                                     if next.color == 0 {
-                                        iter::repeat('^').take(end - start).collect()
+                                        "^".repeat(end - start)
                                     } else {
-                                        iter::repeat('-').take(end - start).collect()
+                                        "-".repeat(end - start)
                                     }
                                 }
                                 Gravity::EndPlus => {
                                     if line == next.end.line {
-                                        iter::repeat('-')
-                                            .take(end - start)
-                                            .chain(iter::once('^'))
-                                            .collect()
+                                        "-".repeat(end - start) + "^"
                                     } else {
-                                        iter::repeat('-').take(end - start).collect()
+                                        "-".repeat(end - start)
                                     }
                                 }
                             };
@@ -397,6 +411,7 @@ fn print_error(files: &VecMap<FileIdx, File>, highlights: &[Highlight], color: b
     }
 }
 
+#[derive(Debug)]
 pub struct File {
     pub content: String,
     pub name: String,
@@ -461,7 +476,7 @@ impl Errors {
                         format!("unclosed {}", highlight(0, str, color, true)),
                     Error::UnresolvedLibrary(ref s) => format!("unresolved library '{}'", s),
                     Error::NoSuchDirectory(ref s) => format!("directory '{}' does not exist", s),
-                    Error::NakedRange => format!("cannot use range literal as value"),
+                    Error::NakedRange => "cannot use range literal as value".into(),
 
                     Error::UnknownEffect => format!(
                         "effect {} not found in scope",
@@ -471,20 +486,6 @@ impl Errors {
                         "package {} not found in scope",
                         highlight(0, str, color, true)
                     ),
-                    Error::UnknownEffectFun(effect, _) => {
-                        format!(
-                            "effect {}has no function {}",
-                            effect
-                                .map(|effect| highlight(
-                                    1,
-                                    &self.files[effect.3].content[effect.1..effect.2],
-                                    color,
-                                    true
-                                ) + " ")
-                                .unwrap_or(String::new()),
-                            highlight(0, str, color, true)
-                        )
-                    }
                     Error::UnknownValue => format!(
                         "value {} not found in scope",
                         highlight(0, str, color, true)
@@ -531,9 +532,24 @@ impl Errors {
                         highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
                         highlight(0, str, color, true)
                     ),
+                    Error::UnknownPackageType(pkg) => format!(
+                        "package {} has no type {}",
+                        highlight(1, &self.files[pkg.3].content[pkg.1..pkg.2], color, true),
+                        highlight(0, str, color, true)
+                    ),
+                    Error::MultipleFunctionDefinitions(_) => format!(
+                        "function {} is defined multiple times",
+                        highlight(0, str, color, true)
+                    ),
+                    Error::MultipleEffectDefinitions(_) => format!(
+                        "effect {} is defined multiple times",
+                        highlight(0, str, color, true)
+                    ),
 
                     Error::UnknownType =>
                         format!("type {} not found in scope", highlight(0, str, color, true)),
+                    Error::UnknownGeneric =>
+                        format!("generic {} not found in scope", highlight(0, str, color, true)),
                     Error::ExpectedType(_) => format!(
                         "expected a type, found value {}",
                         highlight(0, str, color, true)
@@ -542,32 +558,68 @@ impl Errors {
                         format!("type mismatch: expected an effect handler, found {}", found),
                     Error::ExpectedFunction(ref found) =>
                         format!("type mismatch: expected a function, found {}", found),
-                    Error::TypeMismatch(ref expected, ref found) =>
+                    Error::TypeMismatch(_, ref expected, ref found) =>
                         format!("type mismatch: expected {}, found {}", expected, found),
-                    Error::ParameterMismatch(expected, ref found) =>
+                    Error::ExtendedTypeMismatch(_, ref expected, ref found, ref extended) => format!(
+                        "type mismatch: expected {}, found {}\n                      {}",
+                        expected,
+                        found,
+                        extended.iter().map(|(a, b)| format!("expected {}, found {}", a, b)).collect::<Vec<_>>().join("\n                      ")
+                    ),
+                    Error::ParameterMismatch(_, expected, ref found) =>
                         format!("expected {} argument(s), found {}", expected, found),
+
                     Error::ExpectedEffect(ref found, _) =>
                         format!("expected an effect type, found {}", found),
                     Error::NestedHandlers =>
                         "effect handlers may not escape other effect handlers".into(),
                     Error::TryReturnsHandler =>
-                        "effect handlers may not escape try/with expressions".into(),
+                        "effect handlers may not escape try expressions".into(),
                     Error::ExpectedArray(ref found) =>
                         format!("expected an array type, found {}", found),
-                    Error::NotEnoughInfo => format!("cannot resolve type: type annotations needed"),
+                    Error::NotEnoughInfo => "cannot resolve type: type annotations needed".into(),
+                    Error::UnresolvedEffect(def) => format!(
+                        "unhandled effect {} for function call",
+                        highlight(1, &self.files[def.3].content[def.1..def.2], color, true)
+                    ),
+                    Error::UnresolvedTry => "'break' outside of a try block".into(),
+
+                    Error::UnknownEffectFun(effect, _) => {
+                        format!(
+                            "effect {}has no method {}",
+                            effect
+                                .map(|effect| highlight(
+                                    1,
+                                    &self.files[effect.3].content[effect.1..effect.2],
+                                    color,
+                                    true
+                                ) + " ")
+                                .unwrap_or(String::new()),
+                            highlight(0, str, color, true)
+                        )
+                    }
+                    Error::SignatureMismatch(effect, _) => format!(
+                        "handler method {} has an incompatible signature for effect {}",
+                        highlight(0, str, color, true),
+                        highlight(1, &self.files[effect.3].content[effect.1..effect.2], color, true)
+                    ),
+                    Error::UnimplementedMethods(effect, _) => format!(
+                        "handler does not implement all methods for effect {}",
+                        highlight(1, &self.files[effect.3].content[effect.1..effect.2], color, true),
+                    ),
 
                     Error::AssignImmutable(_) => "cannot assign to immutable variable".into(),
                     Error::AssignExpression => "cannot assign to expression".into(),
                     Error::AssignMutDowncast(_) =>
-                        format!("cannot assign to mutable variable: value is immutable and may not become mutable"),
+                        "cannot assign to mutable variable: value is immutable and may not become mutable".into(),
                     Error::MoveMutDowncast(_, _) =>
-                        format!("cannot move into mutable parameter: value is immutable and may not become mutable"),
+                        "cannot move into mutable parameter: value is immutable and may not become mutable".into(),
 
                     Error::UndefinedUnallowed(ref ty) =>
                         format!("cannot leave type {} undefined", ty),
                     Error::ZeroinitUnallowed(ref ty) =>
                         format!("cannot zero-initialize type {}", ty),
-                    Error::NeverValue => format!("cannot create a value of type never"),
+                    Error::NeverValue => "cannot create a value of type never".into(),
                 }
             );
             if color {
@@ -582,6 +634,7 @@ impl Errors {
                 color: 0,
                 gravity: err.0.gravity(),
             }];
+            #[allow(clippy::collapsible_match)]
             match err.0 {
                 Error::ExpectedType(value) => {
                     if let Some(value) = value {
@@ -615,6 +668,34 @@ impl Errors {
                 Error::UnknownPackageEffect(pkg) => {
                     highlights.push(Highlight::from_file(&self.files, pkg, 1));
                 }
+                Error::UnknownPackageType(pkg) => {
+                    highlights.push(Highlight::from_file(&self.files, pkg, 1));
+                }
+                Error::TypeMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
+                }
+                Error::ExtendedTypeMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
+                }
+                Error::ParameterMismatch(Some(def), ..) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
+                }
+                Error::MultipleFunctionDefinitions(first) => {
+                    highlights.push(Highlight::from_file(&self.files, first, 1));
+                }
+                Error::MultipleEffectDefinitions(first) => {
+                    highlights.push(Highlight::from_file(&self.files, first, 1));
+                }
+                Error::SignatureMismatch(effect, effect_fun) => {
+                    highlights.push(Highlight::from_file(&self.files, effect, 1));
+                    highlights.push(Highlight::from_file(&self.files, effect_fun, 2));
+                }
+                Error::UnimplementedMethods(effect, funs) => {
+                    highlights.push(Highlight::from_file(&self.files, effect, 1));
+                    for fun in funs {
+                        highlights.push(Highlight::from_file(&self.files, fun, 2));
+                    }
+                }
                 Error::MultipleEffects(effects) => {
                     for effect in effects {
                         highlights.push(Highlight::from_file(&self.files, effect, 1));
@@ -637,6 +718,9 @@ impl Errors {
                     if let Some(param) = param {
                         highlights.push(Highlight::from_file(&self.files, param, 2));
                     }
+                }
+                Error::UnresolvedEffect(def) => {
+                    highlights.push(Highlight::from_file(&self.files, def, 1));
                 }
                 _ => (),
             }

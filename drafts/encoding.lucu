@@ -1,0 +1,54 @@
+effect text(`str) {
+	
+	type rune
+	const rune_bytes usize
+
+	fun decode() rune / replacement(rune) iter(u8)
+	fun encode(c rune, mut buf [rune_bytes]u8 = ---) []u8
+
+	fun decode_unicode() impl iter(rune) / iter(unicode_rune) replacement(rune)
+	fun encode_unicode() impl iter(unicode_rune) / iter(rune) replacement(unicode_rune)
+
+	fun bytes(s `str)     []const u8
+	fun graphemes(s `str) impl iter(`str)
+
+	fun from_raw_bytes(s []const u8) `str
+
+}
+
+type unicode_rune = #distinct u32
+
+effect replacement(`t) {
+	fun replacement() `t
+}
+
+impl replacement(unicode_rune) {
+	fun replacement() unicode_rune {
+		'�'
+	}
+}
+
+fun runes(s `str) impl iter(rune) / text(`str) srcloc {
+	let bytes = iter_slice(bytes(s))
+	move {
+		let replace impl replacement(rune) = { panic("string is incorrectly encoded") }
+		decode() with replace
+	}
+}
+
+fun unicode_runes(s `str) impl iter(unicode_rune) / text(`str) replacement(unicode_rune) srcloc {
+	encode_unicode() with runes(s)
+}
+
+fun from_runes(runes impl iter(rune)) `str / text(`str) buf(u8) {
+	let start = buf_len()
+
+	for(runes) { rune -> buf_push_slice(encode(rune)) }
+
+	let bytes = buf_slice()[start..]
+	from_raw_bytes(bytes)
+}
+
+fun from_unicode_runes(runes impl iter(unicode_rune)) `str / text(`str) buf(u8) replacement(rune) {
+	from_runes(decode_unicode() with runes)
+}

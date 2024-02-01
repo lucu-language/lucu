@@ -21,46 +21,143 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
-# implicit break effect
-# breaks up to the nearest try block
+# error effects
 ##
-effect break {
-	fun break() !
+effect no_such_element(`t) {
+	fun no_such_element() `t
 }
 
-handle break fails {
-	fun break() ! {
-		fail
-	}
+effect fail {
+	fun fail() !
 }
 
 ##
-# basic ranged for loop
+# sink
 ##
-fun for(start usize, end usize, fn consume fails) {
-	mut n = start
-	with fn loop {
-		if n == end {
-			break()
+effect sink(`t) {
+	fun push(t `t)
+}
+
+fun push_slice(buf []`t) / sink(`t) {
+	for(iter_slice(buf)) { t -> push(t) }
+}
+
+fun sink_slice(mut buf []const `e) impl sink(`e) / fail {
+	mut n usize = 0
+	move {
+		t ->
+		if n == len(buf) {
+			fail()
 		} else {
-			consume(n++)
+			buf[n++] = t
 		}
 	}
 }
 
-effect consume {
-	fun consume(n usize)
+fun sink_buffer() impl sink(`t) / buf(`t) {
+	{ t -> buf_push(t) }
+}
+
+##
+# buffer
+##
+effect buf(`t) {
+	fun buf_push(t `t)
+	fun buf_len() usize
+	fun buf_slice() []const `t
+}
+
+fun buf_push_slice(buf []`t) / buf(`t) {
+	for(iter_slice(buf)) { t -> buf_push(t) }
+}
+
+fun buffer_slice(mut buf[]const `t) impl buf(`t) / fail {
+	mut n usize = 0
+	impl buf(`t) move {
+		fun buf_push(t `t) {
+			if n == len(buf) {
+				fail()
+			} else {
+				buf[n++] = t
+			}
+		}
+		fun buf_len() usize {
+			n
+		}
+		fun buf_slice() []const `t {
+			buf[0..n]
+		}
+	}
+}
+
+##
+# iterator
+##
+effect iter(`t) {
+	fun next() `t / no_such_element(`t)
+}
+
+fun iter_slice(buf []`e) impl iter(const `e) {
+	mut n usize = 0
+	move {
+		if n == len(buf) {
+			no_such_element()
+		} else {
+			buf[n++]
+		}
+	}
+}
+
+fun range(start usize, end usize) impl iter(usize) {
+	mut n = start
+	move {
+		if n == end {
+			no_such_element()
+		} else {
+			n++
+		}
+	}
+}
+
+fun from(start usize) impl iter(usize) {
+	mut n = start
+	move { n++ }
+}
+
+##
+# basic for loop
+##
+fun for(it impl iter(`e), fn impl consume(`e)) {
+	let on_nse impl no_such_element(`e) -> unit = { break }
+	try with on_nse, it, fn loop {
+		consume(next() as `e)
+	}
+}
+
+effect iterable(`t, `e) {
+	fun iter(t `t) impl iter(`e)
+}
+
+impl iterable([]`t, const `t) {
+	fun iter(t []`t) impl iter(const `t) {
+		iter_slice(t)
+	}
+}
+
+fun foreach(t `t, fn impl consume(`e)) / iterable(`t, `e) {
+	let iter = iter(t) as impl iter(`e)
+	for(iter, fn)
 }
 
 ##
 # while loop
 ##
-fun while(cond test, fn run fails) {
-	with fn loop {
+fun while(cond impl test, fn impl perform) {
+	try with fn loop {
 		if test() with cond {
-			run()
+			perform()
 		} else {
-			break()
+			break
 		}
 	}
 }
@@ -68,31 +165,48 @@ fun while(cond test, fn run fails) {
 ##
 # until loop
 ##
-fun until(cond test, fn run fails) {
-	with fn loop {
+fun until(cond impl test, fn impl perform) {
+	try with fn loop {
 		if test() with cond {
-			break()
+			break
 		} else {
-			run()
+			perform()
 		}
+	}
+}
+
+##
+# run
+##
+fun run(fn impl supply(`t)) `t {
+	with fn {
+		supply()
 	}
 }
 
 ##
 # repeat loop
 ##
-fun repeat(fn run fails `t) `t {
-	with fn loop {
-		run()
+fun repeat(fn impl perform -> `t) `t {
+	try with fn loop {
+		perform()
 	}
+}
+
+effect consume(`t) {
+	fun consume(t `t)
 }
 
 effect test {
 	fun test() bool
 }
 
-effect run {
-	fun run()
+effect perform {
+	fun perform()
+}
+
+effect supply(`t) {
+	fun supply() `t
 }
 
 # TODO: && operator
@@ -100,7 +214,7 @@ fun and(a bool, b bool) bool {
 	if a {
 		b
 	} else {
-		0 == 1
+		false
 	}
 }
 
@@ -115,6 +229,13 @@ fun panic(msg str) ! / srcloc {
 	trap()
 }
 
+fun trap() ! / srcloc {
+	trace("trapped at ")
+	trace(source_location())
+	trace("\n")
+	trap_silent()
+}
+
 ##
 # exits the program and displays an error message
 # marks code paths that aren't implemented yet
@@ -126,10 +247,18 @@ fun todo(msg str) ! / srcloc {
 	trap()
 }
 
+fun internal() `t / srcloc {
+	compile_error("internal function has no definition on specified target")
+}
+
 ##
 # the following functions have internal definitions
 # these are not based on a specific target
 ##
+
+fun compile_error(`msg str) ! / srcloc {
+	internal()
+}
 
 ##
 # marks that a code path is unreachable
@@ -137,16 +266,14 @@ fun todo(msg str) ! / srcloc {
 # for displaying an error, &panic is preferred
 ##
 fun unreachable() ! {
-	# internally defined
-	loop {}
+	internal()
 }
 
 ##
 # returns the length of a slice
 ##
 fun len(slice []`elem) usize {
-	# internally defined
-	unreachable()
+	internal()
 }
 
 ##
@@ -159,26 +286,21 @@ effect srcloc {
 	fun source_location() str
 }
 
-handle srcloc {
+impl srcloc {
 	fun source_location() str {
-		# internally defined
-		unreachable()
+		internal()
 	}
 }
 
 ##
 # links to a dynamic library using an effect as a foreign interface
-# &`effect SHOULD be annotated with @foreign,
+# &`effect MUST be annotated with @foreign,
 # as it uses the data inside to determine the symbol names for the effect functions
 ##
-effect linker {
-	fun link_effect(`lib str) handle `effect
-}
-
-@capability
-fun linker() linker {
-	# internally defined
-	unreachable()
+effect foreign {
+	fun impl_link(`lib str) impl `effect
+	fun impl_asm(`assembly str, `constraints str, `sideeffects bool) impl `effect
+	fun syscall(nr int, args [`N]int) int
 }
 
 ##
@@ -191,7 +313,7 @@ fun linker() linker {
 # the message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times
 ##
 fun trace(s str) {
-	# internally defined based on target
+	internal()
 }
 
 ##
@@ -203,10 +325,6 @@ fun trace(s str) {
 #  - throw an exception / interrupt
 #  - spin forever
 ##
-fun trap() ! / srcloc {
-	# internally defined based on target
-	trace("trapped at ")
-	trace(source_location())
-	trace("\n")
-	loop {}
+fun trap_silent() ! {
+	internal()
 }

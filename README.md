@@ -110,7 +110,6 @@ Of course, this example does not include defining a handler for `fs`. An effect 
 # inside core/io/write.lucu
 effect writer {
   fun write(bytes []u8) usize
-  fun flush()
 }
 
 # inside examples/write_buffer.lucu (try it yourself!)
@@ -122,27 +121,26 @@ fun main() / io.stdio {
 
   # define a handler for writing to the buffer
   mut ptr usize = 0
-  let handler = handle io.writer {
+  let handler = impl io.writer {
     fun write(bytes []u8) usize {
       mut written usize = 0
-      while() { and(ptr < 1024, written < len(bytes)) } {
+      while({ and(ptr < 1024, written < len(bytes)) }) {
         buf[ptr++] = bytes[written++]
       }
       written
     }
-    fun flush() {}
   }
 
   # use handler
   with handler {
-    io.write("Hello")
-    io.write(", ")
-    io.write("World")
-    io.write("!\n")
+    do io.write("Hello")
+    do io.write(", ")
+    do io.write("World")
+    do io.write("!\n")
   }
 
   # print the entire buffer to the console
-  io.write(buf[0 .. ptr]) with io.stdout();
+  do io.write(buf[0 .. ptr]) with io.stdout();
 }
 ```
 
@@ -157,21 +155,18 @@ effect show(`t) {
   fun show(t `t) / io.writer
 }
 
-handle show(int) {
+impl show(int) {
   fun show(i int) / io.writer {
     io.write_int(i)
   }
 }
 
-handle show(str) {
+impl show(str) {
   fun show(s str) / io.writer {
     io.write(cast s)
   }
 }
 ```
-
-> [!WARNING]  
-> Generics in lucu effects are not fully supported yet and will crash the compiler. It is being worked on
 
 ### Effects for typed exceptions
 

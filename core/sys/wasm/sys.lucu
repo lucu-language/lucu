@@ -1,0 +1,8 @@
+effect sys {
+	fun unreachable() !
+}
+
+@capability(arch = "wasm")
+fun link() impl sys / foreign {
+	impl_asm("unreachable", "", true)
+}

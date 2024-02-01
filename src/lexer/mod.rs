@@ -12,7 +12,6 @@ pub enum Token {
     If,
     Else,
     Yeet,
-    Yeets,
     Handle,
     Let,
     Mut,
@@ -20,6 +19,9 @@ pub enum Token {
     Import,
     Cast,
     Const,
+    As,
+    Do,
+    Move,
 
     // Symbols
     Semicolon,
@@ -70,14 +72,16 @@ impl fmt::Display for Token {
                 Token::If => "'if'".into(),
                 Token::Else => "'else'".into(),
                 Token::Yeet => "'fail'".into(),
-                Token::Yeets => "'fails'".into(),
-                Token::Handle => "'handle'".into(),
+                Token::Handle => "'impl'".into(),
                 Token::Let => "'let'".into(),
                 Token::Mut => "'mut'".into(),
                 Token::Loop => "'loop'".into(),
                 Token::Import => "'import'".into(),
                 Token::Cast => "'cast'".into(),
                 Token::Const => "'const'".into(),
+                Token::As => "'as'".into(),
+                Token::Do => "'do'".into(),
+                Token::Move => "'move'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Dot => "'.'".into(),
                 Token::DoubleDot => "'..'".into(),
@@ -150,6 +154,9 @@ impl Token {
                 | Token::Arrow
                 | Token::Loop
                 | Token::Cast
+                | Token::As
+                | Token::Do
+                | Token::Move
                 | Token::Open(_)
 
                 // prevents double semicolons
@@ -162,11 +169,9 @@ impl Token {
     pub fn continues_statement(&self) -> bool {
         matches!(
             self,
-            Token::Yeets
-                | Token::Else
+            Token::Else
                 | Token::Comma
                 | Token::Close(_)
-                | Token::Open(Group::Brace)
                 | Token::Dot
                 | Token::Slash
                 | Token::Equals
@@ -177,6 +182,7 @@ impl Token {
                 | Token::Asterisk
                 | Token::Plus
                 | Token::Arrow
+                | Token::As
 
                 // prevents double semicolons
                 | Token::Semicolon
@@ -407,14 +413,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                 let mut word = String::new();
                 word.push(char);
 
-                loop {
-                    match self.next.peek() {
-                        Some(&c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) => {
-                            self.next_char();
-                            word.push(c);
-                        }
-                        _ => break,
-                    }
+                while let Some(&c @ ('a'..='z' | 'A'..='Z' | '0'..='9' | '_')) = self.next.peek() {
+                    self.next_char();
+                    word.push(c);
                 }
 
                 // find keyword
@@ -425,15 +426,17 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "with" => Token::With,
                     "if" => Token::If,
                     "else" => Token::Else,
-                    "yeet" | "fail" => Token::Yeet,
-                    "yeets" | "fails" => Token::Yeets,
-                    "handle" => Token::Handle,
+                    "yeet" | "break" => Token::Yeet,
+                    "impl" => Token::Handle,
                     "let" => Token::Let,
                     "mut" => Token::Mut,
                     "loop" => Token::Loop,
                     "import" => Token::Import,
                     "cast" => Token::Cast,
                     "const" => Token::Const,
+                    "as" => Token::As,
+                    "do" => Token::Do,
+                    "move" => Token::Move,
                     _ => Token::Ident(word),
                 }
             }

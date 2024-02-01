@@ -4,8 +4,8 @@ effect env {
 }
 
 @capability
-fun link() handle env / linker {
-	link_effect("env")
+fun link() impl env / foreign {
+	impl_link("env")
 }
 
 fun main() / env {

@@ -1,54 +1,19 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
-    matches,
     path::{Path, PathBuf},
 };
 
-use either::Either;
-
 use crate::{
-    error::{Error, Expected, FileIdx, Range, Ranged},
+    error::{Error, Expected, Range, Ranged},
     lexer::{Group, Token, Tokenizer, GENERIC},
-    vecmap::{vecmap_index, VecMap},
+    vecmap::VecMap,
 };
 
-vecmap_index!(ExprIdx);
-vecmap_index!(TypeIdx);
-vecmap_index!(Ident);
-vecmap_index!(PackageIdx);
-
-vecmap_index!(ParamIdx);
-vecmap_index!(FunIdx);
-vecmap_index!(EffIdx);
-vecmap_index!(EffFunIdx);
-
-impl Default for ExprIdx {
-    fn default() -> Self {
-        ExprIdx(0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOp {
-    Assign,
-    Equals,
-    Less,
-    Greater,
-    Divide,
-    Multiply,
-    Subtract,
-    Add,
-    Index,
-    Range,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnOp {
-    PostIncrement,
-    Reference,
-    Cast,
-}
+use super::{
+    Ast, Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType,
+    FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent,
+    Param, PolyIdent, PolyParam, Type, TypeIdx, UnOp,
+};
 
 impl BinOp {
     fn from_token(value: &Token) -> Option<BinOp> {
@@ -67,331 +32,16 @@ impl BinOp {
     }
 }
 
-#[derive(Debug, Default)]
-pub enum Expression {
-    Body(Body),
-    Loop(ExprIdx),
-
-    Call(ExprIdx, Vec<ExprIdx>),
-    Member(ExprIdx, Ident),
-    IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
-    BinOp(ExprIdx, BinOp, ExprIdx),
-    UnOp(ExprIdx, UnOp),
-    Yeet(Option<ExprIdx>),
-    Let(bool, Ident, Option<TypeIdx>, ExprIdx),
-
-    TryWith(ExprIdx, Option<ExprIdx>),
-    Handler(Handler),
-
-    Array(Vec<ExprIdx>),
-    String(String),
-    Character(String),
-    Int(u64),
-    Ident(Ident),
-    Uninit,
-
-    #[default]
-    Error, // error at parsing, coerces to any type
-}
-
-#[derive(Debug)]
-pub struct Body {
-    pub main: Vec<ExprIdx>,
-    pub last: Option<ExprIdx>,
-}
-
-impl Body {
-    fn parse_or_default(tk: &mut Tokens) -> Ranged<Expression> {
-        let start = tk.pos_start();
-        match Self::parse_or_skip(tk) {
-            Some(body) => body.map(Expression::Body),
-            None => Ranged(Expression::Error, start, start, tk.iter.file),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Lambda {
-    pub inputs: VecMap<ParamIdx, Ident>,
-    pub body: ExprIdx,
-}
-
-#[derive(Debug)]
-pub enum Handler {
-    Full {
-        fail_type: FailType,
-        effect: EffectIdent,
-        functions: Vec<Function>,
-    },
-    Lambda(Lambda),
-}
-
-impl Handler {
-    pub fn functions(
-        &self,
-        effect: &Effect,
-    ) -> Either<
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-        impl Iterator<Item = (Cow<FunDecl>, ExprIdx)>,
-    > {
-        match *self {
-            Handler::Full { ref functions, .. } => {
-                Either::Left(functions.iter().map(|f| (Cow::Borrowed(&f.decl), f.body)))
-            }
-            Handler::Lambda(Lambda {
-                body, ref inputs, ..
-            }) => {
-                let mut decl: FunDecl = effect.functions.values().next().unwrap().clone();
-
-                // set signature input names
-                for (idx, &input) in inputs.iter(ParamIdx) {
-                    decl.sign.inputs[idx].name = input;
-                }
-
-                Either::Right(std::iter::once((Cow::Owned(decl), body)))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub enum Type {
-    Never,
-    Path(Ident),
-    Handler(Ident, FailType),
-
-    Generic(Ident),
-    GenericHandler(Ident, FailType),
-
-    Pointer(TypeIdx),
-    Const(TypeIdx),
-    ConstArray(u64, TypeIdx),
-    Slice(TypeIdx),
-
-    #[default]
-    Error, // error at parsing, coerces to any type
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum FailType {
-    Never,
-    None,
-    Some(TypeIdx),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EffectIdent {
-    pub package: Option<Ident>,
-    pub effect: Ident,
-}
-
-#[derive(Debug, Clone)]
-pub struct Param {
-    pub mutable: bool,
-    pub const_generic: bool,
-    pub name: Ident,
-    pub ty: TypeIdx,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunSign {
-    pub inputs: VecMap<ParamIdx, Param>,
-    pub output: Option<TypeIdx>,
-    pub effects: Vec<EffectIdent>,
-}
-
-#[derive(Debug, Clone)]
-pub struct FunDecl {
-    pub name: Ident,
-    pub sign: FunSign,
-    pub attributes: Vec<Attribute>,
-}
-
-#[derive(Debug, Clone)]
-pub enum AttributeValue {
-    String(Ranged<String>),
-    Type(TypeIdx),
-}
-
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    pub name: Ident,
-    pub settings: Vec<(Ident, AttributeValue)>,
-}
-
-#[derive(Debug)]
-pub struct Function {
-    pub decl: FunDecl,
-    pub body: ExprIdx,
-}
-
-#[derive(Debug)]
-pub struct Effect {
-    pub name: Ident,
-    pub functions: VecMap<EffFunIdx, FunDecl>,
-    pub attributes: Vec<Attribute>,
-}
-
-#[derive(Default)]
-pub struct Package {
-    pub effects: Vec<EffIdx>,
-    pub implied: Vec<ExprIdx>,
-    pub functions: Vec<FunIdx>,
-    pub imports: HashMap<String, PackageIdx>,
-}
-
-pub struct Parsed {
-    pub effects: VecMap<EffIdx, Effect>,
-    pub functions: VecMap<FunIdx, Function>,
-    pub packages: VecMap<PackageIdx, Package>,
-
-    pub main: PackageIdx,
-    pub preamble: PackageIdx,
-
-    // package inside core of the current system
-    pub system: PackageIdx,
-
-    pub exprs: VecMap<ExprIdx, Ranged<Expression>>,
-    pub types: VecMap<TypeIdx, Ranged<Type>>,
-    pub idents: VecMap<Ident, Ranged<String>>,
-}
-
-impl Default for Parsed {
-    fn default() -> Self {
-        let mut packages = VecMap::new();
-        let core = packages.push(PackageIdx, Package::default());
-        let main = packages.push(PackageIdx, Package::default());
-        let system = packages.push(PackageIdx, Package::default());
-
-        let mut exprs = VecMap::new();
-        exprs.push_value(Ranged(Expression::Error, 0, 0, FileIdx(0)));
-
-        Self {
-            effects: VecMap::new(),
-            functions: VecMap::new(),
-            packages,
-            main,
-            preamble: core,
-            system,
-            exprs,
-            types: VecMap::new(),
-            idents: VecMap::new(),
-        }
-    }
-}
-
-impl Parsed {
-    pub fn for_each(
-        &self,
-        expr: ExprIdx,
-        do_try: bool,
-        do_handler: bool,
-        f: &mut impl FnMut(ExprIdx),
-    ) {
-        f(expr);
-        match self.exprs[expr].0 {
-            Expression::Body(ref b) => {
-                for expr in b.main.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(expr) = b.last {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Loop(expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Call(expr, ref args) => {
-                self.for_each(expr, do_try, do_handler, f);
-                for expr in args.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Array(ref elems) => {
-                for expr in elems.iter().copied() {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::Member(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::IfElse(cond, yes, no) => {
-                self.for_each(cond, do_try, do_handler, f);
-                self.for_each(yes, do_try, do_handler, f);
-                if let Some(no) = no {
-                    self.for_each(no, do_try, do_handler, f);
-                }
-            }
-            Expression::BinOp(left, _, right) => {
-                self.for_each(left, do_try, do_handler, f);
-                self.for_each(right, do_try, do_handler, f);
-            }
-            Expression::Yeet(expr) => {
-                if let Some(expr) = expr {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-            }
-            Expression::TryWith(expr, handler) => {
-                if do_try {
-                    self.for_each(expr, do_try, do_handler, f);
-                }
-                if let Some(handler) = handler {
-                    self.for_each(handler, do_try, do_handler, f);
-                }
-            }
-            Expression::Let(_, _, _, expr) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::UnOp(expr, _) => {
-                self.for_each(expr, do_try, do_handler, f);
-            }
-            Expression::Handler(ref h) => {
-                if do_handler {
-                    match *h {
-                        Handler::Full { ref functions, .. } => {
-                            for fun in functions.iter() {
-                                self.for_each(fun.body, do_try, do_handler, f);
-                            }
-                        }
-                        Handler::Lambda(Lambda { body, .. }) => {
-                            self.for_each(body, do_try, do_handler, f);
-                        }
-                    }
-                }
-            }
-            Expression::String(_) => {}
-            Expression::Character(_) => {}
-            Expression::Int(_) => {}
-            Expression::Ident(_) => {}
-            Expression::Error => {}
-            Expression::Uninit => {}
-        }
-    }
-    pub fn fold<A>(&self, expr: ExprIdx, acc: A, mut f: impl FnMut(A, ExprIdx) -> A) -> A {
-        let mut acc = Some(acc);
-        self.for_each(expr, true, false, &mut |e| {
-            acc = Some(f(acc.take().unwrap(), e))
-        });
-        acc.unwrap()
-    }
-    pub fn any(&self, expr: ExprIdx, mut f: impl FnMut(ExprIdx) -> bool) -> bool {
-        self.fold(expr, false, |n, e| n || f(e))
-    }
-    pub fn yeets(&self, expr: ExprIdx) -> bool {
-        self.any(expr, |e| matches!(self.exprs[e].0, Expression::Yeet(_)))
-    }
-}
-
-struct Tokens<'a> {
+struct ParseCtx<'a> {
     iter: Tokenizer<'a>,
     peeked: Option<Option<<Tokenizer<'a> as Iterator>::Item>>,
     last: usize,
-    context: &'a mut Parsed,
+    context: &'a mut Ast,
     allow_lambda_args: bool,
     attributes: Option<Vec<Attribute>>,
 }
 
-impl<'a> Tokens<'a> {
+impl<'a> ParseCtx<'a> {
     fn pos_start(&mut self) -> usize {
         self.peek().map(|p| p.1).unwrap_or(usize::MAX)
     }
@@ -498,8 +148,8 @@ impl<'a> Tokens<'a> {
         }
         self.context.idents.push(Ident, ident)
     }
-    fn push_type(&mut self, typ: Ranged<Type>) -> TypeIdx {
-        self.context.types.push(TypeIdx, typ)
+    fn push_type(&mut self, ty: Ranged<Type>) -> TypeIdx {
+        self.context.types.push(TypeIdx, ty)
     }
     fn ident(&mut self) -> Option<Ranged<String>> {
         let err = match self.next() {
@@ -646,10 +296,10 @@ impl<'a> Tokens<'a> {
 }
 
 trait Parse: Sized {
-    fn parse(tk: &mut Tokens) -> Option<Self>;
+    fn parse(tk: &mut ParseCtx) -> Option<Self>;
 
     // parse, and if it could not be parsed, skip to anchor tokens
-    fn parse_or_skip(tk: &mut Tokens) -> Option<Ranged<Self>> {
+    fn parse_or_skip(tk: &mut ParseCtx) -> Option<Ranged<Self>> {
         let start = tk.pos_start();
         match Self::parse(tk) {
             // successful parse
@@ -677,7 +327,7 @@ trait Parse: Sized {
 }
 
 trait ParseDefault: Parse + Default {
-    fn parse_or_default(tk: &mut Tokens) -> Ranged<Self> {
+    fn parse_or_default(tk: &mut ParseCtx) -> Ranged<Self> {
         let start = tk.pos_start();
         Self::parse_or_skip(tk).unwrap_or(Ranged(Self::default(), start, start, tk.iter.file))
     }
@@ -688,12 +338,12 @@ impl<T> ParseDefault for T where T: Parse + Default {}
 pub fn parse_ast<'a>(
     tk: Tokenizer<'a>,
     idx: PackageIdx,
-    parsed: &'a mut Parsed,
+    parsed: &'a mut Ast,
     file_path: &Path,
     lib_paths: &HashMap<&str, &Path>,
     todo_packages: &mut Vec<(PathBuf, PackageIdx)>,
 ) {
-    let mut tk = Tokens {
+    let mut tk = ParseCtx {
         iter: tk,
         peeked: None,
         last: 0,
@@ -710,7 +360,7 @@ pub fn parse_ast<'a>(
                 tk.next();
                 if let Some(string) = tk.string() {
                     // parse path
-                    let split = string.0.split_once(":");
+                    let split = string.0.split_once(':');
                     let (lib, path) = match split {
                         Some((lib, path)) => (Some(lib), path),
                         None => (None, string.0.as_str()),
@@ -719,7 +369,7 @@ pub fn parse_ast<'a>(
                     // get dir path
                     let path = match lib {
                         Some(lib) => match lib_paths.get(lib) {
-                            Some(root) => root.join(&path),
+                            Some(root) => root.join(path),
                             None => {
                                 tk.iter
                                     .errors
@@ -805,7 +455,7 @@ pub fn parse_ast<'a>(
 }
 
 impl Parse for Type {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         match tk.peek() {
             Some(Ranged(Token::Bang, ..)) => {
                 tk.next();
@@ -829,13 +479,43 @@ impl Parse for Type {
             }
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 enum ArrType {
-                    Const(u64),
+                    Const(ExprIdx),
                     Slice,
                 }
 
                 let num = tk.group_single(Group::Bracket, |tk| match tk.peek() {
                     Some(&Ranged(Token::Close(Group::Bracket), ..)) => Some(ArrType::Slice),
-                    Some(&Ranged(Token::Int(i), ..)) => Some(ArrType::Const(i?)),
+                    Some(r @ &Ranged(Token::Int(i), ..)) => {
+                        let range = r.empty();
+                        let expr = tk.push_expr(range.with(Expression::Int(i?)));
+                        Some(ArrType::Const(expr))
+                    }
+                    Some(&Ranged(Token::Ident(ref s), ..)) => {
+                        if s.starts_with(GENERIC) {
+                            let ident = tk.ident()?;
+                            let range = ident.empty();
+                            let ident = tk.push_generic_ident(ident).1;
+                            let expr = tk.push_expr(range.with(Expression::Ident(ident)));
+                            Some(ArrType::Const(expr))
+                        } else {
+                            let ident = PackagedIdent::parse_or_skip(tk)?;
+                            let expr = match ident.0.package {
+                                Some(pkg) => {
+                                    let pkg = tk.push_expr(
+                                        tk.context.idents[pkg].with(Expression::Ident(pkg)),
+                                    );
+                                    tk.push_expr(ident.with(Expression::Member(pkg, ident.0.ident)))
+                                }
+                                None => tk.push_expr(ident.with(Expression::Ident(ident.0.ident))),
+                            };
+                            Some(ArrType::Const(expr))
+                        }
+                    }
+                    Some(&Ranged(Token::Open(Group::Brace), ..)) => {
+                        let expr = Body::parse_or_default(tk);
+                        let expr = tk.push_expr(expr);
+                        Some(ArrType::Const(expr))
+                    }
                     _ => {
                         let err = tk.peek_range().with(Error::Unexpected(Expected::ArrayKind));
                         tk.iter.errors.push(err);
@@ -857,27 +537,27 @@ impl Parse for Type {
             Some(Ranged(Token::Handle, ..)) => {
                 tk.next();
 
-                let id = tk.ident()?;
-                let (generic, id) = tk.push_generic_ident(id);
-                let fail = FailType::parse_or_skip(tk)?.0;
-
-                if generic {
+                if matches!(tk.peek(), Some(Ranged(Token::Ident(str), ..)) if str.starts_with(GENERIC))
+                {
+                    let id = tk.ident()?;
+                    let id = tk.push_generic_ident(id).1;
+                    let fail = FailType::parse_or_skip(tk)?.0;
                     Some(Type::GenericHandler(id, fail))
                 } else {
+                    let id = PolyIdent::parse_or_skip(tk)?.0;
+                    let fail = FailType::parse_or_skip(tk)?.0;
                     Some(Type::Handler(id, fail))
                 }
             }
             Some(Ranged(Token::Ident(_), ..)) => {
-                let id = tk.ident()?;
-                let (generic, id) = tk.push_generic_ident(id);
-
-                if generic {
+                if matches!(tk.peek(), Some(Ranged(Token::Ident(str), ..)) if str.starts_with(GENERIC))
+                {
+                    let id = tk.ident()?;
+                    let id = tk.push_generic_ident(id).1;
                     Some(Type::Generic(id))
                 } else {
-                    match FailType::parse_or_skip(tk)?.0 {
-                        FailType::Never => Some(Type::Path(id)),
-                        ty => Some(Type::Handler(id, ty)),
-                    }
+                    let id = PolyIdent::parse_or_skip(tk)?.0;
+                    Some(Type::Path(id))
                 }
             }
             _ => {
@@ -891,15 +571,11 @@ impl Parse for Type {
 }
 
 impl Parse for FailType {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
-        if tk.check(Token::Yeets).is_some() {
-            if tk.peek().map(|t| t.0.continues_statement()).unwrap_or(true) {
-                Some(FailType::None)
-            } else {
-                let t = Type::parse_or_default(tk);
-                let t = tk.push_type(t);
-                Some(FailType::Some(t))
-            }
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        if tk.check(Token::Arrow).is_some() {
+            let t = Type::parse_or_default(tk);
+            let t = tk.push_type(t);
+            Some(FailType::Some(t))
         } else {
             Some(FailType::Never)
         }
@@ -907,10 +583,12 @@ impl Parse for FailType {
 }
 
 impl Parse for Option<TypeIdx> {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         if tk
             .peek()
-            .map(|t| t.0.continues_statement() || t.0 == Token::Loop)
+            .map(|t| {
+                t.0.continues_statement() || t.0 == Token::Loop || t.0 == Token::Open(Group::Brace)
+            })
             .unwrap_or(true)
         {
             Some(None)
@@ -923,7 +601,7 @@ impl Parse for Option<TypeIdx> {
 }
 
 impl Parse for FunSign {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut decl = FunSign {
             inputs: VecMap::new(),
             effects: Vec::new(),
@@ -949,17 +627,10 @@ impl Parse for FunSign {
 
         if tk.check(Token::Slash).is_some() {
             while matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
-                let Some(effect) = tk.ident() else { continue };
-                let effect = tk.push_ident(effect);
-                let (package, effect) = if tk.check(Token::Dot).is_some() {
-                    let package = effect;
-                    let Some(effect) = tk.ident() else { continue };
-                    let effect = tk.push_ident(effect);
-                    (Some(package), effect)
-                } else {
-                    (None, effect)
+                let Some(effect) = PolyIdent::parse_or_skip(tk) else {
+                    continue;
                 };
-                decl.effects.push(EffectIdent { package, effect });
+                decl.effects.push(effect.0);
             }
         }
 
@@ -967,8 +638,48 @@ impl Parse for FunSign {
     }
 }
 
+impl Parse for PackagedIdent {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        let ident = tk.ident()?;
+        let ident = tk.push_ident(ident);
+        let (package, ident) = if tk.check(Token::Dot).is_some() {
+            let package = ident;
+            let ident = tk.ident()?;
+            let ident = tk.push_ident(ident);
+            (Some(package), ident)
+        } else {
+            (None, ident)
+        };
+        Some(Self { package, ident })
+    }
+}
+
+impl Parse for PolyIdent {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        let ident = PackagedIdent::parse(tk)?;
+        if tk.peek_check(Token::Open(Group::Paren)) {
+            let mut params = Vec::new();
+            tk.group(Group::Paren, true, |tk| {
+                let ty = Type::parse_or_skip(tk)?;
+                let ty = tk.push_type(ty);
+                params.push(ty);
+                Some(())
+            })?;
+            Some(PolyIdent {
+                ident,
+                params: Some(params),
+            })
+        } else {
+            Some(PolyIdent {
+                ident,
+                params: None,
+            })
+        }
+    }
+}
+
 impl Parse for FunDecl {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         tk.expect(Token::Fun)?;
         let name = tk.ident()?;
 
@@ -983,12 +694,34 @@ impl Parse for FunDecl {
 }
 
 impl Parse for Effect {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         tk.expect(Token::Effect)?;
         let name = tk.ident()?;
 
+        let generics = if tk.peek_check(Token::Open(Group::Paren)) {
+            let mut params = VecMap::new();
+            tk.group(Group::Paren, true, |tk| {
+                let name = tk.ident()?;
+                let name = tk.push_generic_ident(name).1; // TODO: must be generic!
+                let ty =
+                    if !tk.peek_check(Token::Comma) && !tk.peek_check(Token::Close(Group::Paren)) {
+                        let ty = Type::parse_or_default(tk);
+                        let ty = tk.push_type(ty);
+                        Some(ty)
+                    } else {
+                        None
+                    };
+                params.push_value(PolyParam { name, ty });
+                Some(())
+            })?;
+            Some(params)
+        } else {
+            None
+        };
+
         let mut effect = Effect {
             name: tk.push_ident(name),
+            generics,
             functions: VecMap::new(),
             attributes: tk.attributes.take().unwrap_or(Vec::new()),
         };
@@ -1013,7 +746,7 @@ impl Parse for Effect {
 }
 
 impl Parse for Vec<Attribute> {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut attrs = Vec::new();
         while tk.check(Token::At).is_some() {
             let name = tk.ident()?;
@@ -1046,7 +779,7 @@ impl Parse for Vec<Attribute> {
 }
 
 impl Parse for Function {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let decl = FunDecl::parse_or_skip(tk)?.0;
 
         let body = Body::parse_or_default(tk);
@@ -1059,33 +792,24 @@ impl Parse for Function {
 }
 
 impl Parse for Handler {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
-        if tk.check(Token::Fun).is_some() {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        if tk.peek_check(Token::Open(Group::Brace)) || tk.peek_check(Token::Move) {
             Some(Handler::Lambda(Lambda::parse_or_skip(tk)?.0))
         } else {
             tk.expect(Token::Handle)?;
-            let effect = tk.ident()?;
-            let effect = tk.push_ident(effect);
-            let (package, effect) = if tk.check(Token::Dot).is_some() {
-                let package = effect;
-                let effect = tk.ident()?;
-                let effect = tk.push_ident(effect);
-                (Some(package), effect)
-            } else {
-                (None, effect)
-            };
-
-            let mut funcs = Vec::new();
-
+            let effect = PolyIdent::parse_or_skip(tk)?.0;
             let fail_type = FailType::parse_or_skip(tk)?.0;
 
+            let moved = tk.check(Token::Move).is_some();
+
+            let mut functions = Vec::new();
             tk.group(Group::Brace, false, |tk| {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
 
                 // parse function
                 let func = Function::parse_or_skip(tk)?.0;
-                funcs.push(func);
+                functions.push(func);
 
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
@@ -1094,17 +818,20 @@ impl Parse for Handler {
             })?;
 
             Some(Handler::Full {
-                effect: EffectIdent { package, effect },
-                functions: funcs,
+                effect,
+                functions,
                 fail_type,
+                moved,
             })
         }
     }
 }
 
 impl Parse for Lambda {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
+
+        let moved = tk.check(Token::Move).is_some();
 
         let mut inputs = VecMap::new();
         let mut main = Vec::new();
@@ -1161,6 +888,9 @@ impl Parse for Lambda {
             loop {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
+                if tk.peek_check(Token::Close(Group::Brace)) {
+                    return Some(());
+                }
 
                 // parse expression
                 let expr = Expression::parse_or_default(tk);
@@ -1189,12 +919,16 @@ impl Parse for Lambda {
             tk.iter.file,
         ));
 
-        Some(Lambda { inputs, body })
+        Some(Lambda {
+            inputs,
+            body,
+            moved,
+        })
     }
 }
 
 impl Parse for Expression {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
         let expr = tk.ranged(|tk| match tk.peek() {
             // uninit
@@ -1203,6 +937,7 @@ impl Parse for Expression {
                 Some(Expression::Uninit)
             }
 
+            // loop
             Some(Ranged(Token::Loop, ..)) => {
                 tk.next();
                 let body = Body::parse_or_default(tk);
@@ -1210,18 +945,66 @@ impl Parse for Expression {
                 Some(Expression::Loop(body))
             }
 
+            // do expr
+            Some(Ranged(Token::Do, ..)) => {
+                tk.next();
+
+                let right = Expression::parse_or_default(tk);
+                let right = tk.push_expr(right);
+
+                Some(Expression::Do(right))
+            }
+
             // try-with expression
             Some(Ranged(Token::Try, ..)) => {
                 tk.next();
 
-                // allow for try-loop
-                let loop_start = tk.pos_start();
-                let inner = if tk.check(Token::Loop).is_some() {
+                // allow try-with
+                let with_start = tk.pos_start();
+                let inner = if tk.check(Token::With).is_some() {
+                    let handler = Expression::parse_or_skip(tk)?;
+                    let handler = tk.push_expr(handler);
+                    let mut handlers = vec![handler];
+
+                    while tk.check(Token::Comma).is_some() {
+                        let handler = Expression::parse_or_skip(tk)?;
+                        let handler = tk.push_expr(handler);
+                        handlers.push(handler)
+                    }
+
+                    // allow try-with-loop
+                    let loop_start = tk.pos_start();
+                    let inner = if tk.check(Token::Loop).is_some() {
+                        let body = Body::parse_or_default(tk);
+                        let body = tk.push_expr(body);
+                        Ranged(
+                            Expression::Loop(body),
+                            loop_start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        )
+                    } else {
+                        Body::parse_or_default(tk)
+                    };
+
+                    let mut expr = inner;
+                    for handler in handlers.into_iter().rev() {
+                        expr = Ranged(
+                            Expression::With(handler, tk.push_expr(expr)),
+                            with_start,
+                            tk.pos_end(),
+                            tk.iter.file,
+                        );
+                    }
+
+                    expr
+                } else if tk.check(Token::Loop).is_some() {
+                    // allow try-loop
                     let body = Body::parse_or_default(tk);
                     let body = tk.push_expr(body);
                     Ranged(
                         Expression::Loop(body),
-                        loop_start,
+                        with_start,
                         tk.pos_end(),
                         tk.iter.file,
                     )
@@ -1229,7 +1012,9 @@ impl Parse for Expression {
                     Body::parse_or_default(tk)
                 };
 
-                if tk.check(Token::With).is_some() {
+                // allow try {}-with
+                let with_start = tk.pos_start();
+                let inner = if tk.check(Token::With).is_some() {
                     let handler = Expression::parse_or_skip(tk)?;
                     let handler = tk.push_expr(handler);
                     let mut handlers = vec![handler];
@@ -1243,16 +1028,18 @@ impl Parse for Expression {
                     let mut expr = inner;
                     for handler in handlers.into_iter().rev() {
                         expr = Ranged(
-                            Expression::TryWith(tk.push_expr(expr), Some(handler)),
-                            start,
+                            Expression::With(handler, tk.push_expr(expr)),
+                            with_start,
                             tk.pos_end(),
                             tk.iter.file,
                         );
                     }
-                    Some(expr.0)
+                    expr
                 } else {
-                    Some(Expression::TryWith(tk.push_expr(inner), None))
-                }
+                    inner
+                };
+
+                Some(Expression::Try(tk.push_expr(inner)))
             }
 
             // with block
@@ -1291,7 +1078,7 @@ impl Parse for Expression {
                 let mut expr = inner;
                 for handler in handlers.into_iter().rev() {
                     expr = Ranged(
-                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        Expression::With(handler, tk.push_expr(expr)),
                         start,
                         tk.pos_end(),
                         tk.iter.file,
@@ -1416,7 +1203,7 @@ impl Parse for Expression {
             }
 
             // handler
-            Some(Ranged(Token::Handle | Token::Fun, ..)) => {
+            Some(Ranged(Token::Handle | Token::Open(Group::Brace) | Token::Move, ..)) => {
                 let handler = Handler::parse_or_skip(tk)?;
                 Some(Expression::Handler(handler.0))
             }
@@ -1440,9 +1227,6 @@ impl Parse for Expression {
                 tk.next();
                 Some(Expression::Int(num?))
             }
-
-            // block
-            Some(Ranged(Token::Open(Group::Brace), ..)) => Some(Body::parse_or_default(tk).0),
 
             // array
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
@@ -1484,12 +1268,24 @@ impl Parse for Expression {
 }
 
 fn expression_post(
-    tk: &mut Tokens<'_>,
+    tk: &mut ParseCtx<'_>,
     mut expr: Ranged<Expression>,
     start: usize,
 ) -> Option<Expression> {
     loop {
         match tk.peek() {
+            // as type
+            Some(Ranged(Token::As, ..)) => {
+                tk.next();
+                let ty = Type::parse_or_default(tk);
+                expr = Ranged(
+                    Expression::As(tk.push_expr(expr), tk.push_type(ty)),
+                    start,
+                    tk.pos_end(),
+                    tk.iter.file,
+                );
+            }
+
             // member
             Some(Ranged(Token::Dot, ..)) => {
                 tk.next();
@@ -1517,11 +1313,34 @@ fn expression_post(
 
                 for handler in handlers.into_iter().rev() {
                     expr = Ranged(
-                        Expression::TryWith(tk.push_expr(expr), Some(handler)),
+                        Expression::With(handler, tk.push_expr(expr)),
                         start,
                         tk.pos_end(),
                         tk.iter.file,
                     );
+                }
+            }
+
+            // call with lambda
+            Some(Ranged(Token::Open(Group::Brace) | Token::Move, ..)) => {
+                if tk.allow_lambda_args {
+                    let mut args = Vec::new();
+
+                    while tk.peek_check(Token::Open(Group::Brace)) {
+                        let lambda = Lambda::parse_or_skip(tk)?;
+                        let handler = lambda.map(Handler::Lambda);
+                        let expr = handler.map(Expression::Handler);
+                        args.push(tk.push_expr(expr));
+                    }
+
+                    expr = Ranged(
+                        Expression::Call(tk.push_expr(expr), args),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
+                } else {
+                    break Some(expr.0);
                 }
             }
 
@@ -1538,8 +1357,8 @@ fn expression_post(
 
                 // lambda arguments
                 if tk.allow_lambda_args {
-                    while tk.peek_check(Token::Open(Group::Brace)) {
-                        let lambda = Lambda::parse_or_default(tk);
+                    while tk.peek_check(Token::Open(Group::Brace)) || tk.peek_check(Token::Move) {
+                        let lambda = Lambda::parse_or_skip(tk)?;
                         let handler = lambda.map(Handler::Lambda);
                         let expr = handler.map(Expression::Handler);
                         args.push(tk.push_expr(expr));
@@ -1607,34 +1426,53 @@ fn expression_post(
 }
 
 impl Parse for Body {
-    fn parse(tk: &mut Tokens) -> Option<Self> {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let mut main = Vec::new();
         let mut last = None;
 
-        tk.group(Group::Brace, false, |tk| {
-            // skip semicolons
-            while tk.check(Token::Semicolon).is_some() {}
-
-            // parse expression
+        if tk.peek_check(Token::Do) {
             let expr = Expression::parse_or_default(tk);
             let n = tk.push_expr(expr);
-
-            if tk.check(Token::Semicolon).is_none() {
-                last = Some(n);
-                if !tk.peek_check(Token::Close(Group::Brace)) {
-                    // TODO: error
-                    None
-                } else {
-                    Some(())
-                }
-            } else {
+            last = Some(n);
+        } else {
+            tk.group(Group::Brace, false, |tk| {
                 // skip semicolons
                 while tk.check(Token::Semicolon).is_some() {}
-                main.push(n);
-                Some(())
-            }
-        })?;
+                if tk.peek_check(Token::Close(Group::Brace)) {
+                    return Some(());
+                }
+
+                // parse expression
+                let expr = Expression::parse_or_default(tk);
+                let n = tk.push_expr(expr);
+
+                if tk.check(Token::Semicolon).is_none() {
+                    last = Some(n);
+                    if !tk.peek_check(Token::Close(Group::Brace)) {
+                        // TODO: error
+                        None
+                    } else {
+                        Some(())
+                    }
+                } else {
+                    // skip semicolons
+                    while tk.check(Token::Semicolon).is_some() {}
+                    main.push(n);
+                    Some(())
+                }
+            })?;
+        }
 
         Some(Body { main, last })
+    }
+}
+
+impl Body {
+    fn parse_or_default(tk: &mut ParseCtx) -> Ranged<Expression> {
+        let start = tk.pos_start();
+        match Self::parse_or_skip(tk) {
+            Some(body) => body.map(Expression::Body),
+            None => Ranged(Expression::Error, start, start, tk.iter.file),
+        }
     }
 }

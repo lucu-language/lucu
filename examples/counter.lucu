@@ -4,9 +4,9 @@ effect counter {
 	fun count() int
 }
 
-fun init_counter(start int) counter {
+fun init_counter(start int) impl counter {
 	mut n = start
-	fun { n++ }
+	move { n++ }
 }
 
 fun main() / io.stdio {

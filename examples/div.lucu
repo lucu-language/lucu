@@ -39,7 +39,7 @@ fun divide(a int, b int) int / div_by_zero {
 ##
 fun divide_default(a int, b int, default int) int {
 
-    divide(a, b) with handle div_by_zero {
+    divide(a, b) with impl div_by_zero {
 
         fun div_by_zero(dividend int) int {
             default
@@ -56,7 +56,7 @@ fun divide_default(a int, b int, default int) int {
 ##
 fun divide_throw(a int, b int) int / catch {
 
-    divide(a, b) with handle div_by_zero {
+    divide(a, b) with impl div_by_zero {
 
         fun div_by_zero(dividend int) int {
             throw()
@@ -79,12 +79,12 @@ fun main() / io.stdio {
         io.putint(divide_throw(56, 0))      # 56 / 0
         io.putint(divide_throw(56, 8))      # 56 / 8
 
-    } with handle catch fails {
+    } with impl catch -> unit {
 
         fun throw() ! {
             # this may not return a value
             # we end the entire try block early
-            fail
+            break
         }
 
     }

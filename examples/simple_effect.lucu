@@ -4,29 +4,23 @@ effect get {
     fun get() int
 }
 
-fun getter(n int) get {
-	fun { n }
+fun getter(n int) impl get {
+	{ n }
 }
 
-fun getter_indirect(n int) get {
+fun getter_indirect(n int) impl get {
 	getter(n)
 }
 
-fun gimme_get() get / get {
-	get
-}
-
-fun ident(h get) get {
+fun ident(h impl get) impl get {
 	h
 }
 
 fun puttwice(n int) / io.stdio {
-	with getter_indirect(n) {
-		let handler = gimme_get()
-		io.putint(get()) with handler
-		let handler = ident(handler)
-		io.putint(get()) with handler
-	}
+	let handler = getter_indirect(n)
+	let handler = ident(handler)
+	io.putint(get()) with handler
+	io.putint(get()) with handler
 }
 
 fun main() / io.stdio {

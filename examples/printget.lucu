@@ -5,11 +5,11 @@ effect printget {
 }
 
 effect get {
-	fun get() str
+	fun get() const str
 }
 
-fun getter(s str) get {
-	fun { s }
+fun getter(s str) impl get {
+	{ s }
 }
  
 fun main() / io.stdio {
@@ -19,7 +19,7 @@ fun main() / io.stdio {
 		print() with getter("two")
 		print() with getter("tea")
 		
-	} with handle printget {
+	} with impl printget {
 
 		fun print() / get {
 			io.print(get())

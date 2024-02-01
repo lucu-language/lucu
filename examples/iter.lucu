@@ -1,39 +1,43 @@
 # we import 'io' from the core library to interact with the console
 import "core:io"
 
-# we define an effect for iterating over a string collection
-effect striter {
-	fun next() str
+# we define an effect for interacting with a buffer
+effect buf(`item) {
+	fun push(elem `item) usize
+	fun get(index usize) const `item
+
+	# the 'iter' effect is defined within the preamble
+	fun iter() impl iter(const `item)
 }
 
-# we define an effect for interacting with a string buffer
-effect strbuf {
-	fun push(elem str) usize
-	fun get(index usize) str
-
-	# the iterator fails when next() is called if it is done
-	fun iter() striter fails
+# default implementation for unit buffer
+impl buf(unit) {
+	fun push(elem unit) usize { 0 }
+	fun get(index usize) unit { 0 }
+	fun iter() impl iter(unit) {
+		move {}
+	}
 }
 
-# implementation of these effects using a constant sized string array
-fun array_buffer() strbuf {
-	mut array [16]const str = 0
-	mut size  usize         = 0
-	handle strbuf {
-		fun push(elem str) usize {
+# implementation of these effects using a constant sized array
+fun array_buffer(`cap usize) impl buf(`item) {
+	mut array [`cap]const `item = 0
+	mut size  usize             = 0
+	impl buf(`item) move {
+		fun push(elem `item) usize {
 			array[size] = elem
 			size++
 		}
-		fun get(index usize) str {
+		fun get(index usize) const `item {
 			array[index]
 		}
-		fun iter() striter fails {
+		fun iter() impl iter(const `item) {
 			mut current usize = 0
-			fun {
+			move {
 				if current < size {
 					array[current++]
 				} else {
-					fail
+					no_such_element()
 				}
 			}
 		}
@@ -44,19 +48,21 @@ fun array_buffer() strbuf {
 # the 'io.stdio' effect allows use of the 'io.println' function
 fun main() / io.stdio {
 
+	let buffer impl buf(str) = array_buffer(16)
+
 	# a 'with' block puts the effect handler in scope
 	# which allows us to use the defined effect functions
-	with array_buffer() {
+	with buffer {
 
 		# we push some elements
-		push("Hello")
-		push("world")
+		do push("Hello")
+		do push("world")
 
-		# a 'with loop' block is the same as a regular 'with',
-		# but it loops until it gets a failure
-		# this way we can iterate over all pushed elements and print them
-		with iter() loop {
-			io.putstr(next())
+		# we print all elements
+		# 'for' is just a function defined within the preamble!
+		for(iter() as impl iter(const str)) {
+			elem ->
+			io.putstr(elem)
 		}
 
 	}

@@ -19,7 +19,7 @@ macro_rules! vecmap_index {
 }
 pub(crate) use vecmap_index;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VecMap<K, V>
 where
     K: Into<usize>,
@@ -50,7 +50,7 @@ where
 impl<K, V> Default for VecSet<K, V>
 where
     K: Into<usize>,
-    V: Hash + Eq + Copy,
+    V: Hash + Eq + Clone,
 {
     fn default() -> Self {
         Self::new()
@@ -75,6 +75,15 @@ where
 {
     fn from(value: VecMap<K, V>) -> Self {
         value.vec
+    }
+}
+
+impl<K, V> FromIterator<V> for VecMap<K, V>
+where
+    K: Into<usize>,
+{
+    fn from_iter<T: IntoIterator<Item = V>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
     }
 }
 
@@ -113,6 +122,9 @@ where
     }
     pub fn len(&self) -> usize {
         self.vec.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
     // from https://stackoverflow.com/a/74296885
     pub fn get_mut2(&mut self, i: K, j: K) -> Option<(&mut V, &mut V)> {
@@ -156,17 +168,14 @@ where
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.vec.values()
     }
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        self.vec.values_mut()
-    }
     pub fn keys(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = K> {
         self.vec.keys(f)
     }
     pub fn iter(&self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &V)> {
         self.vec.iter(f)
     }
-    pub fn iter_mut(&mut self, f: impl Fn(usize) -> K) -> impl Iterator<Item = (K, &mut V)> {
-        self.vec.iter_mut(f)
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 }
 
@@ -212,15 +221,5 @@ where
 
     fn index(&self, index: K) -> &Self::Output {
         &self.vec[index]
-    }
-}
-
-impl<K, V> IndexMut<K> for VecSet<K, V>
-where
-    K: Into<usize>,
-    V: Hash + Eq + Clone,
-{
-    fn index_mut(&mut self, index: K) -> &mut Self::Output {
-        &mut self.vec[index]
     }
 }

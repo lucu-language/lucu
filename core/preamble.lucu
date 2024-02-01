@@ -125,13 +125,28 @@ fun from(start usize) impl iter(usize) {
 }
 
 ##
-# basic ranged for loop
+# basic for loop
 ##
 fun for(it impl iter(`e), fn impl consume(`e)) {
 	let on_nse impl no_such_element(`e) -> unit = { break }
 	try with on_nse, it, fn loop {
 		consume(next() as `e)
 	}
+}
+
+effect iterable(`t, `e) {
+	fun iter(t `t) impl iter(`e)
+}
+
+impl iterable([]`t, const `t) {
+	fun iter(t []`t) impl iter(const `t) {
+		iter_slice(t)
+	}
+}
+
+fun foreach(t `t, fn impl consume(`e)) / iterable(`t, `e) {
+	let iter = iter(t) as impl iter(`e)
+	for(iter, fn)
 }
 
 ##

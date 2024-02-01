@@ -532,4 +532,9 @@ mod tests {
     fn write_buffer() {
         test_file("write_buffer", "Hello, World!\n")
     }
+
+    #[test]
+    fn slice() {
+        test_file("slice", "2\n8\n69\n")
+    }
 }

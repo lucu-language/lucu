@@ -668,14 +668,13 @@ impl SemCtx<'_> {
                     ),
                 }
             }
-            T::Maybe(ty) => match self.ast.types[ty].0 {
-                T::Pointer(ty) => {
-                    let inner =
-                        self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                    self.insert_type(Type::MaybePointer(inner), false)
+            T::Maybe(ty) => {
+                let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
+                match self.ir.types[inner] {
+                    Type::Pointer(inner) => self.insert_type(Type::MaybePointer(inner), false),
+                    _ => todo!(),
                 }
-                _ => todo!(),
-            },
+            }
             T::Pointer(ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 self.insert_type(Type::Pointer(inner), false)

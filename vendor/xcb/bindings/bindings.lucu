@@ -1,6 +1,6 @@
 import "vendor:c"
 
-struct connection(c.void)
+struct connection(_ c.void)
 
 @foreign(prefix = "xcb_")
 effect lib {

@@ -1,0 +1,22 @@
+import "vendor:c"
+import "bindings"
+
+effect lib {
+	fun connect(displayname ?c.string, screenp ?^c.int) impl conn
+}
+
+effect conn {
+	fun disconnect()
+}
+
+@capability
+fun link() impl lib / foreign {
+	impl lib {
+		fun connect(displayname ?c.string, screenp ?^c.int) impl conn {
+			let conn = bindings.connect(displayname, screenp)
+			impl conn {
+				fun disconnect() { bindings.disconnect(conn) }
+			}
+		}
+	} with bindings.link()
+}

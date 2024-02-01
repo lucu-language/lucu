@@ -1652,6 +1652,10 @@ impl SemCtx<'_> {
                 ctx.yeetable_ret = Some(end);
 
                 let body_check = self.check_expr(ctx, body, expected, expected_def);
+                if body_check.is_none() {
+                    ctx.push(Instruction::Unreachable);
+                }
+
                 if matches!(self.ir.types[expected], Type::Handler(_)) {
                     self.errors
                         .push(self.ast.exprs[body].with(Error::TryReturnsHandler));
@@ -1893,7 +1897,6 @@ impl SemCtx<'_> {
                             .translate_generics(param.ty, &generic_params, true)
                             .unwrap();
                     }
-                    println!("{}", sign.name);
                     sign.effect_stack = sign
                         .effect_stack
                         .iter()
@@ -2195,6 +2198,10 @@ impl SemCtx<'_> {
                 ctx.yeetable_ret = Some(end);
 
                 let body_synth = self.synth_expr(ctx, body);
+                if body_synth.is_none() {
+                    ctx.push(Instruction::Unreachable);
+                }
+
                 let ty = body_synth
                     .as_ref()
                     .map(|&(_, ty)| ty)

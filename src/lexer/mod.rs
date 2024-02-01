@@ -23,6 +23,7 @@ pub enum Token {
     Do,
     Move,
     Struct,
+    Type,
 
     // Symbols
     Semicolon,
@@ -67,6 +68,7 @@ impl fmt::Display for Token {
             f,
             "{}",
             match self {
+                Token::Type => "'type'".into(),
                 Token::Effect => "'effect'".into(),
                 Token::Fun => "'fun'".into(),
                 Token::Try => "'try'".into(),
@@ -133,6 +135,7 @@ impl Token {
         matches!(
             self,
             Token::With
+                | Token::Type
                 | Token::Let
                 | Token::Mut
                 | Token::Else
@@ -444,6 +447,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "do" => Token::Do,
                     "move" => Token::Move,
                     "struct" => Token::Struct,
+                    "type" => Token::Type,
                     _ => Token::Ident(word),
                 }
             }

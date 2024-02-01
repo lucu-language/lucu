@@ -19,6 +19,7 @@ vecmap_index!(EffIdx);
 vecmap_index!(EffFunIdx);
 
 vecmap_index!(StructIdx);
+vecmap_index!(AliasIdx);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
@@ -194,6 +195,7 @@ pub struct Package {
     pub implied: Vec<ExprIdx>,
     pub functions: Vec<FunIdx>,
     pub structs: Vec<StructIdx>,
+    pub aliases: Vec<AliasIdx>,
     pub imports: HashMap<String, PackageIdx>,
 }
 
@@ -206,6 +208,7 @@ pub struct Ast {
     pub effects: VecMap<EffIdx, Effect>,
     pub functions: VecMap<FunIdx, Function>,
     pub structs: VecMap<StructIdx, Struct>,
+    pub aliases: VecMap<AliasIdx, (Ident, TypeIdx)>,
     pub packages: VecMap<PackageIdx, Package>,
 
     pub main: PackageIdx,
@@ -233,6 +236,7 @@ impl Default for Ast {
             effects: VecMap::new(),
             functions: VecMap::new(),
             structs: VecMap::new(),
+            aliases: VecMap::new(),
             packages,
             main,
             preamble: core,

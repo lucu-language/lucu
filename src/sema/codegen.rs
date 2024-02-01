@@ -2850,7 +2850,37 @@ impl SemCtx<'_> {
                 Some((Value::ConstantNone, TYPE_NONE))
             }
             E::Error => Some((Value::ConstantError, TYPE_ERROR)),
-            E::Member(_, _) => todo!(),
+            E::Member(left, right) => {
+                let (mut struc, mut ty) = self.synth_expr(ctx, left)?;
+
+                // allow member access to dereference pointers
+                while let Type::Pointer(inner) = self.ir.types[ty] {
+                    struc = Value::Deref(Box::new(struc));
+                    ty = inner;
+                }
+
+                let idx = match self.ir.types[ty] {
+                    Type::Struct(idx) => idx,
+                    _ => {
+                        panic!("give error");
+                    }
+                };
+
+                let name = self.ast.idents[right].0.as_str();
+                let elem = self.ir.structs[idx]
+                    .elems
+                    .iter()
+                    .position(|(elem, _)| elem.eq(name));
+
+                let Some(elem) = elem else {
+                    panic!("give error");
+                };
+
+                // TODO: use elementptr if struc is Value::Deref
+                let val = ctx.push(Instruction::Member(struc, elem as u32, ty));
+                let ty = self.ir.structs[idx].elems[elem].1;
+                Some((val, ty))
+            }
         }
     }
     fn get_capability(
@@ -3408,6 +3438,16 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             ctx.ir.structs[i].name = name.clone();
 
             let ty = ctx.insert_type(Type::Struct(i), false);
+            ctx.packages[idx].types.insert(name.clone(), ty);
+        }
+    }
+
+    // analyze type aliases
+    for (idx, package) in ast.packages.iter(PackageIdx) {
+        let mut scope = ScopeStack::new(idx);
+        for (id, ty) in package.aliases.iter().copied().map(|idx| ast.aliases[idx]) {
+            let name = &ast.idents[id].0;
+            let ty = ctx.analyze_type(&mut scope, ty, None, false, &mut SemCtx::no_handler);
             ctx.packages[idx].types.insert(name.clone(), ty);
         }
     }

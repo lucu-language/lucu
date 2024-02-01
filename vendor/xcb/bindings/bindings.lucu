@@ -1,11 +1,11 @@
 import "vendor:c"
 
-struct connptr(_ ^u8)
+struct connection(c.void)
 
 @foreign(prefix = "xcb_")
 effect lib {
-	fun connect(displayname ?^c.string, screenp ?^c.int) connptr
-	fun disconnect(c connptr)
+	fun connect(displayname ?c.string, screenp ?^c.int) ^connection
+	fun disconnect(c ^connection)
 }
 
 @capability

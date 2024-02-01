@@ -12,24 +12,26 @@ effect lib {
 	fun puts(s string) int
 	fun strlen(s string) size_t
 
-	fun malloc(size size_t) voidptr
-	fun free(ptr voidptr)
+	fun malloc(size size_t) ?^void
+	fun free(ptr ?^void)
 }
 
-fun malloc_t(size size_t) ^`t / lib {
+fun malloc_t(size size_t) ?^`t / lib {
 	cast malloc(size)
 }
 
-fun free_t(ptr ^`t) / lib {
+fun free_t(ptr ?^`t) / lib {
 	free(cast ptr)
 }
 
-struct int   (_ core.int)
-struct size_t(_ core.usize)
-struct time_t(timestamp int)
+# opaque types
+struct int    (_ core.int)
+struct size_t (_ core.usize)
+struct time_t (timestamp int)
+struct void   (_ u8)
 
-struct voidptr(_ ^u8)
-struct string (_ ^u8)
+# type aliases
+type string = ^u8
 
 @capability
 fun link() impl lib / foreign {

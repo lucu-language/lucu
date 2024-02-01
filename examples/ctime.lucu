@@ -2,7 +2,6 @@ import "core:io"
 import "vendor:c"
 
 fun main() / io.stdio c.lib {
-	mut time = 0
-	do c.time(&time)
-	io.putint(time)
+	let time = c.time(0)
+	io.putint(time.timestamp._)
 }

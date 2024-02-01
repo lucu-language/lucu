@@ -10,9 +10,9 @@ use crate::{
 };
 
 use super::{
-    Ast, Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType,
-    FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent,
-    Param, PolyIdent, PolyParam, Struct, StructIdx, Type, TypeIdx, UnOp,
+    AliasIdx, Ast, Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression,
+    FailType, FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx,
+    PackagedIdent, Param, PolyIdent, PolyParam, Struct, StructIdx, Type, TypeIdx, UnOp,
 };
 
 impl BinOp {
@@ -428,6 +428,20 @@ pub fn parse_ast<'a>(
                 if let Some(Ranged(struc, ..)) = Struct::parse_or_skip(&mut tk) {
                     let struc = tk.context.structs.push(StructIdx, struc);
                     tk.context.packages[idx].structs.push(struc);
+                }
+            }
+
+            // type alias
+            Some(Ranged(Token::Type, ..)) => {
+                tk.next();
+                if let Some(name) = tk.ident() {
+                    let name = tk.push_ident(name);
+                    if tk.expect(Token::Equals).is_some() {
+                        let ty = Type::parse_or_default(&mut tk);
+                        let ty = tk.push_type(ty);
+                        let alias = tk.context.aliases.push(AliasIdx, (name, ty));
+                        tk.context.packages[idx].aliases.push(alias);
+                    }
                 }
             }
 
@@ -1485,7 +1499,7 @@ impl Parse for Body {
 
 impl Parse for Struct {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
-        tk.expect(Token::Struct)?;
+        tk.next();
         let name = tk.ident()?;
         let name = tk.push_ident(name);
 

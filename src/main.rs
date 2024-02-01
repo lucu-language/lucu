@@ -177,8 +177,8 @@ fn parse_from_filename(
     let mut parsed = Ast::default();
     let mut errors = Errors::new();
 
-    let preamble = core_path.join("core/preamble.lucu");
-    let system = core_path.join("core/os/process.lucu");
+    let preamble = core_path.join("core/");
+    let system = core_path.join("core/os/");
 
     if !preamble.exists() {
         todo!("give error");

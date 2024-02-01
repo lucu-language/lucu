@@ -22,6 +22,7 @@ pub enum Token {
     As,
     Do,
     Move,
+    Struct,
 
     // Symbols
     Semicolon,
@@ -44,6 +45,7 @@ pub enum Token {
     Greater,
     Ampersand,
     At,
+    Question,
     Open(Group),
     Close(Group),
 
@@ -82,6 +84,7 @@ impl fmt::Display for Token {
                 Token::As => "'as'".into(),
                 Token::Do => "'do'".into(),
                 Token::Move => "'move'".into(),
+                Token::Struct => "'struct'".into(),
                 Token::Semicolon => "';'".into(),
                 Token::Dot => "'.'".into(),
                 Token::DoubleDot => "'..'".into(),
@@ -102,6 +105,7 @@ impl fmt::Display for Token {
                 Token::Greater => "'>'".into(),
                 Token::Ampersand => "'&'".into(),
                 Token::At => "'@'".into(),
+                Token::Question => "'?'".into(),
                 Token::Open(Group::Brace) => "'{'".into(),
                 Token::Open(Group::Paren) => "'('".into(),
                 Token::Open(Group::Bracket) => "'['".into(),
@@ -157,6 +161,7 @@ impl Token {
                 | Token::As
                 | Token::Do
                 | Token::Move
+                | Token::Struct
                 | Token::Open(_)
 
                 // prevents double semicolons
@@ -299,6 +304,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             '^' => Token::Caret,
             '&' => Token::Ampersand,
             '@' => Token::At,
+            '?' => Token::Question,
             '.' => match self.next.peek() {
                 Some(&'.') => {
                     self.next_char();
@@ -437,6 +443,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     "as" => Token::As,
                     "do" => Token::Do,
                     "move" => Token::Move,
+                    "struct" => Token::Struct,
                     _ => Token::Ident(word),
                 }
             }

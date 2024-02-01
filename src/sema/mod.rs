@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use either::Either;
 
 use crate::{
-    ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx},
+    ast::{EffFunIdx, EffIdx, FunIdx, ParamIdx, StructIdx},
     error::{Range, Ranged},
     vecmap::{vecmap_index, VecMap, VecSet},
 };
@@ -318,6 +318,7 @@ pub enum IntSize {
 pub enum Type {
     Effect(EffectIdent),
     Handler(Lazy),
+    Struct(StructIdx),
 
     EffectType,
     DataType,
@@ -325,6 +326,7 @@ pub enum Type {
 
     Generic(Generic),
 
+    MaybePointer(TypeIdx),
     Pointer(TypeIdx),
     ConstArray(GenericVal<u64>, TypeIdx),
     Slice(TypeIdx),
@@ -360,6 +362,7 @@ pub struct SemIR {
     pub effects: VecMap<EffIdx, Effect>,
     pub fun_sign: VecMap<FunIdx, FunSign>,
     pub fun_impl: VecMap<FunIdx, FunImpl>,
+    pub structs: VecMap<StructIdx, Struct>,
 
     pub entry: FunIdx,
     pub foreign_handler: HandlerIdx,
@@ -369,6 +372,12 @@ pub struct SemIR {
     pub lazy_handlers: VecMap<LazyIdx, LazyValue>,
 
     pub generic_names: VecMap<GenericIdx, String>,
+}
+
+#[derive(Debug, Default)]
+pub struct Struct {
+    pub name: String,
+    pub elems: Vec<(String, TypeIdx)>,
 }
 
 pub fn get_param(generic_params: &GenericParams, idx: GenericIdx) -> Option<TypeIdx> {
@@ -427,6 +436,7 @@ impl TypeIdx {
             write!(f, "const ")?;
         }
         match ir.types[*self] {
+            Type::Struct(idx) => write!(f, "{}", ir.structs[idx].name),
             Type::Handler(ref lazy) => lazy.idx.display(lazy.typeof_handler, ir, generic_params, f),
             Type::DataType => write!(f, "type"),
             Type::EffectType => write!(f, "effect"),
@@ -453,6 +463,10 @@ impl TypeIdx {
                     write!(f, "{}", ir.generic_names[generic.idx])
                 }
             },
+            Type::MaybePointer(inner) => {
+                write!(f, "?^")?;
+                inner.display(ir, generic_params, f)
+            }
             Type::Pointer(inner) => {
                 write!(f, "^")?;
                 inner.display(ir, generic_params, f)

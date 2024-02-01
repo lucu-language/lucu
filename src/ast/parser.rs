@@ -12,7 +12,7 @@ use crate::{
 use super::{
     Ast, Attribute, AttributeValue, BinOp, Body, EffIdx, Effect, ExprIdx, Expression, FailType,
     FunDecl, FunIdx, FunSign, Function, Handler, Ident, Lambda, Package, PackageIdx, PackagedIdent,
-    Param, PolyIdent, PolyParam, Type, TypeIdx, UnOp,
+    Param, PolyIdent, PolyParam, Struct, StructIdx, Type, TypeIdx, UnOp,
 };
 
 impl BinOp {
@@ -423,6 +423,14 @@ pub fn parse_ast<'a>(
                 }
             }
 
+            // struct
+            Some(Ranged(Token::Struct, ..)) => {
+                if let Some(Ranged(struc, ..)) = Struct::parse_or_skip(&mut tk) {
+                    let struc = tk.context.structs.push(StructIdx, struc);
+                    tk.context.packages[idx].structs.push(struc);
+                }
+            }
+
             // function
             Some(Ranged(Token::Fun, ..)) => {
                 if let Some(Ranged(function, ..)) = Function::parse_or_skip(&mut tk) {
@@ -460,6 +468,14 @@ impl Parse for Type {
             Some(Ranged(Token::Bang, ..)) => {
                 tk.next();
                 Some(Type::Never)
+            }
+            Some(Ranged(Token::Question, ..)) => {
+                tk.next();
+
+                let ty = Type::parse_or_default(tk);
+                let ty = tk.push_type(ty);
+
+                Some(Type::Maybe(ty))
             }
             Some(Ranged(Token::Caret, ..)) => {
                 tk.next();
@@ -1464,6 +1480,26 @@ impl Parse for Body {
         }
 
         Some(Body { main, last })
+    }
+}
+
+impl Parse for Struct {
+    fn parse(tk: &mut ParseCtx) -> Option<Self> {
+        tk.expect(Token::Struct)?;
+        let name = tk.ident()?;
+        let name = tk.push_ident(name);
+
+        let mut elems = Vec::new();
+        tk.group(Group::Paren, true, |tk| {
+            let name = tk.ident()?;
+            let name = tk.push_ident(name);
+            let ty = Type::parse_or_default(tk);
+            let ty = tk.push_type(ty);
+            elems.push((name, ty));
+            Some(())
+        })?;
+
+        Some(Struct { name, elems })
     }
 }
 

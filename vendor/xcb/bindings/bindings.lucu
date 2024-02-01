@@ -1,0 +1,15 @@
+import "vendor:c"
+
+struct connptr(_ ^u8)
+
+@foreign(prefix = "xcb_")
+effect lib {
+	fun connect(displayname ?^c.string, screenp ?^c.int) connptr
+	fun disconnect(c connptr)
+}
+
+@capability
+fun link() impl lib / foreign {
+	do c.link()
+	impl_link("xcb")
+}

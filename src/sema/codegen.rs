@@ -17,7 +17,7 @@ use super::{
     get_param, Block, BlockIdx, Capability, Effect, EffectIdent, FmtType, Foreign, FunIdent,
     FunIdx, FunImpl, FunSign, Generic, GenericIdx, GenericParams, GenericVal, Generics, Handler,
     HandlerIdx, HandlerType, InstrIdx, IntSize, Lazy, LazyIdx, LazyValue, Param, ReturnType, SemIR,
-    Type, TypeIdx, Value,
+    Struct, Type, TypeIdx, Value,
 };
 
 impl FunIdent {
@@ -438,6 +438,10 @@ impl SemCtx<'_> {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
                 self.insert_type(Type::Pointer(inner), ty.is_const())
             }
+            Type::MaybePointer(inner) => {
+                let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
+                self.insert_type(Type::MaybePointer(inner), ty.is_const())
+            }
             Type::ConstArray(size, inner) => {
                 let size = match size {
                     GenericVal::Literal(_) => size,
@@ -462,6 +466,7 @@ impl SemCtx<'_> {
 
             Type::EffectType
             | Type::DataType
+            | Type::Struct(_)
             | Type::Integer(_, _)
             | Type::CompileTime(_)
             | Type::Str
@@ -663,6 +668,14 @@ impl SemCtx<'_> {
                     ),
                 }
             }
+            T::Maybe(ty) => match self.ast.types[ty].0 {
+                T::Pointer(ty) => {
+                    let inner =
+                        self.analyze_type(scope, ty, generics, generic_handler, handler_output);
+                    self.insert_type(Type::MaybePointer(inner), false)
+                }
+                _ => todo!(),
+            },
             T::Pointer(ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 self.insert_type(Type::Pointer(inner), false)
@@ -1313,6 +1326,7 @@ impl SemCtx<'_> {
             Type::HandlerType(_) => false,
             Type::Generic(_) => false,
             Type::Pointer(_) => false,
+            Type::MaybePointer(_) => false,
             Type::ConstArray(_, _) => false,
             Type::Slice(_) => false,
             Type::Integer(_, _) => true,
@@ -1323,6 +1337,10 @@ impl SemCtx<'_> {
             Type::Never => true,
             Type::Error => true,
             Type::CompileTime(_) => true,
+            Type::Struct(idx) => self.ir.structs[idx]
+                .elems
+                .iter()
+                .all(|&(_, ty)| self.is_copy(ty)),
         }
     }
     fn test_move(&mut self, from: TypeIdx, to: TypeIdx) -> bool {
@@ -1338,6 +1356,8 @@ impl SemCtx<'_> {
 
             (Type::Error, _) => true,
             (_, Type::Error) => true,
+
+            (&Type::Pointer(from), &Type::MaybePointer(to)) => self.test_move(from, to),
 
             (Type::HandlerType(from), Type::HandlerType(to)) => {
                 from.effect == to.effect && self.test_move(from.fail_type, to.fail_type)
@@ -3296,6 +3316,9 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             fun_impl: std::iter::repeat_with(FunImpl::default)
                 .take(ast.functions.len())
                 .collect(),
+            structs: std::iter::repeat_with(Struct::default)
+                .take(ast.structs.len())
+                .collect(),
 
             types: VecSet::new(),
             handlers: VecMap::new(),
@@ -3372,6 +3395,43 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             mutable: false,
         },
     );
+
+    // analyze struct names
+    for (idx, package) in ast.packages.iter(PackageIdx) {
+        for (i, struc) in package
+            .structs
+            .iter()
+            .copied()
+            .map(|idx| (idx, &ast.structs[idx]))
+        {
+            let name = &ast.idents[struc.name].0;
+            ctx.ir.structs[i].name = name.clone();
+
+            let ty = ctx.insert_type(Type::Struct(i), false);
+            ctx.packages[idx].types.insert(name.clone(), ty);
+        }
+    }
+
+    // analyze struct elems
+    for (idx, package) in ast.packages.iter(PackageIdx) {
+        let mut scope = ScopeStack::new(idx);
+        for (i, struc) in package
+            .structs
+            .iter()
+            .copied()
+            .map(|idx| (idx, &ast.structs[idx]))
+        {
+            ctx.ir.structs[i].elems = struc
+                .elems
+                .iter()
+                .map(|&(id, ty)| {
+                    let name = ast.idents[id].0.clone();
+                    let ty = ctx.analyze_type(&mut scope, ty, None, false, &mut SemCtx::no_handler);
+                    (name, ty)
+                })
+                .collect();
+        }
+    }
 
     // analyze effect signatures
     for (idx, package) in ast.packages.iter(PackageIdx) {

@@ -1,7 +1,7 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use crate::{
-    ast::{EffFunIdx, EffIdx},
+    ast::{EffFunIdx, EffIdx, StructIdx},
     error::Errors,
     sema::{
         self, get_value, BlockIdx, EffectIdent, FunIdent, FunImpl, FunSign, GenericIdx, GenericVal,
@@ -27,6 +27,7 @@ struct IRCtx<'a> {
     handlers: VecMap<HandlerIdx, (Option<sema::HandlerIdx>, GenericParams<'a>)>,
 
     slice_types: HashMap<TypeIdx, AggrIdx>,
+    struct_types: VecMap<StructIdx, AggrIdx>,
     handler_types: HashMap<(sema::HandlerIdx, GenericParams<'a>), TypeIdx>,
     foreign_types: HashMap<(EffIdx, GenericParams<'a>, Option<ASM>), TypeIdx>,
 }
@@ -101,11 +102,15 @@ impl<'a> IRCtx<'a> {
     fn lower_generic(&mut self, ty: sema::TypeIdx, params: &GenericParams<'a>) -> Generic<'a> {
         use sema::Type as T;
         Generic::Type(match self.sema.types[ty] {
+            T::Struct(idx) => {
+                let aggr = self.struct_types[idx];
+                self.insert_type(Type::Aggregate(aggr))
+            }
             T::Handler(l) => self.lower_lazy(l.idx, params),
             T::Generic(g) => {
                 return get_param(&params, g.idx).unwrap();
             }
-            T::Pointer(ty) => {
+            T::Pointer(ty) | T::MaybePointer(ty) => {
                 let ty = self.lower_type(ty, params);
                 self.insert_type(Type::Pointer(ty))
             }
@@ -876,7 +881,24 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
         foreign_types: HashMap::new(),
         functions: HashMap::new(),
         handlers: VecMap::new(),
+        struct_types: VecMap::new(),
     };
+
+    for struc in sema.structs.values() {
+        let children = struc
+            .elems
+            .iter()
+            .map(|&(_, ty)| ctx.lower_type(ty, &Vec::new()))
+            .collect();
+        let idx = ctx.ir.aggregates.push(
+            AggrIdx,
+            AggregateType {
+                children,
+                debug_name: struc.name.clone(),
+            },
+        );
+        ctx.struct_types.push_value(idx);
+    }
 
     let unit = ctx.insert_type(Type::Unit);
     ctx.lower_sign(FunIdent::Top(sema.entry), Vec::new(), Vec::new(), unit);

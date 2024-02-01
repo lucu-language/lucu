@@ -1,0 +1,6 @@
+import "vendor:xcb/bindings"
+
+fun main() / bindings.lib {
+	let ptr = bindings.connect(0, 0)
+	bindings.disconnect(ptr)
+}

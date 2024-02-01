@@ -1,3 +1,5 @@
+import "core:"
+
 ##
 # libc, defined as an effect
 # every header file in libc is its own effect
@@ -5,16 +7,29 @@
 ##
 @foreign
 effect lib {
-	# TODO: maybe ptr
-	# TODO: opaque time type
-	fun time(mut t ^int) int
+	fun time(mut t ?^time_t) time_t
 
-	# TODO: cstring, cint
-	fun puts(s ^u8) int
+	fun puts(s string) int
+	fun strlen(s string) size_t
 
-	# TODO: cstring
-	fun strlen(s ^u8) usize
+	fun malloc(size size_t) voidptr
+	fun free(ptr voidptr)
 }
+
+fun malloc_t(size size_t) ^`t / lib {
+	cast malloc(size)
+}
+
+fun free_t(ptr ^`t) / lib {
+	free(cast ptr)
+}
+
+struct int   (_ core.int)
+struct size_t(_ core.usize)
+struct time_t(timestamp int)
+
+struct voidptr(_ ^u8)
+struct string (_ ^u8)
 
 @capability
 fun link() impl lib / foreign {

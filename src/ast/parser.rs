@@ -1320,18 +1320,6 @@ fn expression_post(
                 );
             }
 
-            // member
-            Some(Ranged(Token::Dot, ..)) => {
-                tk.next();
-                let member = tk.ident()?;
-                expr = Ranged(
-                    Expression::Member(tk.push_expr(expr), tk.push_ident(member)),
-                    start,
-                    tk.pos_end(),
-                    tk.iter.file,
-                );
-            }
-
             // post try/with
             Some(Ranged(Token::With, ..)) => {
                 tk.next();
@@ -1375,6 +1363,48 @@ fn expression_post(
                     );
                 } else {
                     break Some(expr.0);
+                }
+            }
+
+            // member / dotcall
+            Some(Ranged(Token::Dot, ..)) => {
+                tk.next();
+
+                if tk.peek_check(Token::Open(Group::Paren)) {
+                    let mut args = Vec::new();
+
+                    // regular arguments
+                    tk.group(Group::Paren, true, |tk| {
+                        let expr = Expression::parse_or_default(tk);
+                        args.push(tk.push_expr(expr));
+                        Some(())
+                    })?;
+
+                    // lambda arguments
+                    if tk.allow_lambda_args {
+                        while tk.peek_check(Token::Open(Group::Brace)) || tk.peek_check(Token::Move)
+                        {
+                            let lambda = Lambda::parse_or_skip(tk)?;
+                            let handler = lambda.map(Handler::Lambda);
+                            let expr = handler.map(Expression::Handler);
+                            args.push(tk.push_expr(expr));
+                        }
+                    }
+
+                    expr = Ranged(
+                        Expression::DotCall(tk.push_expr(expr), args),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
+                } else {
+                    let member = tk.ident()?;
+                    expr = Ranged(
+                        Expression::Member(tk.push_expr(expr), tk.push_ident(member)),
+                        start,
+                        tk.pos_end(),
+                        tk.iter.file,
+                    );
                 }
             }
 

@@ -32,130 +32,41 @@ effect fail {
 }
 
 ##
-# sink
+# yield
 ##
-effect sink(`t) {
-	fun push(t `t)
+effect yield(`t) {
+	fun yield(mut t `t)
 }
 
-fun push_slice(buf []`t) / sink(`t) {
-	for(iter_slice(buf)) { t -> push(t) }
+effect generator(`t) {
+	fun generate() / yield(`t)
 }
 
-fun sink_slice(mut buf []const `e) impl sink(`e) / fail {
-	mut n usize = 0
-	move {
-		t ->
-		if n == len(buf) {
-			fail()
-		} else {
-			buf[n++] = t
-		}
+fun first(generate impl generator(`t)) `t / srcloc {
+	try {
+		generate.() with ({ t -> break t } as impl yield(`t) -> `t)
+		panic("nothing was yielded")
 	}
 }
 
-fun sink_buffer() impl sink(`t) / buf(`t) {
-	{ t -> buf_push(t) }
-}
-
-##
-# buffer
-##
-effect buf(`t) {
-	fun buf_push(t `t)
-	fun buf_len() usize
-	fun buf_slice() []const `t
-}
-
-fun buf_push_slice(buf []`t) / buf(`t) {
-	for(iter_slice(buf)) { t -> buf_push(t) }
-}
-
-fun buffer_slice(mut buf[]const `t) impl buf(`t) / fail {
-	mut n usize = 0
-	impl buf(`t) move {
-		fun buf_push(t `t) {
-			if n == len(buf) {
-				fail()
-			} else {
-				buf[n++] = t
-			}
-		}
-		fun buf_len() usize {
-			n
-		}
-		fun buf_slice() []const `t {
-			buf[0..n]
-		}
-	}
-}
-
-##
-# iterator
-##
-effect iter(`t) {
-	fun next() `t / no_such_element(`t)
-}
-
-fun iter_slice(buf []`e) impl iter(const `e) {
-	mut n usize = 0
-	move {
-		if n == len(buf) {
-			no_such_element()
-		} else {
-			buf[n++]
-		}
-	}
-}
-
-fun range(start usize, end usize) impl iter(usize) {
+fun for(start usize, end usize, yield impl yield(usize)) {
 	mut n = start
-	move {
+	try with yield loop {
 		if n == end {
-			no_such_element()
+			break
 		} else {
-			n++
+			yield(n++)
 		}
 	}
-}
-
-fun from(start usize) impl iter(usize) {
-	mut n = start
-	move { n++ }
-}
-
-##
-# basic for loop
-##
-fun for(it impl iter(`e), fn impl consume(`e)) {
-	let on_nse impl no_such_element(`e) -> unit = { break }
-	try with on_nse, it, fn loop {
-		consume(next() as `e)
-	}
-}
-
-effect iterable(`t, `e) {
-	fun iter(t `t) impl iter(`e)
-}
-
-impl iterable([]`t, const `t) {
-	fun iter(t []`t) impl iter(const `t) {
-		iter_slice(t)
-	}
-}
-
-fun foreach(t `t, fn impl consume(`e)) / iterable(`t, `e) {
-	let iter = iter(t) as impl iter(`e)
-	for(iter, fn)
 }
 
 ##
 # while loop
 ##
-fun while(cond impl test, fn impl perform) {
-	try with fn loop {
-		if test() with cond {
-			perform()
+fun while(test impl test, body impl run) {
+	try loop {
+		if test.() {
+			body.()
 		} else {
 			break
 		}
@@ -165,48 +76,31 @@ fun while(cond impl test, fn impl perform) {
 ##
 # until loop
 ##
-fun until(cond impl test, fn impl perform) {
-	try with fn loop {
-		if test() with cond {
+fun until(test impl test, body impl run) {
+	try loop {
+		if test.() {
 			break
 		} else {
-			perform()
+			body.()
 		}
-	}
-}
-
-##
-# run
-##
-fun run(fn impl supply(`t)) `t {
-	with fn {
-		supply()
 	}
 }
 
 ##
 # repeat loop
 ##
-fun repeat(fn impl perform -> `t) `t {
-	try with fn loop {
-		perform()
+fun repeat(body impl run -> `t) `t {
+	try loop {
+		body.()
 	}
-}
-
-effect consume(`t) {
-	fun consume(t `t)
 }
 
 effect test {
 	fun test() bool
 }
 
-effect perform {
-	fun perform()
-}
-
-effect supply(`t) {
-	fun supply() `t
+effect run {
+	fun run()
 }
 
 # TODO: && operator

@@ -1,16 +1,9 @@
 import "core:io"
 import "vendor:xcb"
 
-fun head() `e / iter(`e) srcloc {
-	let on_nse impl no_such_element(`e) = { panic("empty iterator") }
-	try with on_nse {
-		next()
-	}
-}
-
 fun main() / io.stdio xcb.lib {
 	with xcb.connect(0, 0) {
-		let screen ^xcb.screen = head() with xcb.roots_iterator(xcb.get_setup())
+		let screen ^xcb.screen = first { xcb.traverse_roots(xcb.get_setup()) }
 		let width = screen.width_in_pixels
 		let height = screen.height_in_pixels
 		io.putint(cast width)

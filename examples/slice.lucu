@@ -1,6 +1,0 @@
-import "core:io"
-
-fun main() / io.stdio {
-	let nums []int = [ 2, 8, 69 ]
-	foreach(nums, { num -> io.putint(num) } as impl consume(int))
-}

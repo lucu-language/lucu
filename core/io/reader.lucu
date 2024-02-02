@@ -2,24 +2,6 @@ effect reader {
 	fun read(mut buf []u8) usize
 }
 
-fun read_bytes(bytes []u8) impl reader {
-	mut current usize = 0
-	move {
-		buf ->
-
-		let remaining = len(bytes) - current
-		let amnt = if len(buf) < remaining { len(buf) } else { remaining }
-
-		for(range(0, amnt)) {
-			i ->
-			buf[i] = bytes[current + i]
-		}
-
-		current = current + amnt
-		amnt
-	}
-}
-
 fun skip_line() usize / reader {
 	mut total usize = 0
 

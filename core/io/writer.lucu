@@ -2,24 +2,6 @@ effect writer {
 	fun write(buf []u8) usize
 }
 
-fun write_bytes(mut bytes []u8) impl writer {
-	mut current usize = 0
-	move {
-		buf ->
-
-		let remaining = len(bytes) - current
-		let amnt = if len(buf) < remaining { len(buf) } else { remaining }
-
-		for(range(0, amnt)) {
-			i ->
-			bytes[i + current] = buf[i]
-		}
-
-		current = current + amnt
-		amnt
-	}
-}
-
 fun write_int(n int) usize / writer {
 	mut buf [20]u8 = ---
 

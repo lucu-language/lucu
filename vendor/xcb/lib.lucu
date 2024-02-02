@@ -12,7 +12,7 @@ type screen = bindings.screen
 
 effect lib {
 	fun connect(displayname ?c.string, screenp ?^c.int) impl conn
-	fun roots_iterator(setup ^setup) impl iter(^screen)
+	fun traverse_roots(setup ^setup) / yield(^screen)
 }
 
 effect conn {
@@ -30,15 +30,14 @@ fun link() impl lib / foreign {
 				fun get_setup () { bindings.get_setup(conn)  }
 			}
 		}
-		fun roots_iterator(setup ^setup) impl iter(^screen) {
+		fun traverse_roots(setup ^setup) / yield(^screen) {
 			mut iter = bindings.setup_roots_iterator(setup)
-			move {
+			try loop {
 				if iter.rem < 0 {
-					no_such_element()
+					break
 				} else {
-					mut screen = iter.data
+					yield(iter.data)
 					bindings.screen_next(&iter)
-					screen
 				}
 			}
 		}

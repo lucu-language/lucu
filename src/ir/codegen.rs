@@ -701,7 +701,7 @@ impl<'a> IRCtx<'a> {
                                         Value::Deref(effectptr) => {
                                             self.get_value_reg(&mut ctx, effectptr)
                                         }
-                                        Value::ConstantHandler(_, _) => {
+                                        _ => {
                                             let effect = self.get_value_reg(&mut ctx, effect);
 
                                             let effect_ty = self.ir.regs[effect];
@@ -712,7 +712,6 @@ impl<'a> IRCtx<'a> {
                                             ctx.push(Instruction::Reference(effectptr, effect));
                                             effectptr
                                         }
-                                        _ => unreachable!(),
                                     },
                                     block,
                                 )

@@ -1280,16 +1280,21 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int32 => self.context.i32_type().into(),
             Type::Int64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
-            Type::Pointer(ty) => match self.get_type(ir, ty) {
-                AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
-                AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
-            },
+            Type::Pointer(ty) =>
+                if matches!(ir.types[ty], Type::Never) {
+                    self.context.i8_type().ptr_type(AddressSpace::default()).into()
+                } else {
+                    match self.get_type(ir, ty) {
+                        AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::FloatType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::FunctionType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::IntType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::PointerType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::StructType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
+                        AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
+                    }
+                },
             Type::ConstArray(size, ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.array_type(size as u32).into(),
                 AnyTypeEnum::FloatType(t) => t.array_type(size as u32).into(),

@@ -47,7 +47,7 @@ fun next_state(original []u8, mut next []u8) {
 	)
 
 	# middle indices
-	for(range(1, len - 1)) {
+	for(1, len - 1) {
 		cell ->
 		next[cell] = rule(
 			original[cell - 1],
@@ -65,7 +65,7 @@ fun next_state(original []u8, mut next []u8) {
 }
 
 fun print_state(state []u8) / io.stdio {
-	for(range(0, len(state))) {
+	for(0, len(state)) {
 		cell ->
 		if state[cell] == 0 {
 			io.print(" ")

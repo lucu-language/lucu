@@ -25,9 +25,9 @@ fun inc(n usize) usize {
 }
 
 fun print_state(state []u8) / io.stdio {
-	for(range(0, 16)) {
+	for(0, 16) {
 		y ->
-		for(range(0, 16)) {
+		for(0, 16) {
 			x ->
 			let cell = index(x, y)
 			if state[cell] == 0 {
@@ -41,9 +41,9 @@ fun print_state(state []u8) / io.stdio {
 }
 
 fun next_state(old []u8, mut new []u8) {
-	for(range(0, 16)) {
+	for(0, 16) {
 		y ->
-		for(range(0, 16)) {
+		for(0, 16) {
 			x ->
 			mut neighbors = 0
 

@@ -2468,6 +2468,204 @@ impl SemCtx<'_> {
                     Some((Value::ConstantError, TYPE_ERROR))
                 }
             },
+            E::DotCall(handler_expr, ref args) => {
+                let (handler, handler_ty) = self.synth_expr(ctx, handler_expr)?;
+                let metaty = match self.ir.types[handler_ty] {
+                    Type::Handler(l) => l.typeof_handler,
+                    _ => panic!("give error"),
+                };
+                let (effect, fail_type) = match &self.ir.types[metaty] {
+                    Type::HandlerType(t) => (t.effect.literal().expect("give error"), t.fail_type),
+                    _ => unreachable!(),
+                };
+
+                if self.ir.effects[effect.effect].funs.len() != 1 {
+                    panic!("give error");
+                }
+                let fun = FunIdent::Effect(effect.effect, EffFunIdx(0));
+
+                let sign = fun.sign(&self.ir);
+                if sign.params.len() != args.len() {
+                    self.errors
+                        .push(self.ast.exprs[expr].with(Error::ParameterMismatch(
+                            None,
+                            sign.params.len(),
+                            args.len(),
+                        )));
+                }
+
+                // get params and infer generic params
+                let mut generic_params = effect.generic_params.clone();
+                let args = args
+                    .iter()
+                    .copied()
+                    .zip(
+                        sign.params
+                            .values()
+                            .map(|p| (p.ty, p.type_def, p.const_generic))
+                            .collect::<Vec<_>>(),
+                    )
+                    .map(|(arg, (param_ty, param_def, const_generic))| {
+                        let val = match self.translate_generics(param_ty, &generic_params, false) {
+                            Some(from) => {
+                                let val = self.check_expr(ctx, arg, from, Some(param_def))?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
+                                val
+                            }
+                            None => {
+                                let (val, from) = self.synth_expr(ctx, arg)?;
+                                self.infer_generics(&mut generic_params, from, param_ty);
+
+                                if from != TYPE_ERROR
+                                    && !self
+                                        .translate_generics(param_ty, &generic_params, false)
+                                        .is_some_and(|to| self.test_move(from, to))
+                                {
+                                    self.errors
+                                        .push(self.ast.exprs[arg].with(Error::TypeMismatch(
+                                            Some(param_def),
+                                            format!("{}", FmtType(&self.ir, param_ty)),
+                                            format!("{}", FmtType(&self.ir, from)),
+                                        )))
+                                }
+
+                                val
+                            }
+                        };
+                        if let Some(const_generic) = const_generic {
+                            if val.is_constant() {
+                                generic_params.push((
+                                    const_generic,
+                                    self.insert_type(Type::CompileTime(val.clone()), false),
+                                ))
+                            } else {
+                                todo!("give error: not constant")
+                            }
+                        }
+                        Some(val)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+
+                // get effects
+                let mut not_enough_info = false;
+                let mut effects = Vec::new();
+                for effect in 0..fun.sign(&self.ir).effect_stack.len() - 1 {
+                    // get effect ident
+                    let ef = &fun.sign(&self.ir).effect_stack[effect].0;
+                    let gen = ef.0;
+
+                    let ident = match ef.1 {
+                        GenericVal::Literal(ref ident) => GenericVal::Literal(ident.clone()),
+                        GenericVal::Generic(idx) => match get_param(&generic_params, idx) {
+                            Some(ty) => match self.ir.types[ty] {
+                                Type::Effect(ref ident) => GenericVal::Literal(ident.clone()),
+                                Type::Generic(generic) => GenericVal::Generic(generic.idx),
+                                Type::Error => continue,
+                                _ => unreachable!(),
+                            },
+                            None => {
+                                not_enough_info = true;
+                                continue;
+                            }
+                        },
+                    };
+                    let ident = match ident {
+                        GenericVal::Literal(ident) => {
+                            let Some(translated) = ident
+                                .generic_params
+                                .iter()
+                                .copied()
+                                .map(|(idx, ty)| {
+                                    Some((
+                                        idx,
+                                        self.translate_generics(ty, &generic_params, false)?,
+                                    ))
+                                })
+                                .collect::<Option<Vec<_>>>()
+                            else {
+                                continue;
+                            };
+                            GenericVal::Literal(EffectIdent {
+                                effect: ident.effect,
+                                generic_params: translated,
+                            })
+                        }
+                        ident => ident,
+                    };
+
+                    // find matching effect in stack
+                    match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
+                        Some((ty, idx, block)) => {
+                            self.infer_generics(&mut generic_params, ty, gen);
+                            effects.push((idx, block));
+                        }
+                        None => {
+                            // error
+                            let def = fun.sign(&self.ir).effect_stack[effect].empty();
+                            self.errors
+                                .push(self.ast.exprs[expr].with(Error::UnresolvedEffect(def)));
+                        }
+                    }
+                }
+                self.infer_generics(
+                    &mut generic_params,
+                    handler_ty,
+                    fun.sign(&self.ir).effect_stack.last().unwrap().0 .0,
+                );
+                effects.push((handler, ctx.yeetable_ret));
+
+                // make sure we got all generics inferred
+                let sign = &fun.sign(&self.ir);
+                generic_params.sort_unstable_by_key(|(idx, _)| idx.0);
+                if !generic_params
+                    .iter()
+                    .map(|&(idx, _)| idx)
+                    .eq(fun.generic_indices(&self.ir))
+                {
+                    // FIXME: fix this (infer using effect stack)
+                    println!(
+                        "this occurs when an effect param doesn't appear in its function {}",
+                        sign.name
+                    );
+                }
+
+                // get return type
+                let sign = &fun.sign(&self.ir);
+                let return_type =
+                    match self.translate_generics(sign.return_type.ty, &generic_params, true) {
+                        Some(ty) => ty,
+                        None => {
+                            not_enough_info = true;
+                            TYPE_ERROR
+                        }
+                    };
+
+                if not_enough_info {
+                    self.errors
+                        .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
+                }
+
+                if fail_type != TYPE_NEVER {
+                    match ctx.yeetable {
+                        Some(fail) => self.check_move(
+                            fail_type,
+                            fail,
+                            TypeRange {
+                                loc: self.ast.exprs[handler_expr].empty(),
+                                def: ctx.yeetable_def,
+                            },
+                        ),
+                        None => ctx.yeetable = Some(fail_type),
+                    }
+                }
+
+                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                if return_type == TYPE_NEVER {
+                    None
+                } else {
+                    Some((val, return_type))
+                }
+            }
             E::Call(callee, ref args) => {
                 // TODO: currently we assume func is an Ident expr or Effect Member expr
                 let Some(fun) = (match self.ast.exprs[callee].0 {
@@ -2476,25 +2674,7 @@ impl SemCtx<'_> {
                         _ => todo!(),
                     },
                     E::Ident(ident) => ctx.scope.try_function(self, ident),
-                    E::Body(_) => todo!(),
-                    E::Loop(_) => todo!(),
-                    E::Call(_, _) => todo!(),
-                    E::IfElse(_, _, _) => todo!(),
-                    E::BinOp(_, _, _) => todo!(),
-                    E::UnOp(_, _) => todo!(),
-                    E::Yeet(_) => todo!(),
-                    E::Let(_, _, _, _) => todo!(),
-                    E::As(_, _) => todo!(),
-                    E::Do(_) => todo!(),
-                    E::Try(_) => todo!(),
-                    E::With(_, _) => todo!(),
-                    E::Handler(_) => todo!(),
-                    E::Array(_) => todo!(),
-                    E::String(_) => todo!(),
-                    E::Character(_) => todo!(),
-                    E::Int(_) => todo!(),
-                    E::Uninit => todo!(),
-                    E::Error => todo!(),
+                    _ => todo!(),
                 }) else {
                     return Some((Value::ConstantError, TYPE_ERROR));
                 };
@@ -3347,7 +3527,10 @@ impl FunCtx<'_> {
                 self.push(Instruction::Jump(end_block));
                 (a, b, c)
             }
-            None => (Value::ConstantError, TYPE_NEVER, None),
+            None => {
+                self.push(Instruction::Unreachable);
+                (Value::ConstantError, TYPE_NEVER, None)
+            }
         };
 
         self.block = no_block;
@@ -3356,7 +3539,10 @@ impl FunCtx<'_> {
                 self.push(Instruction::Jump(end_block));
                 (a, b, c)
             }
-            None => (Value::ConstantError, TYPE_NEVER, None),
+            None => {
+                self.push(Instruction::Unreachable);
+                (Value::ConstantError, TYPE_NEVER, None)
+            }
         };
 
         self.block = end_block;

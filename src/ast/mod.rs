@@ -47,6 +47,7 @@ pub enum Expression {
     Body(Body),
     Loop(ExprIdx),
 
+    DotCall(ExprIdx, Vec<ExprIdx>),
     Call(ExprIdx, Vec<ExprIdx>),
     Member(ExprIdx, Ident),
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),

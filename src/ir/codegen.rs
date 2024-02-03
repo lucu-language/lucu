@@ -589,7 +589,7 @@ impl<'a> IRCtx<'a> {
                         self.insert_type(Type::Bool)
                     }
 
-                    I::Call(id, ref params, _, _) => {
+                    I::Call(id, ref params, _, _, _) => {
                         let mut params = params
                             .iter()
                             .map(|&(idx, ty)| (idx, self.lower_generic(ty, &ctx.params)))
@@ -692,39 +692,33 @@ impl<'a> IRCtx<'a> {
                         let r = self.get_value_reg(&mut ctx, r);
                         ctx.push(Instruction::Sub(ireg.unwrap(), l, r));
                     }
-                    I::Call(fun, params, args, effects) => {
+                    I::Call(fun, params, args, effects, handled) => {
                         let effects = effects
                             .iter()
-                            .map(|&(ref effect, block)| {
-                                (
-                                    match effect {
-                                        Value::Deref(effectptr) => {
-                                            self.get_value_reg(&mut ctx, effectptr)
-                                        }
-                                        _ => {
-                                            let effect = self.get_value_reg(&mut ctx, effect);
+                            .map(|effect| {
+                                match effect {
+                                    Value::Deref(effectptr) => {
+                                        self.get_value_reg(&mut ctx, effectptr)
+                                    }
+                                    _ => {
+                                        let effect = self.get_value_reg(&mut ctx, effect);
 
-                                            let effect_ty = self.ir.regs[effect];
-                                            let effectptr_ty =
-                                                self.insert_type(Type::Pointer(effect_ty));
-                                            let effectptr = self.next_reg(effectptr_ty);
+                                        let effect_ty = self.ir.regs[effect];
+                                        let effectptr_ty =
+                                            self.insert_type(Type::Pointer(effect_ty));
+                                        let effectptr = self.next_reg(effectptr_ty);
 
-                                            ctx.push(Instruction::Reference(effectptr, effect));
-                                            effectptr
-                                        }
-                                    },
-                                    block,
-                                )
+                                        ctx.push(Instruction::Reference(effectptr, effect));
+                                        effectptr
+                                    }
+                                }
                             })
                             .collect::<Vec<_>>();
 
-                        let handled = effects
+                        let handled = handled
                             .iter()
                             .filter_map(|&(e, b)| {
-                                let b = b?;
-
-                                let effectptr_ty = self.ir.regs[e];
-                                let effect_ty = effectptr_ty.inner(&self.ir);
+                                let effect_ty = self.lower_type(e, &ctx.params);
                                 let handler = match self.ir.types[effect_ty] {
                                     Type::Handler(idx, _) => idx,
                                     _ => unreachable!(),
@@ -744,7 +738,7 @@ impl<'a> IRCtx<'a> {
                         let args = args
                             .iter()
                             .map(|arg| self.get_value_reg(&mut ctx, arg))
-                            .chain(effects.into_iter().map(|(e, _)| e))
+                            .chain(effects)
                             .collect::<Vec<_>>();
 
                         let params = params

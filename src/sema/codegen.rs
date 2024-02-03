@@ -1398,6 +1398,11 @@ impl SemCtx<'_> {
                 Either::Right(sign) => sign,
             };
 
+            let mut taken = ir_sign.effect_stack.len();
+            if sign.is_right() {
+                taken -= 1;
+            }
+
             scope.top().effect_stack = ir_sign
                 .effect_stack
                 .iter()
@@ -1410,6 +1415,7 @@ impl SemCtx<'_> {
                         None,
                     )
                 })
+                .take(taken)
                 .collect();
 
             let mut blocks = VecMap::new();
@@ -1801,9 +1807,9 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, error_loc.loc) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block))
+                            effects.push(idx)
                         }
                         None => {
                             // error
@@ -1847,7 +1853,8 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let handled = ctx.all_handled();
+                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects, handled));
                 if ret == TYPE_NEVER {
                     None
                 } else {
@@ -2595,9 +2602,9 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block));
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -2612,7 +2619,7 @@ impl SemCtx<'_> {
                     handler_ty,
                     fun.sign(&self.ir).effect_stack.last().unwrap().0 .0,
                 );
-                effects.push((handler, ctx.yeetable_ret));
+                effects.push(handler);
 
                 // make sure we got all generics inferred
                 let sign = &fun.sign(&self.ir);
@@ -2659,7 +2666,12 @@ impl SemCtx<'_> {
                     }
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let mut handled = ctx.all_handled();
+                if let Some(block) = ctx.yeetable_ret {
+                    handled.push((handler_ty, block));
+                }
+
+                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects, handled));
                 if return_type == TYPE_NEVER {
                     None
                 } else {
@@ -2790,9 +2802,9 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block));
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -2834,7 +2846,8 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let handled = ctx.all_handled();
+                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects, handled));
                 if return_type == TYPE_NEVER {
                     None
                 } else {
@@ -3199,7 +3212,7 @@ impl SemCtx<'_> {
                     },
                 )?;
                 self.infer_generics(&mut params, capability.0, gen);
-                Some((capability.1, None))
+                Some(capability.1)
             })
             .collect::<Option<Vec<_>>>()?;
 
@@ -3208,7 +3221,7 @@ impl SemCtx<'_> {
 
         let type_idx = capability.sign(&self.ir).return_type.ty;
         let type_idx = self.translate_generics(type_idx, &params, true).unwrap();
-        let val = ctx.push(Instruction::Call(capability, params, Vec::new(), stack));
+        let val = ctx.push(Instruction::Call(capability, params, Vec::new(), stack, Vec::new()));
         let val = ctx.push_deref(Instruction::Reference(val, type_idx));
 
         cache.insert(id, (type_idx, val.clone()));
@@ -3257,6 +3270,13 @@ impl FunCtx<'_> {
         }
         generics.sort_unstable_by_key(|generic| generic.idx.0);
         generics
+    }
+    fn all_handled(&self) -> Vec<(TypeIdx, BlockIdx)> {
+        let mut handled = Vec::new();
+        for scope in self.scope.scopes.iter().skip(self.capture_boundary.1) {
+            handled.extend(scope.effect_stack.iter().filter_map(|&(ty, _, _, block)| Some((ty, block?))))
+        }
+        handled
     }
     fn get_value(&mut self, ctx: &SemCtx, name: &str) -> Option<Variable> {
         let mut iter = self.scope.scopes.iter().enumerate().rev().chain([
@@ -3931,11 +3951,6 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             let capture = Value::Deref(Box::new(Value::Capture(0)));
             fun.push(Instruction::Return(capture));
         });
-        ctx.define_preamble_fun("compile_error", |ctx, fun| {
-            let idx = ctx.get_preamble_sign("compile_error").generics[0].idx;
-            fun.push(Instruction::CompileError(GenericVal::Generic(idx)));
-            fun.push(Instruction::Unreachable);
-        });
 
         let foreign = ctx.get_preamble_effect("foreign");
         let foreign_handler = ctx.push_handler(Handler {
@@ -4066,7 +4081,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     FunIdent::Effect(idx, EffFunIdx(0)),
                     vec![(gen, val.0)],
                     Vec::new(),
-                    vec![(val.1.clone(), None)],
+                    vec![val.1.clone()],
+                    Vec::new(),
                 ));
                 fun.push(Instruction::Unreachable);
             });
@@ -4080,7 +4096,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     FunIdent::Effect(idx, EffFunIdx(2)),
                     vec![(gen, val.0)],
                     Vec::new(),
-                    vec![(val.1.clone(), None)],
+                    vec![val.1.clone()],
+                    Vec::new(),
                 ));
                 let ty = ctx.ir.effects[idx].funs[EffFunIdx(2)].return_type.ty;
                 let ty = ctx
@@ -4097,7 +4114,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     print,
                     vec![(gen, ty)],
                     vec![Value::Param(ParamIdx(0))],
-                    vec![(handler, None)],
+                    vec![handler],
+                    Vec::new(),
                 ));
                 fun.push(Instruction::Return(Value::ConstantNone));
             });
@@ -4129,7 +4147,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                                 .map(|(gen, v)| (gen.idx, v.0))
                                 .collect(),
                             Vec::new(),
-                            stack.into_iter().map(|v| (v.1, None)).collect(),
+                            stack.into_iter().map(|(_, val)| val).collect(),
+                            Vec::new(),
                         ));
                     }
                     None => panic!("give error"),
@@ -4147,7 +4166,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 FunIdent::Effect(idx, EffFunIdx(1)),
                 vec![(gen, val.0)],
                 vec![Value::ConstantInt(TYPE_INT, false, 0)],
-                vec![(val.1, None)],
+                vec![val.1],
+                Vec::new(),
             ));
             cap_fun.push(Instruction::Unreachable);
         } else {

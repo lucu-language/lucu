@@ -141,18 +141,15 @@ fun todo(msg str) ! / srcloc {
 	trap()
 }
 
-fun internal() `t / srcloc {
-	compile_error("internal function has no definition on specified target")
+fun internal() `t {
+	# internal()
+	loop {}
 }
 
 ##
 # the following functions have internal definitions
 # these are not based on a specific target
 ##
-
-fun compile_error(`msg str) ! / srcloc {
-	internal()
-}
 
 ##
 # marks that a code path is unreachable

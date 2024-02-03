@@ -532,4 +532,9 @@ mod tests {
     fn write_buffer() {
         test_file("write_buffer", "Hello, World!\n")
     }
+
+    #[test]
+    fn mapfilterfold() {
+        test_file("mapfilterfold", "10\n")
+    }
 }

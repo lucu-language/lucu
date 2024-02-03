@@ -156,8 +156,9 @@ pub enum Instruction {
         // params
         Vec<Value>,
         // effect params
-        // TODO: Vec<Value>, Vec<(TypeIdx, BlockIdx)>,
-        Vec<(Value, Option<BlockIdx>)>,
+        Vec<Value>,
+        // handled effects
+        Vec<(TypeIdx, BlockIdx)>,
     ),
 
     Yeet(Value, Option<BlockIdx>),
@@ -757,7 +758,7 @@ impl FunImpl {
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Call(fun, _, ref args, _) => {
+                    Instruction::Call(fun, _, ref args, _, _) => {
                         write!(f, "call {} (", fun.sign(ir).name)?;
                         for val in args {
                             val.display(ir, proc, f)?;

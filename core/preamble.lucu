@@ -105,6 +105,22 @@ fun and(a bool, b bool) bool {
 	}
 }
 
+fun not(a bool) bool {
+	if a {
+		false
+	} else {
+		true
+	}
+}
+
+fun or(a bool, b bool) bool {
+	if a {
+		true
+	} else {
+		b
+	}
+}
+
 ##
 # exits the program and displays an error message
 # preferred to be used only for debugging

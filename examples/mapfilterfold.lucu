@@ -26,6 +26,18 @@ fun fold(fold impl fold(`a, `b), mut init `b, gen impl generator(`a)) `b {
 	acc
 }
 
+fun all(filter impl filter(`a), gen impl generator(`a)) bool {
+	fold({ acc, a -> and(acc, filter.(a)) } as impl fold(`a, bool), true, gen)
+}
+
+fun any(filter impl filter(`a), gen impl generator(`a)) bool {
+	fold({ acc, a -> or(acc, filter.(a)) } as impl fold(`a, bool), false, gen)
+}
+
+fun none(filter impl filter(`a), gen impl generator(`a)) bool {
+	all({ a -> not(filter.(a)) } as impl filter(`a), gen)
+}
+
 fun sum(gen impl generator(int)) int {
 	fold({ acc, a -> acc + a } as impl fold(int, int), 0, gen)
 }
@@ -34,18 +46,107 @@ fun product(gen impl generator(int)) int {
 	fold({ acc, a -> acc * a } as impl fold(int, int), 1, gen)
 }
 
-# TODO: proper struct implementation
-# struct average_acc(
-# 	sum_acc int,
-# 	count_acc int
-# )
+fun count(gen impl generator(`t)) usize {
+	fold({ acc, a -> acc + 1 } as impl fold(`t, usize), 0, gen)
+}
 
-# fun average(gen impl generator(int)) int {
-# 	fold({ acc, a -> average_acc() }) ...
+effect unfold(`a, `b) {
+	fun _unfold(a `a) `a / yield(`b)
+}
+
+fun unfold(unfold impl unfold(`a, `b) -> unit, mut seed `a) / yield(`b) {
+	mut val = seed
+	try with unfold loop {
+		val = unfold.(val)
+	}
+}
+
+fun rep(mut a `a, times usize) / yield(`a) {
+	unfold({ count ->
+		if count == times {
+			break
+		} else {
+			yield(a)
+			count + 1
+		}
+	} as impl unfold(usize, `a) -> unit
+	, 0)
+}
+
+# not completely correct, but correct version gives compile error
+fun itermap(map impl map(`a, `a), mut seed `a) / yield(`a) {
+	unfold({ a ->
+		mut next_a = map.(a)
+		yield(next_a) # should be: yield(a)
+		next_a
+	} as impl unfold(`a, `a) -> unit
+	, seed)
+}
+
+fun factorial(num int) int {
+	product({ unfold({ a ->
+		if a == 0 {
+			break
+		} else {
+			yield(a)
+			a - 1
+		}
+	} as impl unfold(int, int) -> unit
+	, num) })
+}
+
+fun last(gen impl generator(`t)) `t {
+	mut acc = first(gen)
+	gen.() with ({a -> acc = a} as impl yield(`t))
+	acc
+}
+
+fun take(amount usize, gen impl generator(`a)) / yield(`a) {
+	mut num_taken usize = 0
+	try {
+		gen.() with { a ->
+			if (num_taken++ == amount) {
+				break
+			} else {
+				yield(a)
+			}
+		} as impl yield(`a) -> unit
+	}
+}
+
+fun putbool(a bool) / io.stdio {
+	if a {
+		io.putstr("true")
+	} else {
+		io.putstr("false")
+	}
+}
+
+# doesn't work :(
+# fun find(pred impl filter(`a), gen impl generator(`a)) `a {
+# 	try { 
+# 		gen.() with { a ->
+# 			if pred.(a) {
+# 				break a
+# 			}
+# 		} as impl yield(`a) -> `a
+# 	}
 # }
 
 fun main() / io.stdio {
-	let num = sum {
+	take(10, { 
+		yield(1)
+		yield(2)
+		yield(3)
+	} as impl generator(int)) with { a -> io.putint(a) } as impl yield(int)
+
+	take(10, { 
+		itermap({ a -> a * 2 } as impl map(int, int), 1)
+	} as impl generator(int)) with { a -> io.putint(a) } as impl yield(int)
+
+	io.putint(factorial(10))
+
+	let b = none({ a -> mod(a, 2) == 1} as impl filter(int)) {
 		filter({ a -> a > 3 } as impl filter(int)) {
 			map({ a -> a * 2 } as impl map (int, int)) {
 				yield(1)
@@ -54,5 +155,10 @@ fun main() / io.stdio {
 			}
 		}
 	}
-	io.putint(num)
+	putbool(b)
+	# count up forever :)
+	# unfold({ a ->
+	# 	yield(a)
+	# 	a + 1} as impl unfold(int, int) -> unit
+	# 	, 0) with { a -> io.putint(a) } as impl yield(int)
 }

@@ -866,19 +866,32 @@ impl<'a> IRCtx<'a> {
     }
 
     fn sizeof(&self, ty: TypeIdx) -> u64 {
+        let arch = self.target.lucu_arch();
         match self.ir.types[ty] {
-            Type::Int => self.target.lucu_arch().register_size().div_ceil(8) as u64,
-            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8) as u64,
-            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::Int => arch.register_size().div_ceil(8) as u64,
+            Type::IntSize => arch.array_len_size().div_ceil(8) as u64,
+            Type::IntPtr => arch.ptr_size().div_ceil(8) as u64,
             Type::Int8 => 1,
             Type::Int16 => 2,
-            Type::Int32 => 3,
-            Type::Int64 => 4,
+            Type::Int32 => 4,
+            Type::Int64 => 8,
             Type::Bool => 1,
-            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::Pointer(_) => arch.ptr_size().div_ceil(8) as u64,
             Type::ConstArray(len, inner) => self.sizeof(inner) * len,
             Type::Aggregate(idx) | Type::Handler(_, idx) => {
-                todo!()
+                let mut size = 0;
+                for child in self.ir.aggregates[idx].children.iter().copied() {
+                    // round up to child align
+                    let align_mask = (1 << self.alignof(child)) - 1;
+                    size = size + align_mask & !align_mask;
+
+                    // add child
+                    size += self.sizeof(child);
+                }
+
+                // round up to align
+                let align_mask = (1 << self.alignof(ty)) - 1;
+                size + align_mask & !align_mask
             }
             Type::Unit => 0,
             Type::Never => 0,
@@ -886,16 +899,17 @@ impl<'a> IRCtx<'a> {
     }
 
     fn alignof(&self, ty: TypeIdx) -> u64 {
+        let arch = self.target.lucu_arch();
         match self.ir.types[ty] {
-            Type::Int => self.target.lucu_arch().register_size().div_ceil(8).ilog2() as u64,
-            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8).ilog2() as u64,
-            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::Int => ilog2_ceil(arch.register_size().div_ceil(8)) as u64,
+            Type::IntSize => ilog2_ceil(arch.array_len_size().div_ceil(8)) as u64,
+            Type::IntPtr => ilog2_ceil(arch.ptr_size().div_ceil(8)) as u64,
             Type::Int8 => 0,
             Type::Int16 => 1,
             Type::Int32 => 2,
             Type::Int64 => 3,
             Type::Bool => 0,
-            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::Pointer(_) => ilog2_ceil(arch.ptr_size().div_ceil(8)) as u64,
             Type::ConstArray(_, inner) => self.alignof(inner),
             Type::Aggregate(idx) | Type::Handler(_, idx) => self.ir.aggregates[idx]
                 .children
@@ -907,6 +921,14 @@ impl<'a> IRCtx<'a> {
             Type::Unit => 0,
             Type::Never => 0,
         }
+    }
+}
+
+fn ilog2_ceil(n: u32) -> u32 {
+    if n < 2 {
+        0
+    } else {
+        (n - 1).ilog2() + 1
     }
 }
 

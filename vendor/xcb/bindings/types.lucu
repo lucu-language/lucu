@@ -1,6 +1,6 @@
 import "vendor:c"
 
-struct connection(_ c.void)
+struct connection(_ u8)
 
 type keycode = u8
 

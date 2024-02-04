@@ -18,6 +18,7 @@ use super::{
 
 struct IRCtx<'a> {
     ir: IR,
+    target: &'a Target,
     sema: &'a SemIR,
     errors: &'a mut Errors,
 
@@ -489,6 +490,24 @@ impl<'a> IRCtx<'a> {
                 ctx.push(Instruction::Aggregate(reg, vals));
                 reg
             }
+            Value::ConstantSizeOf(ty) => {
+                let ty = self.lower_type(ty, &ctx.params);
+                let size = self.sizeof(ty);
+
+                let int_ty = self.insert_type(Type::IntSize);
+                let reg = self.next_reg(int_ty);
+                ctx.push(Instruction::Init(reg, size));
+                reg
+            }
+            Value::ConstantAlignOf(ty) => {
+                let ty = self.lower_type(ty, &ctx.params);
+                let align = self.alignof(ty);
+
+                let int_ty = self.insert_type(Type::Int8);
+                let reg = self.next_reg(int_ty);
+                ctx.push(Instruction::Init(reg, align));
+                reg
+            }
             Value::ConstantInt(ty, false, n) => {
                 let ty = self.lower_type(ty, &ctx.params);
                 let reg = self.next_reg(ty);
@@ -695,22 +714,17 @@ impl<'a> IRCtx<'a> {
                     I::Call(fun, params, args, effects, handled) => {
                         let effects = effects
                             .iter()
-                            .map(|effect| {
-                                match effect {
-                                    Value::Deref(effectptr) => {
-                                        self.get_value_reg(&mut ctx, effectptr)
-                                    }
-                                    _ => {
-                                        let effect = self.get_value_reg(&mut ctx, effect);
+                            .map(|effect| match effect {
+                                Value::Deref(effectptr) => self.get_value_reg(&mut ctx, effectptr),
+                                _ => {
+                                    let effect = self.get_value_reg(&mut ctx, effect);
 
-                                        let effect_ty = self.ir.regs[effect];
-                                        let effectptr_ty =
-                                            self.insert_type(Type::Pointer(effect_ty));
-                                        let effectptr = self.next_reg(effectptr_ty);
+                                    let effect_ty = self.ir.regs[effect];
+                                    let effectptr_ty = self.insert_type(Type::Pointer(effect_ty));
+                                    let effectptr = self.next_reg(effectptr_ty);
 
-                                        ctx.push(Instruction::Reference(effectptr, effect));
-                                        effectptr
-                                    }
+                                    ctx.push(Instruction::Reference(effectptr, effect));
+                                    effectptr
                                 }
                             })
                             .collect::<Vec<_>>();
@@ -850,6 +864,50 @@ impl<'a> IRCtx<'a> {
         // set proc
         self.ir.proc_impl[idx].blocks = ctx.blocks;
     }
+
+    fn sizeof(&self, ty: TypeIdx) -> u64 {
+        match self.ir.types[ty] {
+            Type::Int => self.target.lucu_arch().register_size().div_ceil(8) as u64,
+            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8) as u64,
+            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::Int8 => 1,
+            Type::Int16 => 2,
+            Type::Int32 => 3,
+            Type::Int64 => 4,
+            Type::Bool => 1,
+            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::ConstArray(len, inner) => self.sizeof(inner) * len,
+            Type::Aggregate(idx) | Type::Handler(_, idx) => {
+                todo!()
+            }
+            Type::Unit => 0,
+            Type::Never => 0,
+        }
+    }
+
+    fn alignof(&self, ty: TypeIdx) -> u64 {
+        match self.ir.types[ty] {
+            Type::Int => self.target.lucu_arch().register_size().div_ceil(8).ilog2() as u64,
+            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8).ilog2() as u64,
+            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::Int8 => 0,
+            Type::Int16 => 1,
+            Type::Int32 => 2,
+            Type::Int64 => 3,
+            Type::Bool => 0,
+            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::ConstArray(_, inner) => self.alignof(inner),
+            Type::Aggregate(idx) | Type::Handler(_, idx) => self.ir.aggregates[idx]
+                .children
+                .iter()
+                .copied()
+                .map(|ty| self.alignof(ty))
+                .max()
+                .unwrap_or(0),
+            Type::Unit => 0,
+            Type::Never => 0,
+        }
+    }
 }
 
 pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
@@ -869,6 +927,7 @@ pub fn codegen(sema: &SemIR, errors: &mut Errors, target: &Target) -> IR {
         },
         sema,
         errors,
+        target,
         slice_types: HashMap::new(),
         proc_todo: Vec::new(),
         handler_types: HashMap::new(),

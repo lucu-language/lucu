@@ -867,36 +867,69 @@ impl Parse for Lambda {
         let mut main = Vec::new();
         let mut last = None;
 
-        tk.group_single(Group::Brace, |tk| {
-            if matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
-                let id = tk.ident()?;
-                let name = tk.push_ident(id);
-                if matches!(tk.peek(), Some(Ranged(Token::Comma | Token::Arrow, ..))) {
-                    // arguments
-                    inputs.push_value(name);
+        if tk.peek_check(Token::Do) {
+            let expr = Expression::parse_or_default(tk);
+            let n = tk.push_expr(expr);
+            last = Some(n);
+        } else {
+            tk.group_single(Group::Brace, |tk| {
+                if matches!(tk.peek(), Some(Ranged(Token::Ident(_), ..))) {
+                    let id = tk.ident()?;
+                    let name = tk.push_ident(id);
+                    if matches!(tk.peek(), Some(Ranged(Token::Comma | Token::Arrow, ..))) {
+                        // arguments
+                        inputs.push_value(name);
 
-                    if tk.check(Token::Comma).is_some() {
-                        loop {
-                            let id = tk.ident()?;
-                            let name = tk.push_ident(id);
+                        if tk.check(Token::Comma).is_some() {
+                            loop {
+                                let id = tk.ident()?;
+                                let name = tk.push_ident(id);
 
-                            inputs.push_value(name);
+                                inputs.push_value(name);
 
-                            if tk.check(Token::Comma).is_none() {
-                                break;
+                                if tk.check(Token::Comma).is_none() {
+                                    break;
+                                }
                             }
                         }
+
+                        tk.expect(Token::Arrow)?;
+                    } else {
+                        // ident expr
+                        let expr = expression_post(
+                            tk,
+                            Ranged(Expression::Ident(name), start, tk.pos_end(), tk.iter.file),
+                            start,
+                        )?;
+                        let n = tk.push_expr(Ranged(expr, start, tk.pos_end(), tk.iter.file));
+
+                        if tk.check(Token::Semicolon).is_none() {
+                            last = Some(n);
+                            if !tk.peek_check(Token::Close(Group::Brace)) {
+                                // TODO: error
+                                return None;
+                            } else {
+                                return Some(());
+                            }
+                        } else {
+                            // skip semicolons
+                            while tk.check(Token::Semicolon).is_some() {}
+                            main.push(n);
+                        }
+                    }
+                }
+
+                // rest of exprs
+                loop {
+                    // skip semicolons
+                    while tk.check(Token::Semicolon).is_some() {}
+                    if tk.peek_check(Token::Close(Group::Brace)) {
+                        return Some(());
                     }
 
-                    tk.expect(Token::Arrow)?;
-                } else {
-                    // ident expr
-                    let expr = expression_post(
-                        tk,
-                        Ranged(Expression::Ident(name), start, tk.pos_end(), tk.iter.file),
-                        start,
-                    )?;
-                    let n = tk.push_expr(Ranged(expr, start, tk.pos_end(), tk.iter.file));
+                    // parse expression
+                    let expr = Expression::parse_or_default(tk);
+                    let n = tk.push_expr(expr);
 
                     if tk.check(Token::Semicolon).is_none() {
                         last = Some(n);
@@ -912,35 +945,8 @@ impl Parse for Lambda {
                         main.push(n);
                     }
                 }
-            }
-
-            // rest of exprs
-            loop {
-                // skip semicolons
-                while tk.check(Token::Semicolon).is_some() {}
-                if tk.peek_check(Token::Close(Group::Brace)) {
-                    return Some(());
-                }
-
-                // parse expression
-                let expr = Expression::parse_or_default(tk);
-                let n = tk.push_expr(expr);
-
-                if tk.check(Token::Semicolon).is_none() {
-                    last = Some(n);
-                    if !tk.peek_check(Token::Close(Group::Brace)) {
-                        // TODO: error
-                        return None;
-                    } else {
-                        return Some(());
-                    }
-                } else {
-                    // skip semicolons
-                    while tk.check(Token::Semicolon).is_some() {}
-                    main.push(n);
-                }
-            }
-        })?;
+            })?;
+        }
 
         let body = tk.push_expr(Ranged(
             Expression::Body(Body { main, last }),
@@ -961,6 +967,25 @@ impl Parse for Expression {
     fn parse(tk: &mut ParseCtx) -> Option<Self> {
         let start = tk.pos_start();
         let expr = tk.ranged(|tk| match tk.peek() {
+            // keywords
+            Some(Ranged(Token::At, ..)) => {
+                tk.next();
+                let keyword = tk.ident()?.0;
+                match keyword.as_str() {
+                    "sizeof" => {
+                        let ty = Type::parse_or_default(tk);
+                        let ty = tk.push_type(ty);
+                        Some(Expression::SizeOf(ty))
+                    }
+                    "alignof" => {
+                        let ty = Type::parse_or_default(tk);
+                        let ty = tk.push_type(ty);
+                        Some(Expression::AlignOf(ty))
+                    }
+                    _ => panic!("give error"),
+                }
+            }
+
             // uninit
             Some(Ranged(Token::TripleDash, ..)) => {
                 tk.next();
@@ -1131,9 +1156,7 @@ impl Parse for Expression {
                     Some(condition)
                 })?;
 
-                let yes = Body::parse_or_default(tk);
-                let yes = tk.push_expr(yes);
-
+                let yes = Lambda::parse_or_skip(tk)?.0;
                 let no = if tk.check(Token::Else).is_some() {
                     // allow for else-if
                     let no = if tk.peek_check(Token::If) {
@@ -1146,7 +1169,11 @@ impl Parse for Expression {
                     None
                 };
 
-                Some(Expression::IfElse(condition, yes, no))
+                if yes.inputs.is_empty() {
+                    Some(Expression::IfElse(condition, yes.body, no))
+                } else {
+                    Some(Expression::IfElseUnwrap(condition, yes, no))
+                }
             }
 
             // let x type = ...

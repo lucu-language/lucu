@@ -1,0 +1,56 @@
+##
+# standard memory allocator
+##
+effect alloc {
+	fun raw_alloc(len usize, align u8) ?^u8
+	fun raw_free(buf []u8, align u8)
+}
+
+##
+# returns a pointer to undefined memory
+# call &destroy with the result to free the memory
+##
+fun create() ^`t / alloc fail {
+	let ptr = raw_alloc(@sizeof `t, @alignof `t)
+	if ptr {
+		ptr -> cast ptr
+	} else {
+		fail()
+	}
+}
+
+##
+# &ptr should be the return value of &create,
+# or otherwise have the same address and alignment
+##
+fun destroy(ptr ^`t) / alloc {
+	let ptr ^u8 = cast ptr
+	let mem = raw_slice(ptr, @sizeof `t)
+	raw_free(mem, @alignof `t)
+}
+
+##
+# allocates an array of &len items and sets all items to undefined
+# call &free with the result to free the memory
+##
+fun alloc(len usize) []`t / alloc fail {
+	let ptr = raw_alloc(@sizeof `t * len, @alignof `t)
+	if ptr {
+		ptr ->
+		let ptr ^`t = cast ptr
+		raw_slice(ptr, len)
+	} else {
+		fail()
+	}
+}
+
+##
+# &slice should be the return value of &alloc,
+# or otherwise have the same pointer address, length, and alignment
+##
+fun free(slice []`t) / alloc {
+	let ptr = &slice[0]
+	let ptr ^u8 = cast ptr
+	let mem = raw_slice(ptr, @sizeof `t * len(slice))
+	raw_free(mem, @alignof `t)
+}

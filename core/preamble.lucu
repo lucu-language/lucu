@@ -21,17 +21,6 @@ fun mod(dividend int, divisor int) int {
 }
 
 ##
-# error effects
-##
-effect no_such_element(`t) {
-	fun no_such_element() `t
-}
-
-effect fail {
-	fun fail() !
-}
-
-##
 # yield
 ##
 effect yield(`t) {
@@ -103,6 +92,10 @@ effect run {
 	fun run()
 }
 
+effect fail {
+	fun fail() !
+}
+
 # TODO: && operator
 fun and(a bool, b bool) bool {
 	if a {
@@ -164,6 +157,13 @@ fun unreachable() ! {
 # returns the length of a slice
 ##
 fun len(slice []`elem) usize {
+	internal()
+}
+
+##
+# creates a slice from a pointer and length
+##
+fun raw_slice(ptr ^`t, len usize) []`t {
 	internal()
 }
 

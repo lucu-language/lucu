@@ -1,0 +1,5 @@
+import "core:io"
+
+fun main() / io.stdio {
+	io.putint((0 - 1) / 7)
+}

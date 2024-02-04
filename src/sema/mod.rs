@@ -94,6 +94,9 @@ pub enum Value {
     ConstantError,
     ConstantGeneric(GenericIdx),
 
+    ConstantSizeOf(TypeIdx),
+    ConstantAlignOf(TypeIdx),
+
     Param(ParamIdx),
     EffectParam(usize),
     Capture(usize),
@@ -114,6 +117,8 @@ impl Value {
             Value::ConstantZero(_) => true,
             Value::ConstantError => true,
             Value::ConstantGeneric(_) => true,
+            Value::ConstantAlignOf(_) => true,
+            Value::ConstantSizeOf(_) => true,
             Value::Param(_) => false,
             Value::EffectParam(_) => false,
             Value::Capture(_) => false,
@@ -602,6 +607,16 @@ impl Value {
                     Ok(())
                 }
             },
+            Value::ConstantSizeOf(ty) => {
+                write!(f, "@sizeof ")?;
+                ty.display(ir, &Vec::new(), f)?;
+                Ok(())
+            }
+            Value::ConstantAlignOf(ty) => {
+                write!(f, "@alignof ")?;
+                ty.display(ir, &Vec::new(), f)?;
+                Ok(())
+            }
             Value::Deref(ref val) => {
                 val.display(ir, proc, f)?;
                 write!(f, "^")?;

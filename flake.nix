@@ -1,7 +1,10 @@
 {
-  inputs.astapkgs.url = "github:Astavie/astapkgs";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/release-23.11";
 
-  outputs = { self, astapkgs }: astapkgs.lib.package rec {
+  inputs.astapkgs.url = "github:Astavie/astapkgs";
+  inputs.astapkgs.inputs.nixpkgs.follows = "nixpkgs";
+
+  outputs = { astapkgs, ... }: astapkgs.lib.package rec {
 
     name = "lucu";
 

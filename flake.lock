@@ -3,14 +3,16 @@
     "astapkgs": {
       "inputs": {
         "fenix": "fenix",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": [
+          "nixpkgs"
+        ]
       },
       "locked": {
-        "lastModified": 1698607416,
-        "narHash": "sha256-96jIvuk5iNFqG8Cs0bY4dUINTDtV56jRyfbK1pmqHDo=",
+        "lastModified": 1706745225,
+        "narHash": "sha256-u8qucAzl2YjKT85F1WdiEyX/G5gpZnGm0f748zWK0sM=",
         "owner": "Astavie",
         "repo": "astapkgs",
-        "rev": "c18e6aaf75ca8f5123424ffedb7404b98d1e1ae2",
+        "rev": "a3deb545ea3e6b5d65239fe2174481a413648cee",
         "type": "github"
       },
       "original": {
@@ -43,23 +45,24 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1694767346,
-        "narHash": "sha256-5uH27SiVFUwsTsqC5rs3kS7pBoNhtoy9QfTP9BmknGk=",
+        "lastModified": 1707039165,
+        "narHash": "sha256-2p9VEcmcA/WZQwIW44As8KdnuSBZgusGbLy4J5aNph8=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "ace5093e36ab1e95cb9463863491bee90d5a4183",
+        "rev": "6a31cd61a26fb6ad84615aa23bd564547fd8b968",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-unstable",
+        "ref": "release-23.11",
         "repo": "nixpkgs",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
-        "astapkgs": "astapkgs"
+        "astapkgs": "astapkgs",
+        "nixpkgs": "nixpkgs"
       }
     },
     "rust-analyzer-src": {

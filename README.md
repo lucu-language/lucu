@@ -40,6 +40,7 @@ For compilatation on linux, run
 Dependencies
 
 - `x86_64-w64-mingw32-ld`
+- `wine` (for running)
 
 For compiling to Windows from linux, run
 
@@ -60,7 +61,7 @@ For compiling to WASM from linux, run
 Dependencies
 
 - `wasm-ld`
-- `wasmtime`
+- `wasmtime` (for running)
 
 For compiling to WASI from linux, run
 

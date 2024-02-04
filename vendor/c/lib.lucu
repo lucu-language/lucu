@@ -1,4 +1,5 @@
 import "core:"
+import "core:mem"
 
 ##
 # libc, defined as an effect
@@ -12,21 +13,13 @@ effect lib {
 	fun puts(s string) int
 	fun strlen(s string) size_t
 
-	fun malloc(size size_t) ?^void
-	fun free(ptr ?^void)
-}
-
-fun malloc_t(size size_t) ?^`t / lib {
-	cast malloc(size)
-}
-
-fun free_t(ptr ?^`t) / lib {
-	free(cast ptr)
+	fun malloc(size size_t) ?^max_align_t
+	fun free(ptr ?^max_align_t)
 }
 
 # opaque types
-struct time_t (_timestamp int)
-struct void   (_ u8)
+struct time_t      (_timestamp int)
+struct max_align_t (_ int)
 
 # type aliases
 type string = ^u8
@@ -36,4 +29,15 @@ type size_t = core.usize
 @capability
 fun link() impl lib / foreign {
 	impl_link("c")
+}
+
+fun allocator() impl mem.alloc / lib {
+	impl mem.alloc {
+		fun raw_alloc(len usize, align u8) ?^u8 {
+			cast malloc(len)
+		}
+		fun raw_free(buf []u8, align u8) {
+			free(cast &buf[0])
+		}
+	}
 }

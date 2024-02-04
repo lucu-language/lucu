@@ -94,6 +94,9 @@ pub enum Value {
     ConstantError,
     ConstantGeneric(GenericIdx),
 
+    ConstantSizeOf(TypeIdx),
+    ConstantAlignOf(TypeIdx),
+
     Param(ParamIdx),
     EffectParam(usize),
     Capture(usize),
@@ -114,6 +117,8 @@ impl Value {
             Value::ConstantZero(_) => true,
             Value::ConstantError => true,
             Value::ConstantGeneric(_) => true,
+            Value::ConstantAlignOf(_) => true,
+            Value::ConstantSizeOf(_) => true,
             Value::Param(_) => false,
             Value::EffectParam(_) => false,
             Value::Capture(_) => false,
@@ -156,8 +161,9 @@ pub enum Instruction {
         // params
         Vec<Value>,
         // effect params
-        // TODO: Vec<Value>, Vec<(TypeIdx, BlockIdx)>,
-        Vec<(Value, Option<BlockIdx>)>,
+        Vec<Value>,
+        // handled effects
+        Vec<(TypeIdx, BlockIdx)>,
     ),
 
     Yeet(Value, Option<BlockIdx>),
@@ -601,6 +607,16 @@ impl Value {
                     Ok(())
                 }
             },
+            Value::ConstantSizeOf(ty) => {
+                write!(f, "@sizeof ")?;
+                ty.display(ir, &Vec::new(), f)?;
+                Ok(())
+            }
+            Value::ConstantAlignOf(ty) => {
+                write!(f, "@alignof ")?;
+                ty.display(ir, &Vec::new(), f)?;
+                Ok(())
+            }
             Value::Deref(ref val) => {
                 val.display(ir, proc, f)?;
                 write!(f, "^")?;
@@ -757,7 +773,7 @@ impl FunImpl {
                         write!(f, " ")?;
                         b.display(ir, proc, f)?;
                     }
-                    Instruction::Call(fun, _, ref args, _) => {
+                    Instruction::Call(fun, _, ref args, _, _) => {
                         write!(f, "call {} (", fun.sign(ir).name)?;
                         for val in args {
                             val.display(ir, proc, f)?;

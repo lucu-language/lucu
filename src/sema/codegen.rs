@@ -214,6 +214,7 @@ const TYPE_INT: TypeIdx = TypeIdx(7 << 2);
 const TYPE_STR: TypeIdx = TypeIdx(8 << 2);
 const TYPE_CHAR: TypeIdx = TypeIdx(9 << 2);
 const TYPE_U8: TypeIdx = TypeIdx(10 << 2);
+const TYPE_UPTR: TypeIdx = TypeIdx(11 << 2);
 
 impl SemCtx<'_> {
     fn get_preamble_effect(&self, name: &str) -> EffIdx {
@@ -1398,6 +1399,11 @@ impl SemCtx<'_> {
                 Either::Right(sign) => sign,
             };
 
+            let mut taken = ir_sign.effect_stack.len();
+            if sign.is_right() {
+                taken -= 1;
+            }
+
             scope.top().effect_stack = ir_sign
                 .effect_stack
                 .iter()
@@ -1410,6 +1416,7 @@ impl SemCtx<'_> {
                         None,
                     )
                 })
+                .take(taken)
                 .collect();
 
             let mut blocks = VecMap::new();
@@ -1512,6 +1519,48 @@ impl SemCtx<'_> {
                         Some(Value::ConstantNone)
                     })
             }),
+            (&E::IfElseUnwrap(mptr, ref yes, no), _) => {
+                let (mptr, mptr_ty) = self.synth_expr(ctx, mptr)?;
+
+                let uptr = ctx.push(Instruction::Cast(mptr.clone(), TYPE_UPTR));
+                let cond = ctx.push(Instruction::Equals(uptr, Value::ConstantZero(TYPE_UPTR)));
+
+                if yes.inputs.len() != 1 {
+                    panic!("give error");
+                }
+                let ptr_ty = match self.ir.types[mptr_ty] {
+                    Type::MaybePointer(inner) => {
+                        self.insert_type(Type::Pointer(inner), mptr_ty.is_const())
+                    }
+                    _ => panic!("give error"),
+                };
+
+                ctx.branch(
+                    self,
+                    cond,
+                    |me, ctx| match no {
+                        Some(no) => me
+                            .check_expr(ctx, no, expected, expected_def)
+                            .map(|val| (val, expected, expected_def)),
+                        None => Some((Value::ConstantNone, TYPE_NONE, None)),
+                    },
+                    |me, ctx| {
+                        let ident = yes.inputs.values().copied().next().unwrap();
+                        let ident = self.ast.idents[ident].0.clone();
+                        ctx.define(
+                            ident,
+                            Variable {
+                                value: mptr,
+                                ty: ptr_ty,
+                                mutable: false,
+                            },
+                        );
+                        me.check_expr(ctx, yes.body, expected, expected_def)
+                            .map(|val| (val, expected, expected_def))
+                    },
+                )
+                .map(|(val, _)| val)
+            }
             (&E::IfElse(cond, yes, no), _) => {
                 let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
                 ctx.branch(
@@ -1755,6 +1804,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -1801,9 +1851,16 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, error_loc.loc) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block))
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -1847,7 +1904,13 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let val = ctx.push(Instruction::Call(
+                    fun,
+                    generic_params,
+                    args,
+                    effects,
+                    handled,
+                ));
                 if ret == TYPE_NEVER {
                     None
                 } else {
@@ -2106,6 +2169,14 @@ impl SemCtx<'_> {
     fn synth_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
         use Expression as E;
         match self.ast.exprs[expr].0 {
+            E::SizeOf(ty) => {
+                let ty = self.analyze_type(ctx.scope, ty, None, false, &mut Self::no_handler);
+                Some((Value::ConstantSizeOf(ty), TYPE_USIZE))
+            }
+            E::AlignOf(ty) => {
+                let ty = self.analyze_type(ctx.scope, ty, None, false, &mut Self::no_handler);
+                Some((Value::ConstantAlignOf(ty), TYPE_U8))
+            }
             E::Body(ref body) => ctx.child(|ctx| {
                 for expr in body.main.iter().copied() {
                     self.check_expr(ctx, expr, TYPE_NONE, None)?;
@@ -2124,6 +2195,47 @@ impl SemCtx<'_> {
                 self.synth_expr(ctx, inner)?;
                 ctx.push(Instruction::Jump(old));
                 None
+            }
+            E::IfElseUnwrap(mptr, ref yes, no) => {
+                let (mptr, mptr_ty) = self.synth_expr(ctx, mptr)?;
+
+                let uptr = ctx.push(Instruction::Cast(mptr.clone(), TYPE_UPTR));
+                let cond = ctx.push(Instruction::Equals(uptr, Value::ConstantZero(TYPE_UPTR)));
+
+                if yes.inputs.len() != 1 {
+                    panic!("give error");
+                }
+                let ptr_ty = match self.ir.types[mptr_ty] {
+                    Type::MaybePointer(inner) => {
+                        self.insert_type(Type::Pointer(inner), mptr_ty.is_const())
+                    }
+                    _ => panic!("give error"),
+                };
+
+                ctx.branch(
+                    self,
+                    cond,
+                    |me, ctx| match no {
+                        Some(no) => me
+                            .synth_expr(ctx, no)
+                            .map(|(val, ty)| (val, ty, Some(self.ast.exprs[no].empty()))),
+                        None => Some((Value::ConstantNone, TYPE_NONE, None)),
+                    },
+                    |me, ctx| {
+                        let ident = yes.inputs.values().copied().next().unwrap();
+                        let ident = self.ast.idents[ident].0.clone();
+                        ctx.define(
+                            ident,
+                            Variable {
+                                value: mptr,
+                                ty: ptr_ty,
+                                mutable: false,
+                            },
+                        );
+                        me.synth_expr(ctx, yes.body)
+                            .map(|(val, ty)| (val, ty, Some(self.ast.exprs[yes.body].empty())))
+                    },
+                )
             }
             E::IfElse(cond, yes, no) => {
                 let cond = self.check_expr(ctx, cond, TYPE_BOOL, None)?;
@@ -2549,6 +2661,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() - 1 {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -2595,9 +2708,16 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block));
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -2612,7 +2732,10 @@ impl SemCtx<'_> {
                     handler_ty,
                     fun.sign(&self.ir).effect_stack.last().unwrap().0 .0,
                 );
-                effects.push((handler, ctx.yeetable_ret));
+                effects.push(handler);
+                if let Some(block) = ctx.yeetable_ret {
+                    handled.push((handler_ty, block));
+                }
 
                 // make sure we got all generics inferred
                 let sign = &fun.sign(&self.ir);
@@ -2659,7 +2782,13 @@ impl SemCtx<'_> {
                     }
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let val = ctx.push(Instruction::Call(
+                    fun,
+                    generic_params,
+                    args,
+                    effects,
+                    handled,
+                ));
                 if return_type == TYPE_NEVER {
                     None
                 } else {
@@ -2744,6 +2873,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -2790,9 +2920,16 @@ impl SemCtx<'_> {
 
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
-                        Some((ty, idx, block)) => {
+                        Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push((idx, block));
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -2834,7 +2971,13 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let val = ctx.push(Instruction::Call(fun, generic_params, args, effects));
+                let val = ctx.push(Instruction::Call(
+                    fun,
+                    generic_params,
+                    args,
+                    effects,
+                    handled,
+                ));
                 if return_type == TYPE_NEVER {
                     None
                 } else {
@@ -3199,7 +3342,7 @@ impl SemCtx<'_> {
                     },
                 )?;
                 self.infer_generics(&mut params, capability.0, gen);
-                Some((capability.1, None))
+                Some(capability.1)
             })
             .collect::<Option<Vec<_>>>()?;
 
@@ -3208,7 +3351,13 @@ impl SemCtx<'_> {
 
         let type_idx = capability.sign(&self.ir).return_type.ty;
         let type_idx = self.translate_generics(type_idx, &params, true).unwrap();
-        let val = ctx.push(Instruction::Call(capability, params, Vec::new(), stack));
+        let val = ctx.push(Instruction::Call(
+            capability,
+            params,
+            Vec::new(),
+            stack,
+            Vec::new(),
+        ));
         let val = ctx.push_deref(Instruction::Reference(val, type_idx));
 
         cache.insert(id, (type_idx, val.clone()));
@@ -3257,6 +3406,18 @@ impl FunCtx<'_> {
         }
         generics.sort_unstable_by_key(|generic| generic.idx.0);
         generics
+    }
+    fn all_handled(&self) -> Vec<(TypeIdx, BlockIdx)> {
+        let mut handled = Vec::new();
+        for scope in self.scope.scopes.iter().skip(self.capture_boundary.1) {
+            handled.extend(
+                scope
+                    .effect_stack
+                    .iter()
+                    .filter_map(|&(ty, _, _, block)| Some((ty, block?))),
+            )
+        }
+        handled
     }
     fn get_value(&mut self, ctx: &SemCtx, name: &str) -> Option<Variable> {
         let mut iter = self.scope.scopes.iter().enumerate().rev().chain([
@@ -3629,6 +3790,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
     ctx.insert_type(Type::Str, false);
     ctx.insert_type(Type::Char, false);
     ctx.insert_type(Type::Integer(false, IntSize::Bits(8)), false);
+    ctx.insert_type(Type::Integer(false, IntSize::Ptr), false);
 
     let mut insert = |t: Type| {
         let ty = ctx.insert_type(t, false);
@@ -3925,16 +4087,20 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             let len = fun.push(Instruction::Member(slice, 1, slice_ty));
             fun.push(Instruction::Return(len));
         });
+        ctx.define_preamble_fun("raw_slice", |ctx, fun| {
+            let ptr = Value::Param(ParamIdx(0));
+            let len = Value::Param(ParamIdx(1));
+            let slice_ty = ctx.get_preamble_sign("raw_slice").return_type.ty;
+            fun.push(Instruction::Return(Value::ConstantAggregate(
+                slice_ty,
+                vec![ptr, len].into(),
+            )));
+        });
 
         ctx.get_preamble_handler("srcloc").captures = vec![TYPE_STR];
         ctx.define_preamble_fun("source_location", |_, fun| {
             let capture = Value::Deref(Box::new(Value::Capture(0)));
             fun.push(Instruction::Return(capture));
-        });
-        ctx.define_preamble_fun("compile_error", |ctx, fun| {
-            let idx = ctx.get_preamble_sign("compile_error").generics[0].idx;
-            fun.push(Instruction::CompileError(GenericVal::Generic(idx)));
-            fun.push(Instruction::Unreachable);
         });
 
         let foreign = ctx.get_preamble_effect("foreign");
@@ -4066,7 +4232,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     FunIdent::Effect(idx, EffFunIdx(0)),
                     vec![(gen, val.0)],
                     Vec::new(),
-                    vec![(val.1.clone(), None)],
+                    vec![val.1.clone()],
+                    Vec::new(),
                 ));
                 fun.push(Instruction::Unreachable);
             });
@@ -4080,7 +4247,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     FunIdent::Effect(idx, EffFunIdx(2)),
                     vec![(gen, val.0)],
                     Vec::new(),
-                    vec![(val.1.clone(), None)],
+                    vec![val.1.clone()],
+                    Vec::new(),
                 ));
                 let ty = ctx.ir.effects[idx].funs[EffFunIdx(2)].return_type.ty;
                 let ty = ctx
@@ -4097,7 +4265,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     print,
                     vec![(gen, ty)],
                     vec![Value::Param(ParamIdx(0))],
-                    vec![(handler, None)],
+                    vec![handler],
+                    Vec::new(),
                 ));
                 fun.push(Instruction::Return(Value::ConstantNone));
             });
@@ -4129,7 +4298,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                                 .map(|(gen, v)| (gen.idx, v.0))
                                 .collect(),
                             Vec::new(),
-                            stack.into_iter().map(|v| (v.1, None)).collect(),
+                            stack.into_iter().map(|(_, val)| val).collect(),
+                            Vec::new(),
                         ));
                     }
                     None => panic!("give error"),
@@ -4147,7 +4317,8 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 FunIdent::Effect(idx, EffFunIdx(1)),
                 vec![(gen, val.0)],
                 vec![Value::ConstantInt(TYPE_INT, false, 0)],
-                vec![(val.1, None)],
+                vec![val.1],
+                Vec::new(),
             ));
             cap_fun.push(Instruction::Unreachable);
         } else {

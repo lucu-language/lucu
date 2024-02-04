@@ -51,6 +51,7 @@ pub enum Expression {
     Call(ExprIdx, Vec<ExprIdx>),
     Member(ExprIdx, Ident),
     IfElse(ExprIdx, ExprIdx, Option<ExprIdx>),
+    IfElseUnwrap(ExprIdx, Lambda, Option<ExprIdx>),
     BinOp(ExprIdx, BinOp, ExprIdx),
     UnOp(ExprIdx, UnOp),
     Yeet(Option<ExprIdx>),
@@ -58,6 +59,9 @@ pub enum Expression {
 
     As(ExprIdx, TypeIdx),
     Do(ExprIdx),
+
+    SizeOf(TypeIdx),
+    AlignOf(TypeIdx),
 
     Try(ExprIdx),
     With(ExprIdx, ExprIdx),

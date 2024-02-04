@@ -180,10 +180,6 @@ fn parse_from_filename(
     let preamble = core_path.join("core/");
     let system = core_path.join("core/os/");
 
-    if !preamble.exists() {
-        todo!("give error");
-    }
-
     let mut files_todo = vec![
         (main_file.to_path_buf(), parsed.main),
         (preamble, parsed.preamble),
@@ -201,6 +197,27 @@ fn parse_from_filename(
     let mut n = 0;
     while let Some(&(ref path, pkg)) = files_todo.get(n) {
         n += 1;
+
+        if pkg == parsed.preamble {
+            let content = include_str!("../core/preamble.lucu").replace('\t', "  ");
+            let idx = errors.files.push(
+                FileIdx,
+                File {
+                    content: content.clone(),
+                    name: path.to_string_lossy().into_owned(),
+                },
+            );
+            let tok = Tokenizer::new(&content, idx, &mut errors);
+            parse_ast(
+                tok,
+                pkg,
+                &mut parsed,
+                path.clone().parent().unwrap(),
+                &libs,
+                &mut files_todo,
+            );
+            continue;
+        }
 
         match path.extension() == Some(OsStr::new("lucu")) {
             true => {
@@ -531,5 +548,10 @@ mod tests {
     #[test]
     fn write_buffer() {
         test_file("write_buffer", "Hello, World!\n")
+    }
+
+    #[test]
+    fn mapfilterfold() {
+        test_file("mapfilterfold", "10\n")
     }
 }

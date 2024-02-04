@@ -4,29 +4,31 @@
 @foreign
 effect sys {
 	fun GetStdHandle(nStdHandle DWORD) HANDLE
-	fun ReadConsoleA(hConsoleInput HANDLE, mut lpBuffer ^u8, nNumberOfCharsToRead DWORD, mut lpNumberOfCharsRead ^DWORD, pInputControl ?^CONSOLE_READCONSOLE_CONTROL) bool
-	fun WriteConsoleA(hConsoleOutput HANDLE, lpBuffer ^u8, nNumberOfCharsToWrite DWORD, mut lpNumberOfCharsWritten ^DWORD, lpReserved ?^never) bool
+	fun ReadConsoleA(hConsoleInput HANDLE, mut lpBuffer ^u8, nNumberOfCharsToRead DWORD, mut lpNumberOfCharsRead ^DWORD, pInputControl ?^CONSOLE_READCONSOLE_CONTROL) BOOL
+	fun WriteConsoleA(hConsoleOutput HANDLE, lpBuffer ^u8, nNumberOfCharsToWrite DWORD, mut lpNumberOfCharsWritten ^DWORD, lpReserved ?^never) BOOL
 
 	fun GetCurrentProcess() HANDLE
-	fun TerminateProcess(hProcess HANDLE, uExitCode UINT) bool
+	fun TerminateProcess(hProcess HANDLE, uExitCode UINT) BOOL
 	fun ExitProcess(uExitCode UINT) !
 }
 
 struct CONSOLE_READCONSOLE_CONTROL(_ u8)
 
-type DWORD  = u32
-type UINT   = u32
-type HANDLE = uptr
+type DWORD   = u32
+type UINT    = u32
+type HANDLE  = uptr
+type BOOL    = i32
+type BOOLEAN = u8
 
-fun stdin() uptr / sys {
+fun stdin() HANDLE / sys {
 	GetStdHandle(4294967286)
 }
 
-fun stdout() uptr / sys {
+fun stdout() HANDLE / sys {
 	GetStdHandle(4294967285)
 }
 
-fun stderr() uptr / sys {
+fun stderr() HANDLE / sys {
 	GetStdHandle(4294967284)
 }
 

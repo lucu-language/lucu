@@ -1,0 +1,58 @@
+import "core:io"
+
+effect map(`a, `b) {
+	fun _map(a `a) `b
+}
+
+fun map(mapper impl map(`a, `b), gen impl generator(`a)) / yield(`b) {
+	gen.() with ({a -> yield(mapper.(a))} as impl yield(`a))
+}
+
+effect filter(`a) {
+	fun _filter(a `a) bool
+}
+
+fun filter(filter impl filter(`a), gen impl generator(`a)) / yield(`a) {
+	gen.() with ({a -> if filter.(a) { yield(a) }} as impl yield(`a))
+}
+
+effect fold(`a, `b) {
+	fun _fold(acc `b, a `a) `b
+}
+
+fun fold(fold impl fold(`a, `b), mut init `b, gen impl generator(`a)) `b {
+	mut acc = init
+	gen.() with ({a -> acc = fold.(acc, a)} as impl yield(`a))
+	acc
+}
+
+fun sum(gen impl generator(int)) int {
+	fold({ acc, a -> acc + a } as impl fold(int, int), 0, gen)
+}
+
+fun product(gen impl generator(int)) int {
+	fold({ acc, a -> acc * a } as impl fold(int, int), 1, gen)
+}
+
+# TODO: proper struct implementation
+# struct average_acc(
+# 	sum_acc int,
+# 	count_acc int
+# )
+
+# fun average(gen impl generator(int)) int {
+# 	fold({ acc, a -> average_acc() }) ...
+# }
+
+fun main() / io.stdio {
+	let num = sum {
+		filter({ a -> a > 3 } as impl filter(int)) {
+			map({ a -> a * 2 } as impl map (int, int)) {
+				yield(1)
+				yield(2)
+				yield(3)
+			}
+		}
+	}
+	io.putint(num)
+}

@@ -1,0 +1,14 @@
+import "core:io"
+import "core:mem"
+import "vendor:c"
+
+fun main() / io.stdio c.lib {
+	with c.allocator() {
+		mut array []int = mem.alloc(32) with ({ panic("OOM") } as impl fail)
+		array[0] = 69
+		array[1] = 420
+		io.putint(array[0])
+		io.putint(array[1])
+		mem.free(array)
+	}
+}

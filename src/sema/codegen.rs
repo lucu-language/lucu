@@ -1804,6 +1804,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -1851,8 +1852,15 @@ impl SemCtx<'_> {
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, error_loc.loc) {
                         Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
-                            effects.push(idx)
+                            effects.push(idx);
                         }
                         None => {
                             // error
@@ -1896,7 +1904,6 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let handled = ctx.all_handled();
                 let val = ctx.push(Instruction::Call(
                     fun,
                     generic_params,
@@ -2654,6 +2661,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() - 1 {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -2701,6 +2709,13 @@ impl SemCtx<'_> {
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
                         Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
                             effects.push(idx);
                         }
@@ -2718,6 +2733,9 @@ impl SemCtx<'_> {
                     fun.sign(&self.ir).effect_stack.last().unwrap().0 .0,
                 );
                 effects.push(handler);
+                if let Some(block) = ctx.yeetable_ret {
+                    handled.push((handler_ty, block));
+                }
 
                 // make sure we got all generics inferred
                 let sign = &fun.sign(&self.ir);
@@ -2762,11 +2780,6 @@ impl SemCtx<'_> {
                         ),
                         None => ctx.yeetable = Some(fail_type),
                     }
-                }
-
-                let mut handled = ctx.all_handled();
-                if let Some(block) = ctx.yeetable_ret {
-                    handled.push((handler_ty, block));
                 }
 
                 let val = ctx.push(Instruction::Call(
@@ -2860,6 +2873,7 @@ impl SemCtx<'_> {
                 // get effects
                 let mut not_enough_info = false;
                 let mut effects = Vec::new();
+                let mut handled = ctx.all_handled();
                 for effect in 0..fun.sign(&self.ir).effect_stack.len() {
                     // get effect ident
                     let ef = &fun.sign(&self.ir).effect_stack[effect].0;
@@ -2907,6 +2921,13 @@ impl SemCtx<'_> {
                     // find matching effect in stack
                     match ctx.get_effect(self, &ident, self.ast.exprs[expr].empty()) {
                         Some((ty, idx, _)) => {
+                            if matches!(idx, Value::ConstantHandler(_, _)) {
+                                // implied handler
+                                if let Some(block) = ctx.yeetable_ret {
+                                    handled.push((ty, block));
+                                }
+                            }
+
                             self.infer_generics(&mut generic_params, ty, gen);
                             effects.push(idx);
                         }
@@ -2950,7 +2971,6 @@ impl SemCtx<'_> {
                         .push(self.ast.exprs[expr].with(Error::NotEnoughInfo));
                 }
 
-                let handled = ctx.all_handled();
                 let val = ctx.push(Instruction::Call(
                     fun,
                     generic_params,

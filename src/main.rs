@@ -8,7 +8,7 @@ use std::{
 };
 
 use ast::{parse_ast, Ast};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use error::{Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
@@ -286,13 +286,19 @@ fn parse_from_filename(
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Parser)]
+struct CompileFlags {
     #[arg(help = ".lucu file with entry point")]
     main: PathBuf,
     #[arg(
         short,
         long,
-        help = "Set the file name of the outputted executable\n  defaults to 'out(.exe)'"
+        help = "Set the file name of the outputted executable\n  defaults to 'out'"
     )]
     out: Option<PathBuf>,
 
@@ -321,137 +327,147 @@ struct Args {
     plaintext: bool,
     #[arg(long, help = "Print compiler debug info")]
     debug: bool,
-    #[arg(short, long, help = "Immediately run the compiled binary")]
-    run: bool,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    Build(CompileFlags),
+    Run(CompileFlags),
 }
 
 fn main() {
     unsafe { backtrace_on_stack_overflow::enable() };
 
-    let args = Args::parse();
-    let core = args.core.unwrap_or_else(|| {
-        option_env!("LUCU_CORE")
-            .map(Path::new)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
-            .to_path_buf()
-    });
+    let args = Cli::parse();
+    let run = matches!(args.command, Cmd::Run(_));
 
-    let debug = args.debug;
-    let color = !args.plaintext;
-    let output = args.out.unwrap_or_else(|| PathBuf::from("out"));
-    let output = output.as_path();
+    match args.command {
+        Cmd::Build(flags) | Cmd::Run(flags) => {
+            let core = flags.core.unwrap_or_else(|| {
+                option_env!("LUCU_CORE")
+                    .map(Path::new)
+                    .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+                    .to_path_buf()
+            });
 
-    let target = match args.target {
-        Some(t) => {
-            let triple = TargetTriple::create(&t);
-            let triple = TargetMachine::normalize_triple(&triple);
-            Target {
-                triple: triple.as_str().to_owned().into_string().unwrap(),
+            let debug = flags.debug;
+            let color = !flags.plaintext;
+            let output = flags.out.unwrap_or_else(|| PathBuf::from("out"));
+            let output = output.as_path();
 
-                // TODO: get common denominator
-                cpu: args.cpu,
-                features: args.features,
-            }
-        }
-        None => Target::host(args.cpu, args.features),
-    };
+            let target = match flags.target {
+                Some(t) => {
+                    let triple = TargetTriple::create(&t);
+                    let triple = TargetMachine::normalize_triple(&triple);
+                    Target {
+                        triple: triple.as_str().to_owned().into_string().unwrap(),
 
-    // analyze
-    match parse_from_filename(&args.main, &core, &target) {
-        Ok(ir) => {
-            // generate ir
-            if debug {
-                println!("\n--- IR ---");
-                println!("{}", ir);
-                println!("\n--- LLVM ---");
-            }
-
-            // generate llvm
-            llvm::generate_ir(&ir, &output.with_extension("o"), debug, &target);
-
-            // output
-            if debug {
-                println!("\n--- OUTPUT ---");
-            }
-
-            // TODO: config for linker and runner
-            let os = target.lucu_os();
-            let arch = target.lucu_arch();
-            match (&os, &arch) {
-                (LucuOS::Linux, LucuArch::X86_64) => {
-                    Command::new("ld")
-                        .arg(output.with_extension("o"))
-                        .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
-                        .arg("-o")
-                        .arg(output)
-                        .arg("-e_start")
-                        .status()
-                        .unwrap();
-
-                    if args.run {
-                        Command::new(Path::new("./").join(output)).status().unwrap();
+                        // TODO: get common denominator
+                        cpu: flags.cpu,
+                        features: flags.features,
                     }
                 }
-                (LucuOS::Windows, LucuArch::X86_64) => {
-                    Command::new("x86_64-w64-mingw32-ld")
-                        .arg(output.with_extension("o"))
-                        .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
-                        .arg("-o")
-                        .arg(output.with_extension("exe"))
-                        .arg("-e_start")
-                        .status()
-                        .unwrap();
+                None => Target::host(flags.cpu, flags.features),
+            };
 
-                    if args.run {
-                        Command::new("wine")
-                            .arg(output.with_extension("exe"))
-                            .status()
-                            .unwrap();
+            // analyze
+            match parse_from_filename(&flags.main, &core, &target) {
+                Ok(ir) => {
+                    // generate ir
+                    if debug {
+                        println!("\n--- IR ---");
+                        println!("{}", ir);
+                        println!("\n--- LLVM ---");
                     }
-                }
-                (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
-                    let env = os.wasm_import_module();
-                    Command::new("wasm-ld")
-                        .arg(output.with_extension("o"))
-                        .args(
-                            ir.links
-                                .iter()
-                                .filter(|lib| !str::eq(lib, env))
-                                .map(|lib| format!("-l{}", lib)),
-                        )
-                        .arg("--import-undefined") // TODO: get list of symbols from "env" library
-                        .arg("-o")
-                        .arg(output.with_extension("wasm"))
-                        .arg("-z")
-                        .arg("stack-size=1048576")
-                        .arg("-e_start")
-                        .status()
-                        .unwrap();
 
-                    if args.run {
-                        if matches!(os, LucuOS::WASI) {
-                            Command::new("wasmtime")
-                                .arg(output.with_extension("wasm"))
+                    // generate llvm
+                    llvm::generate_ir(&ir, &output.with_extension("o"), debug, &target);
+
+                    // output
+                    if debug {
+                        println!("\n--- OUTPUT ---");
+                    }
+
+                    // TODO: config for linker and runner
+                    let os = target.lucu_os();
+                    let arch = target.lucu_arch();
+                    match (&os, &arch) {
+                        (LucuOS::Linux, LucuArch::X86_64) => {
+                            Command::new("ld")
+                                .arg(output.with_extension("o"))
+                                .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
+                                .arg("-o")
+                                .arg(output)
+                                .arg("-e_start")
                                 .status()
                                 .unwrap();
-                        } else {
-                            println!(
+
+                            if run {
+                                Command::new(Path::new("./").join(output)).status().unwrap();
+                            }
+                        }
+                        (LucuOS::Windows, LucuArch::X86_64) => {
+                            Command::new("x86_64-w64-mingw32-ld")
+                                .arg(output.with_extension("o"))
+                                .args(ir.links.iter().map(|lib| format!("-l{}", lib)))
+                                .arg("-o")
+                                .arg(output.with_extension("exe"))
+                                .arg("-e_start")
+                                .status()
+                                .unwrap();
+
+                            if run {
+                                Command::new("wine")
+                                    .arg(output.with_extension("exe"))
+                                    .status()
+                                    .unwrap();
+                            }
+                        }
+                        (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
+                            let env = os.wasm_import_module();
+                            Command::new("wasm-ld")
+                                .arg(output.with_extension("o"))
+                                .args(
+                                    ir.links
+                                        .iter()
+                                        .filter(|lib| !str::eq(lib, env))
+                                        .map(|lib| format!("-l{}", lib)),
+                                )
+                                .arg("--import-undefined") // TODO: get list of symbols from "env" library
+                                .arg("-o")
+                                .arg(output.with_extension("wasm"))
+                                .arg("-z")
+                                .arg("stack-size=1048576")
+                                .arg("-e_start")
+                                .status()
+                                .unwrap();
+
+                            if run {
+                                if matches!(os, LucuOS::WASI) {
+                                    Command::new("wasmtime")
+                                        .arg(output.with_extension("wasm"))
+                                        .status()
+                                        .unwrap();
+                                } else {
+                                    println!(
                                 "unknown runner for triple: {}\nplease run the program manually",
+                                target.triple
+                            );
+                                }
+                            }
+                        }
+                        _ => {
+                            println!(
+                                "unknown linker for triple: {}\nplease link the program manually",
                                 target.triple
                             );
                         }
                     }
                 }
-                _ => {
-                    println!(
-                        "unknown linker for triple: {}\nplease link the program manually",
-                        target.triple
-                    );
+                Err(errors) => {
+                    errors.print(color);
                 }
             }
-        }
-        Err(errors) => {
-            errors.print(color);
         }
     }
 }

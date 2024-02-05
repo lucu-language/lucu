@@ -321,6 +321,8 @@ struct Args {
     plaintext: bool,
     #[arg(long, help = "Print compiler debug info")]
     debug: bool,
+    #[arg(short, long, help = "Immediately run the compiled binary")]
+    run: bool,
 }
 
 fn main() {
@@ -385,7 +387,10 @@ fn main() {
                         .arg("-e_start")
                         .status()
                         .unwrap();
-                    Command::new(Path::new("./").join(output)).status().unwrap();
+
+                    if args.run {
+                        Command::new(Path::new("./").join(output)).status().unwrap();
+                    }
                 }
                 (LucuOS::Windows, LucuArch::X86_64) => {
                     Command::new("x86_64-w64-mingw32-ld")
@@ -396,10 +401,13 @@ fn main() {
                         .arg("-e_start")
                         .status()
                         .unwrap();
-                    Command::new("wine")
-                        .arg(output.with_extension("exe"))
-                        .status()
-                        .unwrap();
+
+                    if args.run {
+                        Command::new("wine")
+                            .arg(output.with_extension("exe"))
+                            .status()
+                            .unwrap();
+                    }
                 }
                 (_, LucuArch::Wasm32 | LucuArch::Wasm64) => {
                     let env = os.wasm_import_module();
@@ -420,16 +428,18 @@ fn main() {
                         .status()
                         .unwrap();
 
-                    if matches!(os, LucuOS::WASI) {
-                        Command::new("wasmtime")
-                            .arg(output.with_extension("wasm"))
-                            .status()
-                            .unwrap();
-                    } else {
-                        println!(
-                            "unknown runner for triple: {}\nplease run the program manually",
-                            target.triple
-                        );
+                    if args.run {
+                        if matches!(os, LucuOS::WASI) {
+                            Command::new("wasmtime")
+                                .arg(output.with_extension("wasm"))
+                                .status()
+                                .unwrap();
+                        } else {
+                            println!(
+                                "unknown runner for triple: {}\nplease run the program manually",
+                                target.triple
+                            );
+                        }
                     }
                 }
                 _ => {

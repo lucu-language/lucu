@@ -23,7 +23,7 @@ This is a cargo rust project, so you need cargo installed with the latest stable
 
 Note that the executable will have the `core/` and `vendor/` folders inside the sources hardcoded as the location for the standard library. To change this, set the `LUCU_CORE` environment variable to the folder containing these two folders before compiling the compiler.
 
-The compiler will automatically attempt run the output file. In future this will be a flag.
+To immediately run the compiled binary, pass `--run` to lucu
 
 ### Linux
 

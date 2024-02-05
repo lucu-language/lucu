@@ -23,7 +23,7 @@ This is a cargo rust project, so you need cargo installed with the latest stable
 
 Note that the executable will have the `core/` and `vendor/` folders inside the sources hardcoded as the location for the standard library. To change this, set the `LUCU_CORE` environment variable to the folder containing these two folders before compiling the compiler.
 
-The compiler will automatically attempt run the output file. In future this will be a flag.
+To immediately run the compiled binary, use `run` instead of `build`
 
 ### Linux
 
@@ -33,7 +33,7 @@ Dependencies
 
 For compilatation on linux, run
 
-- `lucu [FILE] (--output [OUTPUT])`
+- `lucu build [FILE] (--output [OUTPUT])`
 
 ### Windows (cross-compilation)
 
@@ -44,7 +44,7 @@ Dependencies
 
 For compiling to Windows from linux, run
 
-- `lucu [FILE] (--output [OUTPUT]) --target x86_64-mingw32`
+- `lucu build [FILE] (--output [OUTPUT]) --target x86_64-mingw32`
 
 ### WASM standalone (cross-compilation)
 
@@ -54,7 +54,7 @@ Dependencies
 
 For compiling to WASM from linux, run
 
-- `lucu [FILE] (--output [OUTPUT]) --target wasm32` or `wasm64`
+- `lucu build [FILE] (--output [OUTPUT]) --target wasm32` or `wasm64`
 
 ### WASI (cross-compilation)
 
@@ -65,7 +65,7 @@ Dependencies
 
 For compiling to WASI from linux, run
 
-- `lucu [FILE] (--output [OUTPUT]) --target wasm32-wasi`
+- `lucu build [FILE] (--output [OUTPUT]) --target wasm32-wasi`
 
 ## Effects?
 

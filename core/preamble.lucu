@@ -1,10 +1,10 @@
 ##
-# everything in this file is always in scope
+# Everything in this file is always in scope
 ##
 
 ##
-# panics with message if the assertion is not met
-# preferred to be used only for debugging
+# Panics with message if the assertion is not met,
+# preferred to be used only for debugging.
 ##
 fun assert(all bool, msg str) {
 	if all {
@@ -14,7 +14,7 @@ fun assert(all bool, msg str) {
 }
 
 ##
-# modulo operator
+# Modulo operator
 ##
 fun mod(dividend int, divisor int) int {
 	dividend - ((dividend / divisor) * divisor)
@@ -49,9 +49,6 @@ fun for(start usize, end usize, yield impl yield(usize)) {
 	}
 }
 
-##
-# while loop
-##
 fun while(test impl test, body impl run) {
 	try loop {
 		if test.() {
@@ -62,9 +59,6 @@ fun while(test impl test, body impl run) {
 	}
 }
 
-##
-# until loop
-##
 fun until(test impl test, body impl run) {
 	try loop {
 		if test.() {
@@ -75,9 +69,6 @@ fun until(test impl test, body impl run) {
 	}
 }
 
-##
-# repeat loop
-##
 fun repeat(body impl run -> `t) `t {
 	try loop {
 		body.()
@@ -106,8 +97,8 @@ fun and(a bool, b bool) bool {
 }
 
 ##
-# exits the program and displays an error message
-# preferred to be used only for debugging
+# Exits the program and displays an error message,
+# preferred to be used only for debugging.
 ##
 fun panic(msg str) ! / srcloc {
 	trace("panic: ")
@@ -124,8 +115,8 @@ fun trap() ! / srcloc {
 }
 
 ##
-# exits the program and displays an error message
-# marks code paths that aren't implemented yet
+# Exits the program and displays an error message,
+# marks code paths that aren't implemented yet.
 ##
 fun todo(msg str) ! / srcloc {
 	trace("todo: ")
@@ -140,38 +131,37 @@ fun internal() `t {
 }
 
 ##
-# the following functions have internal definitions
-# these are not based on a specific target
+# The following functions have internal definitions.
+# These are not based on a specific target.
 ##
 
 ##
-# marks that a code path is unreachable
-# this function should NEVER actually be called
-# for displaying an error, &panic is preferred
+# Marks that a code path is unreachable.
+# This function should NEVER actually be called!
+# For displaying an error, &panic is preferred.
 ##
 fun unreachable() ! {
 	internal()
 }
 
 ##
-# returns the length of a slice
+# Returns the length of a slice.
 ##
 fun len(slice []`elem) usize {
 	internal()
 }
 
 ##
-# creates a slice from a pointer and length
+# Creates a slice from a pointer and length.
 ##
 fun raw_slice(ptr ^`t, len usize) []`t {
 	internal()
 }
 
 ##
-# effect to get the location of the call in the source code
-# has an internally defined global handler
-# when used directly, it returns the location of the call to &source_location
-# when used as an effect parameter inside a function, it returns the location of the caller
+# Effect to get the location of the call in the source code.
+# When used directly, it returns the location of the call to &source_location.
+# When used as an effect parameter inside a function, it returns the location of the caller.
 ##
 effect srcloc {
 	fun source_location() str
@@ -183,34 +173,37 @@ impl srcloc {
 	}
 }
 
-##
-# links to a dynamic library using an effect as a foreign interface
-# &`effect MUST be annotated with @foreign,
-# as it uses the data inside to determine the symbol names for the effect functions
-##
 effect foreign {
+	##
+	# Links to a dynamic library using an effect as a foreign interface.
+	# &`effect SHOULD be annotated with @foreign,
+	# as it uses the data inside to determine the symbol names for the effect functions.
+	##
 	fun impl_link(`lib str) impl `effect
+
 	fun impl_asm(`assembly str, `constraints str, `sideeffects bool) impl `effect
+
 	fun syscall(nr int, args [`N]int) int
 }
 
 ##
-# the following functions may have an internal definition based on the target
-# they also have default implementations for unknown targets
+# The following functions may have an internal definition based on the target.
+# They also have default implementations for unknown targets.
 ##
 
 ##
-# prints a debug message to the environment (usually the standard error)
-# the message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times
+# Prints a debug message to the environment (usually the standard error).
+# The message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times.
 ##
 fun trace(s str) {
 	internal()
 }
 
 ##
-# function that ends execution of the entire program
-# the way it ends execution depends on the target
-# for instance, it could:
+# Function that ends execution of the entire program.
+# The way it ends execution depends on the target.
+# 
+# For instance, it could:
 #  - end the process
 #  - run a halt instruction
 #  - throw an exception / interrupt

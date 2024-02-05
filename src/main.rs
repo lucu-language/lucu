@@ -1,19 +1,23 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
+    fmt::Write,
     fs::{read_dir, read_to_string},
     path::{Path, PathBuf},
     println,
     process::Command,
 };
 
-use ast::{parse_ast, Ast};
+use ast::{parse_ast, Ast, Package, PackageIdx};
 use clap::{Parser, Subcommand};
-use error::{Errors, File, FileIdx};
+use error::{Error, Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
 
+use crate::{ast::Ident, docgen::Docgen};
+
 mod ast;
+mod docgen;
 mod error;
 mod ir;
 mod lexer;
@@ -333,6 +337,14 @@ struct CompileFlags {
 enum Cmd {
     Build(CompileFlags),
     Run(CompileFlags),
+    Docgen {
+        #[arg(help = "directory to recursively search for .lucu fioes")]
+        dir: PathBuf,
+        #[arg(long, help = "Print compiler output in plaintext, without color")]
+        plaintext: bool,
+        #[arg(long, help = "Package name")]
+        name: Option<String>,
+    },
 }
 
 fn main() {
@@ -342,6 +354,76 @@ fn main() {
     let run = matches!(args.command, Cmd::Run(_));
 
     match args.command {
+        Cmd::Docgen {
+            dir,
+            plaintext,
+            name,
+        } => {
+            // parse all files
+            let mut dir_todo = vec![dir.clone()];
+            let mut files_todo = Vec::new();
+            let mut packages = Vec::new();
+
+            let mut parsed = Ast::default();
+            let mut errors = Errors::new();
+
+            while let Some(dir) = dir_todo.pop() {
+                if let Ok(files) = read_dir(&dir) {
+                    let pkg = parsed.packages.push(PackageIdx, Package::default());
+                    packages.push((dir, pkg));
+                    for file in files.filter_map(|f| Some(f.ok()?.path())) {
+                        if file.is_dir() {
+                            dir_todo.push(file);
+                        } else if file.extension() == Some(OsStr::new("lucu")) {
+                            files_todo.push((pkg, file));
+                        }
+                    }
+                }
+            }
+            let package_size = parsed.packages.len();
+
+            for (pkg, file) in files_todo {
+                let content = read_to_string(&file).unwrap().replace('\t', "  ");
+                let idx = errors.files.push(
+                    FileIdx,
+                    File {
+                        content: content.clone(),
+                        name: file.to_string_lossy().into_owned(),
+                    },
+                );
+                let tok = Tokenizer::new(&content, idx, &mut errors);
+                parse_ast(tok, pkg, &mut parsed, &file, &HashMap::new(), &mut packages);
+            }
+
+            // ignore library errors
+            errors.vec.retain(|e| {
+                !matches!(e.0, Error::UnresolvedLibrary(_) | Error::NoSuchDirectory(_))
+            });
+
+            // report errors if any
+            if errors.is_empty() {
+                let mut buf = String::new();
+                let name = name
+                    .or_else(|| Some(dir.file_name()?.to_string_lossy().into_owned()))
+                    .unwrap_or_default();
+
+                for (path, pkg) in packages.into_iter().take(package_size) {
+                    let pkg = &parsed.packages[pkg];
+
+                    let path = path.strip_prefix(&dir).unwrap_or(&path);
+                    writeln!(buf, "# Package `{}:{}`", name, path.to_string_lossy()).unwrap();
+
+                    writeln!(buf, "## Effects").unwrap();
+                    for effect in pkg.effects.iter().map(|&idx| &parsed.effects[idx]) {
+                        effect.gen(&errors.files, &parsed, &mut buf).unwrap();
+                        writeln!(buf, "\n---").unwrap();
+                    }
+                }
+                println!("{}", buf);
+            } else {
+                errors.print(!plaintext);
+            }
+        }
         Cmd::Build(flags) | Cmd::Run(flags) => {
             let core = flags.core.unwrap_or_else(|| {
                 option_env!("LUCU_CORE")

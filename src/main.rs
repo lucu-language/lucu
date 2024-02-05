@@ -10,11 +10,15 @@ use std::{
 
 use ast::{parse_ast, Ast, Package, PackageIdx};
 use clap::{Parser, Subcommand};
+use docgen::Docgen;
 use error::{Error, Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
 
-use crate::{ast::Ident, docgen::Docgen};
+use crate::{
+    ast::{PackagedIdent, PolyIdent, Type, TypeIdx},
+    error::Ranged,
+};
 
 mod ast;
 mod docgen;
@@ -338,7 +342,7 @@ enum Cmd {
     Build(CompileFlags),
     Run(CompileFlags),
     Docgen {
-        #[arg(help = "directory to recursively search for .lucu fioes")]
+        #[arg(help = "directory to recursively search for .lucu files")]
         dir: PathBuf,
         #[arg(long, help = "Print compiler output in plaintext, without color")]
         plaintext: bool,
@@ -410,13 +414,81 @@ fn main() {
                 for (path, pkg) in packages.into_iter().take(package_size) {
                     let pkg = &parsed.packages[pkg];
 
+                    if pkg.effects.is_empty()
+                        && pkg.functions.is_empty()
+                        && pkg.structs.is_empty()
+                        && pkg.aliases.is_empty()
+                    {
+                        continue;
+                    }
+
                     let path = path.strip_prefix(&dir).unwrap_or(&path);
                     writeln!(buf, "# Package `{}:{}`", name, path.to_string_lossy()).unwrap();
 
-                    writeln!(buf, "## Effects").unwrap();
-                    for effect in pkg.effects.iter().map(|&idx| &parsed.effects[idx]) {
-                        effect.gen(&errors.files, &parsed, &mut buf).unwrap();
+                    if !pkg.aliases.is_empty() || !pkg.structs.is_empty() {
+                        writeln!(buf, "## Types").unwrap();
+                    }
+                    for alias in pkg.aliases.iter() {
+                        alias.gen(&errors.files, &parsed, &mut buf).unwrap();
                         writeln!(buf, "\n---").unwrap();
+                    }
+                    for struc in pkg.structs.iter() {
+                        struc.gen(&errors.files, &parsed, &mut buf).unwrap();
+                        writeln!(buf, "\n---").unwrap();
+                    }
+
+                    if !pkg.effects.is_empty() {
+                        writeln!(buf, "## Effects").unwrap();
+                        for effect in pkg.effects.iter().map(|&idx| &parsed.effects[idx]) {
+                            effect.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
+                    }
+
+                    if !pkg.functions.is_empty() {
+                        writeln!(buf, "## Functions").unwrap();
+                        for (idx, function) in pkg.effects.iter().flat_map(|&idx| {
+                            parsed.effects[idx]
+                                .functions
+                                .values()
+                                .map(move |f| (idx, f))
+                        }) {
+                            let mut function = function.clone();
+                            function.sign.effects.push(PolyIdent {
+                                ident: PackagedIdent {
+                                    package: None,
+                                    ident: parsed.effects[idx].name,
+                                },
+                                params: parsed.effects[idx].generics.as_ref().map(|gen| {
+                                    gen.values()
+                                        .map(|gen| {
+                                            parsed.types.push(
+                                                TypeIdx,
+                                                Ranged(
+                                                    Type::Path(PolyIdent {
+                                                        ident: PackagedIdent {
+                                                            package: None,
+                                                            ident: gen.name,
+                                                        },
+                                                        params: None,
+                                                    }),
+                                                    0,
+                                                    0,
+                                                    FileIdx(0),
+                                                ),
+                                            )
+                                        })
+                                        .collect()
+                                }),
+                            });
+
+                            function.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
+                        for function in pkg.functions.iter().map(|&idx| &parsed.functions[idx]) {
+                            function.decl.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
                     }
                 }
                 println!("{}", buf);

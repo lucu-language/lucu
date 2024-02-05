@@ -1,5 +1,5 @@
 ##
-# standard memory allocator
+# Standard memory allocator.
 ##
 effect alloc {
 	fun raw_alloc(len usize, align u8) ?^u8
@@ -7,8 +7,8 @@ effect alloc {
 }
 
 ##
-# returns a pointer to undefined memory
-# call &destroy with the result to free the memory
+# Returns a pointer to undefined memory.
+# Call &destroy with the result to free the memory.
 ##
 fun create() ^`t / alloc fail {
 	let ptr = raw_alloc(@sizeof `t, @alignof `t)
@@ -21,7 +21,7 @@ fun create() ^`t / alloc fail {
 
 ##
 # &ptr should be the return value of &create,
-# or otherwise have the same address and alignment
+# or otherwise have the same address and alignment.
 ##
 fun destroy(ptr ^`t) / alloc {
 	let ptr ^u8 = cast ptr
@@ -30,8 +30,8 @@ fun destroy(ptr ^`t) / alloc {
 }
 
 ##
-# allocates an array of &len items and sets all items to undefined
-# call &free with the result to free the memory
+# Allocates an array of &len items and sets all items to undefined.
+# Call &free with the result to free the memory.
 ##
 fun alloc(len usize) []`t / alloc fail {
 	let ptr = raw_alloc(@sizeof `t * len, @alignof `t)
@@ -46,7 +46,7 @@ fun alloc(len usize) []`t / alloc fail {
 
 ##
 # &slice should be the return value of &alloc,
-# or otherwise have the same pointer address, length, and alignment
+# or otherwise have the same pointer address, length, and alignment.
 ##
 fun free(slice []`t) / alloc {
 	let ptr = &slice[0]

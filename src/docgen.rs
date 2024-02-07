@@ -90,7 +90,7 @@ impl Docgen for TypeIdx {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         match ast.types[*self].0 {
-            Type::Never => write!(f, "never")?,
+            Type::Never => write!(f, "!")?,
             Type::Path(ref id) => {
                 if let Some(pkg) = id.ident.package {
                     write!(f, "{}.", ast.ident(pkg))?;
@@ -170,6 +170,8 @@ impl Docgen for FunDecl {
         ast: &Ast,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
+        writeln!(f, "### {}", ast.ident(self.name))?;
+        writeln!(f, "[source]({}#L{})", files[ast.idents[self.name].3].name, ast.idents[self.name].1)?;
         writeln!(f, "```")?;
         write!(f, "fun {}(", ast.ident(self.name))?;
         self.sign.inputs.gen(files, ast, f)?;
@@ -230,6 +232,8 @@ impl Docgen for AliasIdx {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         let (name, ty) = ast.aliases[*self];
+        writeln!(f, "### {}", ast.ident(name))?;
+        writeln!(f, "[source]({}#L{})", files[ast.idents[name].3].name, ast.idents[name].1)?;
         write!(f, "```\ntype {} = ", ast.ident(name))?;
         ty.gen(files, ast, f)?;
         writeln!(f, "\n```")?;
@@ -264,6 +268,8 @@ impl Docgen for StructIdx {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         let struc = &ast.structs[*self];
+        writeln!(f, "### {}", ast.ident(struc.name))?;
+        writeln!(f, "[source]({}#L{})", files[ast.idents[struc.name].3].name, ast.idents[struc.name].1)?;
         write!(f, "```\nstruct {}(", ast.ident(struc.name))?;
         struc.elems.gen(files, ast, f)?;
         writeln!(f, ")\n```")?;
@@ -284,6 +290,8 @@ impl Docgen for Effect {
         ast: &Ast,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
+        writeln!(f, "### {}", ast.ident(self.name))?;
+        writeln!(f, "[source]({}#L{})", files[ast.idents[self.name].3].name, ast.idents[self.name].1)?;
         writeln!(f, "```")?;
         write!(f, "effect {}", ast.ident(self.name))?;
         if let Some(generics) = self.generics.as_ref() {
@@ -298,7 +306,7 @@ impl Docgen for Effect {
             writeln!(f, "{}", comment)?;
         }
 
-        writeln!(f, "\n*Effect functions*\n")?;
+        writeln!(f, "\n*Handler functions*\n")?;
         for fun in self.functions.values() {
             writeln!(f, "- `{}`", ast.ident(fun.name))?;
         }

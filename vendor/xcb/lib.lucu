@@ -33,7 +33,7 @@ fun link() impl lib / foreign {
 		fun traverse_roots(setup ^setup) / yield(^screen) {
 			mut iter = bindings.setup_roots_iterator(setup)
 			try loop {
-				if iter.rem < 0 {
+				if iter.rem == 0 {
 					break
 				} else {
 					yield(iter.data)

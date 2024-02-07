@@ -3803,7 +3803,6 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
     insert(Type::Bool);
     insert(Type::Char);
     insert(Type::None);
-    insert(Type::Never);
 
     insert(Type::Integer(false, IntSize::Reg));
     insert(Type::Integer(true, IntSize::Reg));

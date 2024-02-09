@@ -26,7 +26,7 @@ fun mod(dividend int, divisor int) int {
 # yield
 ##
 effect yield(`t) {
-	fun yield(mut t `t)
+	fun yield(t `t)
 }
 
 effect generator(`t) {
@@ -173,7 +173,7 @@ fun unreachable() ! {
 ##
 # returns the length of a slice
 ##
-fun len(slice []`elem) usize {
+fun len(slice []const `elem) usize {
 	internal()
 }
 

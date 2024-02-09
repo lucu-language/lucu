@@ -29,16 +29,6 @@ impl FunIdent {
     }
 }
 
-impl Value {
-    fn inner_ptr(self) -> Value {
-        match self {
-            Value::Deref(value) => *value,
-            Value::ConstantError => self,
-            _ => unreachable!(),
-        }
-    }
-}
-
 struct SemCtx<'a> {
     ir: SemIR,
     ast: &'a Ast,
@@ -203,18 +193,18 @@ impl ScopeStack {
     }
 }
 
-const TYPE_ERROR: TypeIdx = TypeIdx(0 << 2);
-const TYPE_NONE: TypeIdx = TypeIdx(1 << 2);
-const TYPE_NEVER: TypeIdx = TypeIdx(2 << 2);
-const TYPE_DATATYPE: TypeIdx = TypeIdx(3 << 2);
-const TYPE_EFFECT: TypeIdx = TypeIdx(4 << 2);
-const TYPE_USIZE: TypeIdx = TypeIdx(5 << 2);
-const TYPE_BOOL: TypeIdx = TypeIdx(6 << 2);
-const TYPE_INT: TypeIdx = TypeIdx(7 << 2);
-const TYPE_STR: TypeIdx = TypeIdx(8 << 2);
-const TYPE_CHAR: TypeIdx = TypeIdx(9 << 2);
-const TYPE_U8: TypeIdx = TypeIdx(10 << 2);
-const TYPE_UPTR: TypeIdx = TypeIdx(11 << 2);
+const TYPE_ERROR: TypeIdx = TypeIdx(0);
+const TYPE_NONE: TypeIdx = TypeIdx(1);
+const TYPE_NEVER: TypeIdx = TypeIdx(2);
+const TYPE_DATATYPE: TypeIdx = TypeIdx(3);
+const TYPE_EFFECT: TypeIdx = TypeIdx(4);
+const TYPE_USIZE: TypeIdx = TypeIdx(5);
+const TYPE_BOOL: TypeIdx = TypeIdx(6);
+const TYPE_INT: TypeIdx = TypeIdx(7);
+const TYPE_STR: TypeIdx = TypeIdx(8);
+const TYPE_CHAR: TypeIdx = TypeIdx(9);
+const TYPE_U8: TypeIdx = TypeIdx(10);
+const TYPE_UPTR: TypeIdx = TypeIdx(11);
 
 impl SemCtx<'_> {
     fn get_preamble_effect(&self, name: &str) -> EffIdx {
@@ -282,15 +272,8 @@ impl SemCtx<'_> {
     fn params_from_generics(&mut self, generics: &[Generic]) -> GenericParams {
         generics
             .iter()
-            .map(|&g| (g.idx, self.insert_type(Type::Generic(g), false)))
+            .map(|&g| (g.idx, self.insert_type(Type::Generic(g))))
             .collect()
-    }
-    fn child_ty(&self, elem: TypeIdx, parent: TypeIdx) -> TypeIdx {
-        if self.is_copy(elem) {
-            elem
-        } else {
-            elem.with_const(parent.is_const() || elem.is_const())
-        }
     }
     fn lazy_handler(
         &mut self,
@@ -299,24 +282,18 @@ impl SemCtx<'_> {
         _: ast::TypeIdx,
     ) -> TypeIdx {
         let idx = self.ir.lazy_handlers.push(LazyIdx, LazyValue::None);
-        self.insert_type(
-            Type::Handler(Lazy {
-                idx,
-                typeof_handler,
-            }),
-            false,
-        )
+        self.insert_type(Type::Handler(Lazy {
+            idx,
+            typeof_handler,
+        }))
     }
     fn no_handler(&mut self, _: &mut Generics, _: TypeIdx, ty: ast::TypeIdx) -> TypeIdx {
         self.errors
             .push(self.ast.types[ty].with(Error::NotEnoughInfo));
         TYPE_ERROR
     }
-    fn insert_type(&mut self, ty: Type, is_const: bool) -> TypeIdx {
-        self.ir
-            .types
-            .insert(|idx| TypeIdx::new(idx, false), ty)
-            .with_const(is_const)
+    fn insert_type(&mut self, ty: Type) -> TypeIdx {
+        *self.ir.types.insert(TypeIdx, ty)
     }
     fn push_handler(&mut self, handler: Handler) -> HandlerIdx {
         self.ir.handlers.push(HandlerIdx, handler)
@@ -352,22 +329,16 @@ impl SemCtx<'_> {
                         LazyIdx,
                         LazyValue::Refer(lazy.idx, Some(generic_params.clone())),
                     );
-                    self.insert_type(
-                        Type::Handler(Lazy {
-                            idx,
-                            typeof_handler,
-                        }),
-                        ty.is_const(),
-                    )
+                    self.insert_type(Type::Handler(Lazy {
+                        idx,
+                        typeof_handler,
+                    }))
                 } else {
                     let idx = self.ir.lazy_handlers.push(LazyIdx, LazyValue::None);
-                    self.insert_type(
-                        Type::Handler(Lazy {
-                            idx,
-                            typeof_handler,
-                        }),
-                        ty.is_const(),
-                    )
+                    self.insert_type(Type::Handler(Lazy {
+                        idx,
+                        typeof_handler,
+                    }))
                 }
             }
             Type::Effect(ref ident) => {
@@ -384,13 +355,10 @@ impl SemCtx<'_> {
                     })
                     .collect::<Option<Vec<_>>>()?;
 
-                self.insert_type(
-                    Type::Effect(EffectIdent {
-                        effect: ie,
-                        generic_params: params,
-                    }),
-                    ty.is_const(),
-                )
+                self.insert_type(Type::Effect(EffectIdent {
+                    effect: ie,
+                    generic_params: params,
+                }))
             }
             Type::HandlerType(ref effect_type) => {
                 let eft = effect_type.fail_type;
@@ -424,24 +392,19 @@ impl SemCtx<'_> {
                     },
                 };
                 let fail_type = self.translate_generics(eft, generic_params, translate_lazy)?;
-                self.insert_type(
-                    Type::HandlerType(HandlerType { effect, fail_type }),
-                    ty.is_const(),
-                )
+                self.insert_type(Type::HandlerType(HandlerType { effect, fail_type }))
             }
             Type::Generic(generic) => match get_param(generic_params, generic.idx) {
-                Some(genty) => {
-                    genty.with_const((genty.is_const() || ty.is_const()) && !self.is_copy(genty))
-                }
+                Some(genty) => genty,
                 None => None?,
             },
-            Type::Pointer(inner) => {
+            Type::Pointer(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::Pointer(inner), ty.is_const())
+                self.insert_type(Type::Pointer(isconst, inner))
             }
-            Type::MaybePointer(inner) => {
+            Type::MaybePointer(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::MaybePointer(inner), ty.is_const())
+                self.insert_type(Type::MaybePointer(isconst, inner))
             }
             Type::ConstArray(size, inner) => {
                 let size = match size {
@@ -458,11 +421,11 @@ impl SemCtx<'_> {
                     },
                 };
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::ConstArray(size, inner), ty.is_const())
+                self.insert_type(Type::ConstArray(size, inner))
             }
-            Type::Slice(inner) => {
+            Type::Slice(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::Slice(inner), ty.is_const())
+                self.insert_type(Type::Slice(isconst, inner))
             }
 
             Type::EffectType
@@ -568,22 +531,19 @@ impl SemCtx<'_> {
                 .0;
 
                 // create handler type
-                let typeof_handler = self.insert_type(
-                    Type::HandlerType(HandlerType {
-                        effect: effect.map(|&effect| EffectIdent {
-                            effect,
-                            // TODO: error on length mismatch
-                            generic_params: self.ir.effects[effect]
-                                .generics
-                                .iter()
-                                .map(|g| g.idx)
-                                .zip(params)
-                                .collect(),
-                        }),
-                        fail_type,
+                let typeof_handler = self.insert_type(Type::HandlerType(HandlerType {
+                    effect: effect.map(|&effect| EffectIdent {
+                        effect,
+                        // TODO: error on length mismatch
+                        generic_params: self.ir.effects[effect]
+                            .generics
+                            .iter()
+                            .map(|g| g.idx)
+                            .zip(params)
+                            .collect(),
                     }),
-                    false,
-                );
+                    fail_type,
+                }));
 
                 match generics.as_deref_mut().filter(|_| generic_handler) {
                     Some(generics) => {
@@ -600,13 +560,10 @@ impl SemCtx<'_> {
                             .ir
                             .lazy_handlers
                             .push(LazyIdx, LazyValue::Some(GenericVal::Generic(value.idx)));
-                        self.insert_type(
-                            Type::Handler(Lazy {
-                                idx: lazy,
-                                typeof_handler,
-                            }),
-                            false,
-                        )
+                        self.insert_type(Type::Handler(Lazy {
+                            idx: lazy,
+                            typeof_handler,
+                        }))
                     }
                     None => handler_output(
                         self,
@@ -617,7 +574,7 @@ impl SemCtx<'_> {
                 }
             }
             T::Generic(id) => match self.analyze_generic(scope, id, TYPE_DATATYPE, generics) {
-                Some(generic) => self.insert_type(Type::Generic(generic), false),
+                Some(generic) => self.insert_type(Type::Generic(generic)),
                 None => TYPE_ERROR,
             },
             T::GenericHandler(id, fail) => {
@@ -637,7 +594,7 @@ impl SemCtx<'_> {
 
                 // create handler type
                 let typeof_handler =
-                    self.insert_type(Type::HandlerType(HandlerType { effect, fail_type }), false);
+                    self.insert_type(Type::HandlerType(HandlerType { effect, fail_type }));
                 match generics.as_deref_mut().filter(|_| generic_handler) {
                     Some(generics) => {
                         let len = self.ir.generic_names.len();
@@ -653,13 +610,10 @@ impl SemCtx<'_> {
                             .ir
                             .lazy_handlers
                             .push(LazyIdx, LazyValue::Some(GenericVal::Generic(value.idx)));
-                        self.insert_type(
-                            Type::Handler(Lazy {
-                                idx: lazy,
-                                typeof_handler,
-                            }),
-                            false,
-                        )
+                        self.insert_type(Type::Handler(Lazy {
+                            idx: lazy,
+                            typeof_handler,
+                        }))
                     }
                     None => handler_output(
                         self,
@@ -672,17 +626,16 @@ impl SemCtx<'_> {
             T::Maybe(ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 match self.ir.types[inner] {
-                    Type::Pointer(inner) => self.insert_type(Type::MaybePointer(inner), false),
+                    Type::Pointer(isconst, inner) => {
+                        self.insert_type(Type::MaybePointer(isconst, inner))
+                    }
                     _ => todo!(),
                 }
             }
-            T::Pointer(ty) => {
+            T::Pointer(isconst, ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                self.insert_type(Type::Pointer(inner), false)
+                self.insert_type(Type::Pointer(isconst, inner))
             }
-            T::Const(ty) => self
-                .analyze_type(scope, ty, generics, generic_handler, handler_output)
-                .with_const(true),
             T::ConstArray(size, ty) => {
                 let inner = self.analyze_type(
                     scope,
@@ -701,11 +654,11 @@ impl SemCtx<'_> {
                     }
                     _ => todo!(),
                 };
-                self.insert_type(Type::ConstArray(size, inner), false)
+                self.insert_type(Type::ConstArray(size, inner))
             }
-            T::Slice(ty) => {
+            T::Slice(isconst, ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                self.insert_type(Type::Slice(inner), false)
+                self.insert_type(Type::Slice(isconst, inner))
             }
         }
     }
@@ -799,7 +752,6 @@ impl SemCtx<'_> {
                     true,
                     &mut Self::no_handler,
                 );
-                let ty = ty.with_const((!param.mutable && !self.is_copy(ty)) || ty.is_const());
                 if param.const_generic {
                     let generic = self
                         .analyze_generic(scope, param.name, ty, Some(&mut generics))
@@ -863,7 +815,7 @@ impl SemCtx<'_> {
                         typeof_ty: TYPE_DATATYPE,
                     };
                     generics.push(value);
-                    let ty = self.insert_type(Type::Generic(value), false);
+                    let ty = self.insert_type(Type::Generic(value));
 
                     handler_params.push(effect.map(|effect| {
                         (
@@ -901,7 +853,7 @@ impl SemCtx<'_> {
                     typeof_ty: TYPE_DATATYPE,
                 };
                 generics.push(value);
-                let ty = self.insert_type(Type::Generic(value), false);
+                let ty = self.insert_type(Type::Generic(value));
 
                 let def = self.ast.idents[self.ast.effects[effect.effect].name].empty();
                 handler_params.push(def.with((ty, GenericVal::Literal(effect))));
@@ -1214,19 +1166,18 @@ impl SemCtx<'_> {
         if from == to {
             return;
         }
-        let infer_generic =
-            move |params: &mut GenericParams, idx: GenericIdx, is_const: bool, val: TypeIdx| {
-                if get_param(params, idx).is_none() {
-                    params.push((idx, val.with_const(val.is_const() && !is_const)));
-                }
-            };
+        let infer_generic = move |params: &mut GenericParams, idx: GenericIdx, val: TypeIdx| {
+            if get_param(params, idx).is_none() {
+                params.push((idx, val));
+            }
+        };
         match (&self.ir.types[from], &self.ir.types[to]) {
             (_, Type::Generic(generic)) => {
-                infer_generic(params, generic.idx, to.is_const(), from);
+                infer_generic(params, generic.idx, from);
             }
             (Type::Handler(inner), Type::Handler(to)) => {
                 if let LazyValue::Some(GenericVal::Generic(idx)) = self.ir.lazy_handlers[to.idx] {
-                    infer_generic(params, idx, false, from);
+                    infer_generic(params, idx, from);
                 }
                 self.infer_generics(params, inner.typeof_handler, to.typeof_handler);
             }
@@ -1235,8 +1186,8 @@ impl SemCtx<'_> {
                 let to_fail = to.fail_type;
                 match (&from.effect, &to.effect) {
                     (GenericVal::Literal(effect), &GenericVal::Generic(idx)) => {
-                        let val = self.insert_type(Type::Effect(effect.clone()), false);
-                        infer_generic(params, idx, false, val);
+                        let val = self.insert_type(Type::Effect(effect.clone()));
+                        infer_generic(params, idx, val);
                     }
                     (GenericVal::Literal(from), GenericVal::Literal(to))
                         if from.effect == to.effect =>
@@ -1252,14 +1203,11 @@ impl SemCtx<'_> {
                         }
                     }
                     (&GenericVal::Generic(from), &GenericVal::Generic(to)) => {
-                        let val = self.insert_type(
-                            Type::Generic(Generic {
-                                idx: from,
-                                typeof_ty: TYPE_EFFECT,
-                            }),
-                            false,
-                        );
-                        infer_generic(params, to, false, val);
+                        let val = self.insert_type(Type::Generic(Generic {
+                            idx: from,
+                            typeof_ty: TYPE_EFFECT,
+                        }));
+                        infer_generic(params, to, val);
                     }
                     _ => {}
                 }
@@ -1276,30 +1224,26 @@ impl SemCtx<'_> {
                     self.infer_generics(params, from, to);
                 }
             }
-            (&Type::Pointer(from), &Type::Pointer(to)) => {
+            (&Type::Pointer(_, from), &Type::Pointer(_, to)) => {
                 self.infer_generics(params, from, to);
             }
-            (&Type::Slice(from), &Type::Slice(to)) => {
+            (&Type::Slice(_, from), &Type::Slice(_, to)) => {
                 self.infer_generics(params, from, to);
             }
             (&Type::ConstArray(sfrom, from), &Type::ConstArray(sto, to)) => {
                 match (sfrom, sto) {
                     (GenericVal::Literal(size), GenericVal::Generic(idx)) => {
-                        let val = self.insert_type(
-                            Type::CompileTime(Value::ConstantInt(TYPE_USIZE, false, size)),
-                            false,
-                        );
-                        infer_generic(params, idx, false, val);
+                        let val = self.insert_type(Type::CompileTime(Value::ConstantInt(
+                            TYPE_USIZE, false, size,
+                        )));
+                        infer_generic(params, idx, val);
                     }
                     (GenericVal::Generic(from), GenericVal::Generic(to)) => {
-                        let val = self.insert_type(
-                            Type::Generic(Generic {
-                                idx: from,
-                                typeof_ty: TYPE_USIZE,
-                            }),
-                            false,
-                        );
-                        infer_generic(params, to, false, val);
+                        let val = self.insert_type(Type::Generic(Generic {
+                            idx: from,
+                            typeof_ty: TYPE_USIZE,
+                        }));
+                        infer_generic(params, to, val);
                     }
                     _ => {}
                 }
@@ -1317,39 +1261,9 @@ impl SemCtx<'_> {
             )));
         }
     }
-    fn is_copy(&self, a: TypeIdx) -> bool {
-        match self.ir.types[a] {
-            Type::Effect(_) => false,
-            Type::Handler(_) => false,
-            Type::EffectType => false,
-            Type::DataType => false,
-            Type::HandlerType(_) => false,
-            Type::Generic(_) => false,
-            Type::Pointer(_) => false,
-            Type::MaybePointer(_) => false,
-            Type::ConstArray(_, _) => false,
-            Type::Slice(_) => false,
-            Type::Integer(_, _) => true,
-            Type::Str => false,
-            Type::Char => true,
-            Type::Bool => true,
-            Type::None => true,
-            Type::Never => true,
-            Type::Error => true,
-            Type::CompileTime(_) => true,
-            Type::Struct(idx) => self.ir.structs[idx]
-                .elems
-                .iter()
-                .all(|&(_, ty)| self.is_copy(ty)),
-        }
-    }
     fn test_move(&mut self, from: TypeIdx, to: TypeIdx) -> bool {
         if from == to {
             return true;
-        }
-        if to.is_const() && !from.is_const() {
-            let from = from.with_const(to.is_const());
-            return self.test_move(from, to);
         }
         match (&self.ir.types[from], &self.ir.types[to]) {
             (Type::Never, _) => true,
@@ -1357,7 +1271,13 @@ impl SemCtx<'_> {
             (Type::Error, _) => true,
             (_, Type::Error) => true,
 
-            (&Type::Pointer(from), &Type::MaybePointer(to)) => self.test_move(from, to),
+            (&Type::Pointer(a, from), &Type::Pointer(b, to) | &Type::MaybePointer(b, to)) => {
+                a <= b && self.test_move(from, to)
+            }
+            (&Type::MaybePointer(a, from), &Type::MaybePointer(b, to)) => {
+                a <= b && self.test_move(from, to)
+            }
+            (&Type::Slice(a, from), &Type::Slice(b, to)) => a <= b && self.test_move(from, to),
 
             (Type::HandlerType(from), Type::HandlerType(to)) => {
                 from.effect == to.effect && self.test_move(from.fail_type, to.fail_type)
@@ -1412,7 +1332,7 @@ impl SemCtx<'_> {
                     (
                         ident.0 .0,
                         ident.0 .1.clone(),
-                        Value::Deref(Box::new(Value::EffectParam(i))),
+                        Value::Deref(Box::new(Value::EffectParam(i)), false),
                         None,
                     )
                 })
@@ -1435,8 +1355,8 @@ impl SemCtx<'_> {
 
             for (idx, param) in ir_sign.params.iter(ParamIdx) {
                 if param.mutable {
-                    let value =
-                        fun_ctx.push_deref(Instruction::Reference(Value::Param(idx), param.ty));
+                    let value = fun_ctx
+                        .push_deref(false, Instruction::Reference(Value::Param(idx), param.ty));
                     fun_ctx.define(
                         param.name.clone(),
                         Variable {
@@ -1494,6 +1414,36 @@ impl SemCtx<'_> {
             }
         })
     }
+    // returns the pointer value along with const? from the pointer type
+    fn check_expr_address(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+        expected: TypeIdx,
+        expected_def: Option<Range>,
+    ) -> Option<(Value, bool)> {
+        let val = self.check_expr(ctx, expr, expected, expected_def)?;
+        match val {
+            Value::Deref(val, isconst) => Some((*val, isconst)),
+            _ => {
+                todo!("give error")
+            }
+        }
+    }
+    // returns the pointer value along with const?, inner from the pointer type
+    fn synth_expr_address(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+    ) -> Option<(Value, bool, TypeIdx)> {
+        let (val, ty) = self.synth_expr(ctx, expr)?;
+        match val {
+            Value::Deref(val, isconst) => Some((*val, isconst, ty)),
+            _ => {
+                todo!("give error")
+            }
+        }
+    }
     fn check_expr(
         &mut self,
         ctx: &mut FunCtx,
@@ -1529,8 +1479,8 @@ impl SemCtx<'_> {
                     panic!("give error");
                 }
                 let ptr_ty = match self.ir.types[mptr_ty] {
-                    Type::MaybePointer(inner) => {
-                        self.insert_type(Type::Pointer(inner), mptr_ty.is_const())
+                    Type::MaybePointer(isconst, inner) => {
+                        self.insert_type(Type::Pointer(isconst, inner))
                     }
                     _ => panic!("give error"),
                 };
@@ -1582,8 +1532,7 @@ impl SemCtx<'_> {
                 )
                 .map(|(val, _)| val)
             }
-            (E::Array(exprs), &Type::Slice(elem)) => {
-                let elem = self.child_ty(elem, expected);
+            (E::Array(exprs), &Type::Slice(_, elem)) => {
                 let elems = exprs
                     .iter()
                     .copied()
@@ -1591,10 +1540,7 @@ impl SemCtx<'_> {
                     .collect::<Option<Rc<[_]>>>()?;
                 let len = elems.len() as u64;
 
-                let arr_ty = self.insert_type(
-                    Type::ConstArray(GenericVal::Literal(len), elem),
-                    expected.is_const(),
-                );
+                let arr_ty = self.insert_type(Type::ConstArray(GenericVal::Literal(len), elem));
                 let arr = Value::ConstantAggregate(arr_ty, elems);
                 let ptr = ctx.push(Instruction::Reference(arr, arr_ty));
                 let slice = Value::ConstantAggregate(
@@ -1606,7 +1552,6 @@ impl SemCtx<'_> {
             (E::Array(exprs), &Type::ConstArray(GenericVal::Literal(n), elem))
                 if n == exprs.len() as u64 =>
             {
-                let elem = self.child_ty(elem, expected);
                 let elems = exprs
                     .iter()
                     .copied()
@@ -1632,7 +1577,7 @@ impl SemCtx<'_> {
                 let c = u64::from(c);
                 Some(Value::ConstantInt(expected, false, c))
             }
-            (E::String(str), &Type::Slice(elem)) if elem == TYPE_U8 => {
+            (E::String(str), &Type::Slice(_, elem)) if elem == TYPE_U8 => {
                 Some(Value::ConstantString(expected, str.as_bytes().into()))
             }
             (&E::UnOp(inner, UnOp::Cast), _) => {
@@ -1659,7 +1604,8 @@ impl SemCtx<'_> {
                     let fail = ty.fail_type;
                     let generic_val = ty.effect.clone();
 
-                    let handler_ref = ctx.push_deref(Instruction::Reference(handler, handler_ty));
+                    let handler_ref =
+                        ctx.push_deref(false, Instruction::Reference(handler, handler_ty));
                     ctx.scope.top().effect_stack.push((
                         handler_ty,
                         generic_val,
@@ -1791,7 +1737,7 @@ impl SemCtx<'_> {
                             if val.is_constant() {
                                 generic_params.push((
                                     const_generic,
-                                    self.insert_type(Type::CompileTime(val.clone()), false),
+                                    self.insert_type(Type::CompileTime(val.clone())),
                                 ))
                             } else {
                                 todo!("give error: not constant")
@@ -2030,7 +1976,7 @@ impl SemCtx<'_> {
                             Either::Left(s) => ctx.get_capture(self, s, lambda.moved).unwrap().ty,
                             Either::Right(s) => {
                                 let ty = ctx.get_effect(self, s, error_loc.loc).unwrap().0;
-                                self.insert_type(Type::Pointer(ty), false)
+                                self.insert_type(Type::Pointer(false, ty))
                             }
                         })
                         .collect();
@@ -2054,13 +2000,10 @@ impl SemCtx<'_> {
                             fail_type: fail,
                         })),
                     );
-                    let ty = self.insert_type(
-                        Type::Handler(Lazy {
-                            idx,
-                            typeof_handler: lazy.typeof_handler,
-                        }),
-                        false,
-                    );
+                    let ty = self.insert_type(Type::Handler(Lazy {
+                        idx,
+                        typeof_handler: lazy.typeof_handler,
+                    }));
                     self.check_move(ty, expected, error_loc);
 
                     Some(Value::ConstantHandler(
@@ -2075,9 +2018,9 @@ impl SemCtx<'_> {
                                     let (ty, val, _) =
                                         ctx.get_effect(self, s, error_loc.loc).unwrap();
                                     match val {
-                                        Value::Deref(val) => *val,
+                                        Value::Deref(val, _) => *val,
                                         _ => {
-                                            let ty = self.insert_type(Type::Pointer(ty), false);
+                                            let ty = self.insert_type(Type::Pointer(false, ty));
                                             ctx.push(Instruction::Reference(val, ty))
                                         }
                                     }
@@ -2114,56 +2057,6 @@ impl SemCtx<'_> {
                 self.check_move(found_ty, expected, error_loc);
                 Some(found)
             }
-        }
-    }
-    fn addressable_expr(
-        &mut self,
-        ctx: &mut FunCtx,
-        expr: ExprIdx,
-    ) -> Option<(Value, TypeIdx, bool)> {
-        use Expression as E;
-        match self.ast.exprs[expr].0 {
-            E::BinOp(left, BinOp::Index, right) => {
-                let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-
-                // TODO: doesn't have to be addressable
-                let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
-
-                let (ptr, elem_ty) = match self.ir.types[ty] {
-                    Type::ConstArray(_, inner) => (value.inner_ptr(), inner),
-                    Type::Slice(inner) => (ctx.push(Instruction::Member(value, 0, ty)), inner),
-                    Type::Error => {
-                        return Some((Value::ConstantError, TYPE_ERROR, true));
-                    }
-                    _ => todo!("give error"),
-                };
-                let elem_ty = self.child_ty(elem_ty, ty);
-
-                let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
-                Some((elem, elem_ty, mutable && !ty.is_const()))
-            }
-            E::Ident(id) => {
-                let name = &self.ast.idents[id].0;
-                match ctx.get_value(self, name) {
-                    Some(var) => {
-                        if var.mutable {
-                            // mutable variables must always be references
-                            Some((var.value, var.ty, true))
-                        } else {
-                            // immutable reference time
-                            let val = ctx.as_deref(var.value, var.ty);
-                            Some((val, var.ty, false))
-                        }
-                    }
-                    None => {
-                        self.errors
-                            .push(self.ast.idents[id].with(Error::UnknownValue));
-                        Some((Value::ConstantError, TYPE_ERROR, true))
-                    }
-                }
-            }
-            E::Error => Some((Value::ConstantError, TYPE_ERROR, true)),
-            _ => todo!("give error"),
         }
     }
     fn synth_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
@@ -2206,8 +2099,8 @@ impl SemCtx<'_> {
                     panic!("give error");
                 }
                 let ptr_ty = match self.ir.types[mptr_ty] {
-                    Type::MaybePointer(inner) => {
-                        self.insert_type(Type::Pointer(inner), mptr_ty.is_const())
+                    Type::MaybePointer(isconst, inner) => {
+                        self.insert_type(Type::Pointer(isconst, inner))
                     }
                     _ => panic!("give error"),
                 };
@@ -2268,7 +2161,8 @@ impl SemCtx<'_> {
                     let fail = ty.fail_type;
                     let generic_val = ty.effect.clone();
 
-                    let handler_ref = ctx.push_deref(Instruction::Reference(handler, handler_ty));
+                    let handler_ref =
+                        ctx.push_deref(false, Instruction::Reference(handler, handler_ty));
                     ctx.scope.top().effect_stack.push((
                         handler_ty,
                         generic_val,
@@ -2503,7 +2397,7 @@ impl SemCtx<'_> {
                                         .get_effect(self, s, self.ast.exprs[expr].empty())
                                         .unwrap()
                                         .0;
-                                    self.insert_type(Type::Pointer(ty), false)
+                                    self.insert_type(Type::Pointer(false, ty))
                                 }
                             })
                             .collect();
@@ -2527,23 +2421,17 @@ impl SemCtx<'_> {
                                 fail_type: fail,
                             })),
                         );
-                        let metaty = self.insert_type(
-                            Type::HandlerType(HandlerType {
-                                effect: GenericVal::Literal(EffectIdent {
-                                    effect: eff.effect,
-                                    generic_params: eff.generic_params,
-                                }),
-                                fail_type: fail,
+                        let metaty = self.insert_type(Type::HandlerType(HandlerType {
+                            effect: GenericVal::Literal(EffectIdent {
+                                effect: eff.effect,
+                                generic_params: eff.generic_params,
                             }),
-                            false,
-                        );
-                        let ty = self.insert_type(
-                            Type::Handler(Lazy {
-                                idx,
-                                typeof_handler: metaty,
-                            }),
-                            false,
-                        );
+                            fail_type: fail,
+                        }));
+                        let ty = self.insert_type(Type::Handler(Lazy {
+                            idx,
+                            typeof_handler: metaty,
+                        }));
                         Some((
                             Value::ConstantHandler(
                                 ty,
@@ -2558,10 +2446,10 @@ impl SemCtx<'_> {
                                                 .get_effect(self, s, self.ast.exprs[expr].empty())
                                                 .unwrap();
                                             match val {
-                                                Value::Deref(val) => *val,
+                                                Value::Deref(val, _) => *val,
                                                 _ => {
                                                     let ty =
-                                                        self.insert_type(Type::Pointer(ty), false);
+                                                        self.insert_type(Type::Pointer(false, ty));
                                                     ctx.push(Instruction::Reference(val, ty))
                                                 }
                                             }
@@ -2648,7 +2536,7 @@ impl SemCtx<'_> {
                             if val.is_constant() {
                                 generic_params.push((
                                     const_generic,
-                                    self.insert_type(Type::CompileTime(val.clone()), false),
+                                    self.insert_type(Type::CompileTime(val.clone())),
                                 ))
                             } else {
                                 todo!("give error: not constant")
@@ -2860,7 +2748,7 @@ impl SemCtx<'_> {
                             if val.is_constant() {
                                 generic_params.push((
                                     const_generic,
-                                    self.insert_type(Type::CompileTime(val.clone()), false),
+                                    self.insert_type(Type::CompileTime(val.clone())),
                                 ))
                             } else {
                                 todo!("give error: not constant")
@@ -2986,30 +2874,35 @@ impl SemCtx<'_> {
             }
 
             E::BinOp(left, BinOp::Assign, right) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
-                if !mutable {
-                    todo!("give error")
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, left)?;
+                if isconst {
+                    self.errors
+                        .push(self.ast.exprs[expr].with(Error::AssignImmutable(None)));
+                    return Some((Value::ConstantNone, TYPE_NONE));
                 }
 
                 let right = self.check_expr(ctx, right, ty, None)?;
-                ctx.push(Instruction::Store(value.inner_ptr(), right));
+                ctx.push(Instruction::Store(ptr, right));
 
                 Some((Value::ConstantNone, TYPE_NONE))
             }
             E::BinOp(left, BinOp::Index, right) => {
                 let (left, left_ty) = self.synth_expr(ctx, left)?;
-                let (ptr, elem_ty) = match self.ir.types[left_ty] {
-                    Type::Slice(elem) => (ctx.push(Instruction::Member(left, 0, left_ty)), elem),
-                    Type::ConstArray(_, elem) => {
-                        let ptr = ctx.as_deref(left, left_ty).inner_ptr();
-                        (ptr, elem)
-                    }
+                let (ptr, isconst, elem_ty) = match self.ir.types[left_ty] {
+                    Type::Slice(isconst, elem) => (
+                        ctx.push(Instruction::Member(left, 0, left_ty)),
+                        isconst,
+                        elem,
+                    ),
+                    Type::ConstArray(_, elem) => match left {
+                        Value::Deref(left, isconst) => (*left, isconst, elem),
+                        _ => (ctx.push(Instruction::Reference(left, left_ty)), false, elem),
+                    },
                     Type::Error => {
                         return Some((Value::ConstantError, TYPE_ERROR));
                     }
                     _ => todo!("give error"),
                 };
-                let elem_ty = self.child_ty(elem_ty, left_ty);
 
                 if let E::BinOp(rleft, BinOp::Range, rright) = self.ast.exprs[right].0 {
                     let rleft = self.check_expr(ctx, rleft, TYPE_USIZE, None)?;
@@ -3018,12 +2911,13 @@ impl SemCtx<'_> {
                     let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone(), elem_ty));
                     let len = ctx.push(Instruction::Sub(TYPE_USIZE, rright, rleft));
 
-                    let slice_ty = self.insert_type(Type::Slice(elem_ty), false);
+                    let slice_ty = self.insert_type(Type::Slice(isconst, elem_ty));
                     let slice = Value::ConstantAggregate(slice_ty, vec![ptr, len].into());
                     Some((slice, slice_ty))
                 } else {
                     let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-                    let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
+                    let elem =
+                        ctx.push_deref(isconst, Instruction::AdjacentPtr(ptr, right, elem_ty));
                     Some((elem, elem_ty))
                 }
             }
@@ -3064,12 +2958,11 @@ impl SemCtx<'_> {
                 Some((res, out))
             }
             E::UnOp(inner, UnOp::PostIncrement) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-                if !mutable {
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, inner)?;
+                if isconst {
                     todo!("give error")
                 }
 
-                let ptr = value.inner_ptr();
                 let loaded = ctx.push(Instruction::Load(ty, ptr.clone()));
                 let incremented = ctx.push(Instruction::Add(
                     ty,
@@ -3080,9 +2973,9 @@ impl SemCtx<'_> {
                 Some((loaded, ty))
             }
             E::UnOp(inner, UnOp::Reference) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-                let ptr_ty = self.insert_type(Type::Pointer(ty), !mutable);
-                Some((value.inner_ptr(), ptr_ty))
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, inner)?;
+                let ptr_ty = self.insert_type(Type::Pointer(isconst, ty));
+                Some((ptr, ptr_ty))
             }
             E::UnOp(_, UnOp::Cast) => {
                 self.errors
@@ -3151,7 +3044,7 @@ impl SemCtx<'_> {
                 let name = self.ast.idents[id].0.clone();
 
                 if mutable {
-                    let ptr = ctx.push_deref(Instruction::Reference(value, ty));
+                    let ptr = ctx.push_deref(false, Instruction::Reference(value, ty));
                     ctx.define(
                         name,
                         Variable {
@@ -3161,14 +3054,7 @@ impl SemCtx<'_> {
                         },
                     );
                 } else {
-                    ctx.define(
-                        name,
-                        Variable {
-                            value,
-                            ty: ty.with_const(!self.is_copy(ty)),
-                            mutable,
-                        },
-                    );
+                    ctx.define(name, Variable { value, ty, mutable });
                 }
 
                 Some((Value::ConstantNone, TYPE_NONE))
@@ -3181,10 +3067,10 @@ impl SemCtx<'_> {
                         let elems = std::iter::once(Some(val))
                             .chain(iter.map(|expr| self.check_expr(ctx, expr, ty, None)))
                             .collect::<Option<Rc<[_]>>>()?;
-                        let arr_ty = self.insert_type(
-                            Type::ConstArray(GenericVal::Literal(elems.len() as u64), ty),
-                            false,
-                        );
+                        let arr_ty = self.insert_type(Type::ConstArray(
+                            GenericVal::Literal(elems.len() as u64),
+                            ty,
+                        ));
                         Some((Value::ConstantAggregate(arr_ty, elems), arr_ty))
                     }
                     None => {
@@ -3238,8 +3124,8 @@ impl SemCtx<'_> {
                 let (mut struc, mut ty) = self.synth_expr(ctx, left)?;
 
                 // allow member access to dereference pointers
-                while let Type::Pointer(inner) = self.ir.types[ty] {
-                    struc = Value::Deref(Box::new(struc));
+                while let Type::Pointer(isconst, inner) = self.ir.types[ty] {
+                    struc = Value::Deref(Box::new(struc), isconst);
                     ty = inner;
                 }
 
@@ -3260,8 +3146,12 @@ impl SemCtx<'_> {
                     panic!("give error");
                 };
 
-                // TODO: use elementptr if struc is Value::Deref
-                let val = ctx.push(Instruction::Member(struc, elem as u32, ty));
+                let val = match struc {
+                    Value::Deref(ptr, isconst) => {
+                        ctx.push_deref(isconst, Instruction::ElementPtr(*ptr, elem as u32, ty))
+                    }
+                    _ => ctx.push(Instruction::Member(struc, elem as u32, ty)),
+                };
                 let ty = self.ir.structs[idx].elems[elem].1;
                 Some((val, ty))
             }
@@ -3358,7 +3248,7 @@ impl SemCtx<'_> {
             stack,
             Vec::new(),
         ));
-        let val = ctx.push_deref(Instruction::Reference(val, type_idx));
+        let val = ctx.push_deref(false, Instruction::Reference(val, type_idx));
 
         cache.insert(id, (type_idx, val.clone()));
         Some((type_idx, val))
@@ -3386,18 +3276,12 @@ impl FunCtx<'_> {
         self.scope.pop();
         t
     }
-    fn as_deref(&mut self, value: Value, ty: TypeIdx) -> Value {
-        match value {
-            Value::Deref(_) => value,
-            _ => self.push_deref(Instruction::Reference(value, ty)),
-        }
-    }
     fn push(&mut self, instr: Instruction) -> Value {
         let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
         Value::Reg(self.block, Some(idx))
     }
-    fn push_deref(&mut self, instr: Instruction) -> Value {
-        Value::Deref(Box::new(self.push(instr)))
+    fn push_deref(&mut self, isconst: bool, instr: Instruction) -> Value {
+        Value::Deref(Box::new(self.push(instr)), isconst)
     }
     fn all_generics(&self) -> Generics {
         let mut generics = Vec::new();
@@ -3443,13 +3327,16 @@ impl FunCtx<'_> {
                 if val.mutable && !self.capture_boundary.0 {
                     // capture by reference
                     Some(Variable {
-                        value: Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                        value: Value::Deref(
+                            Box::new(Value::Deref(Box::new(Value::Capture(idx)), true)),
+                            false,
+                        ),
                         ..val
                     })
                 } else {
                     // capture by value
                     Some(Variable {
-                        value: Value::Deref(Box::new(Value::Capture(idx))),
+                        value: Value::Deref(Box::new(Value::Capture(idx)), !val.mutable),
                         ..val
                     })
                 }
@@ -3463,8 +3350,8 @@ impl FunCtx<'_> {
             if v.mutable && !moved {
                 // capture by reference
                 match v.value {
-                    Value::Deref(b) => {
-                        let ptr_ty = ctx.insert_type(Type::Pointer(v.ty), false);
+                    Value::Deref(b, isconst) => {
+                        let ptr_ty = ctx.insert_type(Type::Pointer(isconst, v.ty));
                         Variable {
                             value: *b,
                             mutable: false,
@@ -3505,7 +3392,10 @@ impl FunCtx<'_> {
                         };
                         Some((
                             ty,
-                            Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                            Value::Deref(
+                                Box::new(Value::Deref(Box::new(Value::Capture(idx)), true)),
+                                false,
+                            ),
                             None,
                         ))
                     } else {
@@ -3569,13 +3459,10 @@ impl FunCtx<'_> {
                             return None;
                         }
 
-                        let metaty = ctx.insert_type(
-                            Type::HandlerType(HandlerType {
-                                effect: GenericVal::Literal(ident.clone()),
-                                fail_type: fail,
-                            }),
-                            false,
-                        );
+                        let metaty = ctx.insert_type(Type::HandlerType(HandlerType {
+                            effect: GenericVal::Literal(ident.clone()),
+                            fail_type: fail,
+                        }));
                         let lazy = ctx.ir.lazy_handlers.push(
                             LazyIdx,
                             LazyValue::Some(GenericVal::Literal(HandlerIdent {
@@ -3584,13 +3471,10 @@ impl FunCtx<'_> {
                                 fail_type: fail,
                             })),
                         );
-                        let ty = ctx.insert_type(
-                            Type::Handler(Lazy {
-                                idx: lazy,
-                                typeof_handler: metaty,
-                            }),
-                            false,
-                        );
+                        let ty = ctx.insert_type(Type::Handler(Lazy {
+                            idx: lazy,
+                            typeof_handler: metaty,
+                        }));
 
                         if idx == ctx.srcloc {
                             let (start, _end) = get_lines(&ctx.errors.files[loc.3].content, loc);
@@ -3779,21 +3663,21 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
         srcloc: HandlerIdx(0),
     };
 
-    ctx.insert_type(Type::Error, false);
-    ctx.insert_type(Type::None, false);
-    ctx.insert_type(Type::Never, false);
-    ctx.insert_type(Type::DataType, false);
-    ctx.insert_type(Type::EffectType, false);
-    ctx.insert_type(Type::Integer(false, IntSize::Size), false);
-    ctx.insert_type(Type::Bool, false);
-    ctx.insert_type(Type::Integer(true, IntSize::Reg), false);
-    ctx.insert_type(Type::Str, false);
-    ctx.insert_type(Type::Char, false);
-    ctx.insert_type(Type::Integer(false, IntSize::Bits(8)), false);
-    ctx.insert_type(Type::Integer(false, IntSize::Ptr), false);
+    ctx.insert_type(Type::Error);
+    ctx.insert_type(Type::None);
+    ctx.insert_type(Type::Never);
+    ctx.insert_type(Type::DataType);
+    ctx.insert_type(Type::EffectType);
+    ctx.insert_type(Type::Integer(false, IntSize::Size));
+    ctx.insert_type(Type::Bool);
+    ctx.insert_type(Type::Integer(true, IntSize::Reg));
+    ctx.insert_type(Type::Str);
+    ctx.insert_type(Type::Char);
+    ctx.insert_type(Type::Integer(false, IntSize::Bits(8)));
+    ctx.insert_type(Type::Integer(false, IntSize::Ptr));
 
     let mut insert = |t: Type| {
-        let ty = ctx.insert_type(t, false);
+        let ty = ctx.insert_type(t);
         let name = format!("{}", FmtType(&ctx.ir, ty));
         let name = String::from(&name[1..name.len() - 1]);
         let types = &mut ctx.packages[ast.preamble].types;
@@ -3849,7 +3733,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
             let name = &ast.idents[struc.name].0;
             ctx.ir.structs[i].name = name.clone();
 
-            let ty = ctx.insert_type(Type::Struct(i), false);
+            let ty = ctx.insert_type(Type::Struct(i));
             ctx.packages[idx].types.insert(name.clone(), ty);
         }
     }
@@ -3969,9 +3853,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                     let generic_params = ctx.ir.effects[i].generics.clone();
                     let generic_params = generic_params
                         .into_iter()
-                        .map(|generic| {
-                            (generic.idx, ctx.insert_type(Type::Generic(generic), false))
-                        })
+                        .map(|generic| (generic.idx, ctx.insert_type(Type::Generic(generic))))
                         .collect();
                     let sign = ctx.analyze_sign(
                         scope,
@@ -4098,7 +3980,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
 
         ctx.get_preamble_handler("srcloc").captures = vec![TYPE_STR];
         ctx.define_preamble_fun("source_location", |_, fun| {
-            let capture = Value::Deref(Box::new(Value::Capture(0)));
+            let capture = Value::Deref(Box::new(Value::Capture(0)), true);
             fun.push(Instruction::Return(capture));
         });
 
@@ -4169,16 +4051,13 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
         };
 
         let mut cache = HashMap::new();
-        let metaty = ctx.insert_type(
-            Type::HandlerType(HandlerType {
-                effect: GenericVal::Literal(EffectIdent {
-                    effect: foreign,
-                    generic_params: Vec::new(),
-                }),
-                fail_type: TYPE_NEVER,
+        let metaty = ctx.insert_type(Type::HandlerType(HandlerType {
+            effect: GenericVal::Literal(EffectIdent {
+                effect: foreign,
+                generic_params: Vec::new(),
             }),
-            false,
-        );
+            fail_type: TYPE_NEVER,
+        }));
         let foreign_lazy = ctx.ir.lazy_handlers.push(
             LazyIdx,
             LazyValue::Some(GenericVal::Literal(HandlerIdent {
@@ -4187,13 +4066,10 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 fail_type: TYPE_NEVER,
             })),
         );
-        let ty = ctx.insert_type(
-            Type::Handler(Lazy {
-                idx: foreign_lazy,
-                typeof_handler: metaty,
-            }),
-            false,
-        );
+        let ty = ctx.insert_type(Type::Handler(Lazy {
+            idx: foreign_lazy,
+            typeof_handler: metaty,
+        }));
         cache.insert(
             EffectIdent {
                 effect: foreign,
@@ -4253,7 +4129,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 let ty = ctx
                     .translate_generics(ty, &vec![(gen, val.0)], true)
                     .unwrap();
-                let handler = fun.push_deref(Instruction::Reference(handler, ty));
+                let handler = fun.push_deref(false, Instruction::Reference(handler, ty));
 
                 let io = ctx.ast.packages[ctx.ast.system].imports["io"];
                 let print = ctx.packages[io].funs["print"];

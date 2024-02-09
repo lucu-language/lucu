@@ -137,12 +137,18 @@ impl Docgen for TypeIdx {
                 write!(f, "?")?;
                 ty.gen(files, ast, f)?;
             }
-            Type::Pointer(ty) => {
+            Type::Pointer(isconst, ty) => {
                 write!(f, "^")?;
+                if isconst {
+                    write!(f, "const ")?;
+                }
                 ty.gen(files, ast, f)?;
             }
-            Type::Const(ty) => {
-                write!(f, "const ")?;
+            Type::Slice(isconst, ty) => {
+                write!(f, "[]")?;
+                if isconst {
+                    write!(f, "const ")?;
+                }
                 ty.gen(files, ast, f)?;
             }
             Type::ConstArray(expr, ty) => {
@@ -151,10 +157,6 @@ impl Docgen for TypeIdx {
                     Expression::Ident(i) => write!(f, "[{}]", ast.ident(i))?,
                     _ => todo!(),
                 }
-                ty.gen(files, ast, f)?;
-            }
-            Type::Slice(ty) => {
-                write!(f, "[]")?;
                 ty.gen(files, ast, f)?;
             }
             Type::Error => unreachable!(),
@@ -171,7 +173,11 @@ impl Docgen for FunDecl {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         writeln!(f, "### {}", ast.ident(self.name))?;
-        writeln!(f, "[source]({}#L{})", files[ast.idents[self.name].3].name, ast.idents[self.name].1)?;
+        writeln!(
+            f,
+            "[source]({}#L{})",
+            files[ast.idents[self.name].3].name, ast.idents[self.name].1
+        )?;
         writeln!(f, "```")?;
         write!(f, "fun {}(", ast.ident(self.name))?;
         self.sign.inputs.gen(files, ast, f)?;
@@ -233,7 +239,11 @@ impl Docgen for AliasIdx {
     ) -> fmt::Result {
         let (name, ty) = ast.aliases[*self];
         writeln!(f, "### {}", ast.ident(name))?;
-        writeln!(f, "[source]({}#L{})", files[ast.idents[name].3].name, ast.idents[name].1)?;
+        writeln!(
+            f,
+            "[source]({}#L{})",
+            files[ast.idents[name].3].name, ast.idents[name].1
+        )?;
         write!(f, "```\ntype {} = ", ast.ident(name))?;
         ty.gen(files, ast, f)?;
         writeln!(f, "\n```")?;
@@ -269,7 +279,11 @@ impl Docgen for StructIdx {
     ) -> fmt::Result {
         let struc = &ast.structs[*self];
         writeln!(f, "### {}", ast.ident(struc.name))?;
-        writeln!(f, "[source]({}#L{})", files[ast.idents[struc.name].3].name, ast.idents[struc.name].1)?;
+        writeln!(
+            f,
+            "[source]({}#L{})",
+            files[ast.idents[struc.name].3].name, ast.idents[struc.name].1
+        )?;
         write!(f, "```\nstruct {}(", ast.ident(struc.name))?;
         struc.elems.gen(files, ast, f)?;
         writeln!(f, ")\n```")?;
@@ -291,7 +305,11 @@ impl Docgen for Effect {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         writeln!(f, "### {}", ast.ident(self.name))?;
-        writeln!(f, "[source]({}#L{})", files[ast.idents[self.name].3].name, ast.idents[self.name].1)?;
+        writeln!(
+            f,
+            "[source]({}#L{})",
+            files[ast.idents[self.name].3].name, ast.idents[self.name].1
+        )?;
         writeln!(f, "```")?;
         write!(f, "effect {}", ast.ident(self.name))?;
         if let Some(generics) = self.generics.as_ref() {

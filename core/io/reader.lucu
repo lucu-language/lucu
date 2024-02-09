@@ -1,5 +1,5 @@
 effect reader {
-	fun read(mut buf []u8) usize
+	fun read(buf []u8) usize
 }
 
 fun skip_line() usize / reader {
@@ -21,7 +21,7 @@ fun skip_line() usize / reader {
 	total
 }
 
-fun read_line(mut buf []u8) usize / reader {
+fun read_line(buf []u8) usize / reader {
 	mut total usize = 0
 
 	try loop {

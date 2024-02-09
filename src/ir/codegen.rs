@@ -111,7 +111,7 @@ impl<'a> IRCtx<'a> {
             T::Generic(g) => {
                 return get_param(&params, g.idx).unwrap();
             }
-            T::Pointer(ty) | T::MaybePointer(ty) => {
+            T::Pointer(_, ty) | T::MaybePointer(_, ty) => {
                 let ty = self.lower_type(ty, params);
                 self.insert_type(Type::Pointer(ty))
             }
@@ -127,7 +127,7 @@ impl<'a> IRCtx<'a> {
                 };
                 self.insert_type(Type::ConstArray(size, ty))
             }
-            T::Slice(ty) => {
+            T::Slice(_, ty) => {
                 let ty = self.lower_type(ty, params);
                 self.insert_slice(ty)
             }
@@ -473,7 +473,7 @@ impl<'a> IRCtx<'a> {
         match *value {
             Value::Reg(idx, None) => ctx.blocks[idx].phis[0].0,
             Value::Reg(idx, Some(instr)) => ctx.regs[idx][instr].unwrap(),
-            Value::Deref(ref value) => {
+            Value::Deref(ref value, _) => {
                 let ptr = self.get_value_reg(ctx, value);
 
                 let inner = self.ir.regs[ptr].inner(&self.ir);
@@ -604,6 +604,16 @@ impl<'a> IRCtx<'a> {
                         self.ir.aggregates[aggr].children[n as usize]
                     }
 
+                    I::ElementPtr(_, n, ty) => {
+                        let aggr_ty = self.lower_type(ty, &ctx.params);
+                        let aggr = match self.ir.types[aggr_ty] {
+                            Type::Aggregate(idx) => idx,
+                            _ => unreachable!(),
+                        };
+                        let elem_ty = self.ir.aggregates[aggr].children[n as usize];
+                        self.insert_type(Type::Pointer(elem_ty))
+                    }
+
                     I::Equals(_, _) | I::Greater(_, _) | I::Less(_, _) => {
                         self.insert_type(Type::Bool)
                     }
@@ -715,7 +725,9 @@ impl<'a> IRCtx<'a> {
                         let effects = effects
                             .iter()
                             .map(|effect| match effect {
-                                Value::Deref(effectptr) => self.get_value_reg(&mut ctx, effectptr),
+                                Value::Deref(effectptr, _) => {
+                                    self.get_value_reg(&mut ctx, effectptr)
+                                }
                                 _ => {
                                     let effect = self.get_value_reg(&mut ctx, effect);
 
@@ -807,6 +819,10 @@ impl<'a> IRCtx<'a> {
                     I::Member(p, n, _) => {
                         let p = self.get_value_reg(&mut ctx, p);
                         ctx.push(Instruction::Member(ireg.unwrap(), p, *n as usize));
+                    }
+                    I::ElementPtr(p, n, _) => {
+                        let p = self.get_value_reg(&mut ctx, p);
+                        ctx.push(Instruction::ElementPtr(ireg.unwrap(), p, *n as usize));
                     }
                     I::AdjacentPtr(p, n, _) => {
                         let p = self.get_value_reg(&mut ctx, p);

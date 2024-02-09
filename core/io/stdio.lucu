@@ -30,6 +30,14 @@ fun putstr(s str) / stdio {
 	}
 }
 
+fun putbool(a bool) / stdio {
+	if a {
+		putstr("true")
+	} else {
+		putstr("false")
+	}
+}
+
 fun wait() / stdio {
 	do skip_line() with stdin()
 }

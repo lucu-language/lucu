@@ -38,6 +38,12 @@ fun first(generate impl generator(`t)) `t / srcloc {
 	}
 }
 
+fun last(gen impl generator(`t)) `t {
+	mut acc `t = ---
+	gen.() with ({a -> acc = a} as impl yield(`t))
+	acc
+}
+
 fun for(start usize, end usize, yield impl yield(usize)) {
 	mut n = start
 	try with yield loop {

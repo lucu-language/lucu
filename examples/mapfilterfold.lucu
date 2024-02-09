@@ -95,12 +95,6 @@ fun factorial(num int) int {
 	, num) })
 }
 
-fun last(gen impl generator(`t)) `t {
-	mut acc = first(gen)
-	gen.() with ({a -> acc = a} as impl yield(`t))
-	acc
-}
-
 fun take(amount usize, gen impl generator(`a)) / yield(`a) {
 	mut num_taken usize = 0
 	try {
@@ -114,26 +108,31 @@ fun take(amount usize, gen impl generator(`a)) / yield(`a) {
 	}
 }
 
-fun putbool(a bool) / io.stdio {
-	if a {
-		io.putstr("true")
-	} else {
-		io.putstr("false")
+# works, but prefer some sort of optional return here...
+fun find(pred impl filter(`a), gen impl generator(`a)) `a {
+	try { 
+		gen.() with { a ->
+			if pred.(a) {
+				break a
+			}
+		} as impl yield(`a) -> `a
+		panic("not found")
 	}
 }
 
-# doesn't work :(
-# fun find(pred impl filter(`a), gen impl generator(`a)) `a {
-# 	try { 
-# 		gen.() with { a ->
-# 			if pred.(a) {
-# 				break a
-# 			}
-# 		} as impl yield(`a) -> `a
-# 	}
-# }
+fun concat(gen1 impl generator(`a), gen2 impl generator(`a)) / yield(`a) {
+	gen1.() with { a -> yield(a) } as impl yield(`a)
+	gen2.() with { a -> yield(a) } as impl yield(`a)
+}
 
 fun main() / io.stdio {
+	let num = find({a -> mod(a, 2) == 0} as impl filter(int), {
+		yield(1)
+		yield(2)
+		yield(3)
+	})
+	io.putint(num)
+
 	take(10, { 
 		yield(1)
 		yield(2)
@@ -155,7 +154,7 @@ fun main() / io.stdio {
 			}
 		}
 	}
-	putbool(b)
+	io.putbool(b)
 	# count up forever :)
 	# unfold({ a ->
 	# 	yield(a)

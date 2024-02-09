@@ -11,6 +11,7 @@ use crate::{
 vecmap_index!(GenericIdx);
 vecmap_index!(HandlerIdx);
 vecmap_index!(LazyIdx);
+vecmap_index!(TypeIdx);
 
 vecmap_index!(BlockIdx);
 vecmap_index!(InstrIdx);
@@ -25,9 +26,6 @@ impl fmt::Display for FmtType<'_> {
         Ok(())
     }
 }
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct TypeIdx(usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FunIdent {
@@ -49,24 +47,6 @@ impl FunIdent {
         })
         .chain(self.sign(ir).generics.iter())
         .map(|generic| generic.idx)
-    }
-}
-
-impl From<TypeIdx> for usize {
-    fn from(value: TypeIdx) -> Self {
-        value.0 >> 2
-    }
-}
-
-impl TypeIdx {
-    pub(crate) fn new(idx: usize, is_const: bool) -> Self {
-        Self(idx << 2 | (if is_const { 1 } else { 0 }))
-    }
-    pub fn is_const(self) -> bool {
-        self.0 & 1 == 1
-    }
-    pub fn with_const(self, is_const: bool) -> Self {
-        Self::new(usize::from(self), is_const)
     }
 }
 
@@ -438,9 +418,6 @@ impl TypeIdx {
         generic_params: &GenericParams,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        if self.is_const() {
-            write!(f, "const ")?;
-        }
         match ir.types[*self] {
             Type::Struct(idx) => write!(f, "{}", ir.structs[idx].name),
             Type::Handler(ref lazy) => lazy.idx.display(lazy.typeof_handler, ir, generic_params, f),

@@ -114,7 +114,6 @@ pub enum Type {
 
     Maybe(TypeIdx),
     Pointer(TypeIdx),
-    Const(TypeIdx),
     ConstArray(ExprIdx, TypeIdx),
     Slice(TypeIdx),
 

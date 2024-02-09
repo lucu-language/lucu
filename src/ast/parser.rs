@@ -499,14 +499,6 @@ impl Parse for Type {
 
                 Some(Type::Pointer(ty))
             }
-            Some(Ranged(Token::Const, ..)) => {
-                tk.next();
-
-                let ty = Type::parse_or_default(tk);
-                let ty = tk.push_type(ty);
-
-                Some(Type::Const(ty))
-            }
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 enum ArrType {
                     Const(ExprIdx),

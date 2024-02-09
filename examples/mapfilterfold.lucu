@@ -126,6 +126,21 @@ fun concat(gen1 impl generator(`a), gen2 impl generator(`a)) / yield(`a) {
 }
 
 fun main() / io.stdio {
+	io.putstr("-= CONCAT =-")
+	concat(
+		{
+			yield(1)
+			yield(2)
+			yield(3)
+		} as impl generator(int)
+		, {
+			yield(1)
+			yield(2)
+			yield(3)
+		} as impl generator(int)
+	) with { a -> io.putint(a) } as impl yield(int)
+	
+	io.putstr("-= FIND =-")
 	let num = find({a -> mod(a, 2) == 0} as impl filter(int), {
 		yield(1)
 		yield(2)
@@ -133,18 +148,22 @@ fun main() / io.stdio {
 	})
 	io.putint(num)
 
+	io.putstr("-= TAKE 1 =-")
 	take(10, { 
 		yield(1)
 		yield(2)
 		yield(3)
 	} as impl generator(int)) with { a -> io.putint(a) } as impl yield(int)
 
+	io.putstr("-= TAKE 2 =-")
 	take(10, { 
 		itermap({ a -> a * 2 } as impl map(int, int), 1)
 	} as impl generator(int)) with { a -> io.putint(a) } as impl yield(int)
 
+	io.putstr("-= FACTORIAL =-")
 	io.putint(factorial(10))
 
+	io.putstr("-= STUFF =-")
 	let b = none({ a -> mod(a, 2) == 1} as impl filter(int)) {
 		filter({ a -> a > 3 } as impl filter(int)) {
 			map({ a -> a * 2 } as impl map (int, int)) {

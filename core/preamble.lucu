@@ -2,6 +2,8 @@
 # everything in this file is always in scope
 ##
 
+type never = !
+
 ##
 # panics with message if the assertion is not met
 # preferred to be used only for debugging
@@ -24,7 +26,7 @@ fun mod(dividend int, divisor int) int {
 # yield
 ##
 effect yield(`t) {
-	fun yield(mut t `t)
+	fun yield(t `t)
 }
 
 effect generator(`t) {
@@ -44,13 +46,28 @@ fun last(gen impl generator(`t)) `t {
 	acc
 }
 
+fun nth(num usize, generate impl generator(`t)) `t / srcloc {
+	try {
+		mut current usize = 0
+		generate.() with ({
+			t ->
+			if current == num {
+				break t
+			} else {
+				do current++
+			}
+		} as impl yield(`t) -> `t)
+		panic("not enough was yielded")
+	}
+}
+
 fun for(start usize, end usize, yield impl yield(usize)) {
 	mut n = start
-	try with yield loop {
+	try loop {
 		if n == end {
 			break
 		} else {
-			yield(n++)
+			yield.(n++)
 		}
 	}
 }
@@ -178,7 +195,7 @@ fun unreachable() ! {
 ##
 # returns the length of a slice
 ##
-fun len(slice []`elem) usize {
+fun len(slice []const `elem) usize {
 	internal()
 }
 

@@ -7,7 +7,6 @@ type window = bindings.window
 type colormap = bindings.colormap
 type visualid = bindings.visualid
 type setup = bindings.setup
-type screen_iterator = bindings.screen_iterator
 type screen = bindings.screen
 
 effect lib {
@@ -32,13 +31,9 @@ fun link() impl lib / foreign {
 		}
 		fun traverse_roots(setup ^setup) / yield(^screen) {
 			mut iter = bindings.setup_roots_iterator(setup)
-			try loop {
-				if iter.rem < 0 {
-					break
-				} else {
-					yield(iter.data)
-					bindings.screen_next(&iter)
-				}
+			until({ iter.rem == 0 }) {
+				yield(iter.data)
+				bindings.screen_next(&iter)
 			}
 		}
 	} with bindings.link()

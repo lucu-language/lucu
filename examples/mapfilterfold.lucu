@@ -20,7 +20,7 @@ effect fold(`a, `b) {
 	fun _fold(acc `b, a `a) `b
 }
 
-fun fold(fold impl fold(`a, `b), mut init `b, gen impl generator(`a)) `b {
+fun fold(fold impl fold(`a, `b), init `b, gen impl generator(`a)) `b {
 	mut acc = init
 	gen.() with ({a -> acc = fold.(acc, a)} as impl yield(`a))
 	acc

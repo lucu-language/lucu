@@ -4,8 +4,8 @@
 @foreign
 effect sys {
 	fun GetStdHandle(nStdHandle DWORD) HANDLE
-	fun ReadConsoleA(hConsoleInput HANDLE, mut lpBuffer ^u8, nNumberOfCharsToRead DWORD, mut lpNumberOfCharsRead ^DWORD, pInputControl ?^CONSOLE_READCONSOLE_CONTROL) BOOL
-	fun WriteConsoleA(hConsoleOutput HANDLE, lpBuffer ^u8, nNumberOfCharsToWrite DWORD, mut lpNumberOfCharsWritten ^DWORD, lpReserved ?^never) BOOL
+	fun ReadConsoleA(hConsoleInput HANDLE, lpBuffer ^u8, nNumberOfCharsToRead DWORD, lpNumberOfCharsRead ^DWORD, pInputControl ?^const CONSOLE_READCONSOLE_CONTROL) BOOL
+	fun WriteConsoleA(hConsoleOutput HANDLE, lpBuffer ^const u8, nNumberOfCharsToWrite DWORD, lpNumberOfCharsWritten ^DWORD, lpReserved ?^never) BOOL
 
 	fun GetCurrentProcess() HANDLE
 	fun TerminateProcess(hProcess HANDLE, uExitCode UINT) BOOL

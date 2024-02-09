@@ -1,8 +1,8 @@
 @foreign
 effect sys {
 	fun proc_exit(rval u32) !
-	fun fd_write(fd u32, iovs [][]u8, mut size ^u32) u16
-	fun fd_read(fd u32, mut iovs [][]u8, mut size ^u32) u16
+	fun fd_write(fd u32, iovs []const []const u8, size ^const u32) u16
+	fun fd_read(fd u32, iovs []const []u8, size ^const u32) u16
 }
 
 @capability(os = "wasi")

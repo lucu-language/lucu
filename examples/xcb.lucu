@@ -1,9 +1,14 @@
 import "core:io"
+import "vendor:c"
 import "vendor:xcb"
 
 fun main() / io.stdio xcb.lib {
-	with xcb.connect(0, 0) {
-		let screen ^xcb.screen = first { xcb.traverse_roots(xcb.get_setup()) }
+	mut screenp c.int = 0
+	let display []u8 = ":0"
+	with xcb.connect(&display[0], &screenp) {
+		let preferred usize = if screenp == 0 { 0 } else { cast screenp - 1 }
+		let screen ^xcb.screen = nth(preferred) { xcb.traverse_roots(xcb.get_setup()) }
+
 		let width = screen.width_in_pixels
 		let height = screen.height_in_pixels
 		io.putint(cast width)

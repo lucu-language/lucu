@@ -111,7 +111,7 @@ impl<'a> IRCtx<'a> {
             T::Generic(g) => {
                 return get_param(&params, g.idx).unwrap();
             }
-            T::Pointer(ty) | T::MaybePointer(ty) => {
+            T::Pointer(_, ty) | T::MaybePointer(_, ty) => {
                 let ty = self.lower_type(ty, params);
                 self.insert_type(Type::Pointer(ty))
             }
@@ -127,7 +127,7 @@ impl<'a> IRCtx<'a> {
                 };
                 self.insert_type(Type::ConstArray(size, ty))
             }
-            T::Slice(ty) => {
+            T::Slice(_, ty) => {
                 let ty = self.lower_type(ty, params);
                 self.insert_slice(ty)
             }
@@ -473,7 +473,7 @@ impl<'a> IRCtx<'a> {
         match *value {
             Value::Reg(idx, None) => ctx.blocks[idx].phis[0].0,
             Value::Reg(idx, Some(instr)) => ctx.regs[idx][instr].unwrap(),
-            Value::Deref(ref value) => {
+            Value::Deref(ref value, _) => {
                 let ptr = self.get_value_reg(ctx, value);
 
                 let inner = self.ir.regs[ptr].inner(&self.ir);
@@ -604,6 +604,16 @@ impl<'a> IRCtx<'a> {
                         self.ir.aggregates[aggr].children[n as usize]
                     }
 
+                    I::ElementPtr(_, n, ty) => {
+                        let aggr_ty = self.lower_type(ty, &ctx.params);
+                        let aggr = match self.ir.types[aggr_ty] {
+                            Type::Aggregate(idx) => idx,
+                            _ => unreachable!(),
+                        };
+                        let elem_ty = self.ir.aggregates[aggr].children[n as usize];
+                        self.insert_type(Type::Pointer(elem_ty))
+                    }
+
                     I::Equals(_, _) | I::Greater(_, _) | I::Less(_, _) => {
                         self.insert_type(Type::Bool)
                     }
@@ -715,7 +725,9 @@ impl<'a> IRCtx<'a> {
                         let effects = effects
                             .iter()
                             .map(|effect| match effect {
-                                Value::Deref(effectptr) => self.get_value_reg(&mut ctx, effectptr),
+                                Value::Deref(effectptr, _) => {
+                                    self.get_value_reg(&mut ctx, effectptr)
+                                }
                                 _ => {
                                     let effect = self.get_value_reg(&mut ctx, effect);
 
@@ -808,6 +820,10 @@ impl<'a> IRCtx<'a> {
                         let p = self.get_value_reg(&mut ctx, p);
                         ctx.push(Instruction::Member(ireg.unwrap(), p, *n as usize));
                     }
+                    I::ElementPtr(p, n, _) => {
+                        let p = self.get_value_reg(&mut ctx, p);
+                        ctx.push(Instruction::ElementPtr(ireg.unwrap(), p, *n as usize));
+                    }
                     I::AdjacentPtr(p, n, _) => {
                         let p = self.get_value_reg(&mut ctx, p);
                         let n = self.get_value_reg(&mut ctx, n);
@@ -866,19 +882,32 @@ impl<'a> IRCtx<'a> {
     }
 
     fn sizeof(&self, ty: TypeIdx) -> u64 {
+        let arch = self.target.lucu_arch();
         match self.ir.types[ty] {
-            Type::Int => self.target.lucu_arch().register_size().div_ceil(8) as u64,
-            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8) as u64,
-            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::Int => arch.register_size().div_ceil(8) as u64,
+            Type::IntSize => arch.array_len_size().div_ceil(8) as u64,
+            Type::IntPtr => arch.ptr_size().div_ceil(8) as u64,
             Type::Int8 => 1,
             Type::Int16 => 2,
-            Type::Int32 => 3,
-            Type::Int64 => 4,
+            Type::Int32 => 4,
+            Type::Int64 => 8,
             Type::Bool => 1,
-            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8) as u64,
+            Type::Pointer(_) => arch.ptr_size().div_ceil(8) as u64,
             Type::ConstArray(len, inner) => self.sizeof(inner) * len,
             Type::Aggregate(idx) | Type::Handler(_, idx) => {
-                todo!()
+                let mut size = 0;
+                for child in self.ir.aggregates[idx].children.iter().copied() {
+                    // round up to child align
+                    let align_mask = (1 << self.alignof(child)) - 1;
+                    size = size + align_mask & !align_mask;
+
+                    // add child
+                    size += self.sizeof(child);
+                }
+
+                // round up to align
+                let align_mask = (1 << self.alignof(ty)) - 1;
+                size + align_mask & !align_mask
             }
             Type::Unit => 0,
             Type::Never => 0,
@@ -886,16 +915,17 @@ impl<'a> IRCtx<'a> {
     }
 
     fn alignof(&self, ty: TypeIdx) -> u64 {
+        let arch = self.target.lucu_arch();
         match self.ir.types[ty] {
-            Type::Int => self.target.lucu_arch().register_size().div_ceil(8).ilog2() as u64,
-            Type::IntSize => self.target.lucu_arch().array_len_size().div_ceil(8).ilog2() as u64,
-            Type::IntPtr => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::Int => ilog2_ceil(arch.register_size().div_ceil(8)) as u64,
+            Type::IntSize => ilog2_ceil(arch.array_len_size().div_ceil(8)) as u64,
+            Type::IntPtr => ilog2_ceil(arch.ptr_size().div_ceil(8)) as u64,
             Type::Int8 => 0,
             Type::Int16 => 1,
             Type::Int32 => 2,
             Type::Int64 => 3,
             Type::Bool => 0,
-            Type::Pointer(_) => self.target.lucu_arch().ptr_size().div_ceil(8).ilog2() as u64,
+            Type::Pointer(_) => ilog2_ceil(arch.ptr_size().div_ceil(8)) as u64,
             Type::ConstArray(_, inner) => self.alignof(inner),
             Type::Aggregate(idx) | Type::Handler(_, idx) => self.ir.aggregates[idx]
                 .children
@@ -907,6 +937,14 @@ impl<'a> IRCtx<'a> {
             Type::Unit => 0,
             Type::Never => 0,
         }
+    }
+}
+
+fn ilog2_ceil(n: u32) -> u32 {
+    if n < 2 {
+        0
+    } else {
+        (n - 1).ilog2() + 1
     }
 }
 

@@ -113,9 +113,9 @@ pub enum Type {
     GenericHandler(Ident, FailType),
 
     Maybe(TypeIdx),
-    Pointer(TypeIdx),
-    ConstArray(ExprIdx, TypeIdx),
-    Slice(TypeIdx),
+    Pointer(bool, TypeIdx),       // const?, inner
+    Slice(bool, TypeIdx),         // const?, inner
+    ConstArray(ExprIdx, TypeIdx), // size, inner
 
     #[default]
     Error, // error at parsing, coerces to any type

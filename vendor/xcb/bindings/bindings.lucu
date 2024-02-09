@@ -7,7 +7,7 @@ effect lib {
 
 	fun get_setup(c ^connection) ^setup
 	fun setup_roots_iterator(R ^setup) screen_iterator
-	fun screen_next(mut i ^screen_iterator)
+	fun screen_next(i ^screen_iterator)
 }
 
 @capability

@@ -8,7 +8,7 @@ import "core:mem"
 ##
 @foreign
 effect lib {
-	fun time(mut t ?^time_t) time_t
+	fun time(t ?^time_t) time_t
 
 	fun puts(s string) int
 	fun strlen(s string) size_t
@@ -22,7 +22,7 @@ struct time_t      (_timestamp int)
 struct max_align_t (_ int)
 
 # type aliases
-type string = ^u8
+type string = ^const u8
 type int    = core.i32
 type size_t = core.usize
 

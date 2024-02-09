@@ -29,16 +29,6 @@ impl FunIdent {
     }
 }
 
-impl Value {
-    fn inner_ptr(self) -> Value {
-        match self {
-            Value::Deref(value) => *value,
-            Value::ConstantError => self,
-            _ => unreachable!(),
-        }
-    }
-}
-
 struct SemCtx<'a> {
     ir: SemIR,
     ast: &'a Ast,
@@ -408,13 +398,13 @@ impl SemCtx<'_> {
                 Some(genty) => genty,
                 None => None?,
             },
-            Type::Pointer(inner) => {
+            Type::Pointer(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::Pointer(inner))
+                self.insert_type(Type::Pointer(isconst, inner))
             }
-            Type::MaybePointer(inner) => {
+            Type::MaybePointer(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::MaybePointer(inner))
+                self.insert_type(Type::MaybePointer(isconst, inner))
             }
             Type::ConstArray(size, inner) => {
                 let size = match size {
@@ -433,9 +423,9 @@ impl SemCtx<'_> {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
                 self.insert_type(Type::ConstArray(size, inner))
             }
-            Type::Slice(inner) => {
+            Type::Slice(isconst, inner) => {
                 let inner = self.translate_generics(inner, generic_params, translate_lazy)?;
-                self.insert_type(Type::Slice(inner))
+                self.insert_type(Type::Slice(isconst, inner))
             }
 
             Type::EffectType
@@ -636,13 +626,15 @@ impl SemCtx<'_> {
             T::Maybe(ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
                 match self.ir.types[inner] {
-                    Type::Pointer(inner) => self.insert_type(Type::MaybePointer(inner)),
+                    Type::Pointer(isconst, inner) => {
+                        self.insert_type(Type::MaybePointer(isconst, inner))
+                    }
                     _ => todo!(),
                 }
             }
-            T::Pointer(ty) => {
+            T::Pointer(isconst, ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                self.insert_type(Type::Pointer(inner))
+                self.insert_type(Type::Pointer(isconst, inner))
             }
             T::ConstArray(size, ty) => {
                 let inner = self.analyze_type(
@@ -664,9 +656,9 @@ impl SemCtx<'_> {
                 };
                 self.insert_type(Type::ConstArray(size, inner))
             }
-            T::Slice(ty) => {
+            T::Slice(isconst, ty) => {
                 let inner = self.analyze_type(scope, ty, generics, generic_handler, handler_output);
-                self.insert_type(Type::Slice(inner))
+                self.insert_type(Type::Slice(isconst, inner))
             }
         }
     }
@@ -1232,10 +1224,10 @@ impl SemCtx<'_> {
                     self.infer_generics(params, from, to);
                 }
             }
-            (&Type::Pointer(from), &Type::Pointer(to)) => {
+            (&Type::Pointer(_, from), &Type::Pointer(_, to)) => {
                 self.infer_generics(params, from, to);
             }
-            (&Type::Slice(from), &Type::Slice(to)) => {
+            (&Type::Slice(_, from), &Type::Slice(_, to)) => {
                 self.infer_generics(params, from, to);
             }
             (&Type::ConstArray(sfrom, from), &Type::ConstArray(sto, to)) => {
@@ -1279,7 +1271,13 @@ impl SemCtx<'_> {
             (Type::Error, _) => true,
             (_, Type::Error) => true,
 
-            (&Type::Pointer(from), &Type::MaybePointer(to)) => self.test_move(from, to),
+            (&Type::Pointer(a, from), &Type::Pointer(b, to) | &Type::MaybePointer(b, to)) => {
+                a <= b && self.test_move(from, to)
+            }
+            (&Type::MaybePointer(a, from), &Type::MaybePointer(b, to)) => {
+                a <= b && self.test_move(from, to)
+            }
+            (&Type::Slice(a, from), &Type::Slice(b, to)) => a <= b && self.test_move(from, to),
 
             (Type::HandlerType(from), Type::HandlerType(to)) => {
                 from.effect == to.effect && self.test_move(from.fail_type, to.fail_type)
@@ -1334,7 +1332,7 @@ impl SemCtx<'_> {
                     (
                         ident.0 .0,
                         ident.0 .1.clone(),
-                        Value::Deref(Box::new(Value::EffectParam(i))),
+                        Value::Deref(Box::new(Value::EffectParam(i)), false),
                         None,
                     )
                 })
@@ -1357,8 +1355,8 @@ impl SemCtx<'_> {
 
             for (idx, param) in ir_sign.params.iter(ParamIdx) {
                 if param.mutable {
-                    let value =
-                        fun_ctx.push_deref(Instruction::Reference(Value::Param(idx), param.ty));
+                    let value = fun_ctx
+                        .push_deref(false, Instruction::Reference(Value::Param(idx), param.ty));
                     fun_ctx.define(
                         param.name.clone(),
                         Variable {
@@ -1416,6 +1414,36 @@ impl SemCtx<'_> {
             }
         })
     }
+    // returns the pointer value along with const? from the pointer type
+    fn check_expr_address(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+        expected: TypeIdx,
+        expected_def: Option<Range>,
+    ) -> Option<(Value, bool)> {
+        let val = self.check_expr(ctx, expr, expected, expected_def)?;
+        match val {
+            Value::Deref(val, isconst) => Some((*val, isconst)),
+            _ => {
+                todo!("give error")
+            }
+        }
+    }
+    // returns the pointer value along with const?, inner from the pointer type
+    fn synth_expr_address(
+        &mut self,
+        ctx: &mut FunCtx,
+        expr: ExprIdx,
+    ) -> Option<(Value, bool, TypeIdx)> {
+        let (val, ty) = self.synth_expr(ctx, expr)?;
+        match val {
+            Value::Deref(val, isconst) => Some((*val, isconst, ty)),
+            _ => {
+                todo!("give error")
+            }
+        }
+    }
     fn check_expr(
         &mut self,
         ctx: &mut FunCtx,
@@ -1451,7 +1479,9 @@ impl SemCtx<'_> {
                     panic!("give error");
                 }
                 let ptr_ty = match self.ir.types[mptr_ty] {
-                    Type::MaybePointer(inner) => self.insert_type(Type::Pointer(inner)),
+                    Type::MaybePointer(isconst, inner) => {
+                        self.insert_type(Type::Pointer(isconst, inner))
+                    }
                     _ => panic!("give error"),
                 };
 
@@ -1502,7 +1532,7 @@ impl SemCtx<'_> {
                 )
                 .map(|(val, _)| val)
             }
-            (E::Array(exprs), &Type::Slice(elem)) => {
+            (E::Array(exprs), &Type::Slice(_, elem)) => {
                 let elems = exprs
                     .iter()
                     .copied()
@@ -1547,7 +1577,7 @@ impl SemCtx<'_> {
                 let c = u64::from(c);
                 Some(Value::ConstantInt(expected, false, c))
             }
-            (E::String(str), &Type::Slice(elem)) if elem == TYPE_U8 => {
+            (E::String(str), &Type::Slice(_, elem)) if elem == TYPE_U8 => {
                 Some(Value::ConstantString(expected, str.as_bytes().into()))
             }
             (&E::UnOp(inner, UnOp::Cast), _) => {
@@ -1574,7 +1604,8 @@ impl SemCtx<'_> {
                     let fail = ty.fail_type;
                     let generic_val = ty.effect.clone();
 
-                    let handler_ref = ctx.push_deref(Instruction::Reference(handler, handler_ty));
+                    let handler_ref =
+                        ctx.push_deref(false, Instruction::Reference(handler, handler_ty));
                     ctx.scope.top().effect_stack.push((
                         handler_ty,
                         generic_val,
@@ -1945,7 +1976,7 @@ impl SemCtx<'_> {
                             Either::Left(s) => ctx.get_capture(self, s, lambda.moved).unwrap().ty,
                             Either::Right(s) => {
                                 let ty = ctx.get_effect(self, s, error_loc.loc).unwrap().0;
-                                self.insert_type(Type::Pointer(ty))
+                                self.insert_type(Type::Pointer(false, ty))
                             }
                         })
                         .collect();
@@ -1987,9 +2018,9 @@ impl SemCtx<'_> {
                                     let (ty, val, _) =
                                         ctx.get_effect(self, s, error_loc.loc).unwrap();
                                     match val {
-                                        Value::Deref(val) => *val,
+                                        Value::Deref(val, _) => *val,
                                         _ => {
-                                            let ty = self.insert_type(Type::Pointer(ty));
+                                            let ty = self.insert_type(Type::Pointer(false, ty));
                                             ctx.push(Instruction::Reference(val, ty))
                                         }
                                     }
@@ -2026,55 +2057,6 @@ impl SemCtx<'_> {
                 self.check_move(found_ty, expected, error_loc);
                 Some(found)
             }
-        }
-    }
-    fn addressable_expr(
-        &mut self,
-        ctx: &mut FunCtx,
-        expr: ExprIdx,
-    ) -> Option<(Value, TypeIdx, bool)> {
-        use Expression as E;
-        match self.ast.exprs[expr].0 {
-            E::BinOp(left, BinOp::Index, right) => {
-                let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-
-                // TODO: doesn't have to be addressable
-                let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
-
-                let (ptr, elem_ty) = match self.ir.types[ty] {
-                    Type::ConstArray(_, inner) => (value.inner_ptr(), inner),
-                    Type::Slice(inner) => (ctx.push(Instruction::Member(value, 0, ty)), inner),
-                    Type::Error => {
-                        return Some((Value::ConstantError, TYPE_ERROR, true));
-                    }
-                    _ => todo!("give error"),
-                };
-
-                let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
-                Some((elem, elem_ty, mutable))
-            }
-            E::Ident(id) => {
-                let name = &self.ast.idents[id].0;
-                match ctx.get_value(self, name) {
-                    Some(var) => {
-                        if var.mutable {
-                            // mutable variables must always be references
-                            Some((var.value, var.ty, true))
-                        } else {
-                            // immutable reference time
-                            let val = ctx.as_deref(var.value, var.ty);
-                            Some((val, var.ty, false))
-                        }
-                    }
-                    None => {
-                        self.errors
-                            .push(self.ast.idents[id].with(Error::UnknownValue));
-                        Some((Value::ConstantError, TYPE_ERROR, true))
-                    }
-                }
-            }
-            E::Error => Some((Value::ConstantError, TYPE_ERROR, true)),
-            _ => todo!("give error"),
         }
     }
     fn synth_expr(&mut self, ctx: &mut FunCtx, expr: ExprIdx) -> Option<(Value, TypeIdx)> {
@@ -2117,7 +2099,9 @@ impl SemCtx<'_> {
                     panic!("give error");
                 }
                 let ptr_ty = match self.ir.types[mptr_ty] {
-                    Type::MaybePointer(inner) => self.insert_type(Type::Pointer(inner)),
+                    Type::MaybePointer(isconst, inner) => {
+                        self.insert_type(Type::Pointer(isconst, inner))
+                    }
                     _ => panic!("give error"),
                 };
 
@@ -2177,7 +2161,8 @@ impl SemCtx<'_> {
                     let fail = ty.fail_type;
                     let generic_val = ty.effect.clone();
 
-                    let handler_ref = ctx.push_deref(Instruction::Reference(handler, handler_ty));
+                    let handler_ref =
+                        ctx.push_deref(false, Instruction::Reference(handler, handler_ty));
                     ctx.scope.top().effect_stack.push((
                         handler_ty,
                         generic_val,
@@ -2412,7 +2397,7 @@ impl SemCtx<'_> {
                                         .get_effect(self, s, self.ast.exprs[expr].empty())
                                         .unwrap()
                                         .0;
-                                    self.insert_type(Type::Pointer(ty))
+                                    self.insert_type(Type::Pointer(false, ty))
                                 }
                             })
                             .collect();
@@ -2461,9 +2446,10 @@ impl SemCtx<'_> {
                                                 .get_effect(self, s, self.ast.exprs[expr].empty())
                                                 .unwrap();
                                             match val {
-                                                Value::Deref(val) => *val,
+                                                Value::Deref(val, _) => *val,
                                                 _ => {
-                                                    let ty = self.insert_type(Type::Pointer(ty));
+                                                    let ty =
+                                                        self.insert_type(Type::Pointer(false, ty));
                                                     ctx.push(Instruction::Reference(val, ty))
                                                 }
                                             }
@@ -2888,24 +2874,30 @@ impl SemCtx<'_> {
             }
 
             E::BinOp(left, BinOp::Assign, right) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, left)?;
-                if !mutable {
-                    todo!("give error")
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, left)?;
+                if isconst {
+                    self.errors
+                        .push(self.ast.exprs[expr].with(Error::AssignImmutable(None)));
+                    return Some((Value::ConstantNone, TYPE_NONE));
                 }
 
                 let right = self.check_expr(ctx, right, ty, None)?;
-                ctx.push(Instruction::Store(value.inner_ptr(), right));
+                ctx.push(Instruction::Store(ptr, right));
 
                 Some((Value::ConstantNone, TYPE_NONE))
             }
             E::BinOp(left, BinOp::Index, right) => {
                 let (left, left_ty) = self.synth_expr(ctx, left)?;
-                let (ptr, elem_ty) = match self.ir.types[left_ty] {
-                    Type::Slice(elem) => (ctx.push(Instruction::Member(left, 0, left_ty)), elem),
-                    Type::ConstArray(_, elem) => {
-                        let ptr = ctx.as_deref(left, left_ty).inner_ptr();
-                        (ptr, elem)
-                    }
+                let (ptr, isconst, elem_ty) = match self.ir.types[left_ty] {
+                    Type::Slice(isconst, elem) => (
+                        ctx.push(Instruction::Member(left, 0, left_ty)),
+                        isconst,
+                        elem,
+                    ),
+                    Type::ConstArray(_, elem) => match left {
+                        Value::Deref(left, isconst) => (*left, isconst, elem),
+                        _ => (ctx.push(Instruction::Reference(left, left_ty)), false, elem),
+                    },
                     Type::Error => {
                         return Some((Value::ConstantError, TYPE_ERROR));
                     }
@@ -2919,12 +2911,13 @@ impl SemCtx<'_> {
                     let ptr = ctx.push(Instruction::AdjacentPtr(ptr, rleft.clone(), elem_ty));
                     let len = ctx.push(Instruction::Sub(TYPE_USIZE, rright, rleft));
 
-                    let slice_ty = self.insert_type(Type::Slice(elem_ty));
+                    let slice_ty = self.insert_type(Type::Slice(isconst, elem_ty));
                     let slice = Value::ConstantAggregate(slice_ty, vec![ptr, len].into());
                     Some((slice, slice_ty))
                 } else {
                     let right = self.check_expr(ctx, right, TYPE_USIZE, None)?;
-                    let elem = ctx.push_deref(Instruction::AdjacentPtr(ptr, right, elem_ty));
+                    let elem =
+                        ctx.push_deref(isconst, Instruction::AdjacentPtr(ptr, right, elem_ty));
                     Some((elem, elem_ty))
                 }
             }
@@ -2965,12 +2958,11 @@ impl SemCtx<'_> {
                 Some((res, out))
             }
             E::UnOp(inner, UnOp::PostIncrement) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-                if !mutable {
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, inner)?;
+                if isconst {
                     todo!("give error")
                 }
 
-                let ptr = value.inner_ptr();
                 let loaded = ctx.push(Instruction::Load(ty, ptr.clone()));
                 let incremented = ctx.push(Instruction::Add(
                     ty,
@@ -2981,9 +2973,9 @@ impl SemCtx<'_> {
                 Some((loaded, ty))
             }
             E::UnOp(inner, UnOp::Reference) => {
-                let (value, ty, mutable) = self.addressable_expr(ctx, inner)?;
-                let ptr_ty = self.insert_type(Type::Pointer(ty));
-                Some((value.inner_ptr(), ptr_ty))
+                let (ptr, isconst, ty) = self.synth_expr_address(ctx, inner)?;
+                let ptr_ty = self.insert_type(Type::Pointer(isconst, ty));
+                Some((ptr, ptr_ty))
             }
             E::UnOp(_, UnOp::Cast) => {
                 self.errors
@@ -3052,7 +3044,7 @@ impl SemCtx<'_> {
                 let name = self.ast.idents[id].0.clone();
 
                 if mutable {
-                    let ptr = ctx.push_deref(Instruction::Reference(value, ty));
+                    let ptr = ctx.push_deref(false, Instruction::Reference(value, ty));
                     ctx.define(
                         name,
                         Variable {
@@ -3132,8 +3124,8 @@ impl SemCtx<'_> {
                 let (mut struc, mut ty) = self.synth_expr(ctx, left)?;
 
                 // allow member access to dereference pointers
-                while let Type::Pointer(inner) = self.ir.types[ty] {
-                    struc = Value::Deref(Box::new(struc));
+                while let Type::Pointer(isconst, inner) = self.ir.types[ty] {
+                    struc = Value::Deref(Box::new(struc), isconst);
                     ty = inner;
                 }
 
@@ -3154,8 +3146,12 @@ impl SemCtx<'_> {
                     panic!("give error");
                 };
 
-                // TODO: use elementptr if struc is Value::Deref
-                let val = ctx.push(Instruction::Member(struc, elem as u32, ty));
+                let val = match struc {
+                    Value::Deref(ptr, isconst) => {
+                        ctx.push_deref(isconst, Instruction::ElementPtr(*ptr, elem as u32, ty))
+                    }
+                    _ => ctx.push(Instruction::Member(struc, elem as u32, ty)),
+                };
                 let ty = self.ir.structs[idx].elems[elem].1;
                 Some((val, ty))
             }
@@ -3252,7 +3248,7 @@ impl SemCtx<'_> {
             stack,
             Vec::new(),
         ));
-        let val = ctx.push_deref(Instruction::Reference(val, type_idx));
+        let val = ctx.push_deref(false, Instruction::Reference(val, type_idx));
 
         cache.insert(id, (type_idx, val.clone()));
         Some((type_idx, val))
@@ -3280,18 +3276,12 @@ impl FunCtx<'_> {
         self.scope.pop();
         t
     }
-    fn as_deref(&mut self, value: Value, ty: TypeIdx) -> Value {
-        match value {
-            Value::Deref(_) => value,
-            _ => self.push_deref(Instruction::Reference(value, ty)),
-        }
-    }
     fn push(&mut self, instr: Instruction) -> Value {
         let idx = self.blocks[self.block].instructions.push(InstrIdx, instr);
         Value::Reg(self.block, Some(idx))
     }
-    fn push_deref(&mut self, instr: Instruction) -> Value {
-        Value::Deref(Box::new(self.push(instr)))
+    fn push_deref(&mut self, isconst: bool, instr: Instruction) -> Value {
+        Value::Deref(Box::new(self.push(instr)), isconst)
     }
     fn all_generics(&self) -> Generics {
         let mut generics = Vec::new();
@@ -3337,13 +3327,16 @@ impl FunCtx<'_> {
                 if val.mutable && !self.capture_boundary.0 {
                     // capture by reference
                     Some(Variable {
-                        value: Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                        value: Value::Deref(
+                            Box::new(Value::Deref(Box::new(Value::Capture(idx)), true)),
+                            false,
+                        ),
                         ..val
                     })
                 } else {
                     // capture by value
                     Some(Variable {
-                        value: Value::Deref(Box::new(Value::Capture(idx))),
+                        value: Value::Deref(Box::new(Value::Capture(idx)), !val.mutable),
                         ..val
                     })
                 }
@@ -3357,8 +3350,8 @@ impl FunCtx<'_> {
             if v.mutable && !moved {
                 // capture by reference
                 match v.value {
-                    Value::Deref(b) => {
-                        let ptr_ty = ctx.insert_type(Type::Pointer(v.ty));
+                    Value::Deref(b, isconst) => {
+                        let ptr_ty = ctx.insert_type(Type::Pointer(isconst, v.ty));
                         Variable {
                             value: *b,
                             mutable: false,
@@ -3399,7 +3392,10 @@ impl FunCtx<'_> {
                         };
                         Some((
                             ty,
-                            Value::Deref(Box::new(Value::Deref(Box::new(Value::Capture(idx))))),
+                            Value::Deref(
+                                Box::new(Value::Deref(Box::new(Value::Capture(idx)), true)),
+                                false,
+                            ),
                             None,
                         ))
                     } else {
@@ -3984,7 +3980,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
 
         ctx.get_preamble_handler("srcloc").captures = vec![TYPE_STR];
         ctx.define_preamble_fun("source_location", |_, fun| {
-            let capture = Value::Deref(Box::new(Value::Capture(0)));
+            let capture = Value::Deref(Box::new(Value::Capture(0)), true);
             fun.push(Instruction::Return(capture));
         });
 
@@ -4133,7 +4129,7 @@ pub fn analyze(ast: &Ast, errors: &mut Errors, target: &Target) -> SemIR {
                 let ty = ctx
                     .translate_generics(ty, &vec![(gen, val.0)], true)
                     .unwrap();
-                let handler = fun.push_deref(Instruction::Reference(handler, ty));
+                let handler = fun.push_deref(false, Instruction::Reference(handler, ty));
 
                 let io = ctx.ast.packages[ctx.ast.system].imports["io"];
                 let print = ctx.packages[io].funs["print"];

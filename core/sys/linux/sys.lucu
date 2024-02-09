@@ -2,13 +2,13 @@
 # system effect for linux
 ##
 effect sys {
-	fun read(fd int, mut buf []u8) usize
-	fun write(fd int, buf []u8) usize
+	fun read(fd int, buf []u8) usize
+	fun write(fd int, buf []const u8) usize
 
 	fun exit(code int) !
 	fun tkill(tid int, sig int) int
 
-	fun set_tid_address(mut tidptr ^int) int
+	fun set_tid_address(tidptr ^int) int
 }
 
 fun reg(ptr uptr) int {
@@ -22,10 +22,10 @@ fun reg(ptr uptr) int {
 @capability(os = "linux")
 fun link() impl sys / foreign {
 	impl sys {
-		fun read(fd int, mut buf []u8) usize {
+		fun read(fd int, buf []u8) usize {
 			cast syscall(0, [fd, reg(cast &buf[0]), cast len(buf)])
 		}
-		fun write(fd int, buf []u8) usize {
+		fun write(fd int, buf []const u8) usize {
 			cast syscall(1, [fd, reg(cast &buf[0]), cast len(buf)])
 		}
 		fun exit(code int) ! {
@@ -35,7 +35,7 @@ fun link() impl sys / foreign {
 		fun tkill(pid int, sig int) int {
 			syscall(200, [pid, sig])
 		}
-		fun set_tid_address(mut tidptr ^int) int {
+		fun set_tid_address(tidptr ^int) int {
 			syscall(218, [reg(cast tidptr)])
 		}
 	}

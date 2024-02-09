@@ -56,7 +56,7 @@ pub use codegen::analyze;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Value {
     Reg(BlockIdx, Option<InstrIdx>),
-    Deref(Box<Value>),
+    Deref(Box<Value>, bool),
 
     // slice, const array
     // TODO: split these into ConstantSlice, ConstantArray
@@ -86,7 +86,7 @@ impl Value {
     pub fn is_constant(&self) -> bool {
         match self {
             Value::Reg(_, _) => false,
-            Value::Deref(_) => false,
+            Value::Deref(_, _) => false,
             Value::ConstantAggregate(_, val) => val.iter().all(Self::is_constant),
             Value::ConstantHandler(_, _) => false,
             Value::ConstantInt(_, _, _) => true,
@@ -155,6 +155,7 @@ pub enum Instruction {
     Store(Value, Value),
 
     Member(Value, u32, TypeIdx),
+    ElementPtr(Value, u32, TypeIdx),
     AdjacentPtr(Value, Value, TypeIdx),
 
     LinkHandler(GenericVal<EffectIdent>, GenericVal<String>),
@@ -312,10 +313,10 @@ pub enum Type {
 
     Generic(Generic),
 
-    MaybePointer(TypeIdx),
-    Pointer(TypeIdx),
-    ConstArray(GenericVal<u64>, TypeIdx),
-    Slice(TypeIdx),
+    MaybePointer(bool, TypeIdx),          // const?, inner
+    Pointer(bool, TypeIdx),               // const?, inner
+    Slice(bool, TypeIdx),                 // const? inner
+    ConstArray(GenericVal<u64>, TypeIdx), // size, inner
 
     Integer(bool, IntSize),
 
@@ -446,12 +447,18 @@ impl TypeIdx {
                     write!(f, "{}", ir.generic_names[generic.idx])
                 }
             },
-            Type::MaybePointer(inner) => {
+            Type::MaybePointer(isconst, inner) => {
                 write!(f, "?^")?;
+                if isconst {
+                    write!(f, "const ")?;
+                }
                 inner.display(ir, generic_params, f)
             }
-            Type::Pointer(inner) => {
+            Type::Pointer(isconst, inner) => {
                 write!(f, "^")?;
+                if isconst {
+                    write!(f, "const ")?;
+                }
                 inner.display(ir, generic_params, f)
             }
             Type::ConstArray(size, inner) => {
@@ -463,8 +470,11 @@ impl TypeIdx {
                 write!(f, "]")?;
                 inner.display(ir, generic_params, f)
             }
-            Type::Slice(inner) => {
+            Type::Slice(isconst, inner) => {
                 write!(f, "[]")?;
+                if isconst {
+                    write!(f, "const ")?;
+                }
                 inner.display(ir, generic_params, f)
             }
             Type::Integer(signed, size) => size.display(signed, f),
@@ -594,7 +604,7 @@ impl Value {
                 ty.display(ir, &Vec::new(), f)?;
                 Ok(())
             }
-            Value::Deref(ref val) => {
+            Value::Deref(ref val, _) => {
                 val.display(ir, proc, f)?;
                 write!(f, "^")?;
                 Ok(())
@@ -741,6 +751,11 @@ impl FunImpl {
                     }
                     Instruction::Member(v, n, _) => {
                         write!(f, "member ")?;
+                        v.display(ir, proc, f)?;
+                        write!(f, " {}", n)?;
+                    }
+                    Instruction::ElementPtr(v, n, _) => {
+                        write!(f, "elemptr ")?;
                         v.display(ir, proc, f)?;
                         write!(f, " {}", n)?;
                     }

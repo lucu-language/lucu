@@ -494,10 +494,11 @@ impl Parse for Type {
             Some(Ranged(Token::Caret, ..)) => {
                 tk.next();
 
+                let isconst = tk.check(Token::Const).is_some();
                 let ty = Type::parse_or_default(tk);
                 let ty = tk.push_type(ty);
 
-                Some(Type::Pointer(ty))
+                Some(Type::Pointer(isconst, ty))
             }
             Some(Ranged(Token::Open(Group::Bracket), ..)) => {
                 enum ArrType {
@@ -545,13 +546,22 @@ impl Parse for Type {
                     }
                 });
 
-                let ty = Type::parse_or_default(tk);
-                let ty = tk.push_type(ty);
-
                 match num {
                     Some(Ranged(num, ..)) => match num {
-                        ArrType::Const(num) => Some(Type::ConstArray(num, ty)),
-                        ArrType::Slice => Some(Type::Slice(ty)),
+                        ArrType::Const(num) => {
+                            let ty = Type::parse_or_default(tk);
+                            let ty = tk.push_type(ty);
+
+                            Some(Type::ConstArray(num, ty))
+                        }
+                        ArrType::Slice => {
+                            let isconst = tk.check(Token::Const).is_some();
+
+                            let ty = Type::parse_or_default(tk);
+                            let ty = tk.push_type(ty);
+
+                            Some(Type::Slice(isconst, ty))
+                        }
                     },
                     None => Some(Type::Error),
                 }

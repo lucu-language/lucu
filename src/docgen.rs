@@ -5,7 +5,7 @@ use crate::{
         AliasIdx, Ast, Effect, Expression, FailType, FunDecl, Ident, Param, PolyParam, StructIdx,
         Type, TypeIdx,
     },
-    error::{File, FileIdx},
+    error::{get_lines, File, FileIdx, Ranged},
     vecmap::VecMap,
 };
 
@@ -165,6 +165,17 @@ impl Docgen for TypeIdx {
     }
 }
 
+fn write_title(
+    files: &VecMap<FileIdx, File>,
+    ident: &Ranged<String>,
+    f: &mut impl fmt::Write,
+) -> fmt::Result {
+    writeln!(f, "### {}", ident.0)?;
+    let (pos, _) = get_lines(&files[ident.3].content, ident.empty());
+    writeln!(f, "[source]({}#L{})", files[ident.3].name, pos.line)?;
+    Ok(())
+}
+
 impl Docgen for FunDecl {
     fn gen(
         &self,
@@ -172,12 +183,7 @@ impl Docgen for FunDecl {
         ast: &Ast,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        writeln!(f, "### {}", ast.ident(self.name))?;
-        writeln!(
-            f,
-            "[source]({}#L{})",
-            files[ast.idents[self.name].3].name, ast.idents[self.name].1
-        )?;
+        write_title(files, &ast.idents[self.name], f)?;
         writeln!(f, "```")?;
         write!(f, "fun {}(", ast.ident(self.name))?;
         self.sign.inputs.gen(files, ast, f)?;
@@ -238,12 +244,7 @@ impl Docgen for AliasIdx {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         let (name, ty) = ast.aliases[*self];
-        writeln!(f, "### {}", ast.ident(name))?;
-        writeln!(
-            f,
-            "[source]({}#L{})",
-            files[ast.idents[name].3].name, ast.idents[name].1
-        )?;
+        write_title(files, &ast.idents[name], f)?;
         write!(f, "```\ntype {} = ", ast.ident(name))?;
         ty.gen(files, ast, f)?;
         writeln!(f, "\n```")?;
@@ -278,12 +279,7 @@ impl Docgen for StructIdx {
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
         let struc = &ast.structs[*self];
-        writeln!(f, "### {}", ast.ident(struc.name))?;
-        writeln!(
-            f,
-            "[source]({}#L{})",
-            files[ast.idents[struc.name].3].name, ast.idents[struc.name].1
-        )?;
+        write_title(files, &ast.idents[struc.name], f)?;
         write!(f, "```\nstruct {}(", ast.ident(struc.name))?;
         struc.elems.gen(files, ast, f)?;
         writeln!(f, ")\n```")?;
@@ -304,12 +300,7 @@ impl Docgen for Effect {
         ast: &Ast,
         f: &mut impl fmt::Write,
     ) -> fmt::Result {
-        writeln!(f, "### {}", ast.ident(self.name))?;
-        writeln!(
-            f,
-            "[source]({}#L{})",
-            files[ast.idents[self.name].3].name, ast.idents[self.name].1
-        )?;
+        write_title(files, &ast.idents[self.name], f)?;
         writeln!(f, "```")?;
         write!(f, "effect {}", ast.ident(self.name))?;
         if let Some(generics) = self.generics.as_ref() {

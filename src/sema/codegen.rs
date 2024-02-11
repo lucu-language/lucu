@@ -1224,7 +1224,10 @@ impl SemCtx<'_> {
                     self.infer_generics(params, from, to);
                 }
             }
-            (&Type::Pointer(_, from), &Type::Pointer(_, to)) => {
+            (
+                &Type::Pointer(_, from) | &Type::MaybePointer(_, from),
+                &Type::Pointer(_, to) | &Type::MaybePointer(_, to),
+            ) => {
                 self.infer_generics(params, from, to);
             }
             (&Type::Slice(_, from), &Type::Slice(_, to)) => {

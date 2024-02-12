@@ -226,6 +226,12 @@ pub struct Ast {
     pub idents: VecMap<Ident, Ranged<String>>,
 }
 
+impl Ast {
+    pub fn ident(&self, id: Ident) -> &str {
+        &self.idents[id].0
+    }
+}
+
 impl Default for Ast {
     fn default() -> Self {
         let mut packages = VecMap::new();

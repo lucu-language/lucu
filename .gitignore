@@ -7,3 +7,4 @@ out.o
 out.asm
 out.exe
 out.wasm
+*.md

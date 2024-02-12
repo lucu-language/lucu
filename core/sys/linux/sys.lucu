@@ -11,8 +11,8 @@ effect sys {
 	fun set_tid_address(tidptr ^int) int
 }
 
-fun reg(ptr uptr) int {
-	cast ptr
+fun reg(ptr ?^const `t) int {
+	cast ((cast ptr) as uptr)
 }
 
 # TODO:
@@ -23,10 +23,10 @@ fun reg(ptr uptr) int {
 fun link() impl sys / foreign {
 	impl sys {
 		fun read(fd int, buf []u8) usize {
-			cast syscall(0, [fd, reg(cast &buf[0]), cast len(buf)])
+			cast syscall(0, [fd, reg(&buf[0]), cast len(buf)])
 		}
 		fun write(fd int, buf []const u8) usize {
-			cast syscall(1, [fd, reg(cast &buf[0]), cast len(buf)])
+			cast syscall(1, [fd, reg(&buf[0]), cast len(buf)])
 		}
 		fun exit(code int) ! {
 			do syscall(60, [code])
@@ -36,7 +36,7 @@ fun link() impl sys / foreign {
 			syscall(200, [pid, sig])
 		}
 		fun set_tid_address(tidptr ^int) int {
-			syscall(218, [reg(cast tidptr)])
+			syscall(218, [reg(tidptr)])
 		}
 	}
 }

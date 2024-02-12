@@ -1,19 +1,27 @@
 use std::{
     collections::HashMap,
     ffi::OsStr,
+    fmt::Write,
     fs::{read_dir, read_to_string},
     path::{Path, PathBuf},
     println,
     process::Command,
 };
 
-use ast::{parse_ast, Ast};
+use ast::{parse_ast, Ast, Package, PackageIdx};
 use clap::{Parser, Subcommand};
-use error::{Errors, File, FileIdx};
+use docgen::Docgen;
+use error::{Error, Errors, File, FileIdx};
 use inkwell::targets::{TargetMachine, TargetTriple};
 use lexer::Tokenizer;
 
+use crate::{
+    ast::{PackagedIdent, PolyIdent, Type, TypeIdx},
+    error::Ranged,
+};
+
 mod ast;
+mod docgen;
 mod error;
 mod ir;
 mod lexer;
@@ -333,6 +341,14 @@ struct CompileFlags {
 enum Cmd {
     Build(CompileFlags),
     Run(CompileFlags),
+    Docgen {
+        #[arg(help = "directory to recursively search for .lucu files")]
+        dir: PathBuf,
+        #[arg(long, help = "Print compiler output in plaintext, without color")]
+        plaintext: bool,
+        #[arg(long, help = "Package name")]
+        name: Option<String>,
+    },
 }
 
 fn main() {
@@ -342,6 +358,144 @@ fn main() {
     let run = matches!(args.command, Cmd::Run(_));
 
     match args.command {
+        Cmd::Docgen {
+            dir,
+            plaintext,
+            name,
+        } => {
+            // parse all files
+            let mut dir_todo = vec![dir.clone()];
+            let mut files_todo = Vec::new();
+            let mut packages = Vec::new();
+
+            let mut parsed = Ast::default();
+            let mut errors = Errors::new();
+
+            while let Some(dir) = dir_todo.pop() {
+                if let Ok(files) = read_dir(&dir) {
+                    let pkg = parsed.packages.push(PackageIdx, Package::default());
+                    packages.push((dir, pkg));
+                    for file in files.filter_map(|f| Some(f.ok()?.path())) {
+                        if file.is_dir() {
+                            dir_todo.push(file);
+                        } else if file.extension() == Some(OsStr::new("lucu")) {
+                            files_todo.push((pkg, file));
+                        }
+                    }
+                }
+            }
+            let package_size = parsed.packages.len();
+
+            for (pkg, file) in files_todo {
+                let content = read_to_string(&file).unwrap().replace('\t', "  ");
+                let idx = errors.files.push(
+                    FileIdx,
+                    File {
+                        content: content.clone(),
+                        name: file.to_string_lossy().into_owned(),
+                    },
+                );
+                let tok = Tokenizer::new(&content, idx, &mut errors);
+                parse_ast(tok, pkg, &mut parsed, &file, &HashMap::new(), &mut packages);
+            }
+
+            // ignore library errors
+            errors.vec.retain(|e| {
+                !matches!(e.0, Error::UnresolvedLibrary(_) | Error::NoSuchDirectory(_))
+            });
+
+            // report errors if any
+            if errors.is_empty() {
+                let mut buf = String::new();
+                let name = name
+                    .or_else(|| Some(dir.file_name()?.to_string_lossy().into_owned()))
+                    .unwrap_or_default();
+
+                for (path, pkg) in packages.into_iter().take(package_size) {
+                    let pkg = &parsed.packages[pkg];
+
+                    if pkg.effects.is_empty()
+                        && pkg.functions.is_empty()
+                        && pkg.structs.is_empty()
+                        && pkg.aliases.is_empty()
+                    {
+                        continue;
+                    }
+
+                    let path = path.strip_prefix(&dir).unwrap_or(&path);
+                    writeln!(buf, "# Package `{}:{}`", name, path.to_string_lossy()).unwrap();
+
+                    if !pkg.aliases.is_empty() || !pkg.structs.is_empty() {
+                        writeln!(buf, "## Types").unwrap();
+                    }
+                    for alias in pkg.aliases.iter() {
+                        alias.gen(&errors.files, &parsed, &mut buf).unwrap();
+                        writeln!(buf, "\n---").unwrap();
+                    }
+                    for struc in pkg.structs.iter() {
+                        struc.gen(&errors.files, &parsed, &mut buf).unwrap();
+                        writeln!(buf, "\n---").unwrap();
+                    }
+
+                    if !pkg.effects.is_empty() {
+                        writeln!(buf, "## Effects").unwrap();
+                        for effect in pkg.effects.iter().map(|&idx| &parsed.effects[idx]) {
+                            effect.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
+                    }
+
+                    if !pkg.functions.is_empty() {
+                        writeln!(buf, "## Functions").unwrap();
+                        for (idx, function) in pkg.effects.iter().flat_map(|&idx| {
+                            parsed.effects[idx]
+                                .functions
+                                .values()
+                                .map(move |f| (idx, f))
+                        }) {
+                            let mut function = function.clone();
+                            function.sign.effects.push(PolyIdent {
+                                ident: PackagedIdent {
+                                    package: None,
+                                    ident: parsed.effects[idx].name,
+                                },
+                                params: parsed.effects[idx].generics.as_ref().map(|gen| {
+                                    gen.values()
+                                        .map(|gen| {
+                                            parsed.types.push(
+                                                TypeIdx,
+                                                Ranged(
+                                                    Type::Path(PolyIdent {
+                                                        ident: PackagedIdent {
+                                                            package: None,
+                                                            ident: gen.name,
+                                                        },
+                                                        params: None,
+                                                    }),
+                                                    0,
+                                                    0,
+                                                    FileIdx(0),
+                                                ),
+                                            )
+                                        })
+                                        .collect()
+                                }),
+                            });
+
+                            function.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
+                        for function in pkg.functions.iter().map(|&idx| &parsed.functions[idx]) {
+                            function.decl.gen(&errors.files, &parsed, &mut buf).unwrap();
+                            writeln!(buf, "\n---").unwrap();
+                        }
+                    }
+                }
+                println!("{}", buf);
+            } else {
+                errors.print(!plaintext);
+            }
+        }
         Cmd::Build(flags) | Cmd::Run(flags) => {
             let core = flags.core.unwrap_or_else(|| {
                 option_env!("LUCU_CORE")

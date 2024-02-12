@@ -141,7 +141,7 @@ impl Error {
 #[derive(Debug)]
 pub struct Errors {
     pub files: VecMap<FileIdx, File>,
-    vec: Vec<Ranged<Error>>,
+    pub vec: Vec<Ranged<Error>>,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]

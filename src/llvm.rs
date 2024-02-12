@@ -974,7 +974,7 @@ impl<'ctx> CodeGen<'ctx> {
                     I::ElementPtr(r, a, n) => {
                         // skip over empty children that are uncounted
                         match ir.types[ir.regs[a].inner(ir)] {
-                            Type::Handler(_, t) => {
+                            Type::Handler(_, t) | Type::Aggregate(t) => {
                                 // get member
                                 if BasicTypeEnum::try_from(self.get_type(ir, ir.regs[r])).is_ok() {
                                     let mut mem = [n];
@@ -1280,9 +1280,12 @@ impl<'ctx> CodeGen<'ctx> {
             Type::Int32 => self.context.i32_type().into(),
             Type::Int64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
-            Type::Pointer(ty) =>
+            Type::Pointer(ty) => {
                 if matches!(ir.types[ty], Type::Never) {
-                    self.context.i8_type().ptr_type(AddressSpace::default()).into()
+                    self.context
+                        .i8_type()
+                        .ptr_type(AddressSpace::default())
+                        .into()
                 } else {
                     match self.get_type(ir, ty) {
                         AnyTypeEnum::ArrayType(t) => t.ptr_type(AddressSpace::default()).into(),
@@ -1294,7 +1297,8 @@ impl<'ctx> CodeGen<'ctx> {
                         AnyTypeEnum::VectorType(t) => t.ptr_type(AddressSpace::default()).into(),
                         AnyTypeEnum::VoidType(_) => self.context.void_type().into(),
                     }
-                },
+                }
+            }
             Type::ConstArray(size, ty) => match self.get_type(ir, ty) {
                 AnyTypeEnum::ArrayType(t) => t.array_type(size as u32).into(),
                 AnyTypeEnum::FloatType(t) => t.array_type(size as u32).into(),

@@ -40,6 +40,12 @@ fun first(generate impl generator(`t)) `t / srcloc {
 	}
 }
 
+fun last(gen impl generator(`t)) `t {
+	mut acc `t = ---
+	gen.() with ({a -> acc = a} as impl yield(`t))
+	acc
+}
+
 fun nth(num usize, generate impl generator(`t)) `t / srcloc {
 	try {
 		mut current usize = 0
@@ -119,6 +125,22 @@ fun and(a bool, b bool) bool {
 		b
 	} else {
 		false
+	}
+}
+
+fun not(a bool) bool {
+	if a {
+		false
+	} else {
+		true
+	}
+}
+
+fun or(a bool, b bool) bool {
+	if a {
+		true
+	} else {
+		b
 	}
 }
 

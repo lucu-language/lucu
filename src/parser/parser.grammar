@@ -1,0 +1,86 @@
+//
+
+//
+
+lucu
+  -> definition ";" lucu
+  -> error ";" lucu
+  ->
+;
+
+definition
+ -> "type" ident generics_def "=" data_type_full
+;
+
+generics_def
+ ->
+ -> ident generics_def
+ -> ident ":" kind generics_def
+ -> "(" ident generics_def ")" generics_def
+;
+
+# kind of a generic
+kind
+ -> "type"
+ -> "effect"
+ -> data_type
+;
+
+# identifier with optional package prefix
+ident_package
+ -> ident
+ -> ident "." ident
+;
+
+# identifier with optional package prefix and generics juxtaposition
+ident_full
+ -> ident_package generics
+;
+
+# constant values
+generics
+ ->
+ -> constant generics
+;
+
+# constant value for a generic
+constant
+ -> data_type
+ -> int
+ -> string
+;
+
+# builtin type prefixes
+data_type_prefix
+ -> "[" "]"
+ -> "[" int "]"
+ -> "[" ident_full "]"
+ -> "^"
+ -> "?" "^"
+ -> "[" "_" "]"
+;
+
+# builtin types
+data_type_builtin
+ -> "_"
+;
+
+# data type without generics
+data_type
+ -> ident_package
+ -> data_type_builtin
+ -> data_type_prefix data_type
+;
+
+# data type with optional generics juxtaposition
+data_type_full
+ -> ident_full
+ -> data_type_builtin
+ -> data_type_prefix data_type_full
+;
+
+ident // string // ;
+
+int // u64 // ;
+
+string // string // ;

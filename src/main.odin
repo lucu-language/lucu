@@ -22,7 +22,8 @@ main :: proc() {
 
 	when ODIN_OS == .JS {
 		js.add_event_listener("text", .Change, nil, proc(e: js.Event) {
-			buffer := make([]byte, 1024)
+			len := js.get_element_value_string_length("text")
+			buffer := make([]byte, len)
 			defer delete(buffer)
 
 			text := js.get_element_value_string("text", buffer)

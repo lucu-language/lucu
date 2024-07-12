@@ -2,3 +2,4 @@ public/luc2.wasm
 luc2
 .direnv
 src/parser/generated/parser.odin
+*.bin

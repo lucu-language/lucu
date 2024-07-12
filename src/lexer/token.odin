@@ -58,7 +58,7 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 	ptr := slice.first_ptr(transmute([]u8)(text^))
 	first, len := _next_rune(text) or_return
 
-	if _is_operator(first) {
+	if _is_operator(first) && first != '\'' {
 
 		// check with every token if it's a known symbol.
 		// this assumes that any prefix of a symbol is also a symbol,
@@ -105,7 +105,11 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 		}
 
 		// other, identifier
-		return {.ident, {ident = ident}}, true
+		if first == '\'' {
+			return {.generic_ident, {generic_ident = ident}}, true
+		} else {
+			return {.ident, {ident = ident}}, true
+		}
 	}
 
 }

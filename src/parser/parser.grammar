@@ -14,9 +14,9 @@ definition
 
 generics_def
  ->
- -> ident generics_def
- -> ident ":" kind generics_def
- -> "(" ident generics_def ")" generics_def
+ -> generic_ident generics_def
+ -> generic_ident ":" kind generics_def
+ -> "(" generic_ident generics_def ")" generics_def
 ;
 
 # kind of a generic
@@ -79,7 +79,11 @@ data_type_full
  -> data_type_prefix data_type_full
 ;
 
-ident // string // ;
+generic_ident // string // ;
+
+ident // string //
+ -> generic_ident // this = _0 //
+;
 
 int_literal // u64 // ;
 

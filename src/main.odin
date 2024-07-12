@@ -32,6 +32,8 @@ main :: proc() {
 		})
 	}
 
-	main2("type Array T N:usize = [N]T\ntype NROM = Array u8 0x8000")
+	main2(
+		"type Array 't 'n:usize = ['t]'n\ntype NROM              = Array u8 0x8000\n\nfunc zeroed() -> Array u8 'n { }",
+	)
 
 }

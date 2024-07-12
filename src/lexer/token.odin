@@ -101,7 +101,7 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 		// check if number
 		// NOTE: this simply overflows with too large integers
 		if num, ok := strconv.parse_u64_maybe_prefixed(ident); ok {
-			return {.int, {int = num}}, true
+			return {.int_literal, {int_literal = num}}, true
 		}
 
 		// other, identifier

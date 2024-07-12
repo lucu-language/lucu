@@ -46,14 +46,14 @@ generics
 # constant value for a generic
 constant
  -> data_type
- -> int
- -> string
+ -> int_literal
+ -> str_literal
 ;
 
 # builtin type prefixes
 data_type_prefix
  -> "[" "]"
- -> "[" int "]"
+ -> "[" int_literal "]"
  -> "[" ident_full "]"
  -> "^"
  -> "?" "^"
@@ -81,6 +81,6 @@ data_type_full
 
 ident // string // ;
 
-int // u64 // ;
+int_literal // u64 // ;
 
-string // string // ;
+str_literal // string // ;

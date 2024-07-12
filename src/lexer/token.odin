@@ -108,7 +108,7 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 		if first == '\'' {
 			return {.generic_ident, {generic_ident = ident}}, true
 		} else {
-			return {.ident, {ident = ident}}, true
+			return {.partial_ident, {partial_ident = ident}}, true
 		}
 	}
 

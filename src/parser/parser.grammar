@@ -2,6 +2,8 @@
 
 //
 
+## RULES
+
 lucu
   -> definition ";" lucu
   -> error ";" lucu
@@ -10,20 +12,34 @@ lucu
 
 definition
  -> "type" ident generics_def "=" data_type_full
+ -> "func" ident "(" params ")" "->" data_type_full "{" "}"
 ;
 
+# function parameter
+param
+ -> partial_ident ":" data_type_full
+;
+
+# function parameters, may end with ","
+params
+ ->
+ -> param
+ -> param "," params
+;
+
+# generics of a type or effect
 generics_def
  ->
- -> generic_ident generics_def
- -> generic_ident ":" kind generics_def
+ -> generic_ident kind generics_def
  -> "(" generic_ident generics_def ")" generics_def
 ;
 
-# kind of a generic
+# kind of a generic, defaults to "type"
 kind
- -> "type"
- -> "effect"
- -> data_type
+ ->
+ -> ":" "type"
+ -> ":" "effect"
+ -> ":" data_type
 ;
 
 # identifier with optional package prefix
@@ -79,11 +95,16 @@ data_type_full
  -> data_type_prefix data_type_full
 ;
 
-generic_ident // string // ;
+
+## LEXEMES
 
 ident // string //
  -> generic_ident // this = _0 //
+ -> partial_ident // this = _0 //
 ;
+
+generic_ident // string // ;
+partial_ident // string // ;
 
 int_literal // u64 // ;
 

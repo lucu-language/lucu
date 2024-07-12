@@ -21,6 +21,10 @@ main2 :: proc(str: string) {
 main :: proc() {
 
 	when ODIN_OS == .JS {
+		js.set_element_value_string(
+			"text",
+			"type Array 't 'n:usize = ['t]'n\ntype NROM              = Array u8 0x8000\n\nfunc zeroed()        -> Array u8 'n { }\nfunc filled(val: 't) -> Array 't 'n { }",
+		)
 		js.add_event_listener("text", .Change, nil, proc(e: js.Event) {
 			len := js.get_element_value_string_length("text")
 			buffer := make([]byte, len)
@@ -33,7 +37,7 @@ main :: proc() {
 	}
 
 	main2(
-		"type Array 't 'n:usize = ['t]'n\ntype NROM              = Array u8 0x8000\n\nfunc zeroed() -> Array u8 'n { }",
+		"type Array 't 'n:usize = ['t]'n\ntype NROM              = Array u8 0x8000\n\nfunc zeroed()        -> Array u8 'n { }\nfunc filled(val: 't) -> Array 't 'n { }",
 	)
 
 }

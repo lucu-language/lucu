@@ -6,10 +6,10 @@
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>My Website</title>
     <style>
-    #tokens {
+    #tokens, #tree {
       font-family: monospace, monospace;
     }
-    #tokens span {
+    #tokens span, #tree span:not(.caret) {
       border-radius: 2em;
       background: #F7F7F7;
       font-weight: bold;
@@ -18,6 +18,36 @@
       display: inline-block;
       box-shadow: 0.1em 0.1em 0.1em 0.1em #aaa;
     }
+    ul {
+      list-style-type: none;
+      padding-left: 1.5em;
+    }
+    #tree {
+      margin: 0;
+      padding: 0;
+    }
+    #tree li > :not(.caret, .nested):first-child {
+      margin-left: 1em;
+    }
+    .caret {
+      cursor: pointer;
+      user-select: none;
+    }
+    .caret::before {
+      content: "\25B6";
+      color: black;
+      display: inline-block;
+      margin-right: 6px;
+    }
+    .caret-down::before {
+      transform: rotate(90deg);
+    }
+    .nested {
+      display: none;
+    }
+    .active {
+      display: block;
+    } 
     </style>
     <!-- <link rel="stylesheet" href="./style.css">                 -->
     <!-- <link rel="icon" href="./favicon.ico" type="image/x-icon"> -->
@@ -25,10 +55,17 @@
   <body>
     <main>
       <h1>Welcome to My Website</h1>
+
+      <h2>Parser</h2>
       <textarea id="text"></textarea>
       <button id="next">Step</button> 
-      <button id="next_big">&gt;&gt;</button> 
+      <button id="next_big">Next</button> 
+      <button id="next_all">&gt;&gt;</button> 
+      <br>
+      <br>
       <div id="tokens"></div>
+      <h3>Tree</h3>
+      <ul id="tree"></ul> 
       <pre id="console"></pre>
     </main>
   <script type="text/javascript" src="runtime.js"></script>

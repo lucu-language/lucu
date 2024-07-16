@@ -20,51 +20,48 @@ Type_Prefix :: union #no_nil {
 }
 
 Type :: struct {
-	head:   Maybe(Ident_Full),
 	prefix: []Type_Prefix,
+	head:   Maybe(Ident_Full),
 }
 
-Kind_Type :: struct {}
-Kind_Effect :: struct {}
-Kind_Constant :: struct {
-	typ: Type,
-}
-Kind_High :: struct {
-	generics: []Generic_Def,
-}
-Kind :: union #no_nil {
-	Kind_Type,
-	Kind_Effect,
-	Kind_Constant,
-	Kind_High,
-}
-
-AnyConstant :: union #no_nil {
+Generic :: union #no_nil {
 	string,
 	u64,
 	Type,
 }
 
-Generic_Def :: struct {
-	name: string,
-	kind: Kind,
-}
-
 Ident_Full :: struct {
 	pkg:      string,
 	ident:    string,
-	generics: []AnyConstant,
+	generics: []Generic,
 }
 
-Definition_Constant :: struct {
+Param :: struct {
+	name: string,
+	type: Type,
+}
+
+Definition_Sign :: union #no_nil {
+	Definition_Type,
+	Definition_Func,
+}
+Definition_Impl :: struct #raw_union {
+	definition_type: Type,
+	definition_func: Body,
+}
+
+Definition :: struct {
 	name:     string,
-	generics: []Generic_Def,
-	value:    AnyConstant,
+	generics: []string,
+	sign:     Definition_Sign,
+	impl:     Maybe(Definition_Impl),
 }
 
-// TODO: make this a struct with a name and generics
-// with a Definition_Value member
-Definition :: union {
-	Definition_Constant,
+Body :: struct {}
+
+Definition_Type :: struct {}
+Definition_Func :: struct {
+	params: []Param,
+	output: Maybe(Type),
 }
 

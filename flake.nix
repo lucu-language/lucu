@@ -20,6 +20,9 @@
           packages = [
             ols
             php
+
+            entr
+            speechd
           ];
 
           nativeBuildInputs = [

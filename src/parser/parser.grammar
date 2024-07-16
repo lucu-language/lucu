@@ -7,88 +7,109 @@ import "../../ast"
 ## RULES
 
 lucu // [dynamic]ast.Definition //
+  ->
+  -> error      ";" lucu // this = _2                    //
   -> definition ";" lucu // this = _2; append(&this, _0) //
-  -> error ";" lucu      // this = _2                    //
-  ->                     // this = {}                    //
 ;
 
 definition // ast.Definition //
- -> "type" ident generics_def "=" data_type_full            // slice.reverse(_2[:]); this = ast.Definition_Constant { _1, _2[:], _4 } //
- -> "func" ident "(" params ")" "->" data_type_full "{" "}"
+ -> definition_type // this = _0 //
+ -> definition_func // this = _0 //
+;
+
+definition_type // ast.Definition //
+ -> "type" partial_ident generics_defs "=" data_type_full // this = { _1, _2[:], ast.Definition_Type {}, ast.Definition_Impl { definition_type = _4 } } //
+ -> "type" partial_ident generics_defs                    // this = { _1, _2[:], ast.Definition_Type {}, nil                                          } //
+;
+
+definition_func // ast.Definition //
+ -> "func" partial_ident func_sign body // this = { _1, nil, _2, ast.Definition_Impl { definition_func = _3 } } //
+ -> "func" partial_ident func_sign      // this = { _1, nil, _2, nil                                          } //
+;
+
+type_sign // ast.Definition_Type //
+ ->
+;
+
+func_sign // ast.Definition_Func //
+ -> "(" params ")"                     // this = { _1[:], nil } //
+ -> "(" params ")" "->" data_type_full // this = { _1[:], _4  } //
+;
+
+body // ast.Body //
+ -> "{" "}"
 ;
 
 # function parameter
-param
- -> partial_ident ":" data_type_full
+param // ast.Param //
+ -> partial_ident ":" data_type_full // this = { _0, _2 } //
 ;
 
 # function parameters, may end with ","
-params
+params // [dynamic]ast.Param //
  ->
- -> param
- -> param "," params
+ -> param            //            append(&this, _0) //
+ -> param "," params // this = _2; append(&this, _0) //
 ;
 
 # generics of a type or effect
-generics_def // [dynamic]ast.Generic_Def //
- ->                                                 //                       this = {}                                                                 //
- -> generic_ident kind generics_def                 //                       this = _2; append(&this, ast.Generic_Def { _0, _1                      }) //
- -> "(" generic_ident generics_def ")" generics_def // slice.reverse(_2[:]); this = _4; append(&this, ast.Generic_Def { _1, ast.Kind_High { _2[:] } }) //
-;
-
-# kind of a generic, defaults to "type"
-kind // ast.Kind //
- ->               // this = ast.Kind_Type     {    } //
- -> ":" "type"    // this = ast.Kind_Type     {    } //
- -> ":" "effect"  // this = ast.Kind_Effect   {    } //
- -> ":" data_type // this = ast.Kind_Constant { _1 } //
+generics_defs // [dynamic]string //
+ ->
+ -> generic_ident generics_defs // this = _1; append(&this, _0) //
 ;
 
 # identifier with optional package prefix
 ident_package // ast.Ident_Full //
- -> ident           // this = { "", _0, {} } //
- -> ident "." ident // this = { _0, _2, {} } //
+ -> ident                           // this = { "", _0, {} } //
+ -> partial_ident "." partial_ident // this = { _0, _2, {} } //
 ;
 
 # identifier with optional package prefix and generics juxtaposition
 ident_full // ast.Ident_Full //
- -> ident_package generics // slice.reverse(_1[:]); this = _0; this.generics = _1[:] //
+ -> ident_package generics // this = _0; this.generics = _1[:] //
 ;
 
 # constant values
-generics // [dynamic]ast.AnyConstant //
- ->                   // this = {}                    //
- -> constant generics // this = _1; append(&this, _0) //
-;
-
-# constant value for a generic
-constant // ast.AnyConstant //
- -> data_type   // this = _0 //
- -> int_literal // this = _0 //
- -> str_literal // this = _0 //
+generics // [dynamic]ast.Generic //
+ ->
+ -> data_type   generics // this = _1; append(&this, _0) //
+ -> int_literal generics // this = _1; append(&this, _0) //
+ -> str_literal generics // this = _1; append(&this, _0) //
 ;
 
 # builtin type prefixes
-data_type_prefix // [dynamic]ast.Type_Prefix //
- ->                                      // this = {}                                            //
- ->             "[" "]" data_type_prefix // this = _2; append(&this, ast.Type_Slice   {       }) //
- -> "[" int_literal "]" data_type_prefix // this = _3; append(&this, ast.Type_Array   { _1    }) //
- ->  "[" ident_full "]" data_type_prefix // this = _3; append(&this, ast.Type_Array   { _1    }) //
- ->         "[" "_" "]" data_type_prefix // this = _3; append(&this, ast.Type_Array   { nil   }) //
- ->                 "^" data_type_prefix // this = _1; append(&this, ast.Type_Pointer { false }) //
- ->             "?" "^" data_type_prefix // this = _2; append(&this, ast.Type_Pointer { true  }) //
+type_prefixes // [dynamic]ast.Type_Prefix //
+ ->
+ -> prefix_slice   type_prefixes // this = _1; append(&this, _0) //
+ -> prefix_array   type_prefixes // this = _1; append(&this, _0) //
+ -> prefix_pointer type_prefixes // this = _1; append(&this, _0) //
+;
+
+prefix_slice // ast.Type_Slice //
+ -> "[" "]"
+;
+
+prefix_array // ast.Type_Array //
+ -> "[" int_literal "]" // this = { _1  } //
+ ->  "[" ident_full "]" // this = { _1  } //
+ ->         "[" "_" "]" // this = { nil } //
+;
+
+prefix_pointer // ast.Type_Pointer //
+ ->     "^" // this = { false } //
+ -> "?" "^" // this = { true  } //
 ;
 
 # data type without generics
 data_type // ast.Type //
- -> data_type_prefix ident_package // slice.reverse(_0[:]); this = {  _1, _0[:] } //
- -> data_type_prefix "_"           // slice.reverse(_0[:]); this = { nil, _0[:] } //
+ -> type_prefixes ident_package // this = { _0[:], _1  } //
+ -> type_prefixes "_"           // this = { _0[:], nil } //
 ;
 
 # data type with optional generics juxtaposition
 data_type_full // ast.Type //
- -> data_type_prefix ident_full // slice.reverse(_0[:]); this = {  _1, _0[:] } //
- -> data_type_prefix "_"        // slice.reverse(_0[:]); this = { nil, _0[:] } //
+ -> type_prefixes ident_full // this = { _0[:], _1  } //
+ -> type_prefixes "_"        // this = { _0[:], nil } //
 ;
 
 ## LEXEMES

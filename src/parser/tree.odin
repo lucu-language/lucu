@@ -87,6 +87,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.params
 		if i^ >= len(arr) do break
 		return {.param, {param = arr[len(arr) - i^ - 1]}}, true
+	case .members, .struct_members:
+		arr := node.value.members
+		if i^ >= len(arr) do break
+		return {.member, {param = arr[len(arr) - i^ - 1]}}, true
 	case .generics:
 		arr := node.value.generics
 		if i^ >= len(arr) do break
@@ -111,7 +115,18 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case ast.Type_Pointer:
 			return {.prefix_pointer, {prefix_pointer = prefix}}, true
 		}
-	case .data_type_full, .data_type:
+	case .type_prefix:
+		if i^ != 0 do break
+
+		switch prefix in node.value.type_prefix {
+		case ast.Type_Slice:
+			return {.prefix_slice, {prefix_slice = prefix}}, true
+		case ast.Type_Array:
+			return {.prefix_array, {prefix_array = prefix}}, true
+		case ast.Type_Pointer:
+			return {.prefix_pointer, {prefix_pointer = prefix}}, true
+		}
+	case .data_type_full, .data_type, .type_head:
 		if i^ == 0 && node.value.data_type.prefix == nil do i^ = 1
 
 		switch i^ {
@@ -119,9 +134,12 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			return {.type_prefixes, {type_prefixes = into_dynamic(node.value.data_type.prefix)}},
 				true
 		case 1:
-			if ident, ok := node.value.data_type.head.?; ok {
-				return {.ident_full, {ident_full = ident}}, true
-			} else {
+			switch head in node.value.data_type.head {
+			case ast.Ident_Full:
+				return {.ident_full, {ident_full = head}}, true
+			case ast.Type_Struct:
+				return {.type_struct, {type_struct = head}}, true
+			case nil:
 				return {.UNDERSCORE, {}}, true
 			}
 		}
@@ -155,6 +173,20 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			return {.partial_ident, {ident = node.value.param.name}}, true
 		case 1:
 			return {.data_type_full, {data_type = node.value.param.type}}, true
+		}
+	case .member, .named_member:
+		if i^ == 0 && node.value.member.name == "" do i^ = 1
+
+		switch i^ {
+		case 0:
+			return {.partial_ident, {ident = node.value.param.name}}, true
+		case 1:
+			return {.data_type_full, {data_type = node.value.param.type}}, true
+		}
+	case .type_struct:
+		switch i^ {
+		case 0:
+			return {.members, {params = into_dynamic(node.value.type_struct.members)}}, true
 		}
 	case .ident:
 		if i^ != 0 do break

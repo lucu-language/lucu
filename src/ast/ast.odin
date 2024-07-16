@@ -19,9 +19,17 @@ Type_Prefix :: union #no_nil {
 	Type_Pointer,
 }
 
+Type_Struct :: struct {
+	members: []Param,
+}
+Type_Head :: union {
+	Ident_Full,
+	Type_Struct,
+}
+
 Type :: struct {
 	prefix: []Type_Prefix,
-	head:   Maybe(Ident_Full),
+	head:   Type_Head,
 }
 
 Generic :: union #no_nil {

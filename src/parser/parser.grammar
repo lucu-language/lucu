@@ -79,10 +79,14 @@ generics // [dynamic]ast.Generic //
 
 # builtin type prefixes
 type_prefixes // [dynamic]ast.Type_Prefix //
- ->
- -> prefix_slice   type_prefixes // this = _1; append(&this, _0) //
- -> prefix_array   type_prefixes // this = _1; append(&this, _0) //
- -> prefix_pointer type_prefixes // this = _1; append(&this, _0) //
+ -> type_prefix               //            append(&this, _0) //
+ -> type_prefix type_prefixes // this = _1; append(&this, _0) //
+;
+
+type_prefix // ast.Type_Prefix //
+ -> prefix_slice   // this = _0 //
+ -> prefix_array   // this = _0 //
+ -> prefix_pointer // this = _0 //
 ;
 
 prefix_slice // ast.Type_Slice //
@@ -100,16 +104,53 @@ prefix_pointer // ast.Type_Pointer //
  -> "?" "^" // this = { true  } //
 ;
 
+# struct members
+named_member // ast.Param //
+ -> partial_ident ":" data_type_full // this = { _0, _2 } //
+;
+
+member // ast.Param //
+ -> data_type_full // this = { "", _0 } //
+ -> named_member   // this = _0         //
+;
+
+members // [dynamic]ast.Param //
+ ->
+ -> member             //            append(&this, _0) //
+ -> member "," members // this = _2; append(&this, _0) //
+;
+
+struct_members // [dynamic]ast.Param //
+ ->
+ -> named_member       //            append(&this, _0) //
+ -> member "," members // this = _2; append(&this, _0) //
+;
+
+# type without prefixes
+type_struct // ast.Type_Struct //
+ -> "(" struct_members ")" // this = { _1[:] } //
+;
+
+type_head // ast.Type //
+ -> "_"                    // this = { nil, nil } //
+ -> type_struct            // this = { nil, _0  } //
+ -> "(" data_type_full ")" // this = _1           //
+;
+
 # data type without generics
 data_type // ast.Type //
- -> type_prefixes ident_package // this = { _0[:], _1  } //
- -> type_prefixes "_"           // this = { _0[:], nil } //
+ -> type_prefixes ident_package // this = { _0[:], _1 }                                                         //
+ -> type_prefixes type_head     // inject_at(&_0, 0, .._1.prefix); this = { _0[:], _1.head }; delete(_1.prefix) //
+ -> ident_package               // this = { nil, _0 }                                                           //
+ -> type_head                   // this = _0                                                                    //
 ;
 
 # data type with optional generics juxtaposition
 data_type_full // ast.Type //
- -> type_prefixes ident_full // this = { _0[:], _1  } //
- -> type_prefixes "_"        // this = { _0[:], nil } //
+ -> type_prefixes ident_full // this = { _0[:], _1 }           //
+ -> type_prefixes type_head  // this = _1; this.prefix = _0[:] //
+ -> ident_full               // this = { nil, _0 }             //
+ -> type_head                // this = _0                      //
 ;
 
 ## LEXEMES

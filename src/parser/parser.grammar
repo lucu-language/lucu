@@ -2,6 +2,10 @@
 
 import "../../ast"
 
+exprs :: proc(exprs: ..ast.Expression) -> []ast.Expression {
+  return slice.clone(exprs)
+}
+
 //
 
 ## RULES
@@ -34,10 +38,6 @@ type_sign // ast.Definition_Type //
 func_sign // ast.Definition_Func //
  -> "(" params ")"                     // this = { _1[:], nil } //
  -> "(" params ")" "->" data_type_full // this = { _1[:], _4  } //
-;
-
-body // ast.Body //
- -> "{" "}"
 ;
 
 # function parameter
@@ -76,6 +76,8 @@ generics // [dynamic]ast.Generic //
  -> int_literal generics // this = _1; append(&this, _0) //
  -> str_literal generics // this = _1; append(&this, _0) //
 ;
+
+### TYPE RULES
 
 # builtin type prefixes
 type_prefixes // [dynamic]ast.Type_Prefix //
@@ -151,6 +153,68 @@ data_type_full // ast.Type //
  -> type_prefixes type_head  // this = _1; this.prefix = _0[:] //
  -> ident_full               // this = { nil, _0 }             //
  -> type_head                // this = _0                      //
+;
+
+### EXPRESSION RULES
+
+body // ast.Expression //
+ -> "{" exprs_semi "}" // this = { .BODY, {base = _1[:]} } //
+;
+
+exprs_semi // [dynamic]ast.Expression //
+ ->
+ -> expr                //            append(&this, _0) //
+ -> expr ";" exprs_semi // this = _2; append(&this, _0) //
+;
+
+exprs_comma // [dynamic]ast.Expression //
+ ->
+ -> expr                 //            append(&this, _0) //
+ -> expr "," exprs_comma // this = _2; append(&this, _0) //
+;
+
+expr4 // ast.Expression //
+ -> body                       // this = _0                                     //
+ -> "(" expr ")"               // this = _1                                     //
+ -> int_literal                // this = { .INT,   {int   = {nil, _0}} }        //
+ -> str_literal                // this = { .STR,   {str   = {nil, _0}} }        //
+ -> ident_full                 // this = { .IDENT, {ident = {nil, _0}} }        //
+ -> "loop" body                // this = _1; this.kind = .LOOP                  //
+ -> "if" expr body             // this = { .IF_ELSE, {base = exprs(_1,_2)   } } //
+ -> "if" expr body "else" body // this = { .IF_ELSE, {base = exprs(_1,_2,_4)} } //
+ -> "break"                    // this = { .BREAK,   {base = nil            } } //
+ -> "break" "(" expr ")"       // this = { .BREAK,   {base = exprs(_2)      } } //
+ -> "@sizeof"  data_type_full  // this = { .SIZE_OF,  {sizeof  = {nil, _1}} }   //
+ -> "@alignof" data_type_full  // this = { .ALIGN_OF, {alignof = {nil, _1}} }   //
+ -> "[" exprs_comma "]"        // this = { .ARRAY, {base = _1[:]} }             //
+ -> "---"                      // this = { .UNINIT, {} }                        //
+;
+
+expr3 // ast.Expression //
+ -> expr3 "--" // this = { .UNARY_OP, {unnop = {exprs(_0), .POST_DECREMENT}} } //
+ -> expr3 "++" // this = { .UNARY_OP, {unnop = {exprs(_0), .POST_INCREMENT}} } //
+ -> expr4      // this = _0                                                    //
+;
+
+expr2 // ast.Expression //
+ -> "cast" expr2 // this = { .UNARY_OP, {unnop = {exprs(_1), .CAST}} } //
+ -> expr3        // this = _0                                          //
+;
+
+expr1 // ast.Expression //
+ -> expr1 "as" data_type_full // this = { .AS, {as = {exprs(_0), _2}} } //
+ -> expr2                     // this = _0                              //
+;
+
+expr0 // ast.Expression //
+ -> "let" partial_ident ":" data_type_full "=" expr0 // this = { .LET, {let = { exprs({ .AS, {as = {exprs(_5), _3}} }), _1, false }} } //
+ -> "let" partial_ident                    "=" expr0 // this = { .LET, {let = { exprs(                         _3    ), _1, false }} } //
+ -> "do" expr0                                       // this = { .UNARY_OP, {unnop = {exprs(_1), .DO  }} }                             //
+ -> expr1                                            // this = _0                                                                      //
+;
+
+expr // ast.Expression //
+ -> expr0 // this = _0 //
 ;
 
 ## LEXEMES

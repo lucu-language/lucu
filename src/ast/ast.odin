@@ -55,7 +55,7 @@ Definition_Sign :: union #no_nil {
 }
 Definition_Impl :: struct #raw_union {
 	definition_type: Type,
-	definition_func: Body,
+	definition_func: Expression,
 }
 
 Definition :: struct {
@@ -65,7 +65,95 @@ Definition :: struct {
 	impl:     Maybe(Definition_Impl),
 }
 
-Body :: struct {}
+Binary_Op :: enum {
+	Assign,
+	Equals,
+	Less,
+	Greater,
+	Divide,
+	Multiply,
+	Subtract,
+	Add,
+	Index,
+	Range,
+}
+
+Unary_Op :: enum {
+	POST_INCREMENT,
+	POST_DECREMENT,
+	REFERENCE,
+	CAST,
+	DO,
+}
+
+Expression_Kind :: enum {
+	BODY,
+	LOOP,
+	CALL,
+	MEMBER,
+	IF_ELSE,
+	IF_ELSE_UNWRAP,
+	BINARY_OP,
+	UNARY_OP,
+	BREAK,
+	LET,
+	AS,
+	SIZE_OF,
+	ALIGN_OF,
+	ARRAY,
+	STR,
+	INT,
+	IDENT,
+	UNINIT,
+}
+
+Expression :: struct {
+	kind: Expression_Kind,
+	data: struct #raw_union {
+		base:    []Expression,
+		binop:   struct {
+			children: []Expression,
+			operator: Binary_Op,
+		},
+		unnop:   struct {
+			children: []Expression,
+			operator: Unary_Op,
+		},
+		member:  struct {
+			children: []Expression,
+			member:   string,
+		},
+		let:     struct {
+			children: []Expression,
+			name:     string,
+			mutable:  bool,
+		},
+		as:      struct {
+			children: []Expression,
+			type:     Type,
+		},
+		sizeof:  struct {
+			children: []Expression,
+			type:     Type,
+		},
+		alignof: struct {
+			children: []Expression,
+			type:     Type,
+		},
+		str:     struct {
+			children: []Expression,
+			string:   string,
+		},
+		int:     struct {
+			children: []Expression,
+			int:      u64,
+		},
+		ident:   struct {
+			children: []Expression,
+			ident:    Ident_Full,
+		},
+	},
+}
 
 Definition_Type :: struct {}
 Definition_Func :: struct {

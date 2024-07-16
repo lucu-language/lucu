@@ -23,11 +23,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1720783254,
-        "narHash": "sha256-DhX6eMbfFF1DqX5PIKSCShgnLc1azGTJ1BhczPfcK6g=",
+        "lastModified": 1721145466,
+        "narHash": "sha256-VWNuEB/oBklAzN7q4OIZRwsEdld5jDFk2zi7CfFRce4=",
         "owner": "Astavie",
         "repo": "parcelr",
-        "rev": "a8b924a12f2cfc2310b10a783d6841bfdbdad304",
+        "rev": "06b448ee6a1c778574f799d51fbbc4d893dec863",
         "type": "github"
       },
       "original": {

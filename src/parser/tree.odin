@@ -45,8 +45,20 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .CARET,
 	     .QUESTION,
 	     .type_sign,
-	     .body,
 	     .prefix_slice,
+	     .LOOP,
+	     .IF,
+	     .ELSE,
+	     .BREAK,
+	     .LET,
+	     .SIZE_OF,
+	     .ALIGN_OF,
+	     .TRIPLE_DASH,
+	     .DO,
+	     .CAST,
+	     .DOUBLE_DASH,
+	     .DOUBLE_PLUS,
+	     .AS,
 	     .prefix_pointer:
 		return {}, false
 	case .definition, .definition_type, .definition_func:
@@ -83,6 +95,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.generics_defs
 		if i^ >= len(arr) do break
 		return {.generic_ident, {ident = arr[len(arr) - i^ - 1]}}, true
+	case .exprs_semi, .exprs_comma:
+		arr := node.value.exprs_semi
+		if i^ >= len(arr) do break
+		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
 	case .params:
 		arr := node.value.params
 		if i^ >= len(arr) do break
@@ -207,6 +223,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case nil:
 			return {.UNDERSCORE, {}}, true
 		}
+	case .body, .expr, .expr0, .expr1, .expr2, .expr3, .expr4:
 	}
 
 	return {}, false

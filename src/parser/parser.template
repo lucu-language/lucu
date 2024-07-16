@@ -4,6 +4,7 @@ import "core:slice"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:crypto/hash"
 
 //preamble
 //l ${preamble}
@@ -27,15 +28,33 @@ SymbolValue :: struct #raw_union {} //d
 
 Token :: struct { symbol: Symbol, value: SymbolValue }
 
-print_token :: proc(token: Token) {
-  fmt.print(symbol_name(token.symbol))
+token_value_string :: proc(token: Token) -> string {
+  sb: strings.Builder
   #partial switch token.symbol {
   //symbol
   //symbol.type
-    //l case .${symbol.enum}: fmt.printf(":%v", token.value.${symbol.enum})
+    //l case .${symbol.enum}: fmt.sbprintf(&sb, "%v", token.value.${symbol.enum})
   //e
   //e
   }
+  return strings.to_string(sb)
+}
+
+token_color :: proc(token: Token) -> [3]u8 {
+  typ: string
+  #partial switch token.symbol {
+  //symbol
+  //symbol.type
+    //l case .${symbol.enum}: typ = "${symbol.type}"
+  //e
+  //e
+    case: return { 0x83, 0x83, 0x83 }
+  }
+
+  buf: [hash.MAX_DIGEST_SIZE]u8
+  hash.hash_string_to_buffer(.SHA512_256, typ, buf[:])
+
+  return { buf[0], buf[1], buf[2] }
 }
 
 symbol_from_literal :: proc(literal: string) -> Symbol {
@@ -87,159 +106,171 @@ symbol_precedes_semicolon :: proc(symbol: Symbol) -> bool {
   }
 }
 
-PARCELR_DEBUG :: true
+State :: struct { symbol: Symbol, value: SymbolValue, state: int }
+Parser :: struct { stack: [dynamic]Token, shifted: #soa[dynamic]State, state: int }
 
-parse :: proc(tokens: [dynamic]Token) -> bool { // d
+Result :: enum {
+  OK,
+  ACCEPT,
+  FAIL,
+}
+
+peek :: proc(a: []Token) -> Symbol {
+  i := len(a) - 1
+  if i >= 0 do return a[i].symbol
+  return .EOF
+}
+
+parser_init :: proc(tokens: [dynamic]Token) -> Parser {
+  stack := tokens
+  slice.reverse(stack[:])
+  return { stack, {}, 0 }
+}
+
+parser_delete :: proc(parser: Parser) {
+  delete(parser.stack)
+  delete(parser.shifted)
+}
+
+parser_will_shift :: proc(parser: ^Parser) -> bool {
+  symbol := peek(parser.stack[:])
+
+  switch parser.state {
+  //state
+    //l case ${state.index}:
+    case 0: //d
+      #partial switch symbol {
+      //state.lookahead lah
+        //l case
+        //lah.symbol
+          //w  .${symbol.enum}
+          //s ,
+        //e
+        //w :
+        //lah.accept
+          //l return false
+        //e
+        //lah.shift
+          //l return true
+        //e
+        //lah.reduce
+          //l return false
+        //e
+      //e
+      }
+  //e
+  }
+
+  if symbol == .ERR {
+    return len(parser.shifted) > 0
+  } else if len(parser.shifted) != 0 && parser.shifted[len(parser.shifted) - 1].symbol == .ERR {
+    return len(parser.stack) > 0
+  } else {
+    return false
+  }
+}
+
+parser_step :: proc(parser: ^Parser) -> Result {
+
+  shift :: proc(parser: ^Parser, new_state: int) {
+    val := pop_safe(&parser.stack) or_else Token{ .EOF, {} }
+    append_soa(&parser.shifted, State { val.symbol, val.value, parser.state })
+    parser.state = new_state
+  }
+
+  reduce :: proc(parser: ^Parser, f: $T/proc(children: [$N]SymbolValue) -> Token) {
+    vals: [N]SymbolValue = ---
+    when N > 0 {
+      _, values, _ := soa_unzip(parser.shifted[:])
+      copy_slice(vals[:], values[len(values) - N:])
+      parser.state = parser.shifted[len(parser.shifted) - N].state
+      resize_soa(&parser.shifted, len(parser.shifted) - N)
+    }
+    append(&parser.stack, f(vals))
+  }
+
+  symbol := peek(parser.stack[:])
+  switch parser.state {
+  //state
+    //l case ${state.index}:
+    case 0: //d
+      #partial switch symbol {
+      //state.lookahead lah
+        //l case
+        //lah.symbol
+          //w  .${symbol.enum}
+          //s ,
+        //e
+        //w :
+        //lah.accept
+          //l return .ACCEPT
+        //e
+        //lah.shift
+          //l shift(parser, ${shift})
+          //l return .OK
+        //e
+        //lah.reduce
+          //l reduce(parser,
+          //l   proc (children: [${reduce.rhs.length}]SymbolValue) -> Token {
+          //l     ret: SymbolValue
+          //reduce.lhs.type
+            //w ; this: ${type}
+            //reduce.rhs child index
+              //child.type
+                //w ; _${index} := children[${index}].${child.enum}
+              //e
+            //e
+            //reduce.code
+              //l ${code}
+            //e
+            //l   ret.${reduce.lhs.enum} = this
+          //e
+          //w ; return { .${reduce.lhs.enum}, ret }
+          //l   })
+          //l return .OK
+        //e
+      //e
+      }
+  //e
+  }
+
+  if symbol == .ERR {
+    if len(parser.shifted) == 0 do return .FAIL
+    parser.state = parser.shifted[len(parser.shifted) - 1].state
+    resize_soa(&parser.shifted, len(parser.shifted) - 1)
+  } else if len(parser.shifted) != 0 && parser.shifted[len(parser.shifted) - 1].symbol == .ERR {
+    if len(parser.stack) == 0 do return .FAIL
+    pop(&parser.stack)
+  } else {
+    append(&parser.stack, Token{ .ERR, {} })
+  }
+
+  return .OK
+}
+
+parse :: proc(tokens: [dynamic]Token) -> bool { //d
 //l parse :: proc(tokens: [dynamic]Token) -> (
 //rule.0.lhs.type
   //w ${type},
 //e
 //w bool) {
-  stack := tokens
-  slice.reverse(stack[:])
+  parser := parser_init(tokens)
+  state := Result.OK
+  for state == .OK do state = parser_step(&parser)
 
-  State :: struct { symbol: Symbol, value: SymbolValue, state: int }
-
-  shifted: #soa[dynamic]State
-  state := 0
-
-  defer delete(stack)
-  defer delete_soa(shifted)
-
-  peek :: proc(a: []Token) -> Symbol {
-    i := len(a) - 1
-    if i >= 0 do return a[i].symbol
-    return .EOF
-  }
-
-  shift :: proc(stack: ^[dynamic]Token, shifted: ^#soa[dynamic]State, state: ^int, new_state: int) {
-    val := pop_safe(stack) or_else Token{ .EOF, {} }
-    append_soa(shifted, State { val.symbol, val.value, state^ })
-    state^ = new_state
-  }
-
-  reduce :: proc(stack: ^[dynamic]Token, shifted: ^#soa[dynamic]State, state: ^int, f: $T/proc(children: [$N]SymbolValue) -> Token) {
-    vals: [N]SymbolValue = ---
-    when N > 0 {
-      _, values, _ := soa_unzip(shifted^[:])
-      copy_slice(vals[:], values[len(values) - N:])
-      state^ = shifted[len(shifted) - N].state
-      resize_soa(shifted, len(shifted) - N)
-    }
-    append(stack, f(vals))
-  }
-
-  when PARCELR_DEBUG {
-    dump :: proc(shifted: #soa[dynamic]State, stack: [dynamic]Token) {
-      for s, i in shifted {
-        fmt.printf(" %s", symbol_name(s.symbol))
-      }
-      fmt.print(" @ ")
-      if (len(stack) == 0) {
-        fmt.print(symbol_name(.EOF))
-      } else {
-        fmt.print(symbol_name(stack[len(stack) - 1].symbol))
-      }
-      fmt.println()
-    }
-  }
-
-  for {
-    symbol := peek(stack[:])
-    switch state {
-    //state
-      //l case ${state.index}:
-      case 0: //d
-        #partial switch symbol {
-        //state.lookahead lah
-          //l case
-          //lah.symbol
-            //w  .${symbol.enum}
-            //s ,
-          //e
-          //w :
-          //lah.accept
-            //l when PARCELR_DEBUG {
-            //l   dump(shifted, stack)
-            //l   fmt.println("    accept")
-            //l }
-            //l return
-            //rule.0.lhs.type
-              //w  shifted[0].value.${rule.0.lhs.enum},
-            //e
-            //w  true
-          //e
-          //lah.shift
-            //l when PARCELR_DEBUG {
-            //l   dump(shifted, stack)
-            //l   fmt.println("    shift ${shift}")
-            //l }
-            //l shift(&stack, &shifted, &state, ${shift})
-            //l continue
-          //e
-          //lah.reduce
-            //l when PARCELR_DEBUG {
-            //l   dump(shifted, stack)
-            //l   fmt.println("    reduce ${reduce}")
-            //l }
-            //l reduce(&stack, &shifted, &state,
-            //l   proc (children: [${reduce.rhs.length}]SymbolValue) -> Token {
-            //l     ret: SymbolValue
-            //reduce.lhs.type
-              //w ; this: ${type}
-              //reduce.rhs child index
-                //child.type
-                  //w ; _${index} := children[${index}].${child.enum}
-                //e
-              //e
-              //reduce.code
-                //l ${code}
-              //e
-              //l   ret.${reduce.lhs.enum} = this
-            //e
-            //w ; return { .${reduce.lhs.enum}, ret }
-            //l   })
-            //l continue
-          //e
-        //e
-        }
+  if state == .ACCEPT {
+    return true //d
+    //l return
+    //rule.0.lhs.type
+      //w  parser.shifted[0].value.${rule.0.lhs.enum},
     //e
-    }
-
-    if symbol == .ERR {
-      when PARCELR_DEBUG {
-        dump(shifted, stack)
-        fmt.println("    discard left")
-      }
-
-      if len(shifted) == 0 do return false //d
-      //l if len(shifted) == 0 do return
-      //rule.0.lhs.type
-        //w  {},
-      //e
-      //w  false
-      state = shifted[len(shifted) - 1].state
-      resize_soa(&shifted, len(shifted) - 1)
-    } else if len(shifted) != 0 && shifted[len(shifted) - 1].symbol == .ERR {
-      when PARCELR_DEBUG {
-        dump(shifted, stack)
-        fmt.println("    discard right")
-      }
-
-      if len(stack) == 0 do return false //d
-      //l if len(stack) == 0 do return
-      //rule.0.lhs.type
-        //w  {},
-      //e
-      //w  false
-      pop(&stack)
-    } else {
-      when PARCELR_DEBUG {
-        dump(shifted, stack)
-        fmt.println("    error")
-      }
-      append(&stack, Token{ .ERR, {} })
-    }
+    //w  true
+  } else {
+    return false //d
+    //l return
+    //rule.0.lhs.type
+      //w {},
+    //e
+    //w  false
   }
 }
-

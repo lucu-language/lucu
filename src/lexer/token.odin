@@ -11,7 +11,11 @@ import "core:unicode/utf8"
 Symbol :: generated.Symbol
 Token :: generated.Token
 
-print_token :: generated.print_token
+token_color :: generated.token_color
+token_value_string :: generated.token_value_string
+token_name :: proc(token: Token) -> string {
+	return generated.symbol_name(token.symbol)
+}
 
 _next_rune :: proc(text: ^string) -> (char: rune, size: int, ok: bool) {
 	if (len(text^) == 0) {
@@ -156,3 +160,4 @@ tokenize :: proc(text: string) -> [dynamic]Token {
 
 	return tokens
 }
+

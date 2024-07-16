@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>My Website</title>
+    <style>
+    #tokens {
+      font-family: monospace, monospace;
+    }
+    #tokens span {
+      border-radius: 2em;
+      background: #F7F7F7;
+      font-weight: bold;
+      padding: 0.2em;
+      margin: 0.1em;
+      display: inline-block;
+      box-shadow: 0.1em 0.1em 0.1em 0.1em #aaa;
+    }
+    </style>
     <!-- <link rel="stylesheet" href="./style.css">                 -->
     <!-- <link rel="icon" href="./favicon.ico" type="image/x-icon"> -->
   </head>
@@ -12,6 +26,9 @@
     <main>
       <h1>Welcome to My Website</h1>
       <textarea id="text"></textarea>
+      <button id="next">Step</button> 
+      <button id="next_big">&gt;&gt;</button> 
+      <div id="tokens"></div>
       <pre id="console"></pre>
     </main>
   <script type="text/javascript" src="runtime.js"></script>

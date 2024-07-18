@@ -29,13 +29,15 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .FUNC,
 	     .OPEN_PAREN,
 	     .CLOSE_PAREN,
-	     .ARROW,
+	     .ARROW_RIGHT,
+	     .ARROW_LEFT,
 	     .OPEN_BRACE,
 	     .CLOSE_BRACE,
 	     .partial_ident,
 	     .COLON,
 	     .COMMA,
 	     .generic_ident,
+	     .option_ident,
 	     .DOT,
 	     .int_literal,
 	     .str_literal,
@@ -59,6 +61,24 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .DOUBLE_DASH,
 	     .DOUBLE_PLUS,
 	     .AS,
+	     .DASH,
+	     .PLUS,
+	     .STAR,
+	     .SLASH,
+	     .GREATER,
+	     .GREATER_EQUALS,
+	     .LESS,
+	     .LESS_EQUALS,
+	     .DOUBLE_EQUALS,
+	     .BANG_EQUALS,
+	     .DOUBLE_DOT,
+	     .PERCENT,
+	     .PLUS_EQUALS,
+	     .DASH_EQUALS,
+	     .SLASH_EQUALS,
+	     .STAR_EQUALS,
+	     .PERCENT_EQUALS,
+	     .AMPERSAND,
 	     .prefix_pointer:
 		return {}, false
 	case .definition, .definition_type, .definition_func:
@@ -95,7 +115,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.generics_defs
 		if i^ >= len(arr) do break
 		return {.generic_ident, {ident = arr[len(arr) - i^ - 1]}}, true
-	case .exprs_semi, .exprs_comma:
+	case .exprs_semi, .exprs_semi_suffix, .exprs_comma:
 		arr := node.value.exprs_semi
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
@@ -103,6 +123,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.params
 		if i^ >= len(arr) do break
 		return {.param, {param = arr[len(arr) - i^ - 1]}}, true
+	case .lambda_params:
+		arr := node.value.lambda_params
+		if i^ >= len(arr) do break
+		return {.lambda_param, {param = arr[len(arr) - i^ - 1]}}, true
 	case .members, .struct_members:
 		arr := node.value.members
 		if i^ >= len(arr) do break
@@ -183,15 +207,9 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			output := node.value.func_sign.output.? or_break
 			return {.data_type_full, {data_type = output}}, true
 		}
-	case .param:
-		switch i^ {
-		case 0:
-			return {.partial_ident, {ident = node.value.param.name}}, true
-		case 1:
-			return {.data_type_full, {data_type = node.value.param.type}}, true
-		}
-	case .member, .named_member:
+	case .member, .named_member, .param, .lambda_param:
 		if i^ == 0 && node.value.member.name == "" do i^ = 1
+		if i^ == 1 && node.value.member.type.prefix == nil && node.value.member.type.head == nil do i^ = 2
 
 		switch i^ {
 		case 0:
@@ -223,9 +241,200 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case nil:
 			return {.UNDERSCORE, {}}, true
 		}
-	case .body, .expr, .expr0, .expr1, .expr2, .expr3, .expr4:
+	case .mul, .add, .cmp, .eq, .range, .ass:
+		if i^ != 0 do break
+
+		sym: generated.Symbol
+
+		return {sym, {}}, true
+	case .expr_loop, .expr_array, .expr_if, .body, .lambda, .call:
+		arr := node.value.expr.data.base
+		if i^ >= len(arr) do break
+		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
+	case .expr,
+	     .expr_top,
+	     .expr_call,
+	     .expr_post,
+	     .expr_pre,
+	     .expr_keyword,
+	     .expr_typed,
+	     .expr_stat,
+	     .expr_final,
+	     .expr_mul,
+	     .expr_add,
+	     .expr_cmp,
+	     .expr_eq,
+	     .expr_range,
+	     .expr_ass:
+		switch node.value.expr.kind {
+		case .BODY:
+			if i^ > 0 do break
+			return {.body, node.value}, true
+		case .LAMBDA:
+			if i^ > 0 do break
+			return {.lambda, node.value}, true
+		case .CALL, .CALL_POINTER:
+			if i^ > 0 do break
+			return {.call, node.value}, true
+		case .IF_ELSE, .IF_ELSE_UNWRAP:
+			if i^ > 0 do break
+			return {.expr_if, node.value}, true
+		case .ARRAY:
+			if i^ > 0 do break
+			return {.expr_array, node.value}, true
+		case .LOOP:
+			if i^ > 0 do break
+			return {.expr_loop, node.value}, true
+		case .BINARY_OP:
+			switch i^ {
+			case 0:
+				return {.expr, {expr = node.value.expr.data.base[1]}}, true
+			case 1:
+				return {binop_symbol(node.value.expr.data.binop.operator), {}}, true
+			case 2:
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			case 3:
+				if node.value.expr.data.binop.operator == .INDEX {
+					return {.CLOSE_BRACKET, {}}, true
+				}
+			}
+		case .MEMBER:
+			switch i^ {
+			case 0:
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			case 1:
+				return {.DOT, {}}, true
+			case 2:
+				return {.partial_ident, {ident = node.value.expr.data.member.member}}, true
+			}
+		case .AS:
+			switch i^ {
+			case 0:
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			case 1:
+				return {.AS, {}}, true
+			case 2:
+				return {.data_type_full, {data_type_full = node.value.expr.data.as.type}}, true
+			}
+		case .SIZE_OF:
+			switch i^ {
+			case 1:
+				return {.SIZE_OF, {}}, true
+			case 2:
+				return {.data_type_full, {data_type_full = node.value.expr.data.sizeof.type}}, true
+			}
+		case .ALIGN_OF:
+			switch i^ {
+			case 1:
+				return {.ALIGN_OF, {}}, true
+			case 2:
+				return {.data_type_full, {data_type_full = node.value.expr.data.alignof.type}},
+					true
+			}
+		case .UNARY_OP:
+			if i^ >= 2 do break
+			sym, rhs := unop_symbol(node.value.expr.data.unnop.operator)
+			if (i^ == 1) == rhs {
+				return {sym, {}}, true
+			} else {
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			}
+		case .STR:
+			if i^ > 0 do break
+			return {.str_literal, {str_literal = node.value.expr.data.str.string}}, true
+		case .IDENT:
+			if i^ > 0 do break
+			return {.ident, {ident = node.value.expr.data.ident.ident}}, true
+		case .INT:
+			if i^ > 0 do break
+			return {.int_literal, {int_literal = node.value.expr.data.int.int}}, true
+		case .UNINIT:
+			if i^ > 0 do break
+			return {.TRIPLE_DASH, {}}, true
+		case .LET:
+			switch i^ {
+			case 0:
+				return {.LET, {}}, true
+			case 1:
+				return {.partial_ident, {ident = node.value.expr.data.let.name}}, true
+			case 2:
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			}
+		case .BREAK:
+			switch i^ {
+			case 0:
+				return {.BREAK, {}}, true
+			case 1:
+				if len(node.value.expr.data.base) == 0 do break
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			}
+		}
 	}
 
 	return {}, false
+}
+
+unop_symbol :: proc(op: ast.Unary_Op) -> (generated.Symbol, bool) {
+	switch op {
+	case .POST_INCREMENT:
+		return .DOUBLE_PLUS, true
+	case .POST_DECREMENT:
+		return .DOUBLE_DASH, true
+	case .REFERENCE:
+		return .AMPERSAND, false
+	case .NEGATE:
+		return .DASH, false
+	case .PLUS:
+		return .PLUS, false
+	case .CAST:
+		return .CAST, false
+	case .DO:
+		return .DO, false
+	}
+	return .ERR, false
+}
+
+binop_symbol :: proc(op: ast.Binary_Op) -> generated.Symbol {
+	switch op {
+	case .ASSIGN:
+		return .EQUALS
+	case .ADD_ASSIGN:
+		return .PLUS_EQUALS
+	case .MUL_ASSIGN:
+		return .STAR_EQUALS
+	case .SUB_ASSIGN:
+		return .DASH_EQUALS
+	case .MOD_ASSIGN:
+		return .PERCENT_EQUALS
+	case .DIV_ASSIGN:
+		return .SLASH_EQUALS
+	case .EQUALS:
+		return .DOUBLE_EQUALS
+	case .NOT_EQUALS:
+		return .BANG_EQUALS
+	case .LESS:
+		return .LESS
+	case .LESS_EQUALS:
+		return .LESS_EQUALS
+	case .GREATER:
+		return .GREATER
+	case .GREATER_EQUALS:
+		return .GREATER_EQUALS
+	case .DIVIDE:
+		return .SLASH
+	case .MULTIPLY:
+		return .STAR
+	case .SUBTRACT:
+		return .DASH
+	case .MODULUS:
+		return .PERCENT
+	case .ADD:
+		return .PLUS
+	case .INDEX:
+		return .OPEN_BRACKET
+	case .RANGE:
+		return .DOUBLE_DOT
+	}
+	return .ERR
 }
 

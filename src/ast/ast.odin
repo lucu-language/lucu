@@ -66,30 +66,43 @@ Definition :: struct {
 }
 
 Binary_Op :: enum {
-	Assign,
-	Equals,
-	Less,
-	Greater,
-	Divide,
-	Multiply,
-	Subtract,
-	Add,
-	Index,
-	Range,
+	ASSIGN,
+	ADD_ASSIGN,
+	MUL_ASSIGN,
+	SUB_ASSIGN,
+	MOD_ASSIGN,
+	DIV_ASSIGN,
+	EQUALS,
+	NOT_EQUALS,
+	LESS,
+	LESS_EQUALS,
+	GREATER,
+	GREATER_EQUALS,
+	DIVIDE,
+	MULTIPLY,
+	SUBTRACT,
+	MODULUS,
+	ADD,
+	INDEX,
+	RANGE,
 }
 
 Unary_Op :: enum {
 	POST_INCREMENT,
 	POST_DECREMENT,
 	REFERENCE,
+	NEGATE,
+	PLUS, // no-op for numbers
 	CAST,
 	DO,
 }
 
 Expression_Kind :: enum {
 	BODY,
+	LAMBDA,
 	LOOP,
 	CALL,
+	CALL_POINTER,
 	MEMBER,
 	IF_ELSE,
 	IF_ELSE_UNWRAP,
@@ -111,6 +124,10 @@ Expression :: struct {
 	kind: Expression_Kind,
 	data: struct #raw_union {
 		base:    []Expression,
+		lambda:  struct {
+			children: []Expression,
+			params:   []Param,
+		},
 		binop:   struct {
 			children: []Expression,
 			operator: Binary_Op,
@@ -150,7 +167,7 @@ Expression :: struct {
 		},
 		ident:   struct {
 			children: []Expression,
-			ident:    Ident_Full,
+			ident:    string,
 		},
 	},
 }

@@ -62,7 +62,7 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 	ptr := slice.first_ptr(transmute([]u8)(text^))
 	first, len := _next_rune(text) or_return
 
-	if _is_operator(first) && first != '\'' {
+	if _is_operator(first) && first != '\'' && first != '@' {
 
 		// check with every token if it's a known symbol.
 		// this assumes that any prefix of a symbol is also a symbol,
@@ -142,7 +142,8 @@ next_token :: proc(state: ^Tokenizer) -> (token: Token, ok: bool) {
 	if in_brace &&
 	   newline &&
 	   state.prev_finished &&
-	   generated.symbol_follows_semicolon(next.symbol) {
+	   generated.symbol_follows_semicolon(next.symbol) &&
+	   next.symbol != .CLOSE_BRACE {
 		state.peek = next
 		return {.SEMICOLON, {}}, true
 	} else {

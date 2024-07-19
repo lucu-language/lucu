@@ -205,6 +205,16 @@ main :: proc() {
 			display_tokens(global_parser.shifted[:], global_parser.stack[:])
 			slice.reverse(global_parser.stack[:])
 		})
+		js.add_event_listener("next_line", .Click, nil, proc(e: js.Event) {
+			for {
+				res := parser.step(&global_parser)
+				if res != .OK || (parser.will_shift(&global_parser) && parser.peek(global_parser.stack[:]) == .SEMICOLON) do break
+			}
+
+			slice.reverse(global_parser.stack[:])
+			display_tokens(global_parser.shifted[:], global_parser.stack[:])
+			slice.reverse(global_parser.stack[:])
+		})
 		js.add_event_listener("next_all", .Click, nil, proc(e: js.Event) {
 			state := parser.step(&global_parser)
 			for state == .OK {

@@ -16,6 +16,16 @@ exprs_append :: proc(exprs: []ast.Expression, expr: ast.Expression) -> []ast.Exp
   return slice
 }
 
+lambda_append :: proc(base: ast.Expression, lambda: ast.Expression) -> ast.Expression {
+  if base.kind == .CALL || base.kind == .CALL_POINTER {
+    ret := base
+    ret.data.base = exprs_append(ret.data.base, lambda)
+    return ret
+  } else {
+    return { .CALL, {base = exprs(base, lambda)} }
+  }
+}
+
 //
 
 ## RULES
@@ -237,10 +247,10 @@ expr_loop // ast.Expression //
 ;
 
 expr_if // ast.Expression //
- -> "if" expr body               // this = { .IF_ELSE, {base = exprs(_1,_2)   } }        //
- -> "if" expr body "else" body   // this = { .IF_ELSE, {base = exprs(_1,_2,_4)} }        //
- -> "if" expr lambda             // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2)   } } //
- -> "if" expr lambda "else" body // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2,_4)} } //
+ -> "if" expr_nolambda body               // this = { .IF_ELSE, {base = exprs(_1,_2)   } }        //
+ -> "if" expr_nolambda body "else" body   // this = { .IF_ELSE, {base = exprs(_1,_2,_4)} }        //
+ -> "if" expr_nolambda lambda             // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2)   } } //
+ -> "if" expr_nolambda lambda "else" body // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2,_4)} } //
 ;
 
 expr_array // ast.Expression //
@@ -265,32 +275,48 @@ expr_top // ast.Expression //
  -> "---"        // this = { .UNINIT, {} }                 //
 ;
 
-# member, function call
-expr_call // ast.Expression //
- -> expr_call "." partial_ident // this = { .MEMBER, {member = {exprs(_0), _2}} } //
- -> call                        // this = _0                                      //
- -> expr_top                    // this = _0                                      //
-;
-
-call // ast.Expression //
- -> expr_call     "(" exprs_member ")" // append(&_2, _0); this = { .CALL,         {base = _2[:]} } //
- -> expr_call "." "(" exprs_member ")" // append(&_3, _0); this = { .CALL_POINTER, {base = _3[:]} } //
-;
-
 # operator suffix
+call // ast.Expression //
+ -> expr_post     "(" exprs_member ")" // append(&_2, _0); this = { .CALL,         {base = _2[:]} } //
+ -> expr_post "." "(" exprs_member ")" // append(&_3, _0); this = { .CALL_POINTER, {base = _3[:]} } //
+;
+
 expr_post // ast.Expression //
- -> expr_post "--"         // this = {  .UNARY_OP, {unnop = {exprs(_0), .POST_DECREMENT}} } //
- -> expr_post "++"         // this = {  .UNARY_OP, {unnop = {exprs(_0), .POST_INCREMENT}} } //
- -> expr_post "[" expr "]" // this = { .BINARY_OP, {binop = {exprs(_0, _2),      .INDEX}} } //
- -> expr_call              // this = _0                                                     //
+ -> expr_post "--"              // this = {  .UNARY_OP, {unnop  = {exprs(_0), .POST_DECREMENT}} } //
+ -> expr_post "++"              // this = {  .UNARY_OP, {unnop  = {exprs(_0), .POST_INCREMENT}} } //
+ -> expr_post "[" expr "]"      // this = { .BINARY_OP, {binop  = {exprs(_0, _2),      .INDEX}} } //
+ -> expr_post "." partial_ident // this = {    .MEMBER, {member = {exprs(_0), _2             }} } //
+ -> call                        // this = _0                                                      //
+ -> expr_top                    // this = _0                                                      //
+;
+
+lambda_body // ast.Expression //
+ -> lambda // this = _0                                          //
+ -> body   // this = { .LAMBDA, {lambda = {_0.data.base, nil}} } //
+;
+
+expr_post_lambda // ast.Expression //
+ -> expr_post            lambda_body // this = lambda_append(_0, _1)                     //
+ -> expr_post_lambda     lambda_body // this = lambda_append(_0, _1)                     //
+ -> expr_post        "." lambda_body // this = { .CALL_POINTER, {base = exprs(_0, _2)} } //
+ -> expr_post_lambda "." lambda_body // this = { .CALL_POINTER, {base = exprs(_0, _2)} } //
 ;
 
 # operator prefix
+pre // ast.Unary_Op //
+ -> "-" // this = .NEGATE    //
+ -> "+" // this = .PLUS      //
+ -> "&" // this = .REFERENCE //
+;
+
 expr_pre // ast.Expression //
- -> "-" expr_pre // this = { .UNARY_OP, {unnop = {exprs(_1), .NEGATE   }} } //
- -> "+" expr_pre // this = { .UNARY_OP, {unnop = {exprs(_1), .PLUS     }} } //
- -> "&" expr_pre // this = { .UNARY_OP, {unnop = {exprs(_1), .REFERENCE}} } //
- -> expr_post    // this = _0                                               //
+ -> pre expr_pre // this = { .UNARY_OP, {unnop = {exprs(_1), _0}} } //
+ -> expr_post    // this = _0                                       //
+;
+
+expr_pre_lambda // ast.Expression //
+ -> pre expr_pre_lambda // this = { .UNARY_OP, {unnop = {exprs(_1), _0}} } //
+ -> expr_post_lambda    // this = _0                                       //
 ;
 
 # keyword prefix
@@ -301,10 +327,20 @@ expr_keyword // ast.Expression //
  -> expr_pre                  // this = _0                                          //
 ;
 
+expr_keyword_lambda // ast.Expression //
+ -> "cast" expr_keyword_lambda // this = { .UNARY_OP, {unnop = {exprs(_1), .CAST}} } //
+ -> expr_pre_lambda            // this = _0                                          //
+;
+
 # "as" keyword (needs to bind less close than "cast")
 expr_typed // ast.Expression //
  -> expr_typed "as" data_type_full // this = { .AS, {as = {exprs(_0), _2}} } //
  -> expr_keyword                   // this = _0                              //
+;
+
+expr_typed_lambda // ast.Expression //
+ -> expr_typed_lambda "as" data_type_full // this = { .AS, {as = {exprs(_0), _2}} } //
+ -> expr_keyword_lambda                   // this = _0                              //
 ;
 
 # multiplicative operators
@@ -315,8 +351,15 @@ mul // ast.Binary_Op //
 ;
 
 expr_mul // ast.Expression //
- -> expr_mul mul expr_typed // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } // 
+ -> expr_mul mul expr_typed // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
  -> expr_typed              // this = _0                                            //
+;
+
+expr_mul_lambda // ast.Expression //
+ -> expr_mul_lambda mul expr_typed        // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_mul        mul expr_typed_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_mul_lambda mul expr_typed_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_typed_lambda                     // this = _0                                            //
 ;
 
 # additive operators
@@ -328,6 +371,13 @@ add // ast.Binary_Op //
 expr_add // ast.Expression //
  -> expr_add add expr_mul // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } // 
  -> expr_mul              // this = _0                                            //
+;
+
+expr_add_lambda // ast.Expression //
+ -> expr_add_lambda add expr_mul        // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_add        add expr_mul_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_add_lambda add expr_mul_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_mul_lambda                     // this = _0                                            //
 ;
  
 # comparison operators
@@ -343,6 +393,13 @@ expr_cmp // ast.Expression //
  -> expr_add              // this = _0                                            //
 ;
 
+expr_cmp_lambda // ast.Expression //
+ -> expr_cmp_lambda cmp expr_add        // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_cmp        cmp expr_add_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_cmp_lambda cmp expr_add_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_add_lambda                     // this = _0                                            //
+;
+
 # equality operators
 eq // ast.Binary_Op //
  -> "==" // this = .EQUALS     //
@@ -352,6 +409,13 @@ eq // ast.Binary_Op //
 expr_eq // ast.Expression //
  -> expr_eq eq expr_cmp // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } // 
  -> expr_cmp            // this = _0                                            //
+;
+
+expr_eq_lambda // ast.Expression //
+ -> expr_eq_lambda eq expr_cmp        // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_eq        eq expr_cmp_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_eq_lambda eq expr_cmp_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_cmp_lambda                   // this = _0                                            //
 ;
 
 # range operators
@@ -364,9 +428,27 @@ expr_range // ast.Expression //
  -> expr_eq                  // this = _0                                            //
 ;
 
-# top expression
-expr // ast.Expression //
+expr_range_lambda // ast.Expression //
+ -> expr_range_lambda range expr_eq        // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_range        range expr_eq_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_range_lambda range expr_eq_lambda // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> expr_eq_lambda                         // this = _0                                            //
+;
+
+# expression with no lambda call syntax
+expr_nolambda // ast.Expression //
  -> expr_range // this = _0 //
+;
+
+# expression with at least one lambda call syntax
+expr_lambda // ast.Expression //
+ -> expr_range_lambda // this = _0 //
+;
+
+# any expression
+expr // ast.Expression //
+ -> expr_nolambda // this = _0 //
+ -> expr_lambda   // this = _0 //
 ;
 
 # assign operators

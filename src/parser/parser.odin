@@ -5,6 +5,7 @@ import "./generated"
 // Parses an array of tokens into the abstract syntax tree.
 // This deletes the token array for you.
 parse :: generated.parse
+peek :: generated.peek
 
 State :: generated.State
 Parser :: generated.Parser

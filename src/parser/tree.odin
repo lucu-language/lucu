@@ -242,6 +242,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case nil:
 			return {.UNDERSCORE, {}}, true
 		}
+	case .pre:
+		if i^ != 0 do break
+		sym, _ := unop_symbol(node.value.pre)
+		return {sym, {}}, true
 	case .mul, .add, .cmp, .eq, .range, .ass_op:
 		if i^ != 0 do break
 		return {binop_symbol(node.value.mul), {}}, true
@@ -251,7 +255,6 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
 	case .expr,
 	     .expr_top,
-	     .expr_call,
 	     .expr_post,
 	     .expr_pre,
 	     .expr_keyword,
@@ -263,6 +266,18 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .expr_cmp,
 	     .expr_eq,
 	     .expr_range,
+	     .expr_nolambda,
+	     .expr_pre_lambda,
+	     .expr_keyword_lambda,
+	     .expr_typed_lambda,
+	     .expr_mul_lambda,
+	     .expr_add_lambda,
+	     .expr_cmp_lambda,
+	     .expr_eq_lambda,
+	     .expr_range_lambda,
+	     .expr_lambda,
+	     .lambda_body,
+	     .expr_post_lambda,
 	     .stmt_ass,
 	     .named_expr,
 	     .member_expr,

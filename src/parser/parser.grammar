@@ -482,9 +482,9 @@ stmt // ast.Expression //
 
 # final statement of a body
 stmt_final // ast.Expression //
- -> "use" lambda_params "<-" call stmts_semi_suffix // this = _3; this.data.base = exprs_append(this.data.base, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
- -> "use"                    call stmts_semi_suffix // this = _1; this.data.base = exprs_append(this.data.base, { .LAMBDA, {lambda = {_2[:], nil  }} }) //
- -> stmt                                            // this = _0                                                                                        //
+ -> "use" lambda_params "<-" expr stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
+ -> "use"                    expr stmts_semi_suffix // this = lambda_append(_1, { .LAMBDA, {lambda = {_2[:], nil  }} }) //
+ -> stmt                                            // this = _0                                                        //
 ;
 
 ## LEXEMES

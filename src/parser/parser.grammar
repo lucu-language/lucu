@@ -7,6 +7,15 @@ exprs :: proc(exprs: ..ast.Expression) -> []ast.Expression {
   return slice.clone(exprs)
 }
 
+exprs_append :: proc(exprs: []ast.Expression, expr: ast.Expression) -> []ast.Expression {
+  slice := make([]ast.Expression, len(exprs) + 1)
+  slice[0] = expr
+  for i in 0..<len(exprs) {
+    slice[i + 1] = exprs[i]
+  }
+  return slice
+}
+
 //
 
 ## RULES
@@ -161,8 +170,13 @@ data_type_full // ast.Type //
 
 # param with optional type
 lambda_param // ast.Param //
- -> partial_ident                    // this = { _0, {} } //
- -> partial_ident ":" data_type_full // this = { _0, _2 } //
+ -> option_ident                    // this = { _0, {} } //
+ -> option_ident ":" data_type_full // this = { _0, _2 } //
+;
+
+option_ident // string //
+ -> "_"
+ -> partial_ident // this = _0 //
 ;
 
 lambda_params // [dynamic]ast.Param //
@@ -172,17 +186,22 @@ lambda_params // [dynamic]ast.Param //
 ;
 
 lambda // ast.Expression //
- -> "{" lambda_params "->" exprs_semi "}" // this = { .LAMBDA, {lambda = {_3[:], _1[:]}} } //
+ -> "{" lambda_params "->" stmts_semi "}" // this = { .LAMBDA, {lambda = {_3[:], _1[:]}} } //
 ;
 
 body // ast.Expression //
- -> "{" exprs_semi "}" // this = { .BODY, {base = _1[:]} } //
+ -> "{" stmts_semi "}" // this = { .BODY, {base = _1[:]} } //
 ;
 
-exprs_semi // [dynamic]ast.Expression //
+stmts_semi // [dynamic]ast.Expression //
  ->
- -> expr_final          //            append(&this, _0) //
- -> expr ";" exprs_semi // this = _2; append(&this, _0) //
+ -> stmt_final          //            append(&this, _0) //
+ -> stmt ";" stmts_semi // this = _2; append(&this, _0) //
+;
+
+stmts_semi_suffix // [dynamic]ast.Expression //
+ ->
+ -> ";" stmts_semi // this = _1 //
 ;
 
 exprs_comma // [dynamic]ast.Expression //
@@ -191,9 +210,25 @@ exprs_comma // [dynamic]ast.Expression //
  -> expr "," exprs_comma // this = _2; append(&this, _0) //
 ;
 
-exprs_semi_suffix // [dynamic]ast.Expression //
+named_expr // ast.Expression //
+ -> partial_ident "=" expr // this = { .LET, {let = {exprs(_2), _0}} } //
+;
+
+member_expr // ast.Expression //
+ -> named_expr // this = _0 //
+ -> expr       // this = _0 //
+;
+
+exprs_member // [dynamic]ast.Expression //
  ->
- -> ";" exprs_semi // this = _1 //
+ -> member_expr                  //            append(&this, _0) //
+ -> member_expr "," exprs_member // this = _2; append(&this, _0) //
+;
+
+exprs_struct // [dynamic]ast.Expression //
+ ->
+ -> named_expr                   //            append(&this, _0) //
+ -> member_expr "," exprs_member // this = _2; append(&this, _0) //
 ;
 
 # non-recursive expression
@@ -212,19 +247,22 @@ expr_array // ast.Expression //
  -> "[" exprs_comma "]" // this = { .ARRAY,   {base = _1[:]} } //
 ;
 
+expr_struct // ast.Expression //
+ -> "(" exprs_struct ")" // this = { .STRUCT, {base = _1[:]} } //
+;
+
 expr_top // ast.Expression //
- -> ident                // this = { .IDENT, {ident = {nil, _0}} }  //
- -> lambda               // this = _0                               //
- -> body                 // this = _0                               //
- -> expr_loop            // this = _0                               //
- -> expr_if              // this = _0                               //
- -> expr_array           // this = _0                               //
- -> "(" expr ")"         // this = _1                               //
- -> int_literal          // this = { .INT,   {int   = {nil, _0}} }  //
- -> str_literal          // this = { .STR,   {str   = {nil, _0}} }  //
- -> "---"                // this = { .UNINIT, {} }                  //
- -> "break"              // this = { .BREAK,   {base = nil      } } //
- -> "break" "(" expr ")" // this = { .BREAK,   {base = exprs(_2)} } //
+ -> lambda       // this = _0                              //
+ -> body         // this = _0                              //
+ -> expr_loop    // this = _0                              //
+ -> expr_if      // this = _0                              //
+ -> expr_array   // this = _0                              //
+ -> expr_struct  // this = _0                              //
+ -> "(" expr ")" // this = _1                              //
+ -> int_literal  // this = { .INT,   {int   = {nil, _0}} } //
+ -> str_literal  // this = { .STR,   {str   = {nil, _0}} } //
+ -> ident        // this = { .IDENT, {ident = {nil, _0}} } //
+ -> "---"        // this = { .UNINIT, {} }                 //
 ;
 
 # member, function call
@@ -235,11 +273,8 @@ expr_call // ast.Expression //
 ;
 
 call // ast.Expression //
-# this should really be 'partial_ident "." partial_ident "(" ... ")"', but that leads to a parser conflict
-# who knows, maybe we'll add method calls someday which would also fall under this rule
- -> expr_call "." partial_ident "(" exprs_comma ")" // append(&_4, ast.Expression { .MEMBER, {member = {exprs(_0), _2}} }); this = { .CALL,         {base = _4[:]} } //
- -> expr_call "."               "(" exprs_comma ")" // append(&_3, _0);                                                     this = { .CALL_POINTER, {base = _3[:]} } //
- -> ident                       "(" exprs_comma ")" // append(&_2, ast.Expression { .IDENT, {ident = {nil, _0}} });         this = { .CALL,         {base = _2[:]} } //
+ -> expr_call     "(" exprs_member ")" // append(&_2, _0); this = { .CALL,         {base = _2[:]} } //
+ -> expr_call "." "(" exprs_member ")" // append(&_3, _0); this = { .CALL_POINTER, {base = _3[:]} } //
 ;
 
 # operator suffix
@@ -295,7 +330,7 @@ expr_add // ast.Expression //
  -> expr_mul              // this = _0                                            //
 ;
  
-# equality operators
+# comparison operators
 cmp // ast.Binary_Op //
  -> ">"  // this = .GREATER        //
  -> "<"  // this = .LESS           //
@@ -329,9 +364,18 @@ expr_range // ast.Expression //
  -> expr_eq                  // this = _0                                            //
 ;
 
+# top expression
+expr // ast.Expression //
+ -> expr_range // this = _0 //
+;
+
 # assign operators
-ass // ast.Binary_Op //
- ->  "=" // this = .ASSIGN     //
+stmt_ass // ast.Expression //
+ -> expr "=" stmt_ass // this = { .BINARY_OP, {binop = {exprs(_0, _2), .ASSIGN}} } //
+ -> expr              // this = _0                                                 //
+;
+
+ass_op // ast.Binary_Op //
  -> "+=" // this = .ADD_ASSIGN //
  -> "-=" // this = .SUB_ASSIGN //
  -> "/=" // this = .DIV_ASSIGN //
@@ -339,34 +383,26 @@ ass // ast.Binary_Op //
  -> "%=" // this = .MOD_ASSIGN //
 ;
 
-expr_ass // ast.Expression //
- -> expr_range ass expr_ass // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
- -> expr_range              // this = _0                                            //
+stmt_ass_op // ast.Expression //
+ -> expr ass_op stmt_ass // this = { .BINARY_OP, {binop = {exprs(_0, _2), _1}} } //
+ -> stmt_ass             // this = _0                                            //
 ;
 
-# statement-like expressions
-expr_stat // ast.Expression //
- -> "let" option_ident ":" data_type_full "=" expr_ass // this = { .LET, {let = { exprs({ .AS, {as = {exprs(_5), _3}} }), _1, false }} } //
- -> "let" option_ident                    "=" expr_ass // this = { .LET, {let = { exprs(                         _3    ), _1, false }} } //
- ->                                      "do" expr_ass // this = { .UNARY_OP, {unnop = {exprs(_1), .DO  }} }                             //
- ->                                           expr_ass // this = _0                                                                      //
+# statement
+stmt // ast.Expression //
+ -> "let" option_ident ":" data_type_full "=" stmt_ass // this = { .LET, {let = {exprs({ .AS, {as = {exprs(_5), _3}} }), _1 }} } //
+ -> "let" option_ident                    "=" stmt_ass // this = { .LET, {let = {exprs(                         _3    ), _1 }} } //
+ ->                                      "do" expr     // this = { .UNARY_OP, {unnop = {exprs(_1), .DO}} }                       //
+ ->                                   "break" expr     // this = { .BREAK,    {base  =  exprs(_1)      } }                       //
+ ->                                   "break"          // this = { .BREAK,    {base  =  nil            } }                       //
+ -> stmt_ass_op                                        // this = _0                                                              //
 ;
 
-# top expression
-expr // ast.Expression //
- -> expr_stat // this = _0 //
-;
-
-# final expression of a body
-expr_final // ast.Expression //
- -> "let" option_ident                    "<-" call exprs_semi_suffix
- -> "let" option_ident ":" data_type_full "<-" call exprs_semi_suffix
- -> expr // this = _0 //
-;
-
-option_ident // string //
- -> "_"
- -> partial_ident // this = _0 //
+# final statement of a body
+stmt_final // ast.Expression //
+ -> "use" lambda_params "<-" call stmts_semi_suffix // this = _3; this.data.base = exprs_append(this.data.base, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
+ -> "use"                    call stmts_semi_suffix // this = _1; this.data.base = exprs_append(this.data.base, { .LAMBDA, {lambda = {_2[:], nil  }} }) //
+ -> stmt                                            // this = _0                                                                                        //
 ;
 
 ## LEXEMES

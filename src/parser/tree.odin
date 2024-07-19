@@ -79,6 +79,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .STAR_EQUALS,
 	     .PERCENT_EQUALS,
 	     .AMPERSAND,
+	     .USE,
 	     .prefix_pointer:
 		return {}, false
 	case .definition, .definition_type, .definition_func:
@@ -115,8 +116,8 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.generics_defs
 		if i^ >= len(arr) do break
 		return {.generic_ident, {ident = arr[len(arr) - i^ - 1]}}, true
-	case .exprs_semi, .exprs_semi_suffix, .exprs_comma:
-		arr := node.value.exprs_semi
+	case .stmts_semi, .stmts_semi_suffix, .exprs_comma, .exprs_struct, .exprs_member:
+		arr := node.value.stmts_semi
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
 	case .params:
@@ -241,13 +242,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case nil:
 			return {.UNDERSCORE, {}}, true
 		}
-	case .mul, .add, .cmp, .eq, .range, .ass:
+	case .mul, .add, .cmp, .eq, .range, .ass_op:
 		if i^ != 0 do break
-
-		sym: generated.Symbol
-
-		return {sym, {}}, true
-	case .expr_loop, .expr_array, .expr_if, .body, .lambda, .call:
+		return {binop_symbol(node.value.mul), {}}, true
+	case .expr_loop, .expr_struct, .expr_array, .expr_if, .body, .lambda, .call:
 		arr := node.value.expr.data.base
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
@@ -258,14 +256,17 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .expr_pre,
 	     .expr_keyword,
 	     .expr_typed,
-	     .expr_stat,
-	     .expr_final,
+	     .stmt,
+	     .stmt_final,
 	     .expr_mul,
 	     .expr_add,
 	     .expr_cmp,
 	     .expr_eq,
 	     .expr_range,
-	     .expr_ass:
+	     .stmt_ass,
+	     .named_expr,
+	     .member_expr,
+	     .stmt_ass_op:
 		switch node.value.expr.kind {
 		case .BODY:
 			if i^ > 0 do break
@@ -282,6 +283,9 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case .ARRAY:
 			if i^ > 0 do break
 			return {.expr_array, node.value}, true
+		case .STRUCT:
+			if i^ > 0 do break
+			return {.expr_struct, node.value}, true
 		case .LOOP:
 			if i^ > 0 do break
 			return {.expr_loop, node.value}, true

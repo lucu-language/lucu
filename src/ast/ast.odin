@@ -114,6 +114,7 @@ Expression_Kind :: enum {
 	SIZE_OF,
 	ALIGN_OF,
 	ARRAY,
+	STRUCT,
 	STR,
 	INT,
 	IDENT,
@@ -143,7 +144,6 @@ Expression :: struct {
 		let:     struct {
 			children: []Expression,
 			name:     string,
-			mutable:  bool,
 		},
 		as:      struct {
 			children: []Expression,

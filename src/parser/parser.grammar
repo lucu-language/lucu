@@ -214,10 +214,10 @@ stmts_semi_suffix // [dynamic]ast.Expression //
  -> ";" stmts_semi // this = _1 //
 ;
 
-exprs_comma // [dynamic]ast.Expression //
+exprs // [dynamic]ast.Expression //
  ->
  -> expr                 //            append(&this, _0) //
- -> expr "," exprs_comma // this = _2; append(&this, _0) //
+ -> expr "," exprs // this = _2; append(&this, _0) //
 ;
 
 named_expr // ast.Expression //
@@ -229,45 +229,45 @@ member_expr // ast.Expression //
  -> expr       // this = _0 //
 ;
 
-exprs_member // [dynamic]ast.Expression //
+member_exprs // [dynamic]ast.Expression //
  ->
  -> member_expr                  //            append(&this, _0) //
- -> member_expr "," exprs_member // this = _2; append(&this, _0) //
+ -> member_expr "," member_exprs // this = _2; append(&this, _0) //
 ;
 
-exprs_struct // [dynamic]ast.Expression //
+member_exprs_struct // [dynamic]ast.Expression //
  ->
  -> named_expr                   //            append(&this, _0) //
- -> member_expr "," exprs_member // this = _2; append(&this, _0) //
+ -> member_expr "," member_exprs // this = _2; append(&this, _0) //
 ;
 
 # non-recursive expression
-expr_loop // ast.Expression //
+loop_expr // ast.Expression //
  -> "loop" body // this = _1; this.kind = .LOOP //
 ;
 
-expr_if // ast.Expression //
+cond_expr // ast.Expression //
  -> "if" expr_nolambda body               // this = { .IF_ELSE, {base = exprs(_1,_2)   } }        //
  -> "if" expr_nolambda body "else" body   // this = { .IF_ELSE, {base = exprs(_1,_2,_4)} }        //
  -> "if" expr_nolambda lambda             // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2)   } } //
  -> "if" expr_nolambda lambda "else" body // this = { .IF_ELSE_UNWRAP, {base = exprs(_1,_2,_4)} } //
 ;
 
-expr_array // ast.Expression //
- -> "[" exprs_comma "]" // this = { .ARRAY,   {base = _1[:]} } //
+array_expr // ast.Expression //
+ -> "[" exprs "]" // this = { .ARRAY,   {base = _1[:]} } //
 ;
 
-expr_struct // ast.Expression //
- -> "(" exprs_struct ")" // this = { .STRUCT, {base = _1[:]} } //
+struct_expr // ast.Expression //
+ -> "(" member_exprs_struct ")" // this = { .STRUCT, {base = _1[:]} } //
 ;
 
 expr_top // ast.Expression //
  -> lambda       // this = _0                              //
  -> body         // this = _0                              //
- -> expr_loop    // this = _0                              //
- -> expr_if      // this = _0                              //
- -> expr_array   // this = _0                              //
- -> expr_struct  // this = _0                              //
+ -> loop_expr    // this = _0                              //
+ -> cond_expr      // this = _0                              //
+ -> array_expr   // this = _0                              //
+ -> struct_expr  // this = _0                              //
  -> "(" expr ")" // this = _1                              //
  -> int_literal  // this = { .INT,   {int   = {nil, _0}} } //
  -> str_literal  // this = { .STR,   {str   = {nil, _0}} } //
@@ -277,15 +277,15 @@ expr_top // ast.Expression //
 
 # operator suffix
 call // ast.Expression //
- -> expr_post     "(" exprs_member ")" // append(&_2, _0); this = { .CALL,         {base = _2[:]} } //
- -> expr_post "." "(" exprs_member ")" // append(&_3, _0); this = { .CALL_POINTER, {base = _3[:]} } //
+ -> expr_post     "(" member_exprs ")" // append(&_2, _0); this = { .CALL,         {base = _2[:]} } //
+ -> expr_post "." "(" member_exprs ")" // append(&_3, _0); this = { .CALL_POINTER, {base = _3[:]} } //
 ;
 
 expr_post // ast.Expression //
  -> expr_post "--"              // this = {  .UNARY_OP, {unnop  = {exprs(_0), .POST_DECREMENT}} } //
  -> expr_post "++"              // this = {  .UNARY_OP, {unnop  = {exprs(_0), .POST_INCREMENT}} } //
  -> expr_post "[" expr "]"      // this = { .BINARY_OP, {binop  = {exprs(_0, _2),      .INDEX}} } //
- -> expr_post "." partial_ident // this = {    .MEMBER, {member = {exprs(_0), _2             }} } //
+ -> expr_post "." partial_ident // this = {    .MEMBER, {member = {exprs(_0),_2              }} } //
  -> call                        // this = _0                                                      //
  -> expr_top                    // this = _0                                                      //
 ;

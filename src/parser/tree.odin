@@ -116,8 +116,8 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.generics_defs
 		if i^ >= len(arr) do break
 		return {.generic_ident, {ident = arr[len(arr) - i^ - 1]}}, true
-	case .stmts_semi, .stmts_semi_suffix, .exprs_comma, .exprs_struct, .exprs_member:
-		arr := node.value.stmts_semi
+	case .stmts_semi, .stmts_semi_suffix, .exprs, .member_exprs_struct, .member_exprs:
+		arr := node.value.exprs
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
 	case .params:
@@ -249,7 +249,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	case .mul, .add, .cmp, .eq, .range, .ass_op:
 		if i^ != 0 do break
 		return {binop_symbol(node.value.mul), {}}, true
-	case .expr_loop, .expr_struct, .expr_array, .expr_if, .body, .lambda, .call:
+	case .loop_expr, .struct_expr, .array_expr, .cond_expr, .body, .lambda, .call:
 		arr := node.value.expr.data.base
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
@@ -294,16 +294,16 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			return {.call, node.value}, true
 		case .IF_ELSE, .IF_ELSE_UNWRAP:
 			if i^ > 0 do break
-			return {.expr_if, node.value}, true
+			return {.cond_expr, node.value}, true
 		case .ARRAY:
 			if i^ > 0 do break
-			return {.expr_array, node.value}, true
+			return {.array_expr, node.value}, true
 		case .STRUCT:
 			if i^ > 0 do break
-			return {.expr_struct, node.value}, true
+			return {.struct_expr, node.value}, true
 		case .LOOP:
 			if i^ > 0 do break
-			return {.expr_loop, node.value}, true
+			return {.loop_expr, node.value}, true
 		case .BINARY_OP:
 			switch i^ {
 			case 0:

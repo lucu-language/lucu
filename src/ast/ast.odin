@@ -51,18 +51,33 @@ Param :: struct {
 
 Definition_Sign :: union #no_nil {
 	Definition_Type,
+	Definition_Effect,
+	Definition_Use,
 	Definition_Func,
 }
 Definition_Impl :: struct #raw_union {
-	definition_type: Type,
-	definition_func: Expression,
+	definition_type:   Type,
+	definition_effect: []Definition,
+	definition_use:    []Definition,
+	definition_func:   Expression,
 }
 
 Definition :: struct {
+	ctxt:     []Ident_Full,
 	name:     string,
 	generics: []string,
 	sign:     Definition_Sign,
 	impl:     Maybe(Definition_Impl),
+}
+
+Definition_Type :: struct {}
+Definition_Effect :: struct {}
+Definition_Use :: struct {
+	ident: Ident_Full,
+}
+Definition_Func :: struct {
+	params: []Param,
+	output: Maybe(Type),
 }
 
 Binary_Op :: enum {
@@ -110,6 +125,7 @@ Expression_Kind :: enum {
 	UNARY_OP,
 	BREAK,
 	LET,
+	MUT,
 	AS,
 	SIZE_OF,
 	ALIGN_OF,
@@ -170,11 +186,5 @@ Expression :: struct {
 			ident:    string,
 		},
 	},
-}
-
-Definition_Type :: struct {}
-Definition_Func :: struct {
-	params: []Param,
-	output: Maybe(Type),
 }
 

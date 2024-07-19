@@ -175,7 +175,9 @@ global_parser: parser.Parser
 
 main :: proc() {
 
-	DEFAULT_TEXT :: "type Array 't 'n = ['t]'n\ntype NROM        = Array u8 0x8000\n\nfunc zeroed()        -> Array u8 'n { }\nfunc filled(val: 't) -> Array 't 'n { }"
+	DEFAULT_TEXT :: #load("../lucu/preamble.lucu", string)
+
+	// DEFAULT_TEXT :: "type Array 't 'n = ['t]'n\ntype NROM        = Array u8 0x8000\n\nfunc zeroed()        -> Array u8 'n { }\nfunc filled(val: 't) -> Array 't 'n { }"
 
 	when ODIN_OS == .JS {
 		js.set_element_value_string("text", DEFAULT_TEXT)

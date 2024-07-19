@@ -46,7 +46,6 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .UNDERSCORE,
 	     .CARET,
 	     .QUESTION,
-	     .type_sign,
 	     .prefix_slice,
 	     .LOOP,
 	     .IF,
@@ -69,6 +68,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .GREATER_EQUALS,
 	     .LESS,
 	     .LESS_EQUALS,
+	     .ARROW_RIGHT_FAT,
 	     .DOUBLE_EQUALS,
 	     .BANG_EQUALS,
 	     .DOUBLE_DOT,
@@ -80,35 +80,62 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .PERCENT_EQUALS,
 	     .AMPERSAND,
 	     .USE,
+	     .EFFECT,
+	     .MUT,
+	     .CONST,
 	     .prefix_pointer:
 		return {}, false
-	case .definition, .definition_type, .definition_func:
+	case .definition,
+	     .definition_type,
+	     .definition_func,
+	     .definition_effect,
+	     .definition_use,
+	     .definition_const:
+		def, ok := node.value.definition.sign.(ast.Definition_Use)
+		if ok && i^ == 2 do i^ = 3
+
 		switch i^ {
 		case 0:
-			return {.partial_ident, {ident = node.value.definition.name}}, true
+			return {
+					.definition_context,
+					{definition_context = into_dynamic(node.value.definition.ctxt)},
+				},
+				true
 		case 1:
+			if ok {
+				return {.ident_full, {ident_full = def.ident}}, true
+			} else {
+				return {.partial_ident, {ident = node.value.definition.name}}, true
+			}
+		case 2:
 			return {
 					.generics_defs,
 					{generics_defs = into_dynamic(node.value.definition.generics)},
 				},
 				true
-		case 2:
+		case 3:
 			switch sign in node.value.definition.sign {
 			case ast.Definition_Type:
-				return {.type_sign, {type_sign = sign}}, true
+				return {.TYPE, {}}, true
+			case ast.Definition_Effect:
+				return {.EFFECT, {}}, true
+			case ast.Definition_Use:
+				return {.USE, {}}, true
 			case ast.Definition_Func:
 				return {.func_sign, {func_sign = sign}}, true
 			}
-		case 3:
+		case 4:
 			impl := node.value.definition.impl.? or_break
 			switch _ in node.value.definition.sign {
 			case ast.Definition_Type:
 				return {.data_type_full, {data_type = impl.definition_type}}, true
+			case ast.Definition_Effect, ast.Definition_Use:
+				return {.definitions, {definitions = into_dynamic(impl.definition_effect)}}, true
 			case ast.Definition_Func:
 				return {.body, {body = impl.definition_func}}, true
 			}
 		}
-	case .lucu:
+	case .lucu, .definitions:
 		arr := node.value.lucu
 		if i^ >= len(arr) do break
 		return {.definition, {definition = arr[len(arr) - i^ - 1]}}, true
@@ -132,6 +159,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.members
 		if i^ >= len(arr) do break
 		return {.member, {param = arr[len(arr) - i^ - 1]}}, true
+	case .definition_context, .ident_full_comma:
+		arr := node.value.ident_full_comma
+		if i^ >= len(arr) do break
+		return {.ident_full, {ident_full = arr[len(arr) - i^ - 1]}}, true
 	case .generics:
 		arr := node.value.generics
 		if i^ >= len(arr) do break
@@ -167,7 +198,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case ast.Type_Pointer:
 			return {.prefix_pointer, {prefix_pointer = prefix}}, true
 		}
-	case .data_type_full, .data_type, .type_head:
+	case .data_type_full, .data_type, .type_head, .data_type_full_nofunc:
 		if i^ == 0 && node.value.data_type.prefix == nil do i^ = 1
 
 		switch i^ {
@@ -208,7 +239,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			output := node.value.func_sign.output.? or_break
 			return {.data_type_full, {data_type = output}}, true
 		}
-	case .member, .named_member, .param, .lambda_param:
+	case .member, .named_member, .param, .lambda_param, .lambda_param_nofunc:
 		if i^ == 0 && node.value.member.name == "" do i^ = 1
 		if i^ == 1 && node.value.member.type.prefix == nil && node.value.member.type.head == nil do i^ = 2
 
@@ -371,6 +402,15 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			if i^ > 0 do break
 			return {.TRIPLE_DASH, {}}, true
 		case .LET:
+			switch i^ {
+			case 0:
+				return {.LET, {}}, true
+			case 1:
+				return {.partial_ident, {ident = node.value.expr.data.let.name}}, true
+			case 2:
+				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			}
+		case .MUT:
 			switch i^ {
 			case 0:
 				return {.LET, {}}, true

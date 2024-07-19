@@ -18,7 +18,7 @@ token_name :: proc(token: Token) -> string {
 }
 
 _next_rune :: proc(text: ^string) -> (char: rune, size: int, ok: bool) {
-	if (len(text^) == 0) {
+	if len(text^) == 0 {
 		return {}, {}, false
 	} else {
 		rune, len := utf8.decode_rune_in_string(text^)
@@ -28,7 +28,7 @@ _next_rune :: proc(text: ^string) -> (char: rune, size: int, ok: bool) {
 }
 
 _peek_rune :: proc(text: string) -> (char: rune, size: int, ok: bool) {
-	if (len(text) == 0) {
+	if len(text) == 0 {
 		return {}, {}, false
 	} else {
 		return utf8.decode_rune_in_string(text), true
@@ -37,9 +37,15 @@ _peek_rune :: proc(text: string) -> (char: rune, size: int, ok: bool) {
 
 _skip_whitespace :: proc(text: ^string) -> bool {
 	found_newline := false
-	for (len(text^) > 0) {
+	for len(text^) > 0 {
 		rune, offset := utf8.decode_rune_in_string(text^)
-		if (!unicode.is_white_space(rune)) do break
+		if rune == '#' do for rune != '\n' {
+			text^ = text[offset:]
+			if len(text^) == 0 do return found_newline
+			rune, offset = utf8.decode_rune_in_string(text^)
+		}
+
+		if !unicode.is_white_space(rune) do break
 		text^ = text[offset:]
 
 		found_newline |= rune == '\n'
@@ -62,7 +68,31 @@ _next_token :: proc(text: ^string) -> (token: Token, ok: bool) {
 	ptr := slice.first_ptr(transmute([]u8)(text^))
 	first, len := _next_rune(text) or_return
 
-	if _is_operator(first) && first != '\'' && first != '@' {
+	if first == '"' {
+
+		str: [dynamic]u8
+		for {
+			old := text^
+			next, size := _next_rune(text) or_break
+
+			if next == '\\' {
+				escape, _ := _next_rune(text) or_break
+				switch escape {
+				case 'n':
+					append(&str, '\n')
+				case '"':
+					append(&str, '"')
+				}
+			} else if next == '"' {
+				break
+			} else {
+				append_elem_string(&str, old[:size])
+			}
+		}
+
+		return {.str_literal, {str_literal = transmute(string)str[:]}}, true
+
+	} else if _is_operator(first) && first != '\'' && first != '@' {
 
 		// check with every token if it's a known symbol.
 		// this assumes that any prefix of a symbol is also a symbol,

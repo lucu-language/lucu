@@ -31,33 +31,60 @@ lambda_append :: proc(base: ast.Expression, lambda: ast.Expression) -> ast.Expre
 ## RULES
 
 lucu // [dynamic]ast.Definition //
-  ->
-  -> error      ";" lucu // this = _2                    //
-  -> definition ";" lucu // this = _2; append(&this, _0) //
+ -> definitions // this = _0 //
+;
+
+definitions // [dynamic]ast.Definition //
+ ->
+ -> definition                                             //            append(&this, _0) //
+ -> definition_context "{" definitions "}"
+ -> error                                  ";" definitions // this = _2                    //
+ -> definition                             ";" definitions // this = _2; append(&this, _0) //
+ -> definition_context "{" definitions "}" ";" definitions
+;
+
+definition_context // [dynamic]ast.Ident_Full //
+ ->
+ -> "(" ident_full_comma ")" "=>" // this = _1 //
 ;
 
 definition // ast.Definition //
- -> definition_type // this = _0 //
- -> definition_func // this = _0 //
+ -> definition_context definition_type   // this = _1; this.ctxt = _0[:] //
+ -> definition_context definition_func   // this = _1; this.ctxt = _0[:] //
+ -> definition_context definition_effect // this = _1; this.ctxt = _0[:] //
+ -> definition_context definition_use    // this = _1; this.ctxt = _0[:] //
+ -> definition_context definition_const
+;
+
+definition_const // ast.Definition //
+ -> "const" partial_ident                    "=" expr
+ -> "const" partial_ident ":" data_type_full "=" expr
+ -> "const" partial_ident ":" data_type_full
+;
+
+definition_use // ast.Definition //
+ -> "use" ident_full "{" definitions "}" // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = _3[:] } } //
+ -> "use" ident_full                     // this = { nil, "", nil, ast.Definition_Use {_1}, nil                                            } //
+;
+
+definition_effect // ast.Definition //
+ -> "effect" partial_ident generics_defs "{" definitions "}" // this = { nil, _1, _2[:], ast.Definition_Effect {}, ast.Definition_Impl { definition_effect = _4[:] } } //
+ -> "effect" partial_ident generics_defs                     // this = { nil, _1, _2[:], ast.Definition_Effect {}, nil                                               } //
 ;
 
 definition_type // ast.Definition //
- -> "type" partial_ident generics_defs "=" data_type_full // this = { _1, _2[:], ast.Definition_Type {}, ast.Definition_Impl { definition_type = _4 } } //
- -> "type" partial_ident generics_defs                    // this = { _1, _2[:], ast.Definition_Type {}, nil                                          } //
+ -> "type" partial_ident generics_defs "=" data_type_full // this = { nil, _1, _2[:], ast.Definition_Type {}, ast.Definition_Impl { definition_type = _4 } } //
+ -> "type" partial_ident generics_defs                    // this = { nil, _1, _2[:], ast.Definition_Type {}, nil                                          } //
 ;
 
 definition_func // ast.Definition //
- -> "func" partial_ident func_sign body // this = { _1, nil, _2, ast.Definition_Impl { definition_func = _3 } } //
- -> "func" partial_ident func_sign      // this = { _1, nil, _2, nil                                          } //
-;
-
-type_sign // ast.Definition_Type //
- ->
+ -> "func" partial_ident func_sign body // this = { nil, _1, nil, _2, ast.Definition_Impl { definition_func = _3 } } //
+ -> "func" partial_ident func_sign      // this = { nil, _1, nil, _2, nil                                          } //
 ;
 
 func_sign // ast.Definition_Func //
- -> "(" params ")"                     // this = { _1[:], nil } //
- -> "(" params ")" "->" data_type_full // this = { _1[:], _4  } //
+ -> "(" params ")"                            // this = { _1[:], nil } //
+ -> "(" params ")" "->" data_type_full_nofunc // this = { _1[:], _4  } //
 ;
 
 # function parameter
@@ -88,6 +115,12 @@ ident_package // ast.Ident_Full //
 # identifier with optional package prefix and generics juxtaposition
 ident_full // ast.Ident_Full //
  -> ident_package generics // this = _0; this.generics = _1[:] //
+;
+
+ident_full_comma // [dynamic]ast.Ident_Full //
+ -> ident_full                      //            append(&this, _0) //
+ -> ident_full ","                  //            append(&this, _0) //
+ -> ident_full "," ident_full_comma // this = _2; append(&this, _0) //
 ;
 
 # constant values
@@ -169,11 +202,19 @@ data_type // ast.Type //
 ;
 
 # data type with optional generics juxtaposition
-data_type_full // ast.Type //
+data_type_full_nofunc // ast.Type //
  -> type_prefixes ident_full // this = { _0[:], _1 }           //
  -> type_prefixes type_head  // this = _1; this.prefix = _0[:] //
  -> ident_full               // this = { nil, _0 }             //
  -> type_head                // this = _0                      //
+;
+
+data_type_full // ast.Type //
+ -> "func"
+ -> "func"                               func_sign
+ -> "func" "(" ident_full_comma ")" "=>" func_sign
+ -> "func" "(" ident_full_comma ")"
+ -> data_type_full_nofunc                          // this = _0 //
 ;
 
 ### EXPRESSION RULES
@@ -184,6 +225,11 @@ lambda_param // ast.Param //
  -> option_ident ":" data_type_full // this = { _0, _2 } //
 ;
 
+lambda_param_nofunc // ast.Param //
+ -> option_ident                           // this = { _0, {} } //
+ -> option_ident ":" data_type_full_nofunc // this = { _0, _2 } //
+;
+
 option_ident // string //
  -> "_"
  -> partial_ident // this = _0 //
@@ -191,7 +237,7 @@ option_ident // string //
 
 lambda_params // [dynamic]ast.Param //
  ->
- -> lambda_param                   //            append(&this, _0) //
+ -> lambda_param_nofunc            //            append(&this, _0) //
  -> lambda_param "," lambda_params // this = _2; append(&this, _0) //
 ;
 
@@ -265,7 +311,7 @@ expr_top // ast.Expression //
  -> lambda       // this = _0                              //
  -> body         // this = _0                              //
  -> loop_expr    // this = _0                              //
- -> cond_expr      // this = _0                              //
+ -> cond_expr    // this = _0                              //
  -> array_expr   // this = _0                              //
  -> struct_expr  // this = _0                              //
  -> "(" expr ")" // this = _1                              //
@@ -474,6 +520,8 @@ stmt_ass_op // ast.Expression //
 stmt // ast.Expression //
  -> "let" option_ident ":" data_type_full "=" stmt_ass // this = { .LET, {let = {exprs({ .AS, {as = {exprs(_5), _3}} }), _1 }} } //
  -> "let" option_ident                    "=" stmt_ass // this = { .LET, {let = {exprs(                         _3    ), _1 }} } //
+ -> "mut" option_ident ":" data_type_full "=" stmt_ass // this = { .MUT, {let = {exprs({ .AS, {as = {exprs(_5), _3}} }), _1 }} } //
+ -> "mut" option_ident                    "=" stmt_ass // this = { .MUT, {let = {exprs(                         _3    ), _1 }} } //
  ->                                      "do" expr     // this = { .UNARY_OP, {unnop = {exprs(_1), .DO}} }                       //
  ->                                   "break" expr     // this = { .BREAK,    {base  =  exprs(_1)      } }                       //
  ->                                   "break"          // this = { .BREAK,    {base  =  nil            } }                       //
@@ -482,9 +530,10 @@ stmt // ast.Expression //
 
 # final statement of a body
 stmt_final // ast.Expression //
- -> "use" lambda_params "<-" expr stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
- -> "use"                    expr stmts_semi_suffix // this = lambda_append(_1, { .LAMBDA, {lambda = {_2[:], nil  }} }) //
- -> stmt                                            // this = _0                                                        //
+ -> "use" lambda_params "<-" expr        stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
+ -> "use" ident_full lambda              stmts_semi_suffix
+ -> "use" ident_full "{" definitions "}" stmts_semi_suffix
+ -> stmt                                                   // this = _0                                                        //
 ;
 
 ## LEXEMES

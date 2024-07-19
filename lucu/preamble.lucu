@@ -1,0 +1,155 @@
+type unit = ()
+type never
+
+type  int
+type uint
+
+type isize
+type usize
+
+type iptr
+type uptr
+
+type i8
+type u8
+
+type i16
+type u16
+
+type i32
+type u32
+
+type i64
+type u64
+
+type bool
+type str = (_backing: []u8)
+
+const unit  = ()
+const true  = 0 == 0
+const false = 0 != 0
+
+effect yield 't {
+	func yield(t: 't)
+}
+
+type Generator 't = func (yield 't)
+
+(srcloc) => {
+	func first(gen: Generator 't) -> 't {
+		use yield 't {
+			t ->
+			break t
+		}
+
+		gen.()
+		panic("nothing was yielded")
+	}
+	func nth(num: usize, gen: Generator 't) -> 't {
+		mut current: usize = 0
+		use yield 't {
+			t ->
+			if current == num {
+				break t
+			} else {
+				current += 1
+			}
+		}
+
+		gen.()
+		panic("not enough was yielded")
+	}
+}
+
+(srcloc) => {
+	##
+	# Panics with message if the assertion is not met.
+	##
+	func assert(all: bool, msg: str) {
+		if all {
+		} else { # fails
+			panic(msg)
+		}
+	}
+	##
+	# Exits the program and displays an error message.
+	##
+	func panic(msg: str) -> never {
+		trace("panic: ")
+		trace(msg)
+		trace("\n")
+		trap()
+	}
+	##
+	# Exits the program and displays an error message,
+	# marks code paths that aren't implemented yet.
+	##
+	func todo(msg: str) -> never {
+		trace("todo: ")
+		trace(msg)
+		trace("\n")
+		trap()
+	}
+	##
+	# Exits the program without an error message,
+	# only displays the source location it errored at.
+	##
+	func trap() -> never {
+		trace("trapped at ")
+		trace(source_location())
+		trace("\n")
+		trap_silent()
+	}
+}
+
+## THE FOLLOWING DECLARATIONS HAVE INTERNAL DEFINITIONS ##
+
+##
+# Marks that a code path is unreachable.
+# This function should NEVER actually be called!
+# For displaying an error, &panic is preferred.
+##
+func unreachable() -> never
+
+##
+# Returns the length of a slice.
+##
+func len(slice: []'t) -> usize
+
+##
+# Creates a slice from a pointer and length.
+##
+func raw_slice(ptr: ^'t, len: usize) -> []'t
+
+##
+# Effect to get the location of the call in the source code.
+# When used directly, it returns the location of the call to &source_location.
+# When used as an effect parameter inside a function, it returns the location of the caller.
+##
+effect srcloc {
+	func source_location() -> str
+}
+
+use srcloc
+
+##
+# Prints a debug message to the environment (usually the standard error).
+# The message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times.
+#
+# On unsupported targets, this does nothing.
+##
+func trace(s: str)
+
+##
+# Function that ends execution of the entire program.
+# The way it ends execution depends on the target.
+# 
+# For instance, it could:
+#  - end the process
+#  - run a halt instruction
+#  - throw an exception / interrupt
+#  - spin forever
+#
+# On unsupported targets, this spins forever.
+##
+func trap_silent() -> never

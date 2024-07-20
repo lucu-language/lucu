@@ -35,20 +35,11 @@ when ODIN_OS == .JS {
 
 display_tokens :: proc(shifted: #soa[]parser.State, tokens: []lexer.Token) {
 
-	title :: proc(sb: ^strings.Builder, token: lexer.Token) {
-		val := lexer.token_value_string(token)
-		if val != "" {
-			fmt.sbprintf(sb, "title='%s'", val)
-			delete(val)
-		}
-	}
-
 	print :: proc(sb: ^strings.Builder, token: lexer.Token) {
 		color := lexer.token_color(token)
 		name := lexer.token_name(token)
 
 		fmt.sbprintf(sb, "<span style=\"color:#%02x%02x%02x\"", color[0], color[1], color[2])
-		title(sb, token)
 
 		#partial switch token.symbol {
 		case .partial_ident, .generic_ident:
@@ -175,9 +166,9 @@ global_parser: parser.Parser
 
 main :: proc() {
 
-	DEFAULT_TEXT :: #load("../lucu/preamble.lucu", string)
-
-	// DEFAULT_TEXT :: "type Array 't 'n = ['t]'n\ntype NROM        = Array u8 0x8000\n\nfunc zeroed()        -> Array u8 'n { }\nfunc filled(val: 't) -> Array 't 'n { }"
+	// DEFAULT_TEXT :: #load("../lucu/preamble.lucu", string)
+	// DEFAULT_TEXT :: #load("../lucu/group.lucu", string)
+	DEFAULT_TEXT :: #load("../lucu/yield.lucu", string)
 
 	when ODIN_OS == .JS {
 		js.set_element_value_string("text", DEFAULT_TEXT)

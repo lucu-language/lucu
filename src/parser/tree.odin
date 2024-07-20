@@ -47,7 +47,6 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .CARET,
 	     .QUESTION,
 	     .prefix_slice,
-	     .LOOP,
 	     .IF,
 	     .ELSE,
 	     .BREAK,
@@ -83,6 +82,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .EFFECT,
 	     .MUT,
 	     .CONST,
+	     .IMPORT,
 	     .prefix_pointer:
 		return {}, false
 	case .definition,
@@ -92,6 +92,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .definition_use,
 	     .definition_const:
 		def, ok := node.value.definition.sign.(ast.Definition_Use)
+		if !ok && node.value.definition.name == "" && (i^ == 1 || i^ == 2) do i^ = 3
 		if ok && i^ == 2 do i^ = 3
 
 		switch i^ {
@@ -119,6 +120,8 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 				return {.TYPE, {}}, true
 			case ast.Definition_Effect:
 				return {.EFFECT, {}}, true
+			case ast.Definition_Const:
+				return {.data_type_full, {data_type_full = sign.type}}, true
 			case ast.Definition_Use:
 				return {.USE, {}}, true
 			case ast.Definition_Func:
@@ -133,6 +136,8 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 				return {.definitions, {definitions = into_dynamic(impl.definition_effect)}}, true
 			case ast.Definition_Func:
 				return {.body, {body = impl.definition_func}}, true
+			case ast.Definition_Const:
+				return {.expr, {expr = impl.definition_const}}, true
 			}
 		}
 	case .lucu, .definitions:
@@ -159,10 +164,10 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		arr := node.value.members
 		if i^ >= len(arr) do break
 		return {.member, {param = arr[len(arr) - i^ - 1]}}, true
-	case .definition_context, .ident_full_comma:
-		arr := node.value.ident_full_comma
+	case .definition_context, .constraints:
+		arr := node.value.constraints
 		if i^ >= len(arr) do break
-		return {.ident_full, {ident_full = arr[len(arr) - i^ - 1]}}, true
+		return {.constraint, {ident_full = arr[len(arr) - i^ - 1]}}, true
 	case .generics:
 		arr := node.value.generics
 		if i^ >= len(arr) do break
@@ -211,6 +216,12 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 				return {.ident_full, {ident_full = head}}, true
 			case ast.Type_Struct:
 				return {.type_struct, {type_struct = head}}, true
+			case ast.Type_Func:
+				return {
+						.definition_func,
+						{definition_func = {head.ctxt, "", nil, head.sign, nil}},
+					},
+					true
 			case nil:
 				return {.UNDERSCORE, {}}, true
 			}
@@ -236,8 +247,9 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case 0:
 			return {.params, {params = into_dynamic(node.value.func_sign.params)}}, true
 		case 1:
-			output := node.value.func_sign.output.? or_break
-			return {.data_type_full, {data_type = output}}, true
+			output := node.value.func_sign.output
+			if output == nil do break
+			return {.data_type_full, {data_type = output^}}, true
 		}
 	case .member, .named_member, .param, .lambda_param, .lambda_param_nofunc:
 		if i^ == 0 && node.value.member.name == "" do i^ = 1
@@ -280,10 +292,14 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	case .mul, .add, .cmp, .eq, .range, .ass_op:
 		if i^ != 0 do break
 		return {binop_symbol(node.value.mul), {}}, true
-	case .loop_expr, .struct_expr, .array_expr, .cond_expr, .body, .lambda, .call:
+	case .struct_expr, .array_expr, .cond_expr, .body, .lambda, .call:
 		arr := node.value.expr.data.base
 		if i^ >= len(arr) do break
 		return {.expr, {expr = arr[len(arr) - i^ - 1]}}, true
+	case .imports:
+	// TODO
+	case .constraint:
+	// TODO
 	case .expr,
 	     .expr_top,
 	     .expr_post,
@@ -332,9 +348,6 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case .STRUCT:
 			if i^ > 0 do break
 			return {.struct_expr, node.value}, true
-		case .LOOP:
-			if i^ > 0 do break
-			return {.loop_expr, node.value}, true
 		case .BINARY_OP:
 			switch i^ {
 			case 0:
@@ -409,6 +422,22 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 				return {.partial_ident, {ident = node.value.expr.data.let.name}}, true
 			case 2:
 				return {.expr, {expr = node.value.expr.data.base[0]}}, true
+			}
+		case .USE_HANDLER:
+			switch i^ {
+			case 0:
+				return {.USE, {}}, true
+			case 1:
+				return {.ident_full, {ident_full = node.value.expr.data.use_handler.ident}}, true
+			case 2:
+				switch h in node.value.expr.data.use_handler.handler {
+				case []ast.Definition:
+					return {.definitions, {definitions = into_dynamic(h)}}, true
+				case ^ast.Expression:
+					return {.lambda, {lambda = h^}}, true
+				}
+			case 3:
+				return {.body, {body = node.value.expr}}, true
 			}
 		case .MUT:
 			switch i^ {

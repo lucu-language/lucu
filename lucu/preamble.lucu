@@ -1,65 +1,48 @@
 type unit = ()
 type never
 
-type  int
+# Largest unsigned integer that can fit in a general register.
 type uint
-
-type isize
+# Unsigned integer that can fit the largest consecutive memory size.
 type usize
-
-type iptr
+# Unsigned integer that can fit a pointer.
 type uptr
 
-type i8
 type u8
-
-type i16
 type u16
-
-type i32
 type u32
-
-type i64
 type u64
 
+# Signed equivalent of &uint. 
+type int
+# Signed equivalent of &usize.
+type isize
+# Signed equivalent of &uptr.
+type iptr
+
+type i8
+type i16
+type i32
+type i64
+
+# Largest floating point number that can fit in a general register.
+type float
+
+type f16
+type f32
+type f64
+
 type bool
-type str = (_backing: []u8)
+type str  = (_backing: []u8)
+type char = (_backing:  u32)
 
 const unit  = ()
 const true  = 0 == 0
 const false = 0 != 0
 
-effect yield 't {
-	func yield(t: 't)
-}
+type Body 'e 't = func ('e) => () -> 't
 
-type Generator 't = func (yield 't)
-
-(srcloc) => {
-	func first(gen: Generator 't) -> 't {
-		use yield 't {
-			t ->
-			break t
-		}
-
-		gen.()
-		panic("nothing was yielded")
-	}
-	func nth(num: usize, gen: Generator 't) -> 't {
-		mut current: usize = 0
-		use yield 't {
-			t ->
-			if current == num {
-				break t
-			} else {
-				current += 1
-			}
-		}
-
-		gen.()
-		panic("not enough was yielded")
-	}
-}
+func id
 
 (srcloc) => {
 	##
@@ -102,7 +85,155 @@ type Generator 't = func (yield 't)
 	}
 }
 
+## MARKER EFFECTS ##
+
+effect clone 't {
+	func clone(t: 't) -> 't
+}
+
+(clone 't) => effect copy 't {}
+
+## OPERATOR EFFECTS ##
+
+effect binop 'op { const _: string = 'op }
+use binop "+" {}
+use binop "-" {}
+use binop "*" {}
+use binop "/" {}
+use binop "%" {}
+
+(op 'op) =>
+effect infix 'op 'lhs 'rhs {
+	type output
+	func infix(lhs: 'lhs, rhs: 'rhs) -> output
+}
+
+(op 'op) =>
+effect assign 'op 'lhs 'rhs {
+	func assign(lhs: ^'lhs, rhs: 'rhs)
+}
+
+##
+# Defines the infix operator using the assignment operator.
+# This way you only have to define the assignment operator for copy types.
+##
+(copy 'lhs, assign 'op 'lhs 'rhs) =>
+use infix 'op 'lhs 'rhs {
+	type output = 'lhs
+	func infix(lhs: 'lhs, rhs: 'rhs) -> output {
+		mut copy = lhs
+		assign(&copy, rhs)
+		copy
+	}
+}
+
+## NUMBER EFFECTS ##
+
+effect num 't {
+	const zero: 't
+	const one: 't
+
+	use assign "+" 't 't
+	use assign "-" 't 't
+	use assign "*" 't 't
+	use assign "/" 't 't
+
+	use assign "%" 't 't {
+		dividend, divisor ->
+		dividend - ((dividend / divisor) * divisor)
+	}
+}
+
+(num    't) => effect signed 't {}
+(signed 't) => effect  float 't {}
+
+use signed int   {}
+use signed isize {}
+use signed iptr  {}
+use signed i8    {}
+use signed i16   {}
+use signed i32   {}
+use signed i64   {}
+
+use signed float {}
+use signed f16   {}
+use signed f32   {}
+use signed f64   {}
+
+use float float {}
+use float f16   {}
+use float f32   {}
+use float f64   {}
+
 ## THE FOLLOWING DECLARATIONS HAVE INTERNAL DEFINITIONS ##
+
+use num uint
+use num usize
+use num uptr
+use num u8
+use num u16
+use num u32
+use num u64
+
+use num int
+use num isize
+use num iptr
+use num i8
+use num i16
+use num i32
+use num i64
+
+use num float
+use num f16
+use num f32
+use num f64
+
+use clone uint
+use clone usize
+use clone uptr
+use clone u8
+use clone u16
+use clone u32
+use clone u64
+
+use clone int
+use clone isize
+use clone iptr
+use clone i8
+use clone i16
+use clone i32
+use clone i64
+
+use clone float
+use clone f16
+use clone f32
+use clone f64
+
+use copy uint
+use copy usize
+use copy uptr
+use copy u8
+use copy u16
+use copy u32
+use copy u64
+
+use copy int
+use copy isize
+use copy iptr
+use copy i8
+use copy i16
+use copy i32
+use copy i64
+
+use copy float
+use copy f16
+use copy f32
+use copy f64
+
+##
+# Loops the body function indefinitely.
+##
+func loop(body: func) -> never
 
 ##
 # Marks that a code path is unreachable.

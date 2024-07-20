@@ -26,26 +26,54 @@ lambda_append :: proc(base: ast.Expression, lambda: ast.Expression) -> ast.Expre
   }
 }
 
+apply_outer_context :: proc(ctxt_outer: [dynamic]ast.Ident_Full, defs: [dynamic]ast.Definition) {
+  for &def in defs {
+    ctxt := slice.clone_to_dynamic(def.ctxt)
+    for ident in ctxt_outer {
+      append(&ctxt, ast.clone_ident(ident))
+    }
+    delete(def.ctxt)
+    def.ctxt = ctxt[:]
+  }
+  delete(ctxt_outer)
+}
+
 //
 
 ## RULES
 
 lucu // [dynamic]ast.Definition //
- -> definitions // this = _0 //
+ -> imports definitions // this = _1 //
+;
+
+imports
+ ->
+ -> "import" str_literal ";" imports
 ;
 
 definitions // [dynamic]ast.Definition //
  ->
- -> definition                                             //            append(&this, _0) //
- -> definition_context "{" definitions "}"
- -> error                                  ";" definitions // this = _2                    //
- -> definition                             ";" definitions // this = _2; append(&this, _0) //
- -> definition_context "{" definitions "}" ";" definitions
+ -> definition                                             //            append(&this, _0)                                                     //
+ -> definition_context "{" definitions "}"                 // this = _2; apply_outer_context(_0, this)                                         //
+ -> error                                  ";" definitions // this = _2                                                                        //
+ -> definition                             ";" definitions // this = _2; append(&this, _0)                                                     //
+ -> definition_context "{" definitions "}" ";" definitions // this = _5; apply_outer_context(_0, _2); append_elems(&this, .._2[:]); delete(_2) //
 ;
 
 definition_context // [dynamic]ast.Ident_Full //
  ->
- -> "(" ident_full_comma ")" "=>" // this = _1 //
+ -> "(" constraints ")" "=>" // this = _1 //
+;
+
+constraint // ast.Ident_Full //
+ -> ident_full                    // this = _0 //
+ -> ident_full "=" data_type_full
+;
+
+constraints // [dynamic]ast.Ident_Full //
+ -> constraint                 //            append(&this, _0) //
+ -> constraint ","             //            append(&this, _0) //
+ -> constraint "," constraints // this = _2; append(&this, _0) //
 ;
 
 definition // ast.Definition //
@@ -53,23 +81,26 @@ definition // ast.Definition //
  -> definition_context definition_func   // this = _1; this.ctxt = _0[:] //
  -> definition_context definition_effect // this = _1; this.ctxt = _0[:] //
  -> definition_context definition_use    // this = _1; this.ctxt = _0[:] //
- -> definition_context definition_const
+ -> definition_context definition_const  // this = _1; this.ctxt = _0[:] //
 ;
 
 definition_const // ast.Definition //
- -> "const" partial_ident                    "=" expr
- -> "const" partial_ident ":" data_type_full "=" expr
- -> "const" partial_ident ":" data_type_full
+ -> "const" partial_ident                    "=" expr // this = { nil, _1, nil, ast.Definition_Const {   }, ast.Definition_Impl { definition_const = _3 } } //
+ -> "const" partial_ident ":" data_type_full "=" expr // this = { nil, _1, nil, ast.Definition_Const {_3 }, ast.Definition_Impl { definition_const = _5 } } //
+ -> "const" partial_ident ":" data_type_full          // this = { nil, _1, nil, ast.Definition_Const {_3 }, nil                                           } //
 ;
 
 definition_use // ast.Definition //
- -> "use" ident_full "{" definitions "}" // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = _3[:] } } //
- -> "use" ident_full                     // this = { nil, "", nil, ast.Definition_Use {_1}, nil                                            } //
+ -> "use" ident_full "{" definitions "}" // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = _3[:]         } } //
+ -> "use" ident_full lambda              // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = new_clone(_2) } } //
+ -> "use" ident_full                     // this = { nil, "", nil, ast.Definition_Use {_1}, nil                                                    } //
 ;
 
 definition_effect // ast.Definition //
- -> "effect" partial_ident generics_defs "{" definitions "}" // this = { nil, _1, _2[:], ast.Definition_Effect {}, ast.Definition_Impl { definition_effect = _4[:] } } //
- -> "effect" partial_ident generics_defs                     // this = { nil, _1, _2[:], ast.Definition_Effect {}, nil                                               } //
+ -> "effect" partial_ident generics_defs     "{" definitions "}" // this = { nil, _1, _2[:], ast.Definition_Effect {}, ast.Definition_Impl { definition_effect = _4[:] } } //
+ -> "effect" partial_ident generics_defs "=" "(" constraints ")"
+ -> "effect" partial_ident generics_defs "=" ident_full
+ -> "effect" partial_ident generics_defs                         // this = { nil, _1, _2[:], ast.Definition_Effect {}, nil                                               } //
 ;
 
 definition_type // ast.Definition //
@@ -83,8 +114,8 @@ definition_func // ast.Definition //
 ;
 
 func_sign // ast.Definition_Func //
- -> "(" params ")"                            // this = { _1[:], nil } //
- -> "(" params ")" "->" data_type_full_nofunc // this = { _1[:], _4  } //
+ -> "(" params ")"                            // this = { _1[:], nil           } //
+ -> "(" params ")" "->" data_type_full_nofunc // this = { _1[:], new_clone(_4) } //
 ;
 
 # function parameter
@@ -115,12 +146,6 @@ ident_package // ast.Ident_Full //
 # identifier with optional package prefix and generics juxtaposition
 ident_full // ast.Ident_Full //
  -> ident_package generics // this = _0; this.generics = _1[:] //
-;
-
-ident_full_comma // [dynamic]ast.Ident_Full //
- -> ident_full                      //            append(&this, _0) //
- -> ident_full ","                  //            append(&this, _0) //
- -> ident_full "," ident_full_comma // this = _2; append(&this, _0) //
 ;
 
 # constant values
@@ -210,11 +235,11 @@ data_type_full_nofunc // ast.Type //
 ;
 
 data_type_full // ast.Type //
- -> "func"
- -> "func"                               func_sign
- -> "func" "(" ident_full_comma ")" "=>" func_sign
- -> "func" "(" ident_full_comma ")"
- -> data_type_full_nofunc                          // this = _0 //
+ -> "func"                                    // this = {nil, ast.Type_Func {nil,   {}}} //
+ -> "func"                          func_sign // this = {nil, ast.Type_Func {nil,   _1}} //
+ -> "func" "(" constraints ")" "=>" func_sign // this = {nil, ast.Type_Func {_2[:], _5}} //
+ -> "func" "(" constraints ")"                // this = {nil, ast.Type_Func {_2[:], {}}} //
+ -> data_type_full_nofunc                     // this = _0                                                              //
 ;
 
 ### EXPRESSION RULES
@@ -262,7 +287,7 @@ stmts_semi_suffix // [dynamic]ast.Expression //
 
 exprs // [dynamic]ast.Expression //
  ->
- -> expr                 //            append(&this, _0) //
+ -> expr           //            append(&this, _0) //
  -> expr "," exprs // this = _2; append(&this, _0) //
 ;
 
@@ -288,10 +313,6 @@ member_exprs_struct // [dynamic]ast.Expression //
 ;
 
 # non-recursive expression
-loop_expr // ast.Expression //
- -> "loop" body // this = _1; this.kind = .LOOP //
-;
-
 cond_expr // ast.Expression //
  -> "if" expr_nolambda body               // this = { .IF_ELSE, {base = exprs(_1,_2)   } }        //
  -> "if" expr_nolambda body "else" body   // this = { .IF_ELSE, {base = exprs(_1,_2,_4)} }        //
@@ -310,7 +331,6 @@ struct_expr // ast.Expression //
 expr_top // ast.Expression //
  -> lambda       // this = _0                              //
  -> body         // this = _0                              //
- -> loop_expr    // this = _0                              //
  -> cond_expr    // this = _0                              //
  -> array_expr   // this = _0                              //
  -> struct_expr  // this = _0                              //
@@ -530,10 +550,10 @@ stmt // ast.Expression //
 
 # final statement of a body
 stmt_final // ast.Expression //
- -> "use" lambda_params "<-" expr        stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} }) //
- -> "use" ident_full lambda              stmts_semi_suffix
- -> "use" ident_full "{" definitions "}" stmts_semi_suffix
- -> stmt                                                   // this = _0                                                        //
+ -> "use" lambda_params "<-" expr        stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} })    //
+ -> "use" ident_full lambda              stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_3[:], _1, new_clone(_2)}} } //
+ -> "use" ident_full "{" definitions "}" stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_5[:], _1, _3[:]        }} } //
+ -> stmt                                                   // this = _0                                                           //
 ;
 
 ## LEXEMES

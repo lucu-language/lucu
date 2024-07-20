@@ -1,0 +1,141 @@
+import "lucu:group"
+
+effect yield 't {
+	func yield(t: 't)
+}
+
+type Generator 't = func (yield 't)
+
+type Mapping 'a 'b = func (a: 'a) -> 'b
+type Predicate 't  = func (t: 't) -> bool
+
+(yield 'b) =>
+func map(map: Mapping 'a 'b, gen: Generator 'a) {
+	use yield 'a { a ->
+		yield(map.(a))
+	}
+	gen.()
+}
+
+
+(yield 'a) =>
+func filter(pred: Predicate 'a, gen: Generator 'a) {
+	use yield 'a { a ->
+		if pred.(a) { yield(a) }
+	}
+	gen.()
+}
+
+func fold(f: func (acc: 'b, a: 'a) -> 'b, init: 'b, gen: Generator 'a) -> 'b {
+	mut acc = init
+	use yield 'a { a ->
+		acc = f.(acc, a)
+	}
+	gen.()
+	acc
+}
+
+#func all(pred: Predicate 'a, gen: Generator 'a) -> bool {
+#	fold({ acc, a -> acc && pred.(a) }, true, gen)
+#}
+#
+#func any(pred: Predicate 'a, gen: Generator 'a) -> bool {
+#	fold({ acc, a -> acc || pred.(a) }, false, gen)
+#}
+#
+#func none(pred: Predicate 'a, gen: Generator 'a) -> bool {
+#	!any(pred, gen)
+#}
+
+(group.monoid 't group.add) =>
+func sum(gen: Generator 't) -> 't {
+	fold({ acc, a -> acc + a }, identity, gen)
+}
+
+(group.monoid 't group.mul) =>
+func product(gen: Generator 't) -> 't {
+	fold({ acc, a -> acc * a }, identity, gen)
+}
+
+func count(gen: Generator 't) -> usize {
+	fold({ acc, _ -> acc + 1 }, 0, gen)
+}
+
+func unfold(seed: 'a, map: Mapping 'a 'a) {
+	mut val = seed
+	loop { val = map.(val) }
+}
+
+(yield 'a) =>
+func take(count: usize, gen: Generator 'a) {
+	mut taken: usize = 0
+	use yield 'a { a ->
+		if taken++ == count {
+			break
+		} else {
+			yield(a)
+		}
+	}
+	gen.()
+}
+
+(yield 'a) =>
+func repeat(count: usize, seed: 'a) {
+	use <- take(count)
+	use <- loop
+	yield(seed)
+}
+
+(yield 'a) =>
+func itermap(seed: 'a, map: Mapping 'a 'a) {
+	unfold(seed) { a ->
+		yield(a)
+		map.(a)
+	}
+}
+
+(srcloc) => {
+	func find(pred: Predicate 't, gen: Generator 't) -> 't {
+		use yield 't { t ->
+			if pred.(t) { break t }
+		}
+		gen.()
+		panic("not found")
+	}
+	func first(gen: Generator 't) -> 't {
+		use yield 't { t ->
+			break t
+		}
+
+		gen.()
+		panic("nothing was yielded")
+	}
+	func nth(num: usize, gen: Generator 't) -> 't {
+		mut current: usize = 0
+		use yield 't { t ->
+			if current == num {
+				break t
+			} else {
+				current += 1
+			}
+		}
+
+		gen.()
+		panic("not enough was yielded")
+	}
+	func last(gen: Generator 't) -> 't {
+		mut found     = false
+		mut value: 't = ---
+		use yield 't { t ->
+			found = true
+			value = t
+		}
+
+		gen.()
+		if found {
+			value
+		} else {
+			panic("nothing was yielded")
+		}
+	}
+}

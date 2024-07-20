@@ -1,0 +1,146 @@
+## DEFINITION MAGMA ##
+
+effect op 'op 't = (infix 'op 't 't, output = 't)
+
+effect add 't = op "+" 't
+effect sub 't = op "-" 't
+effect mul 't = op "*" 't
+effect div 't = op "/" 't
+effect mod 't = op "%" 't
+
+('m 't) =>
+effect magma 't 'm {
+	func binop(lhs: 't, rhs: 't) -> 't
+}
+
+(op 'op 't) =>
+use magma 't (op 'op) {
+	lhs, rhs ->
+	infix(lhs, rhs)
+}
+
+## ORDERING PROPERTIES ##
+
+(magma 't 'm) =>
+effect associative 't 'm {}
+(magma 't 'm) =>
+effect commutative 't 'm {}
+
+## IDENTITY PROPERTIES ##
+
+(magma 't 'm) =>
+effect left_identity 't 'm {
+	const left_identity: 't
+}
+(magma 't 'm) =>
+effect right_identity 't 'm {
+	const left_identity: 't
+}
+
+(magma 't 'm) =>
+effect identity 't 'm {
+	const identity: 't
+}
+(identity 't 'm) => {
+	use  left_identity 't 'm { const  left_identity = identity }
+	use right_identity 't 'm { const right_identity = identity }
+}
+
+## CANCELLATIVE PROPERTIES ##
+
+# -= cancellative property =-
+#  for any identity (a * x = b),
+#  x is unique
+
+# -= division property =-
+#  for any a, b,
+#  the identity (a * x = b) exists
+#  x is unique
+
+(magma 't 'm) =>
+effect left_cancellative 't 'm {
+	##
+	# Calculates x in the identity (a * x = b)
+	##
+	func left_cancel(a: 't, b: 't) -> 't
+}
+(magma 't 'm) =>
+effect right_cancellative 't 'm {
+	##
+	# Calculates x in the identity (x * a = b)
+	##
+	func right_cancel(a: 't, b: 't) -> 't
+}
+
+(magma 't 'm) =>
+effect cancellative 't 'm {
+	##
+	# Calculates x in the identity (a * x = b)
+	##
+	func cancel(a: 't, b: 't) -> 't
+}
+(cancellative 't 'm) => {
+	use  left_cancellative 't 'm { a, b -> cancel(a, b) }
+	use right_cancellative 't 'm { a, b -> cancel(a, b) }
+}
+
+( left_cancellative 't 'm) => effect  left_division 't 'm {}
+(right_cancellative 't 'm) => effect right_division 't 'm {}
+(      cancellative 't 'm) => effect       division 't 'm {}
+
+## INVERTIBLE PROPERTIES ##
+
+effect  left_invertible 't 'm = ( left_identity 't 'm,  left_division 't 'm)
+effect right_invertible 't 'm = (right_identity 't 'm, right_division 't 'm)
+effect       invertible 't 'm = (      identity 't 'm,       division 't 'm)
+
+(left_invertible 't 'm) =>
+func left_inverse(a: 't) -> 't { left_cancel(a, left_identity) }
+
+(right_invertible 't 'm) =>
+func right_inverse(a: 't) -> 't { right_cancel(a, right_identity) }
+
+(invertible 't 'm) =>
+func inverse(a: 't) -> 't { cancel(a, identity) }
+
+## COMBINED PROPERTIES ##
+
+effect  semigroup 't 'm = (associative 't 'm)
+effect quasigroup 't 'm = (left_division 't 'm, right_division 't 'm)
+effect       loop 't 'm = (quasigroup 't 'm, identity 't 'm)
+effect     monoid 't 'm =  (semigroup 't 'm, identity 't 'm)
+effect      group 't 'm =  (semigrouo 't 'm, invertible 't 'm)
+
+## GROUP DEFINITIONS ##
+
+(num 't) => {
+	use associative 't add {}
+	use associative 't mul {}
+
+	use commutative 't add {}
+	use commutative 't mul {}
+
+	use       identity 't add { const       identity = zero }
+	use right_identity 't sub { const right_identity = zero }
+	use       identity 't mul { const       identity = one  }
+	use right_identity 't div { const right_identity = one  }
+
+	use       cancellative 't add { a, b -> b - a }
+	use  left_cancellative 't sub { a, b -> a - b }
+	use right_cancellative 't sub { a, b -> b - a }
+	use       cancellative 't mul { a, b -> b / a }
+	use  left_cancellative 't div { a, b -> a / b }
+	use right_cancellative 't div { a, b -> b / a }
+
+	(signed 't) => {
+		use       division 't add {}
+		use  left_division 't sub {}
+		use right_division 't sub {}
+	}
+
+	(float 't) => {
+		use       division 't mul {}
+		use  left_division 't div {}
+		use right_division 't div {}
+	}
+}

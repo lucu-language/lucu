@@ -78,7 +78,8 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 	     .STAR_EQUALS,
 	     .PERCENT_EQUALS,
 	     .AMPERSAND,
-	     .USE,
+	     .USING,
+	     .HANDLE,
 	     .EFFECT,
 	     .MUT,
 	     .CONST,
@@ -123,7 +124,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 			case ast.Definition_Const:
 				return {.data_type_full, {data_type_full = sign.type}}, true
 			case ast.Definition_Use:
-				return {.USE, {}}, true
+				return {.HANDLE, {}}, true
 			case ast.Definition_Func:
 				return {.func_sign, {func_sign = sign}}, true
 			}
@@ -426,7 +427,7 @@ node_children :: proc(node: Node, i: ^int) -> (Node, bool) {
 		case .USE_HANDLER:
 			switch i^ {
 			case 0:
-				return {.USE, {}}, true
+				return {.HANDLE, {}}, true
 			case 1:
 				return {.ident_full, {ident_full = node.value.expr.data.use_handler.ident}}, true
 			case 2:

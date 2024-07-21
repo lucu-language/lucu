@@ -1,54 +1,39 @@
 ## DEFINITION MAGMA ##
 
-effect op 'op 't = (infix 'op 't 't, output = 't)
-
-effect add 't = op "+" 't
-effect sub 't = op "-" 't
-effect mul 't = op "*" 't
-effect div 't = op "/" 't
-effect mod 't = op "%" 't
-
-('m 't) =>
-effect magma 't 'm {
+effect Magma 't {
 	func binop(lhs: 't, rhs: 't) -> 't
-}
-
-(op 'op 't) =>
-use magma 't (op 'op) {
-	lhs, rhs ->
-	infix(lhs, rhs)
 }
 
 ## ORDERING PROPERTIES ##
 
-(magma 't 'm) =>
-effect associative 't 'm {}
-(magma 't 'm) =>
-effect commutative 't 'm {}
+(Magma 't) =>
+effect Associative 't {}
+(Magma 't) =>
+effect Commutative 't {}
 
 ## IDENTITY PROPERTIES ##
 
-(magma 't 'm) =>
-effect left_identity 't 'm {
-	const left_identity: 't
+(Magma 't) =>
+effect LeftIdentity 't {
+	const LEFT_IDENTITY: 't
 }
-(magma 't 'm) =>
-effect right_identity 't 'm {
-	const left_identity: 't
-}
-
-(magma 't 'm) =>
-effect identity 't 'm {
-	const identity: 't
-}
-(identity 't 'm) => {
-	use  left_identity 't 'm { const  left_identity = identity }
-	use right_identity 't 'm { const right_identity = identity }
+(Magma 't) =>
+effect RightIdentity 't {
+	const RIGHT_IDENTITY: 't
 }
 
-## CANCELLATIVE PROPERTIES ##
+(Magma 't) =>
+effect Identity 't {
+	const IDENTITY: 't
+}
+(Identity 't) => {
+	handle  LeftIdentity 't { const  LEFT_IDENTITY = IDENTITY }
+	handle RightIdentity 't { const RIGHT_IDENTITY = IDENTITY }
+}
 
-# -= cancellative property =-
+## CANCELLATION PROPERTIES ##
+
+# -= cancellation property =-
 #  for any identity (a * x = b),
 #  x is unique
 
@@ -57,90 +42,117 @@ effect identity 't 'm {
 #  the identity (a * x = b) exists
 #  x is unique
 
-(magma 't 'm) =>
-effect left_cancellative 't 'm {
+(Magma 't) =>
+effect LeftCancellation 't {
 	##
 	# Calculates x in the identity (a * x = b)
 	##
 	func left_cancel(a: 't, b: 't) -> 't
 }
-(magma 't 'm) =>
-effect right_cancellative 't 'm {
+(Magma 't) =>
+effect RightCancellation 't {
 	##
 	# Calculates x in the identity (x * a = b)
 	##
 	func right_cancel(a: 't, b: 't) -> 't
 }
 
-(magma 't 'm) =>
-effect cancellative 't 'm {
+(Commutative 't) =>
+effect Cancellation 't {
 	##
 	# Calculates x in the identity (a * x = b)
 	##
 	func cancel(a: 't, b: 't) -> 't
 }
-(cancellative 't 'm) => {
-	use  left_cancellative 't 'm { a, b -> cancel(a, b) }
-	use right_cancellative 't 'm { a, b -> cancel(a, b) }
+(Cancellation 't) => {
+	handle  LeftCancellation 't { a, b -> cancel(a, b) }
+	handle RightCancellation 't { a, b -> cancel(a, b) }
 }
 
-( left_cancellative 't 'm) => effect  left_division 't 'm {}
-(right_cancellative 't 'm) => effect right_division 't 'm {}
-(      cancellative 't 'm) => effect       division 't 'm {}
+( LeftCancellation 't) => effect  LeftDivision 't {}
+(RightCancellation 't) => effect RightDivision 't {}
+(     Cancellation 't) => effect      Division 't {}
+
+effect TwoSidedCancellation 't = (LeftCancellation 't, RightCancellation 't)
+effect TwoSidedDivision     't = (LeftDivision     't, RightDivision     't)
 
 ## INVERTIBLE PROPERTIES ##
 
-effect  left_invertible 't 'm = ( left_identity 't 'm,  left_division 't 'm)
-effect right_invertible 't 'm = (right_identity 't 'm, right_division 't 'm)
-effect       invertible 't 'm = (      identity 't 'm,       division 't 'm)
+effect  LeftInvertible 't = ( LeftIdentity 't,     LeftDivision 't)
+effect RightInvertible 't = (RightIdentity 't,    RightDivision 't)
+effect      Invertible 't = (     Identity 't, TwoSidedDivision 't)
 
-(left_invertible 't 'm) =>
-func left_inverse(a: 't) -> 't { left_cancel(a, left_identity) }
+(LeftInvertible 't) =>
+func left_inverse(a: 't) -> 't { left_cancel(a, LEFT_IDENTITY) }
 
-(right_invertible 't 'm) =>
-func right_inverse(a: 't) -> 't { right_cancel(a, right_identity) }
+(RightInvertible 't) =>
+func right_inverse(a: 't) -> 't { right_cancel(a, RIGHT_IDENTITY) }
 
-(invertible 't 'm) =>
-func inverse(a: 't) -> 't { cancel(a, identity) }
+(Invertible 't) =>
+func inverse(a: 't) -> 't { left_cancel(a, IDENTITY) }
 
 ## COMBINED PROPERTIES ##
 
-effect  semigroup 't 'm = (associative 't 'm)
-effect quasigroup 't 'm = (left_division 't 'm, right_division 't 'm)
-effect       loop 't 'm = (quasigroup 't 'm, identity 't 'm)
-effect     monoid 't 'm =  (semigroup 't 'm, identity 't 'm)
-effect      group 't 'm =  (semigrouo 't 'm, invertible 't 'm)
+effect  Semigroup 't = Associative 't
+effect Quasigroup 't = TwoSidedDivision 't
+effect       Loop 't = (Quasigroup 't, Identity 't)
+effect     Monoid 't = (Semigroup 't, Identity 't)
+effect      Group 't = (Semigroup 't, Invertible 't)
 
 ## GROUP DEFINITIONS ##
 
-(num 't) => {
-	use associative 't add {}
-	use associative 't mul {}
-
-	use commutative 't add {}
-	use commutative 't mul {}
-
-	use       identity 't add { const       identity = zero }
-	use right_identity 't sub { const right_identity = zero }
-	use       identity 't mul { const       identity = one  }
-	use right_identity 't div { const right_identity = one  }
-
-	use       cancellative 't add { a, b -> b - a }
-	use  left_cancellative 't sub { a, b -> a - b }
-	use right_cancellative 't sub { a, b -> b - a }
-	use       cancellative 't mul { a, b -> b / a }
-	use  left_cancellative 't div { a, b -> a / b }
-	use right_cancellative 't div { a, b -> b / a }
-
-	(signed 't) => {
-		use       division 't add {}
-		use  left_division 't sub {}
-		use right_division 't sub {}
-	}
-
-	(float 't) => {
-		use       division 't mul {}
-		use  left_division 't div {}
-		use right_division 't div {}
-	}
+func monoid(
+	binop:    func (lhs: 't, rhs: 't) -> 't,
+	identity: 't,
+	body:     Body (monoid 't) 'r,
+) -> 'r {
+	handle Magma       't { lhs, rhs -> binop(lhs, rhs) }
+	handle Identity    't { const IDENTITY = identity   }
+	handle Associative 't {}
+	body.()
 }
+
+func group(
+	binop:    func (lhs: 't, rhs: 't) -> 't,
+	identity: 't,
+	inverse:  func (a: 't),
+	body:     Body (group 't) 'r,
+) -> 'r {
+	using monoid(binop, identity, inverse)
+
+	handle  LeftCancellation 't { a, b -> binop(inverse(a), b) }
+	handle RightCancellation 't { a, b -> binop(b, inverse(a)) }
+	handle  LeftDivision 't {}
+	handle RightDivision 't {}
+
+	body.()
+}
+
+(Infix 't "+" 't, Output = 't) =>
+effect Sum 't {
+	func sum(body: Body (monoid 't) 'r) -> 'r
+}
+
+(Infix 't "*" 't, Output = 't) =>
+effect Product 't {
+	func product(body: Body (monoid 't) 'r) -> 'r
+}
+
+(Infix 't "+" 't, Output = 't) =>
+effect Addititive 't {
+	func addditive(body: Body (group 't) 'r) -> 'r
+}
+
+(Infix 't "*" 't, Output = 't) =>
+effect Multiplicative 't {
+	func multiplicative(body: Body (group 't) 'r) -> 'r
+}
+
+(Num    't) =>
+handle            Sum 't { body -> monoid({ lhs, rhs -> lhs + rhs }, 0, body) }
+(Num    't) =>
+handle        Product 't { body -> monoid({ lhs, rhs -> lhs * rhs }, 1, body) }
+(Signed 't) =>
+handle       Additive 't { body -> group({ lhs, rhs -> lhs + rhs }, 0, { a ->    -a }, body) }
+(Float  't) =>
+handle Multiplicative 't { body -> group({ lhs, rhs -> lhs * rhs }, 1, { a -> 1 / a }, body) }

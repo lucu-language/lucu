@@ -33,8 +33,8 @@ type f32
 type f64
 
 type bool
-type str  = (_backing: []u8)
-type char = (_backing:  u32)
+type str
+type char
 
 const unit  = ()
 const true  = 0 == 0
@@ -42,9 +42,7 @@ const false = 0 != 0
 
 type Body 'e 't = func ('e) => () -> 't
 
-func id
-
-(srcloc) => {
+(SrcLoc) => {
 	##
 	# Panics with message if the assertion is not met.
 	##
@@ -79,7 +77,7 @@ func id
 	##
 	func trap() -> never {
 		trace("trapped at ")
-		trace(source_location())
+		trace(location())
 		trace("\n")
 		trap_silent()
 	}
@@ -87,29 +85,36 @@ func id
 
 ## MARKER EFFECTS ##
 
-effect clone 't {
-	func clone(t: 't) -> 't
+effect Clone 't {
+	func clone(t: ^'t) -> 't
 }
 
-(clone 't) => effect copy 't {}
+##
+# Any type 't where Copy 't is defined
+# will use copy semantics instead of move semantcs.
+#
+# The naming convention for copy types is littlecase,
+# where the convention for non-copy types is PascalCase.
+##
+(Clone 't) => effect Copy 't {}
 
 ## OPERATOR EFFECTS ##
 
-effect binop 'op { const _: string = 'op }
-use binop "+" {}
-use binop "-" {}
-use binop "*" {}
-use binop "/" {}
-use binop "%" {}
+effect BinOp 'op { const _: string = 'op }
+handle BinOp "+" {}
+handle BinOp "-" {}
+handle BinOp "*" {}
+handle BinOp "/" {}
+handle BinOp "%" {}
 
-(op 'op) =>
-effect infix 'op 'lhs 'rhs {
-	type output
-	func infix(lhs: 'lhs, rhs: 'rhs) -> output
+(BinOp 'op) =>
+effect Infix 'lhs 'op 'rhs {
+	type Output
+	func infix(lhs: 'lhs, rhs: 'rhs) -> Output
 }
 
-(op 'op) =>
-effect assign 'op 'lhs 'rhs {
+(BinOp 'op) =>
+effect Assign 'lhs 'op 'rhs {
 	func assign(lhs: ^'lhs, rhs: 'rhs)
 }
 
@@ -117,118 +122,128 @@ effect assign 'op 'lhs 'rhs {
 # Defines the infix operator using the assignment operator.
 # This way you only have to define the assignment operator for copy types.
 ##
-(copy 'lhs, assign 'op 'lhs 'rhs) =>
-use infix 'op 'lhs 'rhs {
-	type output = 'lhs
-	func infix(lhs: 'lhs, rhs: 'rhs) -> output {
+(Copy 'lhs, Assign 'lhs 'op 'rhs) =>
+handle Infix 'lhs 'op 'rhs {
+	type Output = 'lhs
+	func infix(lhs: 'lhs, rhs: 'rhs) -> Output {
 		mut copy = lhs
 		assign(&copy, rhs)
 		copy
 	}
 }
-
+ 
 ## NUMBER EFFECTS ##
 
-effect num 't {
-	const zero: 't
-	const one: 't
+effect Num 't {
+	const ZERO: 't
+	const ONE: 't
 
-	use assign "+" 't 't
-	use assign "-" 't 't
-	use assign "*" 't 't
-	use assign "/" 't 't
+	handle Assign 't "+" 't
+	handle Assign 't "-" 't
+	handle Assign 't "*" 't
+	handle Assign 't "/" 't
 
-	use assign "%" 't 't {
+	handle Assign 't "%" 't {
 		dividend, divisor ->
 		dividend - ((dividend / divisor) * divisor)
 	}
 }
 
-(num    't) => effect signed 't {}
-(signed 't) => effect  float 't {}
+(Num 't) => effect Signed 't {}
+(Num 't) => effect  Float 't {}
 
-use signed int   {}
-use signed isize {}
-use signed iptr  {}
-use signed i8    {}
-use signed i16   {}
-use signed i32   {}
-use signed i64   {}
+handle Signed int   {}
+handle Signed isize {}
+handle Signed iptr  {}
+handle Signed i8    {}
+handle Signed i16   {}
+handle Signed i32   {}
+handle Signed i64   {}
 
-use signed float {}
-use signed f16   {}
-use signed f32   {}
-use signed f64   {}
+handle Signed float {}
+handle Signed f16   {}
+handle Signed f32   {}
+handle Signed f64   {}
 
-use float float {}
-use float f16   {}
-use float f32   {}
-use float f64   {}
+handle Float float {}
+handle Float f16   {}
+handle Float f32   {}
+handle Float f64   {}
+
+handle Copy uint  {}
+handle Copy usize {}
+handle Copy uptr  {}
+handle Copy u8    {}
+handle Copy u16   {}
+handle Copy u32   {}
+handle Copy u64   {}
+
+handle Copy int   {}
+handle Copy isize {}
+handle Copy iptr  {}
+handle Copy i8    {}
+handle Copy i16   {}
+handle Copy i32   {}
+handle Copy i64   {}
+
+handle Copy float {}
+handle Copy f16   {}
+handle Copy f32   {}
+handle Copy f64   {}
+
+handle Copy unit  {}
+handle Copy never {}
+handle Copy bool  {}
+handle Copy char  {}
 
 ## THE FOLLOWING DECLARATIONS HAVE INTERNAL DEFINITIONS ##
 
-use num uint
-use num usize
-use num uptr
-use num u8
-use num u16
-use num u32
-use num u64
+handle Num uint
+handle Num usize
+handle Num uptr
+handle Num u8
+handle Num u16
+handle Num u32
+handle Num u64
 
-use num int
-use num isize
-use num iptr
-use num i8
-use num i16
-use num i32
-use num i64
+handle Num int
+handle Num isize
+handle Num iptr
+handle Num i8
+handle Num i16
+handle Num i32
+handle Num i64
 
-use num float
-use num f16
-use num f32
-use num f64
+handle Num float
+handle Num f16
+handle Num f32
+handle Num f64
 
-use clone uint
-use clone usize
-use clone uptr
-use clone u8
-use clone u16
-use clone u32
-use clone u64
+handle Clone uint
+handle Clone usize
+handle Clone uptr
+handle Clone u8
+handle Clone u16
+handle Clone u32
+handle Clone u64
 
-use clone int
-use clone isize
-use clone iptr
-use clone i8
-use clone i16
-use clone i32
-use clone i64
+handle Clone int
+handle Clone isize
+handle Clone iptr
+handle Clone i8
+handle Clone i16
+handle Clone i32
+handle Clone i64
 
-use clone float
-use clone f16
-use clone f32
-use clone f64
+handle Clone float
+handle Clone f16
+handle Clone f32
+handle Clone f64
 
-use copy uint
-use copy usize
-use copy uptr
-use copy u8
-use copy u16
-use copy u32
-use copy u64
-
-use copy int
-use copy isize
-use copy iptr
-use copy i8
-use copy i16
-use copy i32
-use copy i64
-
-use copy float
-use copy f16
-use copy f32
-use copy f64
+handle Clone unit
+handle Clone never
+handle Clone bool
+handle Clone char
 
 ##
 # Loops the body function indefinitely.
@@ -254,14 +269,14 @@ func raw_slice(ptr: ^'t, len: usize) -> []'t
 
 ##
 # Effect to get the location of the call in the source code.
-# When used directly, it returns the location of the call to &source_location.
-# When used as an effect parameter inside a function, it returns the location of the caller.
+# When handled directly, it returns the location of the call to &source_location.
+# When handled as an effect parameter inside a function, it returns the location of the caller.
 ##
-effect srcloc {
-	func source_location() -> str
+effect SrcLoc {
+	func location() -> str
 }
 
-use srcloc
+handle SrcLoc
 
 ##
 # Prints a debug message to the environment (usually the standard error).

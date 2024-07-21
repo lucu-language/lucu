@@ -91,9 +91,9 @@ definition_const // ast.Definition //
 ;
 
 definition_use // ast.Definition //
- -> "use" ident_full "{" definitions "}" // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = _3[:]         } } //
- -> "use" ident_full lambda              // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = new_clone(_2) } } //
- -> "use" ident_full                     // this = { nil, "", nil, ast.Definition_Use {_1}, nil                                                    } //
+ -> "handle" ident_full "{" definitions "}" // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = _3[:]         } } //
+ -> "handle" ident_full lambda              // this = { nil, "", nil, ast.Definition_Use {_1}, ast.Definition_Impl { definition_use = new_clone(_2) } } //
+ -> "handle" ident_full                     // this = { nil, "", nil, ast.Definition_Use {_1}, nil                                                    } //
 ;
 
 definition_effect // ast.Definition //
@@ -550,10 +550,11 @@ stmt // ast.Expression //
 
 # final statement of a body
 stmt_final // ast.Expression //
- -> "use" lambda_params "<-" expr        stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} })    //
- -> "use" ident_full lambda              stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_3[:], _1, new_clone(_2)}} } //
- -> "use" ident_full "{" definitions "}" stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_5[:], _1, _3[:]        }} } //
- -> stmt                                                   // this = _0                                                           //
+ -> "using" lambda_params "<-" expr         stmts_semi_suffix // this = lambda_append(_3, { .LAMBDA, {lambda = {_4[:], _1[:]}} })    //
+ -> "using"                    expr         stmts_semi_suffix // this = lambda_append(_1, { .LAMBDA, {lambda = {_2[:], nil  }} })    //
+ -> "handle" ident_full lambda              stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_3[:], _1, new_clone(_2)}} } //
+ -> "handle" ident_full "{" definitions "}" stmts_semi_suffix // this = { .USE_HANDLER, {use_handler = {_5[:], _1, _3[:]        }} } //
+ -> stmt                                                      // this = _0                                                           //
 ;
 
 ## LEXEMES

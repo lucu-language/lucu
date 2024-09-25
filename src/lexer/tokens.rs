@@ -44,6 +44,19 @@ impl Token {
             Token::Close(_) | Token::Keyword(Keyword::With) | Token::Symbol(Symbol::Semicolon)
         )
     }
+    pub fn starts_type(self) -> bool {
+        matches!(
+            self,
+            Token::Symbol(Symbol::Question)
+                | Token::Symbol(Symbol::Caret)
+                | Token::Keyword(Keyword::Struct)
+                | Token::Keyword(Keyword::Typeof)
+                | Token::Keyword(Keyword::Type)
+                | Token::Keyword(Keyword::Effect)
+                | Token::Symbol(Symbol::Bang)
+                | Token::Literal(Literal::Identifier)
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

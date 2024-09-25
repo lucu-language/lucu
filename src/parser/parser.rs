@@ -11,12 +11,14 @@ pub(super) struct Parser<'a> {
     pos: usize,
 }
 
+#[derive(Debug)]
 pub struct Error {
     pub error: ErrorVariant,
     pub len: u32,
     pub start: u32,
 }
 
+#[derive(Debug)]
 pub enum ErrorVariant {
     EOF,
     Unexpected(Token),
@@ -337,14 +339,15 @@ impl<'a> Parser<'a> {
     pub(super) fn skip_until(&mut self, mut filter: impl FnMut(Token) -> bool) {
         loop {
             match self.token_peek() {
+                Some(t) if filter(t.token) => break,
                 Some(FullToken {
                     token: Token::Open(g),
                     ..
                 }) => {
+                    self.skip();
                     self.skip_to(Token::Close(g));
                     self.skip();
                 }
-                Some(t) if filter(t.token) => break,
                 None => break,
                 _ => self.skip(),
             }

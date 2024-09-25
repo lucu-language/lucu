@@ -1,0 +1,3 @@
+const Four      : []int = [4]
+const ArrayType : type  = [4]int
+const SliceType : type  = []int

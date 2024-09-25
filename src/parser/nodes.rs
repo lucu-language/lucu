@@ -3,17 +3,62 @@ use std::num::NonZeroU32;
 use crate::lexer::{FullToken, Group, Keyword, Literal, Symbol, Token};
 
 use super::{
-    Constant, Constraint, Definition, Expression, Identifier, List, NodeData, NodeVariant, Nodes,
-    Parser, Result, Type,
+    Constant, Constraint, Definition, Error, Expression, Identifier, List, NodeData, NodeVariant,
+    Nodes, Parser, Result, Type,
 };
 
-pub fn parse(tokens: &[FullToken]) -> Nodes {
+pub fn parse(tokens: &[FullToken]) -> (Nodes, Vec<Error>) {
     let mut parser = Parser::new(tokens);
     parser.lucu();
-    parser.nodes
+    (parser.nodes, parser.errors)
+}
+
+fn skip_group<'a>(group: Group, tokens: &mut impl Iterator<Item = &'a FullToken>) {
+    while let Some(token) = tokens.next().filter(|t| t.token != Token::Close(group)) {
+        if let Token::Open(inner) = token.token {
+            skip_group(inner, tokens);
+        }
+    }
+}
+fn starts_type<'a>(tokens: &mut impl Iterator<Item = &'a FullToken>) -> bool {
+    match tokens.next().map(|t| t.token) {
+        Some(Token::Open(Group::Bracket)) => {
+            skip_group(Group::Bracket, tokens);
+            starts_type(tokens)
+        }
+        Some(t) if t.starts_type() => true,
+        _ => false,
+    }
 }
 
 impl Parser<'_> {
+    fn in_lambda_params(&self) -> bool {
+        // matches: { -> OR { id -> OR { id ,
+        let mut tokens = self.next_tokens();
+        tokens.next();
+
+        let Some(first) = tokens.next() else {
+            return false;
+        };
+        if first.token == Token::Symbol(Symbol::Arrow) {
+            return true;
+        };
+
+        tokens.next().is_some_and(|t| {
+            matches!(
+                t.token,
+                Token::Symbol(Symbol::Comma) | Token::Symbol(Symbol::Arrow)
+            )
+        })
+    }
+    fn in_array_type(&self) -> bool {
+        let mut tokens = self.next_tokens();
+        tokens.next();
+
+        skip_group(Group::Bracket, &mut tokens);
+        starts_type(&mut tokens)
+    }
+
     fn import(&mut self) -> Result<NonZeroU32> {
         self.node(NodeVariant::Import, |parser| {
             parser.token_expect(Token::Keyword(Keyword::Import))?;
@@ -366,11 +411,9 @@ impl Parser<'_> {
                     parser.skip();
                     Some((Expression::PostDecrement, None))
                 }
-                Token::Open(Group::Parenthesis) | Token::Open(Group::Brace) => {
-                    if !LAMBDA && parser.token_check(Token::Open(Group::Brace)) {
-                        return Ok(None);
-                    }
-
+                Token::Open(Group::Parenthesis) | Token::Open(Group::Brace)
+                    if LAMBDA || !parser.token_check(Token::Open(Group::Brace)) =>
+                {
                     let arguments = parser.node(NodeVariant::Arguments, |parser| {
                         let exprs =
                             parser.check_then(Token::Open(Group::Parenthesis), |parser| {
@@ -427,7 +470,7 @@ impl Parser<'_> {
                         )?;
                         Some((Expression::Struct, Some(expr), None))
                     }
-                    Token::Open(Group::Bracket) => {
+                    Token::Open(Group::Bracket) if !parser.in_array_type() => {
                         let expr = parser.grouped_delimited(
                             List::Expressions,
                             Group::Bracket,
@@ -566,8 +609,8 @@ impl Parser<'_> {
                             let typ = parser.type_()?;
                             Some((Type::Slice, Some(typ), None))
                         } else {
-                            let size = parser.grouped(Group::Parenthesis, Self::constant)?;
-                            let size = size.unwrap(); // TODO
+                            let size = parser.constant()?;
+                            parser.token_expect(Token::Close(Group::Bracket))?;
                             let typ = parser.type_()?;
                             Some((Type::Array, Some(size), Some(typ)))
                         }
@@ -597,24 +640,6 @@ impl Parser<'_> {
                 })
             },
         )
-    }
-    fn in_lambda_params(&self) -> bool {
-        let mut tokens = self.next_tokens();
-        tokens.next();
-
-        let Some(first) = tokens.next() else {
-            return false;
-        };
-        if first.token == Token::Symbol(Symbol::Arrow) {
-            return true;
-        };
-
-        tokens.next().is_some_and(|t| {
-            matches!(
-                t.token,
-                Token::Symbol(Symbol::Comma) | Token::Symbol(Symbol::Arrow)
-            )
-        })
     }
     fn lambda(&mut self) -> Result<NonZeroU32> {
         let params = self.in_lambda_params();
@@ -691,7 +716,7 @@ impl Parser<'_> {
                         let typ = parser.type_()?;
                         Some((Constant::Sizeof, Some(typ), None))
                     }
-                    Token::Open(Group::Bracket) => {
+                    Token::Open(Group::Bracket) if !parser.in_array_type() => {
                         let constants = parser.grouped_delimited(
                             List::Constants,
                             Group::Bracket,

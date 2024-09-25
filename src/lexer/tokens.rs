@@ -35,13 +35,19 @@ impl Token {
     pub fn prevent_semi_after(self) -> bool {
         matches!(
             self,
-            Token::Open(_) | Token::Symbol(Symbol::Arrow) | Token::Symbol(Symbol::Semicolon)
+            Token::Open(_)
+                | Token::Symbol(Symbol::Arrow)
+                | Token::Symbol(Symbol::Semicolon)
+                | Token::Symbol(Symbol::Comma)
         )
     }
     pub fn prevent_semi_before(self) -> bool {
         matches!(
             self,
-            Token::Close(_) | Token::Keyword(Keyword::With) | Token::Symbol(Symbol::Semicolon)
+            Token::Close(_)
+                | Token::Keyword(Keyword::With)
+                | Token::Symbol(Symbol::Semicolon)
+                | Token::Symbol(Symbol::Comma)
         )
     }
     pub fn starts_type(self) -> bool {
@@ -87,6 +93,7 @@ pub enum Keyword {
     Break,
     Loop,
     Then,
+    Case,
 
     #[strum(serialize = "@sizeof")]
     Sizeof,

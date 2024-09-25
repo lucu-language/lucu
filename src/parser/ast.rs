@@ -132,6 +132,10 @@ impl fmt::Debug for Nodes {
     }
 }
 
+fn inner(s: &str) -> &str {
+    &s[1..s.len() - 1]
+}
+
 impl NodeData {
     pub fn fillcolor(&self) -> Option<&'static str> {
         match self.variant {
@@ -192,21 +196,23 @@ impl NodeData {
             NodeVariant::Constant(Constant::Struct) => write!(w, "const struct"),
             NodeVariant::Constant(Constant::Zero) => write!(w, "0"),
             NodeVariant::Constant(Constant::Uninit) => write!(w, "---"),
+            NodeVariant::Constant(Constant::Case) => write!(w, "const case"),
+            NodeVariant::ConstantCase | NodeVariant::ExpressionCase => write!(w, "case"),
             NodeVariant::Identifier(Identifier::Identifier)
             | NodeVariant::Constant(Constant::Integer) => write!(
                 w,
                 "{}",
-                &src[self.start as usize..(self.start + self.len) as usize],
+                src[self.start as usize..(self.start + self.len) as usize].trim(),
             ),
             NodeVariant::Constant(Constant::String) => write!(
                 w,
                 "\\\"{}\\\"",
-                &src[self.start as usize + 1..(self.start + self.len) as usize - 1],
+                inner(src[self.start as usize..(self.start + self.len) as usize].trim()),
             ),
             NodeVariant::Constant(Constant::Character) => write!(
                 w,
                 "'{}'",
-                &src[self.start as usize + 1..(self.start + self.len) as usize - 1],
+                inner(src[self.start as usize..(self.start + self.len) as usize].trim()),
             ),
             NodeVariant::Identifier(Identifier::PackagedIdentifier) => write!(w, "pkg ident"),
             NodeVariant::Identifier(Identifier::FullIdentifier) => write!(w, "full ident"),
@@ -236,6 +242,7 @@ impl NodeData {
             NodeVariant::Expression(Expression::Array) => write!(w, "expr array"),
             NodeVariant::Expression(Expression::Assign) => write!(w, "="),
             NodeVariant::Expression(Expression::Member) => write!(w, "."),
+            NodeVariant::Expression(Expression::Case) => write!(w, "expr case"),
             NodeVariant::Expression(_) => todo!("{:?}", self.variant),
         }
     }
@@ -353,6 +360,9 @@ pub enum NodeVariant {
     TypedIdentifier,   // (ident) : (type?)
     GenericIdentifier, // [ (typed names?) ] (full ident)
 
+    ConstantCase,   // (constants?) => (constant)
+    ExpressionCase, // (constants?) => (expression)
+
     // subvariants
     Expression(Expression),
     Definition(Definition),
@@ -387,6 +397,8 @@ pub enum List {
     Identifiers,
     Lambdas,
     Handlers,
+    ConstantCases,
+    ExpressionCases,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -395,6 +407,7 @@ pub enum Expression {
     If,      // if (expr) { (expr) } / if (expr) { (lambda) }
     Else,    // (if) else { (expr) }
     Loop,    // loop (expr)
+    Case,    // case (expr) { (expr cases) }
 
     Break,                 // (expr?)
     Do,                    // (expr)
@@ -476,6 +489,7 @@ pub enum Constant {
     Alignof,   // @alignof (type)
     Array,     // [ (constants) ]
     Struct,    // ( (constants) )
+    Case,      // case (constant) { (const cases) }
     Integer,   // leaf
     String,    // leaf
     Character, // leaf

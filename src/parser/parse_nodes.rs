@@ -488,6 +488,17 @@ impl Parser<'_> {
                         let lhs = parser.expression_pre::<LAMBDA>()?;
                         Some((Expression::Cast, Some(lhs), None))
                     }
+                    Token::Keyword(Keyword::Case) => {
+                        parser.skip();
+                        let expr = parser.expression_assign::<false>()?;
+                        let cases = parser.grouped_delimited(
+                            List::ExpressionCases,
+                            Group::Brace,
+                            Symbol::Comma,
+                            Self::expression_case,
+                        )?;
+                        Some((Expression::Case, Some(expr), Some(cases)))
+                    }
                     Token::Keyword(Keyword::Loop) => {
                         parser.skip();
                         let lhs = parser.expression()?;
@@ -696,12 +707,57 @@ impl Parser<'_> {
             Token::Literal(Literal::Identifier),
         )
     }
+    fn constant_case(&mut self) -> Result<NonZeroU32> {
+        self.node(NodeVariant::ConstantCase, |parser| {
+            let cases = if parser.token_consume(Token::Keyword(Keyword::Else)) {
+                None
+            } else {
+                Some(parser.delimited(
+                    List::Constants,
+                    Symbol::Comma,
+                    |t| t == Token::Symbol(Symbol::Arrow),
+                    Self::constant,
+                ))
+            };
+            parser.token_expect(Token::Symbol(Symbol::Arrow))?;
+            let value = parser.constant()?;
+            Ok((cases, Some(value)))
+        })
+    }
+    fn expression_case(&mut self) -> Result<NonZeroU32> {
+        self.node(NodeVariant::ExpressionCase, |parser| {
+            let cases = if parser.token_consume(Token::Keyword(Keyword::Else)) {
+                None
+            } else {
+                Some(parser.delimited(
+                    List::Constants,
+                    Symbol::Comma,
+                    |t| t == Token::Symbol(Symbol::Arrow),
+                    Self::constant,
+                ))
+            };
+            parser.token_expect(Token::Symbol(Symbol::Arrow))?;
+            let value = parser.expression()?;
+            Ok((cases, Some(value)))
+        })
+    }
     fn constant(&mut self) -> Result<NonZeroU32> {
         self.peeked(
             NodeVariant::Constant,
             |parser| parser.wrap(NodeVariant::Constant(Constant::Type), Self::type_),
             |parser, peek| {
                 Ok(match peek {
+                    Token::Keyword(Keyword::Case) => {
+                        parser.skip();
+                        let constant = parser.constant()?;
+                        let cases = parser.grouped_delimited(
+                            List::ConstantCases,
+                            Group::Brace,
+                            Symbol::Comma,
+                            Self::constant_case,
+                        )?;
+                        Some((Constant::Case, Some(constant), Some(cases)))
+                    }
                     Token::Symbol(Symbol::DashDashDash) => {
                         parser.skip();
                         Some((Constant::Uninit, None, None))

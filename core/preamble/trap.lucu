@@ -1,0 +1,43 @@
+##
+# Panics with message if the assertion is not met,
+# preferred to be used only for debugging.
+##
+fun assert(all: bool, msg: str)
+with Loc = {
+	if all {
+	} else { # fails
+		panic(msg)
+	}
+}
+
+##
+# Exits the program and displays an error message,
+# preferred to be used only for debugging.
+##
+fun panic(msg: str): !
+with Loc = {
+	trace("panic: ")
+	trace(msg)
+	trace("\n")
+	trap()
+}
+
+##
+# Exits the program and displays an error message,
+# marks code paths that aren't implemented yet.
+##
+fun todo(msg: str): !
+with Loc = {
+	trace("todo: ")
+	trace(msg)
+	trace("\n")
+	trap()
+}
+
+fun trap(): !
+with Loc = {
+	trace("trapped at ")
+	trace(LOCATION)
+	trace("\n")
+	trap_silent()
+}

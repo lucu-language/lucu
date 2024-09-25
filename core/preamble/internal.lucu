@@ -1,0 +1,65 @@
+##
+# The following functions have internal definitions.
+# These are not based on a specific target.
+##
+
+##
+# Marks that a code path is unreachable.
+# This function should NEVER actually be called!
+# For displaying an error, &panic is preferred.
+##
+fun unreachable(): !
+
+##
+# Returns the length of a slice.
+##
+fun len[T](slice: []T): usize
+
+##
+# Creates a slice from a pointer and length.
+##
+fun raw_slice[T](ptr ^T, len usize): []T
+
+##
+# Effect to get the location of the call in the source code.
+# When used directly, it returns the current line of code.
+# When used as an effect parameter inside a function, it returns the location of the caller.
+##
+effect Loc = {
+	const LOCATION: str
+}
+
+default Loc
+
+effect Foreign = {
+	##
+	# Links to a dynamic library using an effect as a foreign interface.
+	# &EFFECT SHOULD be annotated with @foreign,
+	# as it uses the data inside to determine the symbol names for the effect functions.
+	##
+	fun link[LIB: str, EFFECT: effect] { body with E }
+	fun syscall[N: usize](nr: int, args: [N]int): int
+}
+
+##
+# The following functions may have an internal definition based on the target.
+# They also have default implementations for unknown targets.
+##
+
+##
+# Prints a debug message to the environment (usually the standard error).
+# The message is printed exactly as it is, so concatinating strings is possible by calling &trace multiple times.
+##
+fun trace(msg: str) = {}
+
+##
+# Function that ends execution of the entire program.
+# The way it ends execution depends on the target.
+# 
+# For instance, it could:
+#  - end the process
+#  - run a halt instruction
+#  - throw an exception / interrupt
+#  - spin forever
+##
+fun trap_silent(): ! = loop {}

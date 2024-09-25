@@ -2,9 +2,10 @@ use super::{FullToken, Group};
 
 fn skip_whitespace(src: &mut &str) -> u32 {
     let mut skipped = 0;
-    while src.len() > 0 && (src.as_bytes()[0].is_ascii_whitespace() || src.as_bytes()[0] == b'#') {
+    while !src.is_empty() && (src.as_bytes()[0].is_ascii_whitespace() || src.as_bytes()[0] == b'#')
+    {
         if src.as_bytes()[0] == b'#' {
-            while src.len() > 0 && src.as_bytes()[0] != b'\n' {
+            while !src.is_empty() && src.as_bytes()[0] != b'\n' {
                 *src = &src[1..];
                 skipped += 1;
             }
@@ -77,7 +78,7 @@ fn next_token(mut src: &str, pos: u32) -> Option<FullToken> {
     src = &src[pos as usize..];
     let start = pos + skip_whitespace(&mut src);
 
-    if src.len() == 0 {
+    if src.is_empty() {
         return None;
     }
 

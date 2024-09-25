@@ -27,6 +27,12 @@ pub struct Nodes {
     nodes: Vec<NodeData>,
 }
 
+impl Default for Nodes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Nodes {
     pub fn new() -> Self {
         Self {
@@ -65,8 +71,7 @@ impl Nodes {
             .iter()
             .rev()
             .copied()
-            .map(|c| self.draw(c, spaces + 2, f))
-            .collect::<fmt::Result>()?;
+            .try_for_each(|c| self.draw(c, spaces + 2, f))?;
 
         Ok(())
     }
@@ -262,23 +267,21 @@ impl<'a> NodeChildren<'a> {
                 let first = node.first_child().unwrap().get();
                 NodeChildren(until_last, first, false)
             }
+        } else if node.first_child().is_none() {
+            NodeChildren(&[], 0, true)
         } else {
-            if node.first_child().is_none() {
-                NodeChildren(&[], 0, true)
-            } else {
-                let min = node
-                    .last_child()
-                    .unwrap()
-                    .min(node.first_child().unwrap())
-                    .get();
-                let max = node
-                    .last_child()
-                    .unwrap()
-                    .max(node.first_child().unwrap())
-                    .get();
-                let until_last = &nodes[..=max as usize];
-                NodeChildren(until_last, min, true)
-            }
+            let min = node
+                .last_child()
+                .unwrap()
+                .min(node.first_child().unwrap())
+                .get();
+            let max = node
+                .last_child()
+                .unwrap()
+                .max(node.first_child().unwrap())
+                .get();
+            let until_last = &nodes[..=max as usize];
+            NodeChildren(until_last, min, true)
         }
     }
 }
@@ -307,12 +310,10 @@ impl Iterator for NodeChildren<'_> {
                 } else {
                     self.0 = &[];
                 }
+            } else if last > self.1 as usize {
+                self.0 = &self.0[..last];
             } else {
-                if last > self.1 as usize {
-                    self.0 = &self.0[..last];
-                } else {
-                    self.0 = &[];
-                }
+                self.0 = &[];
             }
 
             Some(next as u32)

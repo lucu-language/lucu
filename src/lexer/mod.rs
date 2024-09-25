@@ -1,5 +1,5 @@
-mod lexer;
+mod tokenizer;
 mod tokens;
 
-pub use lexer::*;
+pub use tokenizer::*;
 pub use tokens::*;

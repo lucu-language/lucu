@@ -40,6 +40,7 @@
             # compilation
             rustc
             cargo
+            clippy
             bacon
             openssl
             pkg-config

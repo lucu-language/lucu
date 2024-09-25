@@ -1,0 +1,85 @@
+effect Yield[T] = {
+	fun yield(t: T)
+}
+
+fun first[T] { body with Yield[T] }: T
+with Loc = {
+	try {
+		body
+		panic("nothing was yielded")
+	} with Yield[T] {
+		t -> break t
+	}
+}
+
+fun nth[T] { body with Yield[T] }: T
+with Loc = {
+	mut current: usize = 0
+	try {
+		body
+		panic("not enough was yielded")
+	} with Yield[T] {
+		t ->
+		if current == num {
+			break t
+		} else {
+			do current++
+		}
+	}
+}
+
+fun last[T] { body with Yield[T] }: T
+with Loc = {
+	let mut current: T = ---
+	let mut yielded = false
+	try body with Yield[T] {
+		t ->
+		current = t
+		yielded = true
+	}
+	if yielded {
+		current
+	} else {
+		panic("nothing was yielded")
+	}
+}
+
+effect Generator[T] = {
+	type Item
+	fun generate(t: T) with Yield[Item]
+}
+
+fun for[T](t: T) { body(e: Item) }
+with Generator[T] = {
+	try generate(t) with Yield[Item] { e -> body(e) }
+}
+
+type Range = struct (from: usize, to: usize)
+
+default Generator[Range] {
+	type Item = usize
+	fun generate(self: Range) with Yield[usize] = {
+		mut n = self.start
+		loop {
+			if n == self.end {
+				break
+			} else {
+				yield(n)
+			}
+		}
+	}
+}
+
+default[E] Generator[[]E] {
+	type Item = E
+	fun generate(self: []E) with Yield[E] = {
+		for(0..len(self)) { i -> yield(self[i]) }
+	}
+}
+
+default[N: usize, E] Generator[[N]E] {
+	type Item = E
+	fun generate(self: [N]E) with Yield[E] = {
+		for(0..N) { i -> yield(self[i]) }
+	}
+}

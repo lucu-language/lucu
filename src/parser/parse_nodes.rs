@@ -75,67 +75,67 @@ impl Parser<'_> {
     }
     fn definition(&mut self) -> Result<NonZeroU32> {
         self.node(NodeVariant::ConstrainedDefinition, |parser| {
-            const EQUALS: Token = Token::Symbol(Symbol::Equals);
-            let mut constraints = None;
-            let definition = parser.choice(NodeVariant::Definition, |parser, token| {
-                Ok(Some(match token {
-                    Token::Keyword(Keyword::Const) => {
-                        let name = parser.typed_name()?;
-                        constraints = parser.constraints();
-
-                        let constant = parser.consume_then(EQUALS, Parser::constant)?;
-                        (Definition::Constant, name, constant)
-                    }
-                    Token::Keyword(Keyword::Default) => {
-                        let id = parser.generic_identifier()?;
-                        constraints = parser.constraints();
-
-                        let definitions = parser.handler_impl()?;
-                        (Definition::Default, id, definitions)
-                    }
-                    Token::Keyword(Keyword::Fun) => {
-                        let name = parser.named_signature()?;
-                        constraints = parser.constraints();
-
-                        let body = parser.consume_then(EQUALS, Parser::expression)?;
-                        (Definition::Function, name, body)
-                    }
-                    Token::Keyword(Keyword::Effect) => {
-                        let name = parser.name()?;
-                        constraints = parser.constraints();
-
-                        let definitions = parser.consume_then(EQUALS, |parser| {
-                            if parser.token_check(Token::Open(Group::Brace)) {
-                                // effect definition
-                                parser.grouped_delimited(
-                                    List::ConstrainedDefinitions,
-                                    Group::Brace,
-                                    Symbol::Semicolon,
-                                    Parser::definition,
-                                )
-                            } else {
-                                // effect alias
-                                Ok(parser.delimited(
-                                    List::Constraints,
-                                    Symbol::Comma,
-                                    Token::is_semicolon,
-                                    Parser::constraint,
-                                ))
-                            }
-                        })?;
-                        (Definition::Effect, name, definitions)
-                    }
-                    Token::Keyword(Keyword::Type) => {
-                        let name = parser.name()?;
-                        constraints = parser.constraints();
-
-                        let typ = parser.consume_then(EQUALS, Parser::type_)?;
-                        (Definition::Type, name, typ)
-                    }
-                    _ => return Ok(None),
-                }))
-            })?;
-            Ok((Some(definition), constraints))
+            let constraints = parser.constraints();
+            if parser.token_check(Token::Open(Group::Brace)) {
+                let definitions = parser.grouped_delimited(
+                    List::ConstrainedDefinitions,
+                    Group::Brace,
+                    Symbol::Semicolon,
+                    Parser::definition,
+                )?;
+                Ok((constraints, Some(definitions)))
+            } else {
+                const EQUALS: Token = Token::Symbol(Symbol::Equals);
+                let definition = parser.choice(NodeVariant::Definition, |parser, token| {
+                    Ok(Some(match token {
+                        Token::Keyword(Keyword::Const) => {
+                            let name = parser.typed_name()?;
+                            let constant = parser.consume_then(EQUALS, Parser::constant)?;
+                            (Definition::Constant, name, constant)
+                        }
+                        Token::Keyword(Keyword::Default) => {
+                            let id = parser.generic_identifier()?;
+                            let definitions = parser.handler_impl()?;
+                            (Definition::Default, id, definitions)
+                        }
+                        Token::Keyword(Keyword::Fun) => {
+                            let name = parser.named_signature()?;
+                            let body = parser.consume_then(EQUALS, Parser::expression)?;
+                            (Definition::Function, name, body)
+                        }
+                        Token::Keyword(Keyword::Effect) => {
+                            let name = parser.name()?;
+                            let definitions = parser.consume_then(EQUALS, |parser| {
+                                if parser.token_check(Token::Open(Group::Brace)) {
+                                    // effect definition
+                                    parser.grouped_delimited(
+                                        List::ConstrainedDefinitions,
+                                        Group::Brace,
+                                        Symbol::Semicolon,
+                                        Parser::definition,
+                                    )
+                                } else {
+                                    // effect alias
+                                    Ok(parser.delimited(
+                                        List::Constraints,
+                                        Symbol::Comma,
+                                        Token::is_semicolon,
+                                        Parser::constraint,
+                                    ))
+                                }
+                            })?;
+                            (Definition::Effect, name, definitions)
+                        }
+                        Token::Keyword(Keyword::Type) => {
+                            let name = parser.name()?;
+                            let typ = parser.consume_then(EQUALS, Parser::type_)?;
+                            (Definition::Type, name, typ)
+                        }
+                        _ => return Ok(None),
+                    }))
+                })?;
+                Ok((constraints, Some(definition)))
+            }
         })
     }
     fn named_signature(&mut self) -> Result<NonZeroU32> {
@@ -892,7 +892,7 @@ impl Parser<'_> {
         if !self.token_consume(Token::Keyword(Keyword::With)) {
             return None;
         }
-        Some(self.delimited(
+        let constraints = self.delimited(
             List::Constraints,
             Symbol::Comma,
             |t| {
@@ -900,11 +900,18 @@ impl Parser<'_> {
                     t,
                     Token::Symbol(Symbol::Semicolon)
                         | Token::Open(Group::Brace)
-                        | Token::Symbol(Symbol::Equals)
+                        | Token::Keyword(Keyword::Const)
+                        | Token::Keyword(Keyword::Type)
+                        | Token::Keyword(Keyword::Fun)
+                        | Token::Keyword(Keyword::Effect)
+                        | Token::Keyword(Keyword::With)
+                        | Token::Keyword(Keyword::Default)
                 )
             },
             Self::constraint,
-        ))
+        );
+        self.token_consume(Token::Symbol(Symbol::Semicolon));
+        Some(constraints)
     }
     fn constraint(&mut self) -> Result<NonZeroU32> {
         let start = self.position();

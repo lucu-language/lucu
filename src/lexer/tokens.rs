@@ -44,10 +44,7 @@ impl Token {
     pub fn prevent_semi_before(self) -> bool {
         matches!(
             self,
-            Token::Close(_)
-                | Token::Keyword(Keyword::With)
-                | Token::Symbol(Symbol::Semicolon)
-                | Token::Symbol(Symbol::Comma)
+            Token::Close(_) | Token::Symbol(Symbol::Semicolon) | Token::Symbol(Symbol::Comma)
         )
     }
     pub fn starts_type(self) -> bool {

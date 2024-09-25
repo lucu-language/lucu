@@ -4,3 +4,7 @@ const FEATURE[S: str]: bool
 
 const WASM = case ARCH { "wasm32", "wasm64" => true, else => false }
 const X86  = case ARCH { "x86",    "x86-64" => true, else => false }
+
+const LINUX   = case OS { "linux"   => true, else => false }
+const WINDOWS = case OS { "windows" => true, else => false }
+const WASI    = case OS { "wasi"    => true, else => false }

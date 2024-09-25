@@ -2,8 +2,8 @@ effect Yield[T] = {
 	fun yield(t: T)
 }
 
-fun first[T] { body with Yield[T] }: T
-with Loc = {
+with Loc
+fun first[T] { body with Yield[T] }: T = {
 	try {
 		body
 		panic("nothing was yielded")
@@ -12,8 +12,8 @@ with Loc = {
 	}
 }
 
-fun nth[T] { body with Yield[T] }: T
-with Loc = {
+with Loc
+fun nth[T] { body with Yield[T] }: T = {
 	let mut current: usize = 0
 	try {
 		body
@@ -28,8 +28,8 @@ with Loc = {
 	}
 }
 
-fun last[T] { body with Yield[T] }: T
-with Loc = {
+with Loc
+fun last[T] { body with Yield[T] }: T = {
 	let mut current: T = ---
 	let mut yielded = false
 	try body with Yield[T] {
@@ -46,11 +46,13 @@ with Loc = {
 
 effect Generator[T] = {
 	type Item
-	fun generate(t: T) with Yield[Item]
+
+	with Yield[Item]
+	fun generate(t: T)
 }
 
-fun for[T](t: T) { body(e: Item) }
-with Generator[T] = {
+with Generator[T]
+fun for[T](t: T) { body(e: Item) } = {
 	try generate(t) with Yield[Item] { e => body(e) }
 }
 
@@ -58,7 +60,9 @@ type Range = struct (from: usize, to: usize)
 
 default Generator[Range] {
 	type Item = usize
-	fun generate(self: Range) with Yield[usize] = {
+
+	with Yield[usize]
+	fun generate(self: Range) = {
 		let mut n = self.start
 		loop {
 			if n == self.end {
@@ -72,14 +76,18 @@ default Generator[Range] {
 
 default[E] Generator[[]E] {
 	type Item = E
-	fun generate(self: []E) with Yield[E] = {
+
+	with Yield[E]
+	fun generate(self: []E) = {
 		for(0..len(self)) { i => yield(self[i]) }
 	}
 }
 
 default[N: usize, E] Generator[[N]E] {
 	type Item = E
-	fun generate(self: [N]E) with Yield[E] = {
+
+	with Yield[E]
+	fun generate(self: [N]E) = {
 		for(0..N) { i => yield(self[i]) }
 	}
 }

@@ -340,7 +340,7 @@ pub enum NodeVariant {
     Lucu,   // (imports) (definitions)
     Import, // (string) (name?)
 
-    ConstrainedDefinition, // (def) where (constraints?)
+    ConstrainedDefinition, // with (constraints?) (def) / with (constraints?) (full defs)
 
     NamedSignature,     // (name) (fun sig)
     FunctionSignature,  // (fun params) (type?)

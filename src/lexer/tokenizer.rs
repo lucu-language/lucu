@@ -123,18 +123,18 @@ fn next_token(mut src: &str, pos: u32) -> Option<FullToken> {
         b'?' => Symbol(Question),
         b'&' => Symbol(Ampersand),
 
-        b'=' => equals!(Equals, EqualsEquals),
         b'/' => equals!(Slash, SlashEquals),
         b'*' => equals!(Star, StarEquals),
         b'%' => equals!(Percent, PercentEquals),
+        b'<' => equals!(Less, LessEquals),
         b'>' => equals!(Greater, GreaterEquals),
         b'!' => equals!(Bang, BangEquals),
 
-        b'<' => {
-            if next!(b'-') {
-                Symbol(ArrowLeft)
+        b'=' => {
+            if next!(b'>') {
+                Symbol(Arrow)
             } else {
-                equals!(Less, LessEquals)
+                equals!(Equals, EqualsEquals)
             }
         }
         b'.' => {
@@ -158,8 +158,6 @@ fn next_token(mut src: &str, pos: u32) -> Option<FullToken> {
                 } else {
                     Symbol(DashDash)
                 }
-            } else if next!(b'>') {
-                Symbol(Arrow)
             } else {
                 equals!(Dash, DashEquals)
             }

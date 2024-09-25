@@ -856,25 +856,24 @@ impl Parser<'_> {
         let constant = self.constant()?;
 
         if self.token_consume(Token::Symbol(Symbol::Tilde)) {
-            // type constraint
+            // unify constants
             let other = self.constant()?;
             Ok(self.nodes.push(NodeData {
-                variant: NodeVariant::Constraint(Constraint::UnifyTypes),
+                variant: NodeVariant::Constraint(Constraint::Unify),
                 len: self.position() - start,
                 start,
                 left: Some(constant),
                 right: Some(other),
             }))
-        } else if matches!(
-            self.nodes[constant.get()].variant,
-            NodeVariant::Constant(Constant::Path)
-        ) {
-            // handled effect
-            self.nodes[constant.get()].variant = NodeVariant::Constraint(Constraint::Handled);
-            Ok(constant)
         } else {
-            self.token_expect(Token::Symbol(Symbol::Tilde))?;
-            unreachable!();
+            // handled effect / boolean constant
+            Ok(self.nodes.push(NodeData {
+                variant: NodeVariant::Constraint(Constraint::Constant),
+                len: self.position() - start,
+                start,
+                left: Some(constant),
+                right: None,
+            }))
         }
     }
     fn typed_name(&mut self) -> Result<NonZeroU32> {

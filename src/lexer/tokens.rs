@@ -94,6 +94,7 @@ pub enum Keyword {
     Alignof,
     #[strum(serialize = "@typeof")]
     Typeof,
+
     #[strum(disabled)]
     Unknown,
 }
@@ -111,11 +112,11 @@ pub enum Symbol {
     Question,      // ?
     Equals,        // =
     EqualsEquals,  // ==
+    Arrow,         // =>
     Dash,          // -
     DashDash,      // --
     DashDashDash,  // ---
     DashEquals,    // -=
-    Arrow,         // ->
     Plus,          // +
     PlusPlus,      // ++
     PlusEquals,    // +=
@@ -129,7 +130,6 @@ pub enum Symbol {
     Greater,       // >
     GreaterEquals, // >=
     Less,          // <
-    ArrowLeft,     // <-
     LessEquals,    // <=
     Bang,          // !
     BangEquals,    // !=

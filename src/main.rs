@@ -7,7 +7,7 @@ pub mod parser;
 fn main() {
     unsafe { backtrace_on_stack_overflow::enable() };
 
-    let src = include_str!("../test/parse_array.lucu");
+    let src = include_str!("../core/preamble/yield.lucu");
 
     let tokens = tokenize(src).collect::<Box<[_]>>();
     let (nodes, errors) = parse(&tokens);

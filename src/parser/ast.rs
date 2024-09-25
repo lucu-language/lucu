@@ -235,6 +235,7 @@ impl NodeData {
             NodeVariant::Expression(Expression::Do) => write!(w, "do"),
             NodeVariant::Expression(Expression::Array) => write!(w, "expr array"),
             NodeVariant::Expression(Expression::Assign) => write!(w, "="),
+            NodeVariant::Expression(Expression::Member) => write!(w, "."),
             NodeVariant::Expression(_) => todo!("{:?}", self.variant),
         }
     }
@@ -450,8 +451,8 @@ pub enum Definition {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Constraint {
-    Handled,    // (full ident)
-    UnifyTypes, // (type) ~ (type)
+    Constant, // (constant)
+    Unify,    // (constant) ~ (constant)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

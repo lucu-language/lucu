@@ -1,0 +1,6 @@
+const OS: str
+const ARCH: str
+const FEATURE[S: str]: bool
+
+# const WASM = switch ARCH { "wasm32", "wasm64" => true, else => false }
+# const X86  = switch ARCH { "x86", "x86-64" => true, else => false }

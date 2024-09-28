@@ -58,6 +58,9 @@ impl Nodes {
     pub fn children_rev(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
         NodeChildren::new(&self.nodes, node)
     }
+    pub fn last(&self) -> u32 {
+        (self.nodes.len() - 1) as u32
+    }
 
     fn draw(&self, node: u32, spaces: u32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -152,6 +155,18 @@ impl NodeData {
             _ => None,
         }
     }
+    pub fn text<'a>(&self, src: &'a str) -> &'a str {
+        match self.variant {
+            NodeVariant::Identifier(Identifier::Identifier)
+            | NodeVariant::Constant(Constant::Integer) => {
+                src[self.start as usize..(self.start + self.len) as usize].trim()
+            }
+            NodeVariant::Constant(Constant::String | Constant::Character) => {
+                inner(src[self.start as usize..(self.start + self.len) as usize].trim())
+            }
+            _ => "",
+        }
+    }
     pub fn display(&self, src: &str, mut w: impl std::io::Write) -> std::io::Result<()> {
         match self.variant {
             NodeVariant::List(_) => write!(w, "list"),
@@ -217,7 +232,7 @@ impl NodeData {
             NodeVariant::Identifier(Identifier::PackagedIdentifier) => write!(w, "pkg ident"),
             NodeVariant::Identifier(Identifier::FullIdentifier) => write!(w, "full ident"),
             NodeVariant::Dummy => Ok(()),
-            NodeVariant::Expression(Expression::Body) => write!(w, "body"),
+            NodeVariant::Expression(Expression::Block) => write!(w, "body"),
             NodeVariant::Expression(Expression::Cast) => write!(w, "cast"),
             NodeVariant::Expression(Expression::Typed) => write!(w, ":"),
             NodeVariant::Expression(Expression::Reference) => write!(w, "&"),
@@ -345,7 +360,7 @@ pub enum NodeVariant {
     NamedSignature,     // (name) (fun sig)
     FunctionSignature,  // (fun params) (type?)
     FunctionParameters, // (params?) { (block params?) }
-    Arguments,          // (exprs?) { (lambdas)? }
+    Arguments,          // (exprs?) { (lambdas?) }
 
     Handler, // (generic ident) { (full defs) } / (generic ident) { (lambda) }
     Lambda,  // (identifiers?) -> (exprs)
@@ -378,8 +393,8 @@ pub enum NodeVariant {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Identifier {
     Identifier,         // leaf
-    PackagedIdentifier, // (ident?).(ident)
-    FullIdentifier,     // (packaged ident) [ (constants?) ]
+    PackagedIdentifier, // (ident).(ident)
+    FullIdentifier,     // (packaged ident) [ (constants) ]
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -444,7 +459,7 @@ pub enum Expression {
     Member,        // (expr).(id)
     Index,         // (expr) [ (exprs) ]
     Call,          // (packaged ident) (function arguments)
-    Body,          // { (exprs) }
+    Block,         // { (exprs) }
 
     // NOTE: full identifiers will be represented with E::Index(E::Path, ...)
     Path,     // (ident)

@@ -1,19 +1,23 @@
 use lexer::tokenize;
 use parser::parse;
 
+use crate::untyped_ir::codegen;
+
 pub mod lexer;
 pub mod parser;
+pub mod untyped_ir;
 
 fn main() {
     unsafe { backtrace_on_stack_overflow::enable() };
 
-    let src = include_str!("../core/target/target.lucu");
+    let src = include_str!("../core/preamble/internal.lucu");
 
     let tokens = tokenize(src).collect::<Box<[_]>>();
     let (nodes, errors) = parse(&tokens);
+    let file = codegen(&nodes, src);
 
     println!("{:?}", errors);
-    println!("{:?}", nodes);
+    println!("{}", file);
 
     let out = std::fs::File::create("out.graphviz").unwrap();
     nodes.graphviz(src, out).unwrap();

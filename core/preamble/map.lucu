@@ -1,0 +1,24 @@
+with Yield[U]
+fun map[T, U] { f(a: T): U } { gen with Yield[T] } = {
+	try gen with Yield[T] { t => yield(f(t)) }
+}
+
+with Generator[T], Yield[Item]
+fun all[T](t: T) = {
+	generate(t)
+}
+
+with Yield[[N]T]
+fun chunk[N: usize, T] { gen with Yield[T] } = {
+	let mut chunk: [N]T  = ---
+	let mut found: usize = 0
+
+	try gen with Yield[T] {
+		t =>
+		chunk[found++] = t
+		if (found == N) {
+			found = 0
+			yield(chunk)
+		}
+	}
+}

@@ -459,7 +459,7 @@ impl Parser<'_> {
                             Symbol::Semicolon,
                             Parser::expression,
                         )?;
-                        Some((Expression::Body, Some(expr), None))
+                        Some((Expression::Block, Some(expr), None))
                     }
                     Token::Open(Group::Parenthesis) => {
                         let expr = parser.grouped_delimited(
@@ -529,7 +529,7 @@ impl Parser<'_> {
                         } else if parser.in_lambda_params() {
                             parser.lambda()?
                         } else {
-                            parser.wrap(NodeVariant::Expression(Expression::Body), |parser| {
+                            parser.wrap(NodeVariant::Expression(Expression::Block), |parser| {
                                 parser.grouped_delimited(
                                     List::Expressions,
                                     Group::Brace,

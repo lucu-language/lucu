@@ -91,3 +91,13 @@ default[N: usize, E] Generator[[N]E] {
 		for(0..N) { i => yield(self[i]) }
 	}
 }
+
+effect Collect[T, E] {
+	fun collect { gen with Yield[E] }: T
+}
+
+default Collect[unit, unit] {
+	fun collect { gen with Yield[unit] }: unit {
+		try gen with Yield[unit] { i => }
+	}
+}

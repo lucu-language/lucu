@@ -18,7 +18,7 @@ fun len[T](slice: []T): usize
 ##
 # Creates a slice from a pointer and length.
 ##
-fun raw_slice[T](ptr ^T, len usize): []T
+fun raw_slice[T](ptr: ^T, len: usize): []T
 
 ##
 # Effect to get the location of the call in the source code.
@@ -37,7 +37,7 @@ effect Foreign = {
 	# &EFFECT SHOULD be annotated with @foreign,
 	# as it uses the data inside to determine the symbol names for the effect functions.
 	##
-	fun link[LIB: str, EFFECT: effect] { body with E }
+	fun link[LIB: str, EFFECT: effect] { body with EFFECT }
 	fun syscall[N: usize](nr: int, args: [N]int): int
 }
 

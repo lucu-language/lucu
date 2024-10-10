@@ -1,13 +1,16 @@
 use std::num::NonZeroU32;
 
-use crate::lexer::{FullToken, Group, Keyword, Literal, Symbol, Token};
-
-use super::{
-    Constant, Constraint, Definition, Error, Expression, Identifier, List, NodeData, NodeVariant,
-    Nodes, Parser, Result, Type,
+use crate::{
+    lexer::{FullToken, Group, Keyword, Literal, Symbol, Token},
+    tree::{Location, NodeData},
 };
 
-pub fn parse(tokens: &[FullToken]) -> (Nodes, Vec<Error>) {
+use super::{
+    Constant, Constraint, Definition, Error, Expression, Identifier, List, NodeVariant, ParseTree,
+    Parser, Result, Type,
+};
+
+pub fn parse(tokens: &[FullToken]) -> (ParseTree, Vec<Error>) {
     let mut parser = Parser::new(tokens);
     parser.lucu();
     (parser.nodes, parser.errors)
@@ -542,12 +545,14 @@ impl Parser<'_> {
                         if parser.token_consume(Token::Keyword(Keyword::Else)) {
                             let rhs = parser.expression()?;
 
-                            let start = parser.nodes[cond.get()].start;
-                            let data = &parser.nodes[lhs.get()];
+                            let start = parser.nodes[cond].location.start;
+                            let data = &parser.nodes[lhs];
                             let stmt = parser.nodes.push(NodeData {
-                                variant: NodeVariant::Expression(Expression::If),
-                                len: data.start + data.len - start,
-                                start,
+                                variant: Some(NodeVariant::Expression(Expression::If)),
+                                location: Location {
+                                    start,
+                                    end: data.location.end,
+                                },
                                 left: Some(cond),
                                 right: Some(lhs),
                             });
@@ -822,9 +827,11 @@ impl Parser<'_> {
             let package = id;
             let id = self.identifier()?;
             Ok(self.nodes.push(NodeData {
-                variant: NodeVariant::Identifier(Identifier::PackagedIdentifier),
-                len: self.position() - start,
-                start,
+                variant: Some(NodeVariant::Identifier(Identifier::PackagedIdentifier)),
+                location: Location {
+                    start,
+                    end: self.position(),
+                },
                 left: Some(package),
                 right: Some(id),
             }))
@@ -843,16 +850,18 @@ impl Parser<'_> {
                 Self::constant,
             )?;
 
-            if self.nodes[types.get()].len == 0 {
+            if self.nodes[types].left.is_none() {
                 // empty list
                 // TODO: give error
                 panic!();
             }
 
             Ok(self.nodes.push(NodeData {
-                variant: NodeVariant::Identifier(Identifier::FullIdentifier),
-                len: self.position() - start,
-                start,
+                variant: Some(NodeVariant::Identifier(Identifier::FullIdentifier)),
+                location: Location {
+                    start,
+                    end: self.position(),
+                },
                 left: Some(id),
                 right: Some(types),
             }))
@@ -922,18 +931,22 @@ impl Parser<'_> {
             // unify constants
             let other = self.constant()?;
             Ok(self.nodes.push(NodeData {
-                variant: NodeVariant::Constraint(Constraint::Unify),
-                len: self.position() - start,
-                start,
+                variant: Some(NodeVariant::Constraint(Constraint::Unify)),
+                location: Location {
+                    start,
+                    end: self.position(),
+                },
                 left: Some(constant),
                 right: Some(other),
             }))
         } else {
             // handled effect / boolean constant
             Ok(self.nodes.push(NodeData {
-                variant: NodeVariant::Constraint(Constraint::Constant),
-                len: self.position() - start,
-                start,
+                variant: Some(NodeVariant::Constraint(Constraint::Constant)),
+                location: Location {
+                    start,
+                    end: self.position(),
+                },
                 left: Some(constant),
                 right: None,
             }))
@@ -975,9 +988,11 @@ impl Parser<'_> {
             Self::definition,
         );
         self.nodes.push(NodeData {
-            variant: NodeVariant::Lucu,
-            len: self.position(),
-            start: 0,
+            variant: Some(NodeVariant::Lucu),
+            location: Location {
+                start: 0,
+                end: self.position(),
+            },
             left: Some(imports),
             right: Some(definitions),
         })

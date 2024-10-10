@@ -1,96 +1,19 @@
-use std::{
-    collections::HashSet,
-    fmt,
-    num::NonZeroU32,
-    ops::{Index, IndexMut},
-};
+use std::collections::HashSet;
 
-#[derive(Clone, Debug)]
-pub struct NodeData {
-    pub variant: NodeVariant,
-    pub len: u32,
-    pub start: u32,
-    pub left: Option<NonZeroU32>,
-    pub right: Option<NonZeroU32>,
-}
+use crate::tree::{NodeData, NodeTree};
 
-impl NodeData {
-    pub fn first_child(&self) -> Option<NonZeroU32> {
-        self.left.or(self.right)
-    }
-    pub fn last_child(&self) -> Option<NonZeroU32> {
-        self.right.or(self.left)
-    }
-}
+pub type ParseTree = NodeTree<NodeVariant>;
 
-pub struct Nodes {
-    nodes: Vec<NodeData>,
-}
-
-impl Default for Nodes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Nodes {
-    pub fn new() -> Self {
-        Self {
-            nodes: vec![NodeData {
-                variant: NodeVariant::Dummy,
-                len: 0,
-                start: 0,
-                left: None,
-                right: None,
-            }],
-        }
-    }
-    pub fn push(&mut self, data: NodeData) -> NonZeroU32 {
-        self.nodes.push(data);
-        NonZeroU32::new((self.nodes.len() - 1) as u32).unwrap()
-    }
-    pub fn get(&self, node: u32) -> Option<&NodeData> {
-        self.nodes.get(node as usize)
-    }
-    pub fn get_mut(&mut self, node: u32) -> Option<&mut NodeData> {
-        self.nodes.get_mut(node as usize)
-    }
-    pub fn children_rev(&self, node: u32) -> impl Iterator<Item = u32> + '_ {
-        NodeChildren::new(&self.nodes, node)
-    }
-    pub fn last(&self) -> u32 {
-        (self.nodes.len() - 1) as u32
-    }
-
-    fn draw(&self, node: u32, spaces: u32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "{: <2$}{:?}",
-            "", self.nodes[node as usize], spaces as usize
-        )?;
-
-        let children_rev = self.children_rev(node).collect::<Box<[_]>>();
-        children_rev
-            .iter()
-            .rev()
-            .copied()
-            .try_for_each(|c| self.draw(c, spaces + 2, f))?;
-
-        Ok(())
-    }
-
+impl ParseTree {
     pub fn graphviz(&self, src: &str, mut w: impl std::io::Write) -> std::io::Result<()> {
         write!(w, "graph G{{")?;
         write!(w, "compound=true;")?;
         write!(w, "node[shape=box,style=\"filled\"];")?;
         let mut listed = HashSet::new();
-        for (i, node) in self.nodes.iter().enumerate().skip(1).rev() {
-            let mut children = self.children_rev(i as u32).collect::<Box<[_]>>();
-            children.reverse();
-
-            if matches!(node.variant, NodeVariant::List(_)) {
-                write!(w, "subgraph cluster{}{{", i)?;
-                for child in children.iter().copied() {
+        for node in self.iter().rev() {
+            if matches!(self[node].variant, Some(NodeVariant::List(_))) {
+                write!(w, "subgraph cluster{}{{", node)?;
+                for child in self.children(node) {
                     listed.insert(child);
 
                     write!(w, "a{}[label=\"", child)?;
@@ -103,23 +26,22 @@ impl Nodes {
                 }
                 write!(w, "}}")?;
             } else {
-                if !listed.contains(&(i as u32)) {
-                    write!(w, "a{}[label=\"", i)?;
-                    node.display(src, &mut w)?;
-                    if let Some(fillcolor) = node.fillcolor() {
+                if !listed.contains(&node) {
+                    write!(w, "a{}[label=\"", node)?;
+                    self[node].display(src, &mut w)?;
+                    if let Some(fillcolor) = self[node].fillcolor() {
                         write!(w, "\",fillcolor=\"{}", fillcolor)?;
                     }
                     write!(w, "\"];")?;
                 }
-                for child in children.iter().copied() {
-                    let data = self.get(child).unwrap();
-                    let list = matches!(data.variant, NodeVariant::List(_));
+                for child in self.children(node) {
+                    let list = matches!(self[child].variant, Some(NodeVariant::List(_)));
                     if list {
-                        if let Some(first) = data.first_child() {
-                            write!(w, "a{}--a{}[lhead=cluster{}];", i, first, child)?;
+                        if let Some(first) = self[child].left {
+                            write!(w, "a{}--a{}[lhead=cluster{}];", node, first, child)?;
                         }
                     } else {
-                        write!(w, "a{}--a{};", i, child)?;
+                        write!(w, "a{}--a{};", node, child)?;
                     }
                 }
             }
@@ -129,19 +51,13 @@ impl Nodes {
     }
 }
 
-impl fmt::Debug for Nodes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.draw(self.nodes.len() as u32 - 1, 0, f)
-    }
-}
-
 fn inner(s: &str) -> &str {
     &s[1..s.len() - 1]
 }
 
-impl NodeData {
+impl NodeData<NodeVariant> {
     pub fn fillcolor(&self) -> Option<&'static str> {
-        match self.variant {
+        match self.variant.unwrap() {
             NodeVariant::ConstrainedDefinition => Some("cornflowerblue"),
             NodeVariant::Definition(Definition::Constant) => Some("indianred2"),
             NodeVariant::Definition(Definition::Effect) => Some("lawngreen"),
@@ -156,19 +72,17 @@ impl NodeData {
         }
     }
     pub fn text<'a>(&self, src: &'a str) -> &'a str {
-        match self.variant {
+        match self.variant.unwrap() {
             NodeVariant::Identifier(Identifier::Identifier)
-            | NodeVariant::Constant(Constant::Integer) => {
-                src[self.start as usize..(self.start + self.len) as usize].trim()
-            }
+            | NodeVariant::Constant(Constant::Integer) => src[self.location].trim(),
             NodeVariant::Constant(Constant::String | Constant::Character) => {
-                inner(src[self.start as usize..(self.start + self.len) as usize].trim())
+                inner(src[self.location].trim())
             }
             _ => "",
         }
     }
     pub fn display(&self, src: &str, mut w: impl std::io::Write) -> std::io::Result<()> {
-        match self.variant {
+        match self.variant.unwrap() {
             NodeVariant::List(_) => write!(w, "list"),
             NodeVariant::Lucu => write!(w, "HEAD"),
             NodeVariant::Import => write!(w, "import"),
@@ -214,24 +128,17 @@ impl NodeData {
             NodeVariant::Constant(Constant::Case) => write!(w, "const case"),
             NodeVariant::ConstantCase | NodeVariant::ExpressionCase => write!(w, "case"),
             NodeVariant::Identifier(Identifier::Identifier)
-            | NodeVariant::Constant(Constant::Integer) => write!(
-                w,
-                "{}",
-                src[self.start as usize..(self.start + self.len) as usize].trim(),
-            ),
-            NodeVariant::Constant(Constant::String) => write!(
-                w,
-                "\\\"{}\\\"",
-                inner(src[self.start as usize..(self.start + self.len) as usize].trim()),
-            ),
-            NodeVariant::Constant(Constant::Character) => write!(
-                w,
-                "'{}'",
-                inner(src[self.start as usize..(self.start + self.len) as usize].trim()),
-            ),
+            | NodeVariant::Constant(Constant::Integer) => {
+                write!(w, "{}", src[self.location].trim(),)
+            }
+            NodeVariant::Constant(Constant::String) => {
+                write!(w, "\\\"{}\\\"", inner(src[self.location].trim()),)
+            }
+            NodeVariant::Constant(Constant::Character) => {
+                write!(w, "'{}'", inner(src[self.location].trim()),)
+            }
             NodeVariant::Identifier(Identifier::PackagedIdentifier) => write!(w, "pkg ident"),
             NodeVariant::Identifier(Identifier::FullIdentifier) => write!(w, "full ident"),
-            NodeVariant::Dummy => Ok(()),
             NodeVariant::Expression(Expression::Block) => write!(w, "body"),
             NodeVariant::Expression(Expression::Cast) => write!(w, "cast"),
             NodeVariant::Expression(Expression::Typed) => write!(w, ":"),
@@ -259,89 +166,6 @@ impl NodeData {
             NodeVariant::Expression(Expression::Member) => write!(w, "."),
             NodeVariant::Expression(Expression::Case) => write!(w, "expr case"),
             NodeVariant::Expression(_) => todo!("{:?}", self.variant),
-        }
-    }
-}
-
-impl Index<u32> for Nodes {
-    type Output = NodeData;
-
-    fn index(&self, index: u32) -> &Self::Output {
-        self.get(index).unwrap()
-    }
-}
-
-impl IndexMut<u32> for Nodes {
-    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
-        self.get_mut(index).unwrap()
-    }
-}
-
-struct NodeChildren<'a>(&'a [NodeData], u32, bool);
-
-impl<'a> NodeChildren<'a> {
-    fn new(nodes: &'a [NodeData], parent: u32) -> Self {
-        let node = &nodes[parent as usize];
-        if matches!(node.variant, NodeVariant::List(_)) {
-            if node.first_child().is_none() {
-                NodeChildren(&[], 0, false)
-            } else {
-                let until_last = &nodes[..=node.last_child().unwrap().get() as usize];
-                let first = node.first_child().unwrap().get();
-                NodeChildren(until_last, first, false)
-            }
-        } else if node.first_child().is_none() {
-            NodeChildren(&[], 0, true)
-        } else {
-            let min = node
-                .last_child()
-                .unwrap()
-                .min(node.first_child().unwrap())
-                .get();
-            let max = node
-                .last_child()
-                .unwrap()
-                .max(node.first_child().unwrap())
-                .get();
-            let until_last = &nodes[..=max as usize];
-            NodeChildren(until_last, min, true)
-        }
-    }
-}
-
-impl Iterator for NodeChildren<'_> {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(next) = self.0.last() {
-            // skip children of nodes
-            let mut last = self.0.len() - 1;
-            if !self.2 {
-                let mut node = next;
-                while let Some(child) = node.first_child() {
-                    last = child.get() as usize;
-                    node = &self.0[last];
-                }
-            }
-
-            let next = self.0.len() - 1;
-
-            // stop when target is reached
-            if self.2 {
-                if next != self.1 as usize {
-                    self.0 = &self.0[..=self.1 as usize];
-                } else {
-                    self.0 = &[];
-                }
-            } else if last > self.1 as usize {
-                self.0 = &self.0[..last];
-            } else {
-                self.0 = &[];
-            }
-
-            Some(next as u32)
-        } else {
-            None
         }
     }
 }
@@ -385,9 +209,6 @@ pub enum NodeVariant {
     Constraint(Constraint),
     Constant(Constant),
     Identifier(Identifier),
-
-    // dummy
-    Dummy,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

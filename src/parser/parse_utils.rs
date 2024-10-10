@@ -1,11 +1,14 @@
 use std::num::NonZeroU32;
 
-use crate::lexer::{FullToken, Group, Symbol, Token};
+use crate::{
+    lexer::{FullToken, Group, Symbol, Token},
+    tree::{Location, NodeData},
+};
 
-use super::{Expression, List, NodeData, NodeVariant, Nodes};
+use super::{Expression, List, NodeVariant, ParseTree};
 
 pub(super) struct Parser<'a> {
-    pub nodes: Nodes,
+    pub nodes: ParseTree,
     pub errors: Vec<Error>,
     tokens: &'a [FullToken],
     pos: usize,
@@ -29,7 +32,7 @@ pub(super) type Result<T> = std::result::Result<T, Error>;
 impl<'a> Parser<'a> {
     pub(super) fn new(tokens: &'a [FullToken]) -> Self {
         Self {
-            nodes: Nodes::new(),
+            nodes: ParseTree::new(),
             tokens,
             pos: 0,
             errors: Vec::new(),
@@ -41,13 +44,33 @@ impl<'a> Parser<'a> {
         mut inner: impl FnMut(&mut Self) -> Result<Option<NonZeroU32>>,
     ) -> Result<NonZeroU32> {
         self.node(NodeVariant::List(variant), |parser| {
-            let mut first = None;
-            let mut last = None;
+            let Some(first) = inner(parser)? else {
+                return Ok((None, None));
+            };
+            let Some(second) = inner(parser)? else {
+                return Ok((Some(first), None));
+            };
+
+            let second = parser.nodes.push(NodeData {
+                variant: None,
+                location: Location::ZERO,
+                left: Some(second),
+                right: None,
+            });
+            let mut last = second;
+
             while let Some(elem) = inner(parser)? {
-                first = first.or(Some(elem));
-                last = Some(elem);
+                let glue = parser.nodes.push(NodeData {
+                    variant: None,
+                    location: Location::ZERO,
+                    left: Some(elem),
+                    right: None,
+                });
+                parser.nodes[last].right = Some(glue);
+                last = glue;
             }
-            Ok((first, last))
+
+            Ok((Some(first), Some(second)))
         })
     }
     pub(super) fn left_rec(
@@ -56,14 +79,16 @@ impl<'a> Parser<'a> {
         mut rhs: impl FnMut(&mut Self, Token) -> Result<Option<(Expression, Option<NonZeroU32>)>>,
     ) -> Result<NonZeroU32> {
         let mut lhs = lhs(self)?;
-        let start = self.nodes[lhs.get()].start;
+        let start = self.nodes[lhs].location.start;
         loop {
             if let Some(token) = self.token_peek() {
                 if let Some((variant, rhs)) = rhs(self, token.token)? {
                     lhs = self.nodes.push(NodeData {
-                        variant: NodeVariant::Expression(variant),
-                        len: self.position() - start,
-                        start,
+                        variant: Some(NodeVariant::Expression(variant)),
+                        location: Location {
+                            start,
+                            end: self.position(),
+                        },
                         left: Some(lhs),
                         right: rhs,
                     });
@@ -214,9 +239,11 @@ impl<'a> Parser<'a> {
 
                 let start = t.start;
                 Ok(self.nodes.push(NodeData {
-                    variant: variant_f(variant),
-                    len: self.position() - start,
-                    start,
+                    variant: Some(variant_f(variant)),
+                    location: Location {
+                        start,
+                        end: self.position(),
+                    },
                     left: lhs,
                     right: rhs,
                 }))
@@ -239,11 +266,13 @@ impl<'a> Parser<'a> {
         };
 
         let start = token.start;
-        let data = &self.nodes[rhs.unwrap_or(lhs).get()];
+        let data = &self.nodes[rhs.unwrap_or(lhs)];
         Ok(self.nodes.push(NodeData {
-            variant: variant_f(variant),
-            len: data.start + data.len - start,
-            start,
+            variant: Some(variant_f(variant)),
+            location: Location {
+                start,
+                end: data.location.end,
+            },
             left: Some(lhs),
             right: rhs,
         }))
@@ -256,9 +285,11 @@ impl<'a> Parser<'a> {
         let start = self.position();
         let (left, right) = inner(self)?;
         Ok(self.nodes.push(NodeData {
-            variant,
-            len: self.position() - start,
-            start,
+            variant: Some(variant),
+            location: Location {
+                start,
+                end: self.position(),
+            },
             left,
             right,
         }))
@@ -266,9 +297,11 @@ impl<'a> Parser<'a> {
     pub(super) fn leaf(&mut self, variant: NodeVariant, token: Token) -> Result<NonZeroU32> {
         let token = self.token_expect(token)?;
         Ok(self.nodes.push(NodeData {
-            variant,
-            len: token.len as u32,
-            start: token.start,
+            variant: Some(variant),
+            location: Location {
+                start: token.start,
+                end: token.start + token.len as u32,
+            },
             left: None,
             right: None,
         }))
@@ -276,9 +309,11 @@ impl<'a> Parser<'a> {
     pub(super) fn leaf_option(&mut self, variant: NodeVariant, token: Token) -> Option<NonZeroU32> {
         if let Some(token) = self.token_peek().filter(|t| t.token == token) {
             Some(self.nodes.push(NodeData {
-                variant,
-                len: token.len as u32,
-                start: token.start,
+                variant: Some(variant),
+                location: Location {
+                    start: token.start,
+                    end: token.start + token.len as u32,
+                },
                 left: None,
                 right: None,
             }))

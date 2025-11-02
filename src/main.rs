@@ -1,10 +1,13 @@
 use std::{collections::HashMap, time::Duration};
 
 use annotate_snippets::{Renderer, renderer::DecorStyle};
-use import::ModuleImports;
+use import::ModuleGraph;
 use include_dir::include_dir;
-use module::{Library, Module, ModuleResolver};
-use stage::{lexer::Lexer, parser::Parser};
+use module::{Library, Module};
+use petgraph::{
+    algo::kosaraju_scc,
+    dot::{Config, Dot},
+};
 use watcher::{FileWatcher, WatchedLibrary};
 
 mod err;
@@ -37,11 +40,14 @@ fn main() {
 
     let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
     loop {
-        let all = ModuleImports::all(&watcher);
-        for diagnostic in all.diagnostics {
+        let graph = ModuleGraph::from(&watcher);
+        for diagnostic in graph.diagnostics {
             diagnostic.print(&watcher, &renderer);
         }
-        println!("{:?}", all.value.unwrap());
+        for node in graph.value.as_ref().unwrap().postorder().value.unwrap() {
+            println!("{:?}", graph.value.as_ref().unwrap().graph[node]);
+        }
+        println!("{}", Dot::new(&graph.value.as_ref().unwrap().graph));
 
         watcher.await_change();
     }

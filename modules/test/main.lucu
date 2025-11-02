@@ -1,4 +1,2 @@
-import "core:test"
-import "core:test2" hello
-import "a" holy shit balls
-import "what$balls"
+import ":test"
+import "core:preamble" core

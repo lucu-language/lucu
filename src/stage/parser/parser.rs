@@ -5,7 +5,7 @@ use super::ast;
 use crate::{
     err::{LucuDiagnostic, Result, SimpleDiagnostic},
     module::Module,
-    stage::lexer::{Keyword, Literal, Symbol, Token, TokenKind},
+    stage::lexer::{Keyword, Lexer, Literal, Symbol, Token, TokenKind},
 };
 
 pub struct Parser<'a> {
@@ -21,6 +21,15 @@ impl<'a> Parser<'a> {
             source,
             tokens,
         }
+    }
+    pub fn parse(module: &'a Module, source: &'a str) -> Result<ast::Module> {
+        let tokens = Lexer::new(source).collect::<Box<_>>();
+        Parser {
+            module,
+            source,
+            tokens: &tokens,
+        }
+        .module()
     }
 
     pub fn string(&mut self) -> Result<ast::String> {
@@ -143,9 +152,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Result {
-            value: Some(values),
-            diagnostics,
-        }
+        Result::new(values).prepended(diagnostics)
     }
 }

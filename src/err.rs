@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    ops::{Add, AddAssign},
+};
 
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Group, Level, Origin, Renderer, Snippet, Title,
@@ -13,7 +16,7 @@ use crate::{
 
 #[must_use = "this `Result` may have diagnostics, which should be handled"]
 #[derive(Clone, Debug)]
-pub struct Result<T> {
+pub struct Result<T = ()> {
     pub value: Option<T>,
     pub diagnostics: im::Vector<LucuDiagnostic>,
 }
@@ -27,9 +30,52 @@ where
     }
 }
 
+impl AddAssign for Result<()> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.value = self.value.and(rhs.value);
+        self.diagnostics.append(rhs.diagnostics);
+    }
+}
+
+impl Add for Result<()> {
+    type Output = Result<()>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            value: self.value.and(rhs.value),
+            diagnostics: self.diagnostics + rhs.diagnostics,
+        }
+    }
+}
+
 impl Result<()> {
     pub fn ok() -> Self {
         Self::new(())
+    }
+    pub fn require(cond: bool, f: impl FnOnce() -> LucuDiagnostic) -> Self {
+        if cond {
+            Self::ok()
+        } else {
+            Self::ok().with(f())
+        }
+    }
+}
+
+impl From<Option<LucuDiagnostic>> for Result<()> {
+    fn from(value: Option<LucuDiagnostic>) -> Self {
+        match value {
+            Some(diag) => Result::ok().with(diag),
+            None => Result::ok(),
+        }
+    }
+}
+
+impl<T> From<std::result::Result<T, LucuDiagnostic>> for Result<T> {
+    fn from(value: std::result::Result<T, LucuDiagnostic>) -> Self {
+        match value {
+            Ok(t) => Result::new(t),
+            Err(e) => Result::error(e),
+        }
     }
 }
 
@@ -58,6 +104,15 @@ impl<T> Result<T> {
             diagnostics: im::Vector::new(),
         }
     }
+    pub fn recover(self, f: impl FnOnce(T)) -> Result<()> {
+        if let Some(t) = self.value {
+            f(t);
+        }
+        Result {
+            value: Some(()),
+            diagnostics: self.diagnostics,
+        }
+    }
     pub fn with(self, diagnostic: LucuDiagnostic) -> Self {
         Self {
             value: self.value,
@@ -69,18 +124,6 @@ impl<T> Result<T> {
         Self {
             value: None,
             diagnostics: im::Vector::unit(diagnostic),
-        }
-    }
-    pub fn checked(self, f: impl FnOnce(&T) -> Option<LucuDiagnostic>) -> Self {
-        match &self.value {
-            Some(val) => match f(val) {
-                Some(diag) => Self {
-                    value: self.value,
-                    diagnostics: self.diagnostics + im::Vector::unit(diag),
-                },
-                None => self,
-            },
-            None => self,
         }
     }
     pub fn prepended(self, diagnostics: im::Vector<LucuDiagnostic>) -> Self {
@@ -248,9 +291,10 @@ impl LucuDiagnostic {
 
 #[rustfmt::skip]
 diagnostics!(
-    (UnknownFile      (SimpleDiagnostic), 0, Error, "Could not access module file"),
-    (UnknownLibrary   (SimpleDiagnostic), 1, Error, "Unknown library"),
-    (InvalidIdentifier(SimpleDiagnostic), 2, Error, "File name is not a valid identifier"),
-    (UnexpectedToken  (SimpleDiagnostic), 3, Error, "Unexpected token"),
-    (UnexpectedEOF    (SimpleDiagnostic), 4, Error, "Unexpected end of file"),
+    (UnexpectedToken  (SimpleDiagnostic),      0, Error, "Unexpected token"),
+    (UnexpectedEOF    (SimpleDiagnostic),      1, Error, "Unexpected end of file"),
+
+    (UnknownFile      (SimpleDiagnostic),      2, Error, "Could not access module file"),
+    (UnknownLibrary   (SimpleDiagnostic),      3, Error, "Unknown library"),
+    (InvalidIdentifier(SimpleDiagnostic),      4, Error, "File name is not a valid identifier"),
 );

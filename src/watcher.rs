@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    env,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -9,29 +10,62 @@ use notify_debouncer_full::{
     DebounceEventResult, Debouncer, RecommendedCache, new_debouncer,
     notify::{RecommendedWatcher, RecursiveMode},
 };
-use pathdiff::diff_paths;
+use path_clean::PathClean;
 
-use crate::module::{Library, LibraryDir, Module, UnknownModule};
-
-pub trait ModuleReader {
-    fn main(&self) -> Module;
-    fn preamble(&mut self, pkg: &Module) -> Option<Module>;
-    fn contents(&mut self, pkg: &Module) -> Result<String, UnknownModule>;
-}
+use crate::module::{Library, Module, ModuleResolver, UnknownModule};
 
 pub struct FileWatcher {
     main: Module,
-    watched_modules: HashSet<Module>,
-    libraries: HashMap<Library, LibraryDir>,
+    libraries: HashMap<Library, WatchedLibrary>,
 
     rx: Receiver<DebounceEventResult>,
+    #[expect(unused)]
     file_watcher: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
+#[derive(Clone)]
+pub struct WatchedLibrary {
+    pub location: PathBuf,
+    pub preamble: Option<Module>,
+    pub modules_override: Option<include_dir::Dir<'static>>,
+}
+
+impl WatchedLibrary {
+    pub fn new<P: Into<PathBuf>>(location: P) -> Self {
+        let path: PathBuf = location.into();
+        let absolute_path = if path.is_absolute() {
+            path.clean()
+        } else {
+            std::env::current_dir()
+                .expect("ICE: library path is relative but cannot access current dir")
+                .join(path)
+                .clean()
+        };
+
+        Self {
+            location: absolute_path,
+            preamble: None,
+            modules_override: None,
+        }
+    }
+    pub fn with_preamble(mut self, library: Library, path: impl AsRef<Path>) -> Self {
+        self.preamble = Some(Module::new(library, path));
+        self
+    }
+    pub fn with_modules(mut self, modules: include_dir::Dir<'static>) -> Self {
+        self.modules_override = Some(modules);
+        self
+    }
+}
+
 impl FileWatcher {
-    pub fn new(main: Module, libraries: HashMap<Library, LibraryDir>) -> Self {
+    pub fn new(
+        main: Module,
+        libraries: HashMap<Library, WatchedLibrary>,
+        timeout: Duration,
+    ) -> Self {
         let (tx, rx) = unbounded();
-        let mut file_watcher = new_debouncer(Duration::from_secs_f64(0.1), None, tx).unwrap();
+        let mut file_watcher = new_debouncer(timeout, None, tx).unwrap();
         for lib in libraries.values() {
             if lib.modules_override.is_none() {
                 file_watcher
@@ -41,7 +75,6 @@ impl FileWatcher {
         }
         Self {
             main,
-            watched_modules: HashSet::new(),
             libraries,
             rx,
             file_watcher,
@@ -58,13 +91,8 @@ impl FileWatcher {
                 // Check for modified files
                 for path in &event.paths {
                     for (lib, lib_path) in self.libraries.iter() {
-                        let path = diff_paths(path, &lib_path.location).expect(
-                            "ICE: could not get the difference between module and library path",
-                        );
-                        let module = Module::new(lib.clone(), path);
-                        if self.watched_modules.contains(&module) {
-                            eprintln!("{} changed!", module);
-                            changed.insert(module);
+                        if let Ok(relative) = path.strip_prefix(&lib_path.location) {
+                            changed.insert(Module::new(lib.clone(), relative));
                         }
                     }
                 }
@@ -80,23 +108,33 @@ impl FileWatcher {
     }
 }
 
-impl ModuleReader for FileWatcher {
+impl ModuleResolver for FileWatcher {
     fn main(&self) -> Module {
         self.main.clone()
     }
-    fn preamble(&mut self, module: &Module) -> Option<Module> {
+    fn preamble(&self, module: &Module) -> Option<Module> {
         self.libraries
             .get(&module.library)
             .and_then(|lp| lp.preamble.clone())
     }
-    fn contents(&mut self, module: &Module) -> Result<String, UnknownModule> {
+    fn readable_path(&self, module: &Module) -> String {
+        let current_dir = env::current_dir().ok();
+        let library_dir = self.library_path(&module.library).ok();
+        let relative_dir =
+            Option::zip(current_dir, library_dir).and_then(|(cur, lib)| lib.strip_prefix(cur).ok());
+
+        match relative_dir {
+            Some(dir) => dir
+                .join(module.path_with_extension())
+                .to_string_lossy()
+                .into_owned(),
+            None => module.to_string(),
+        }
+    }
+    fn contents(&self, module: &Module) -> Result<String, UnknownModule> {
         let full_path = self
             .library_path(&module.library)?
             .join(module.path_with_extension());
-
-        if !self.watched_modules.contains(module) {
-            self.watched_modules.insert(module.clone());
-        }
 
         std::fs::read_to_string(&full_path).map_err(|_| UnknownModule::UnknownFile(full_path))
     }

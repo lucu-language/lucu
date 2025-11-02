@@ -5,11 +5,13 @@ edition = "2024"
 
 [dependencies]
 annotate-snippets = "0.12.8"
+anstream = "0.6.21"
 compact_str = "0.9.0"
 crossbeam-channel = "0.5.15"
+do-notation = "0.1.3"
+im = "15.1.0"
 include_dir = "0.7.4"
 lasso = "0.7.3"
 notify-debouncer-full = { version = "0.6.0", features = ["crossbeam-channel"] }
 path-clean = "1.0.1"
-pathdiff = "0.2.3"
 strum = { version = "0.27.2", features = ["derive"] }

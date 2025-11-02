@@ -56,7 +56,7 @@ impl<'a> Parser<'a> {
             (next, _) => {
                 let diagnostic = SimpleDiagnostic::new(self.module.clone(), next.span)
                     .label(format_compact!("Expected {}", token));
-                if next.token == TokenKind::EOF {
+                if next.token == TokenKind::Eof {
                     Result::error(LucuDiagnostic::UnexpectedEOF(diagnostic))
                 } else {
                     Result::error(LucuDiagnostic::UnexpectedToken(diagnostic))
@@ -93,7 +93,7 @@ impl<'a> Parser<'a> {
     }
     fn skip_to_recovery(&mut self, sep: TokenKind) {
         while self.next().token != sep
-            && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::EOF)
+            && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
         {
             self.skip();
         }
@@ -128,7 +128,7 @@ impl<'a> Parser<'a> {
             }
 
             match self.next().token {
-                TokenKind::Close(_) | TokenKind::EOF => break,
+                TokenKind::Close(_) | TokenKind::Eof => break,
                 _ => {
                     let sep = self.consume(separator);
                     diagnostics.append(sep.diagnostics);

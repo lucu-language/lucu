@@ -18,6 +18,15 @@ pub struct Result<T> {
     pub diagnostics: im::Vector<LucuDiagnostic>,
 }
 
+impl<T> Default for Result<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl Result<()> {
     pub fn ok() -> Self {
         Self::new(())
@@ -49,17 +58,29 @@ impl<T> Result<T> {
             diagnostics: im::Vector::new(),
         }
     }
+    pub fn with(self, diagnostic: LucuDiagnostic) -> Self {
+        Self {
+            value: self.value,
+            diagnostics: self.diagnostics + im::Vector::unit(diagnostic),
+        }
+    }
     pub fn error(diagnostic: LucuDiagnostic) -> Self {
         assert_eq!(diagnostic.level(), DiagnosticLevel::Error);
         Self {
             value: None,
-            diagnostics: im::vector![diagnostic],
+            diagnostics: im::Vector::unit(diagnostic),
         }
     }
-    pub fn checked(t: T, f: impl FnOnce(&T) -> Result<()>) -> Self {
-        Self {
-            diagnostics: f(&t).diagnostics,
-            value: Some(t),
+    pub fn checked(self, f: impl FnOnce(&T) -> Option<LucuDiagnostic>) -> Self {
+        match &self.value {
+            Some(val) => match f(val) {
+                Some(diag) => Self {
+                    value: self.value,
+                    diagnostics: self.diagnostics + im::Vector::unit(diag),
+                },
+                None => self,
+            },
+            None => self,
         }
     }
     pub fn prepended(self, diagnostics: im::Vector<LucuDiagnostic>) -> Self {

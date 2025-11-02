@@ -1,12 +1,14 @@
 use std::{collections::HashMap, time::Duration};
 
 use annotate_snippets::{Renderer, renderer::DecorStyle};
+use import::ModuleImports;
 use include_dir::include_dir;
 use module::{Library, Module, ModuleResolver};
 use stage::{lexer::Lexer, parser::Parser};
 use watcher::{FileWatcher, WatchedLibrary};
 
 mod err;
+mod import;
 mod module;
 mod watcher;
 
@@ -35,21 +37,11 @@ fn main() {
 
     let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
     loop {
-        let contents = watcher.contents(&main).unwrap();
-
-        let lexer = Lexer::new(&contents);
-        let tokens = lexer.collect::<Box<_>>();
-
-        let mut parser = Parser::new(&main, &contents, &tokens);
-        let module = parser.module();
-
-        for diagnostic in module.diagnostics {
+        let all = ModuleImports::all(&watcher);
+        for diagnostic in all.diagnostics {
             diagnostic.print(&watcher, &renderer);
         }
-
-        if let Some(value) = module.value {
-            println!("{:#?}", value);
-        }
+        println!("{:?}", all.value.unwrap());
 
         watcher.await_change();
     }

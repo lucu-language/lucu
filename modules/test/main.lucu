@@ -1,4 +1,4 @@
 import "core:test"
 import "core:test2" hello
 import "a" holy shit balls
-import "what"
+import "what$balls"

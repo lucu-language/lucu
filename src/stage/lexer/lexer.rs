@@ -65,7 +65,7 @@ impl Iterator for Lexer<'_> {
                 self.pos = u32::MAX;
                 let end = self.src.len() as u32;
                 Some(Token {
-                    token: TokenKind::EOF,
+                    token: TokenKind::Eof,
                     span: Span::new(end, end),
                 })
             }

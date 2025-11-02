@@ -46,7 +46,7 @@ pub enum TokenKind {
     Open(Group),
     Close(Group),
     Identifier,
-    EOF,
+    Eof,
     #[default]
     Unknown,
 }
@@ -115,7 +115,7 @@ impl Display for TokenKind {
                 Group::Bracket => write!(f, "']'"),
             },
             TokenKind::Identifier => write!(f, "identifier"),
-            TokenKind::EOF => write!(f, "end of file"),
+            TokenKind::Eof => write!(f, "end of file"),
             TokenKind::Unknown => write!(f, "unknown symbol"),
         }
     }

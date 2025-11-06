@@ -1,2 +1,14 @@
 import ":test"
 import "core:preamble" core
+
+fun main = {
+	
+}
+
+fun f(i int) int = {
+	
+}
+
+fun g(i int, fun f(i int) int) int = {
+	
+}

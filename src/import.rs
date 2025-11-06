@@ -6,14 +6,16 @@ use std::{
 use compact_str::{CompactString, format_compact};
 use petgraph::{
     algo::kosaraju_scc,
+    dot::Dot,
     graph::{DiGraph, NodeIndex},
+    visit::EdgeRef,
 };
 
 use crate::{
     err::{LucuDiagnostic, Result, SimpleDiagnostic},
     module::{Module, ModuleResolver, UnknownModule},
     stage::{
-        lexer::{Span, TokenKind},
+        lexer::token::{Span, TokenKind},
         parser::{
             Parser,
             ast::{self, Spanned},
@@ -51,8 +53,8 @@ impl Display for Import {
 
 #[derive(Debug)]
 pub struct ModuleGraph {
-    pub asts: HashMap<NodeIndex, ast::Module>,
-    pub graph: DiGraph<Module, Import>,
+    asts: HashMap<NodeIndex, ast::Module>,
+    graph: DiGraph<Module, Import>,
 }
 
 impl ModuleGraph {
@@ -64,6 +66,20 @@ impl ModuleGraph {
                 _ => todo!("Cyclic graph!"),
             })
             .collect()
+    }
+    pub fn imports(&self, idx: NodeIndex) -> impl Iterator<Item = (&Import, NodeIndex)> {
+        self.graph
+            .edges(idx)
+            .map(|edge| (edge.weight(), edge.target()))
+    }
+    pub fn ast(&self, idx: NodeIndex) -> Option<&ast::Module> {
+        self.asts.get(&idx)
+    }
+    pub fn module(&self, idx: NodeIndex) -> &Module {
+        &self.graph[idx]
+    }
+    pub fn dot(&self) -> Dot<&DiGraph<Module, Import>> {
+        Dot::new(&self.graph)
     }
     pub fn from(resolver: &impl ModuleResolver) -> Result<Self> {
         let mut result = Result::ok();

@@ -4,10 +4,7 @@ use annotate_snippets::{Renderer, renderer::DecorStyle};
 use import::ModuleGraph;
 use include_dir::include_dir;
 use module::{Library, Module};
-use petgraph::{
-    algo::kosaraju_scc,
-    dot::{Config, Dot},
-};
+use petgraph::graph::NodeIndex;
 use watcher::{FileWatcher, WatchedLibrary};
 
 mod err;
@@ -44,10 +41,13 @@ fn main() {
         for diagnostic in graph.diagnostics {
             diagnostic.print(&watcher, &renderer);
         }
-        for node in graph.value.as_ref().unwrap().postorder().value.unwrap() {
-            println!("{:?}", graph.value.as_ref().unwrap().graph[node]);
+
+        let graph = graph.value.as_ref().unwrap();
+        println!("{}", graph.dot());
+        println!("{:#?}", graph.ast(NodeIndex::new(0)));
+        for node in graph.postorder().value.unwrap() {
+            println!("{:?}", graph.module(node));
         }
-        println!("{}", Dot::new(&graph.value.as_ref().unwrap().graph));
 
         watcher.await_change();
     }

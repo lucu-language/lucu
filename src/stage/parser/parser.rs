@@ -5,7 +5,10 @@ use super::ast;
 use crate::{
     err::{LucuDiagnostic, Result, SimpleDiagnostic},
     module::Module,
-    stage::lexer::{Keyword, Lexer, Literal, Symbol, Token, TokenKind},
+    stage::lexer::{
+        Lexer,
+        token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind},
+    },
 };
 
 pub struct Parser<'a> {
@@ -51,7 +54,74 @@ impl<'a> Parser<'a> {
     pub fn module(&mut self) -> Result<ast::Module> {
         m! {
             imports <- self.many_while_next(Symbol::Semicolon, Keyword::Import, Parser::import);
-            return ast::Module { imports };
+            definitions <- self.many(Symbol::Semicolon, Parser::definition);
+            return ast::Module { imports, definitions };
+        }
+    }
+    pub fn definition(&mut self) -> Result<ast::Definition> {
+        match self.next().token {
+            TokenKind::Keyword(Keyword::Fun) => self.function().map(ast::Definition::Function),
+            tok => todo!("error: unknown definition with token {tok}"),
+        }
+    }
+    pub fn function(&mut self) -> Result<ast::Function> {
+        m! {
+            _ <- self.consume(Keyword::Fun);
+            name <- self.ident();
+            signature <- self.function_signature();
+            _ <- self.consume(Symbol::Assign(SymbolAssign::Equals));
+            definition <- self.expression();
+            return ast::Function {
+                name,
+                signature,
+                definition,
+            };
+        }
+    }
+    pub fn ty(&mut self) -> Result<ast::Type> {
+        m! {
+            _ <- self.ident().and_then(|s| if s.0 == "int" { Result::new(s) } else { todo!("unknown type") });
+            return ast::Type::Int;
+        }
+    }
+    pub fn expression(&mut self) -> Result<ast::Expression> {
+        m! {
+            _ <- self.consume(TokenKind::Open(Group::Brace));
+            _ <- self.consume(TokenKind::Close(Group::Brace));
+            return ast::Expression::Block;
+        }
+    }
+    pub fn function_parameter(&mut self) -> Result<ast::FunctionParameter> {
+        if self.is_next(Keyword::Fun) {
+            self.skip();
+            m! {
+                name <- self.ident();
+                sign <- self.function_signature();
+                return ast::FunctionParameter::Lambda(name, sign);
+            }
+        } else {
+            m! {
+                name <- self.ident();
+                ty <- self.ty();
+                return ast::FunctionParameter::Data(name, ty);
+            }
+        }
+    }
+    pub fn function_signature(&mut self) -> Result<ast::FunctionSignature> {
+        m! {
+            parameters <- self.when_next(TokenKind::Open(Group::Parenthesis), |parser| parser.many_grouped(
+                Group::Parenthesis,
+                Symbol::Comma,
+                Parser::function_parameter,
+            ));
+            return_ty <- self.unless_next(
+                &[TokenKind::Symbol(Symbol::Assign(SymbolAssign::Equals)), TokenKind::Symbol(Symbol::Comma), TokenKind::Symbol(Symbol::Semicolon)],
+                Parser::ty
+            );
+            return ast::FunctionSignature {
+                parameters,
+                return_ty,
+            };
         }
     }
 
@@ -89,6 +159,19 @@ impl<'a> Parser<'a> {
     fn is_next(&self, token: impl Into<TokenKind>) -> bool {
         self.next().token == token.into()
     }
+    fn unless_next<T>(
+        &mut self,
+        tokens: &[TokenKind],
+        parse: impl Fn(&mut Self) -> Result<T>,
+    ) -> Result<Option<T>> {
+        if !tokens.contains(&self.next().token)
+            && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
+        {
+            parse(self).map(Some)
+        } else {
+            Result::new(None)
+        }
+    }
     fn when_next<T>(
         &mut self,
         token: impl Into<TokenKind>,
@@ -100,12 +183,51 @@ impl<'a> Parser<'a> {
             Result::new(None)
         }
     }
-    fn skip_to_recovery(&mut self, sep: TokenKind) {
-        while self.next().token != sep
-            && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
-        {
-            self.skip();
+    fn skip_group(&mut self, group: Group) {
+        self.skip();
+        loop {
+            match self.next().token {
+                TokenKind::Eof => break,
+                TokenKind::Close(c) => {
+                    if c == group {
+                        self.skip();
+                    }
+                    break;
+                }
+                TokenKind::Open(group) => self.skip_group(group),
+                _ => self.skip(),
+            }
         }
+    }
+    fn skip_to_recovery(&mut self, sep: TokenKind) {
+        loop {
+            match self.next().token {
+                tok if tok == sep => break,
+                TokenKind::Close(_) | TokenKind::Eof => break,
+                TokenKind::Open(group) => self.skip_group(group),
+                _ => self.skip(),
+            }
+        }
+    }
+    fn many_grouped<T>(
+        &mut self,
+        group: Group,
+        separator: impl Into<TokenKind>,
+        parse: impl Fn(&mut Self) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        m! {
+            _ <- self.consume(TokenKind::Open(group));
+            many <- self.many(separator, parse);
+            _ <- self.consume(TokenKind::Close(group));
+            return many;
+        }
+    }
+    fn many<T>(
+        &mut self,
+        separator: impl Into<TokenKind>,
+        parse: impl Fn(&mut Self) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        self.many_while(separator, |_| true, parse)
     }
     fn many_while_next<T>(
         &mut self,
@@ -127,7 +249,7 @@ impl<'a> Parser<'a> {
         let mut values = Vec::new();
         let mut diagnostics = im::Vector::new();
 
-        while pred(self) {
+        while pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof) {
             let next = parse(self);
             diagnostics.append(next.diagnostics);
 

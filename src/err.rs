@@ -11,7 +11,7 @@ use do_notation::Lift;
 
 use crate::{
     module::{Module, ModuleResolver},
-    stage::lexer::Span,
+    stage::lexer::token::Span,
 };
 
 #[must_use = "this `Result` may have diagnostics, which should be handled"]

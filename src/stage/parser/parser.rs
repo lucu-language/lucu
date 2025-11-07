@@ -1,19 +1,20 @@
 use compact_str::format_compact;
 use do_notation::m;
 
-use super::ast;
+use super::ast::{self, Spanned};
 use crate::{
     err::{LucuDiagnostic, Result, SimpleDiagnostic},
     module::Module,
     stage::lexer::{
         Lexer,
-        token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind},
+        token::{Group, Keyword, Literal, Span, Symbol, SymbolAssign, Token, TokenKind},
     },
 };
 
 pub struct Parser<'a> {
     module: &'a Module,
     source: &'a str,
+    last_token_end: u32,
     tokens: &'a [Token],
 }
 
@@ -23,6 +24,7 @@ impl<'a> Parser<'a> {
             module,
             source,
             tokens,
+            last_token_end: 0,
         }
     }
     pub fn parse(module: &'a Module, source: &'a str) -> Result<ast::Module> {
@@ -61,27 +63,32 @@ impl<'a> Parser<'a> {
     }
     pub fn function(&mut self) -> Result<ast::Function> {
         m! {
-            signature <- self.function_declaration();
+            declaration <- self.function_declaration();
             _ <- self.consume(Symbol::Assign(SymbolAssign::Equals));
             definition <- self.expression();
             return ast::Function {
-                signature,
+                declaration,
                 definition,
             };
         }
     }
     pub fn ty(&mut self) -> Result<ast::Type> {
-        m! {
-            _ <- self.ident().and_then(|s| if s.0 == "int" { Result::new(s) } else { todo!("unknown type") });
-            return ast::Type::Int;
-        }
+        self.spanned(|parse| {
+            m! {
+                _ <- parse.ident().and_then(|s| if s.0 == "int" { Result::new(s) } else { todo!("unknown type") });
+                return ast::TypeEnum::Int;
+            }
+        }).map(Box::new)
     }
     pub fn expression(&mut self) -> Result<ast::Expression> {
-        m! {
-            _ <- self.consume(TokenKind::Open(Group::Brace));
-            _ <- self.consume(TokenKind::Close(Group::Brace));
-            return ast::Expression::Block;
-        }
+        self.spanned(|parse| {
+            m! {
+                _ <- parse.consume(TokenKind::Open(Group::Brace));
+                _ <- parse.consume(TokenKind::Close(Group::Brace));
+                return ast::ExpressionEnum::Block;
+            }
+        })
+        .map(Box::new)
     }
     pub fn function_parameter(&mut self) -> Result<ast::FunctionParameter> {
         match self.next().token {
@@ -133,21 +140,29 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn kind(&mut self) -> Result<ast::Kind> {
-        match self.next().token {
-            TokenKind::Keyword(Keyword::Type) => {
-                self.skip();
-                Result::new(ast::Kind::Type)
+        self.spanned(|parse| {
+            match parse.next().token {
+                TokenKind::Keyword(Keyword::Type) => {
+                    parse.skip();
+                    Result::new(ast::KindEnum::Type)
+                }
+                _ => parse.ty().map(ast::KindEnum::Constant),
+                // TODO: check if next token cannot start a type, then give error
             }
-            _ => self.ty().map(ast::Kind::Constant),
-            // TODO: check if next token cannot start a type, then give error
-        }
+        })
+        .map(Box::new)
     }
 
+    fn spanned<T>(&mut self, parse: impl Fn(&mut Self) -> Result<T>) -> Result<Spanned<T>> {
+        let start = self.next().span.start;
+        parse(self).map(|t| Spanned(t, Span::new(start, self.last_token_end)))
+    }
     fn consume(&mut self, token: impl Into<TokenKind>) -> Result<Token> {
         let token = token.into();
         match self.tokens.split_first().expect("ICE: consumed EOF token") {
             (next, rest) if next.token == token => {
                 self.tokens = rest;
+                self.last_token_end = next.span.end;
                 Result::new(*next)
             }
             (next, _) => {
@@ -162,11 +177,9 @@ impl<'a> Parser<'a> {
         }
     }
     fn skip(&mut self) {
-        self.tokens = self
-            .tokens
-            .split_first()
-            .expect("ICE: consumed EOF token")
-            .1;
+        let (token, tokens) = self.tokens.split_first().expect("ICE: consumed EOF token");
+        self.tokens = tokens;
+        self.last_token_end = token.span.end;
     }
     fn next(&self) -> Token {
         self.tokens
@@ -218,10 +231,10 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    fn skip_to_recovery(&mut self, sep: TokenKind) {
+    fn skip_to_recovery(&mut self, sep: Symbol) {
         loop {
             match self.next().token {
-                tok if tok == sep => break,
+                TokenKind::Symbol(sym) if sym == sep => break,
                 TokenKind::Close(_) | TokenKind::Eof => break,
                 TokenKind::Open(group) => self.skip_group(group),
                 _ => self.skip(),
@@ -231,7 +244,7 @@ impl<'a> Parser<'a> {
     fn many_grouped<T>(
         &mut self,
         group: Group,
-        separator: impl Into<TokenKind>,
+        separator: Symbol,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         m! {
@@ -243,14 +256,14 @@ impl<'a> Parser<'a> {
     }
     fn many<T>(
         &mut self,
-        separator: impl Into<TokenKind>,
+        separator: Symbol,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         self.many_while(separator, |_| true, parse)
     }
     fn many_while_next<T>(
         &mut self,
-        separator: impl Into<TokenKind>,
+        separator: Symbol,
         token: impl Into<TokenKind>,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
@@ -259,12 +272,10 @@ impl<'a> Parser<'a> {
     }
     fn many_while<T>(
         &mut self,
-        separator: impl Into<TokenKind>,
+        separator: Symbol,
         pred: impl Fn(&Self) -> bool,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
-        let separator = separator.into();
-
         let mut values = Vec::new();
         let mut diagnostics = im::Vector::new();
 

@@ -4,27 +4,6 @@ use compact_str::CompactString;
 
 use crate::stage::lexer::token::Span;
 
-#[derive(Clone, Copy)]
-pub struct Spanned<T>(pub T, pub Span);
-
-impl<T> Debug for Spanned<T>
-where
-    T: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Display for Spanned<T>
-where
-    T: Display,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
 pub type String = Spanned<CompactString>;
 pub type Ident = Spanned<CompactString>;
 
@@ -45,14 +24,24 @@ pub enum Definition {
     Function(Function),
 }
 
-#[derive(Debug)]
-pub struct Function {
-    pub signature: FunctionDeclaration,
-    pub definition: Expression,
+impl Definition {
+    pub fn name(&self) -> Option<&Name> {
+        match self {
+            Definition::Function(function) => Some(&function.declaration.name),
+        }
+    }
 }
 
 #[derive(Debug)]
-pub enum Kind {
+pub struct Function {
+    pub declaration: FunctionDeclaration,
+    pub definition: Expression,
+}
+
+pub type Kind = Box<Spanned<KindEnum>>;
+
+#[derive(Debug)]
+pub enum KindEnum {
     Type,
     Constant(Type),
 }
@@ -69,13 +58,17 @@ pub struct Name {
     pub generics: Option<Vec<Generic>>,
 }
 
+pub type Type = Box<Spanned<TypeEnum>>;
+
 #[derive(Debug)]
-pub enum Type {
+pub enum TypeEnum {
     Int,
 }
 
+pub type Expression = Box<Spanned<ExpressionEnum>>;
+
 #[derive(Debug)]
-pub enum Expression {
+pub enum ExpressionEnum {
     Block,
 }
 
@@ -90,4 +83,25 @@ pub struct FunctionDeclaration {
     pub name: Name,
     pub parameters: Option<Vec<FunctionParameter>>,
     pub return_ty: Option<Type>,
+}
+
+#[derive(Clone, Copy)]
+pub struct Spanned<T>(pub T, pub Span);
+
+impl<T> Debug for Spanned<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T> Display for Spanned<T>
+where
+    T: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }

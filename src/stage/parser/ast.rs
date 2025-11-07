@@ -1,13 +1,16 @@
-use std::fmt::{Debug, Display};
+use std::fmt::{self, Debug, Display};
 
 use compact_str::CompactString;
 
 use crate::stage::lexer::token::Span;
 
-pub type String = Spanned<CompactString>;
-pub type Ident = Spanned<CompactString>;
+#[derive(Debug)]
+pub struct String(pub Spanned<CompactString>);
 
 #[derive(Debug)]
+pub struct Ident(pub Spanned<CompactString>);
+
+#[derive(Debug, Default)]
 pub struct Module {
     pub imports: Vec<Import>,
     pub definitions: Vec<Definition>,
@@ -22,12 +25,14 @@ pub struct Import {
 #[derive(Debug)]
 pub enum Definition {
     Function(Function),
+    Type(TypeAlias),
 }
 
 impl Definition {
     pub fn name(&self) -> Option<&Name> {
         match self {
-            Definition::Function(function) => Some(&function.declaration.name),
+            Definition::Function(fun) => Some(&fun.declaration.name),
+            Definition::Type(ty) => Some(&ty.name),
         }
     }
 }
@@ -38,7 +43,13 @@ pub struct Function {
     pub definition: Expression,
 }
 
-pub type Kind = Box<Spanned<KindEnum>>;
+#[derive(Debug)]
+pub struct TypeAlias {
+    pub name: Name,
+    pub definition: Type,
+}
+
+pub type Kind = Spanned<KindEnum>;
 
 #[derive(Debug)]
 pub enum KindEnum {
@@ -58,11 +69,37 @@ pub struct Name {
     pub generics: Option<Vec<Generic>>,
 }
 
+pub struct Path {
+    pub package: Option<Ident>,
+    pub name: Ident,
+}
+
+impl Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.package {
+            Some(pkg) => write!(f, "\"{}.{}\"", pkg.0, self.name.0),
+            None => write!(f, "\"{}\"", self.name.0),
+        }
+    }
+}
+
 pub type Type = Box<Spanned<TypeEnum>>;
 
 #[derive(Debug)]
 pub enum TypeEnum {
     Int,
+    Path(Path),
+    Struct(Struct),
+}
+
+#[derive(Debug)]
+pub struct Struct {
+    pub members: Vec<StructMember>,
+}
+
+#[derive(Debug)]
+pub enum StructMember {
+    Data(Ident, Type),
 }
 
 pub type Expression = Box<Spanned<ExpressionEnum>>;
@@ -82,7 +119,15 @@ pub enum FunctionParameter {
 pub struct FunctionDeclaration {
     pub name: Name,
     pub parameters: Option<Vec<FunctionParameter>>,
-    pub return_ty: Option<Type>,
+    pub returns: Option<Returns>,
+}
+
+pub type Returns = Spanned<ReturnsEnum>;
+
+#[derive(Debug)]
+pub enum ReturnsEnum {
+    Never,
+    Data(Type),
 }
 
 #[derive(Clone, Copy)]
@@ -92,7 +137,7 @@ impl<T> Debug for Spanned<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -101,7 +146,7 @@ impl<T> Display for Spanned<T>
 where
     T: Display,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }

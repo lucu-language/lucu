@@ -34,11 +34,11 @@ impl<'a> Parser<'a> {
 
     pub fn string(&mut self) -> Result<ast::String> {
         self.consume(Literal::String)
-            .map(|tok| ast::Spanned((&self.source[tok.span.inner()]).into(), tok.span))
+            .map(|tok| ast::String(Spanned((&self.source[tok.span.inner()]).into(), tok.span)))
     }
     pub fn ident(&mut self) -> Result<ast::Ident> {
         self.consume(TokenKind::Identifier)
-            .map(|tok| ast::Spanned((&self.source[tok.span]).into(), tok.span))
+            .map(|tok| ast::Ident(Spanned((&self.source[tok.span]).into(), tok.span)))
     }
     pub fn import(&mut self) -> Result<ast::Import> {
         m! {
@@ -58,6 +58,7 @@ impl<'a> Parser<'a> {
     pub fn definition(&mut self) -> Result<ast::Definition> {
         match self.next().token {
             TokenKind::Keyword(Keyword::Fun) => self.function().map(ast::Definition::Function),
+            TokenKind::Keyword(Keyword::Type) => self.type_alias().map(ast::Definition::Type),
             tok => todo!("error: unknown definition with token {tok}"),
         }
     }
@@ -66,19 +67,58 @@ impl<'a> Parser<'a> {
             declaration <- self.function_declaration();
             _ <- self.consume(Symbol::Assign(SymbolAssign::Equals));
             definition <- self.expression();
-            return ast::Function {
-                declaration,
-                definition,
+            return ast::Function { declaration, definition };
+        }
+    }
+    pub fn type_alias(&mut self) -> Result<ast::TypeAlias> {
+        m! {
+            _ <- self.consume(Keyword::Type);
+            name <- self.name();
+            _ <- self.consume(Symbol::Assign(SymbolAssign::Equals));
+            definition <- self.r#type();
+            return ast::TypeAlias { name, definition };
+        }
+    }
+    pub fn path(&mut self) -> Result<ast::Path> {
+        m! {
+            first <- self.ident();
+            second <- self.when_next(Symbol::Dot, |parse| {
+                parse.skip();
+                parse.ident()
+            });
+            return match second {
+                Some(name) => ast::Path { package: Some(first), name },
+                None => ast::Path { package: None, name: first },
             };
         }
     }
-    pub fn ty(&mut self) -> Result<ast::Type> {
-        self.spanned(|parse| {
-            m! {
-                _ <- parse.ident().and_then(|s| if s.0 == "int" { Result::new(s) } else { todo!("unknown type") });
-                return ast::TypeEnum::Int;
-            }
-        }).map(Box::new)
+    pub fn r#type(&mut self) -> Result<ast::Type> {
+        self.spanned(|parse| match parse.next().token {
+            TokenKind::Identifier => parse.path().map(|path| {
+                if path.package.is_none() && path.name.0.0 == "int" {
+                    ast::TypeEnum::Int
+                } else {
+                    ast::TypeEnum::Path(path)
+                }
+            }),
+            TokenKind::Keyword(Keyword::Struct) => parse.r#struct().map(ast::TypeEnum::Struct),
+            _ => todo!("error"),
+        })
+        .map(Box::new)
+    }
+    pub fn r#struct(&mut self) -> Result<ast::Struct> {
+        m! {
+            _ <- self.consume(Keyword::Struct);
+            members <- self.many_grouped(Group::Parenthesis, Symbol::Colon, Parser::struct_member);
+            return ast::Struct { members };
+        }
+    }
+    pub fn struct_member(&mut self) -> Result<ast::StructMember> {
+        m! {
+            name <- self.ident();
+            ty <- self.r#type();
+            return ast::StructMember::Data(name, ty);
+        }
     }
     pub fn expression(&mut self) -> Result<ast::Expression> {
         self.spanned(|parse| {
@@ -98,7 +138,7 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier => {
                 m! {
                     name <- self.ident();
-                    ty <- self.ty();
+                    ty <- self.r#type();
                     return ast::FunctionParameter::Data(name, ty);
                 }
             }
@@ -114,12 +154,24 @@ impl<'a> Parser<'a> {
                 Symbol::Comma,
                 Parser::function_parameter,
             ));
-            return_ty <- self.unless_next(
+            returns <- self.unless_next(
                 &[Symbol::Assign(SymbolAssign::Equals), Symbol::Comma, Symbol::Semicolon],
-                Parser::ty
+                Parser::returns
             );
-            return ast::FunctionDeclaration { name, parameters, return_ty };
+            return ast::FunctionDeclaration { name, parameters, returns };
         }
+    }
+    pub fn returns(&mut self) -> Result<ast::Returns> {
+        self.spanned(|parse| {
+            match parse.next().token {
+                TokenKind::Symbol(Symbol::Bang) => {
+                    parse.skip();
+                    Result::new(ast::ReturnsEnum::Never)
+                }
+                _ => parse.r#type().map(ast::ReturnsEnum::Data),
+                // TODO: check if next token cannot start a type, then give error
+            }
+        })
     }
     pub fn name(&mut self) -> Result<ast::Name> {
         m! {
@@ -146,11 +198,10 @@ impl<'a> Parser<'a> {
                     parse.skip();
                     Result::new(ast::KindEnum::Type)
                 }
-                _ => parse.ty().map(ast::KindEnum::Constant),
+                _ => parse.r#type().map(ast::KindEnum::Constant),
                 // TODO: check if next token cannot start a type, then give error
             }
         })
-        .map(Box::new)
     }
 
     fn spanned<T>(&mut self, parse: impl Fn(&mut Self) -> Result<T>) -> Result<Spanned<T>> {
@@ -234,7 +285,10 @@ impl<'a> Parser<'a> {
     fn skip_to_recovery(&mut self, sep: Symbol) {
         loop {
             match self.next().token {
-                TokenKind::Symbol(sym) if sym == sep => break,
+                TokenKind::Symbol(sym) if sym == sep => {
+                    self.skip();
+                    break;
+                }
                 TokenKind::Close(_) | TokenKind::Eof => break,
                 TokenKind::Open(group) => self.skip_group(group),
                 _ => self.skip(),
@@ -276,34 +330,20 @@ impl<'a> Parser<'a> {
         pred: impl Fn(&Self) -> bool,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
-        let mut values = Vec::new();
-        let mut diagnostics = im::Vector::new();
-
-        while pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof) {
-            let next = parse(self);
-            diagnostics.append(next.diagnostics);
-
-            match next.value {
-                Some(value) => values.push(value),
-                None => self.skip_to_recovery(separator),
-            }
-
-            match self.next().token {
-                TokenKind::Close(_) | TokenKind::Eof => break,
-                _ => {
-                    let sep = self.consume(separator);
-                    diagnostics.append(sep.diagnostics);
-
-                    if sep.value.is_none() {
-                        self.skip_to_recovery(separator);
-                        if self.is_next(separator) {
-                            self.skip();
-                        }
+        std::iter::from_fn(|| {
+            (pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)).then(
+                || {
+                    let parser = &mut *self;
+                    m! {
+                        t <- parse(parser)
+                            .on_fail(|| parser.skip_to_recovery(separator));
+                        _ <- parser.unless_next(&[], |parser| parser.consume(separator)
+                            .on_fail(|| parser.skip_to_recovery(separator)).discard_value());
+                        return t;
                     }
-                }
-            }
-        }
-
-        Result::new(values).prepended(diagnostics)
+                },
+            )
+        })
+        .collect()
     }
 }

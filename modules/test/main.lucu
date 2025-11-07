@@ -1,6 +1,12 @@
 import ":test"
 import "core:preamble" core
 
+type A = A
+type B = struct(b B)
+
+type C = struct(d D)
+type D = struct(c C)
+
 fun main = {
 	
 }

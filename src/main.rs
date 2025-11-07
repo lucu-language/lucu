@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use annotate_snippets::{Renderer, renderer::DecorStyle};
-use import::ModuleGraph;
+use import::{ModuleGraph, ModuleScope};
 use include_dir::include_dir;
 use module::{Library, Module};
 use petgraph::graph::NodeIndex;
@@ -44,7 +44,17 @@ fn main() {
 
         let graph = graph.value.as_ref().unwrap();
         println!("{}", graph.dot());
+
+        let scope = ModuleScope::from(graph.ast(NodeIndex::new(0)).unwrap());
+        let scope = scope.value.as_ref().unwrap();
+        println!("{}", scope.dot());
+
         println!("{:#?}", graph.ast(NodeIndex::new(0)));
+
+        for def in scope.postorder().value.unwrap() {
+            println!("{:?}", def);
+        }
+
         for node in graph.postorder().value.unwrap() {
             println!("{:?}", graph.module(node));
         }

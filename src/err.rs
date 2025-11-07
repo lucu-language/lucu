@@ -30,21 +30,9 @@ where
     }
 }
 
-impl AddAssign for Result<()> {
-    fn add_assign(&mut self, rhs: Self) {
-        self.value = self.value.and(rhs.value);
+impl<T> AddAssign<Result<()>> for Result<T> {
+    fn add_assign(&mut self, rhs: Result<()>) {
         self.diagnostics.append(rhs.diagnostics);
-    }
-}
-
-impl Add for Result<()> {
-    type Output = Result<()>;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            value: self.value.and(rhs.value),
-            diagnostics: self.diagnostics + rhs.diagnostics,
-        }
     }
 }
 
@@ -82,17 +70,30 @@ impl<T> From<std::result::Result<T, LucuDiagnostic>> for Result<T> {
 impl<A, V: FromIterator<A>> FromIterator<Result<A>> for Result<V> {
     fn from_iter<T: IntoIterator<Item = Result<A>>>(iter: T) -> Self {
         let mut diagnostics = im::Vector::new();
-        let mut complete = true;
 
         let values = V::from_iter(iter.into_iter().filter_map(|r| {
             diagnostics.append(r.diagnostics);
-            complete &= r.value.is_some();
             r.value
         }));
 
         Self {
-            value: complete.then_some(values),
+            value: Some(values),
             diagnostics,
+        }
+    }
+}
+
+impl<T> Result<T>
+where
+    T: Default,
+{
+    pub fn or_default(self) -> Self {
+        match self.value {
+            Some(_) => self,
+            None => Result {
+                value: Some(T::default()),
+                diagnostics: self.diagnostics,
+            },
         }
     }
 }
@@ -104,7 +105,19 @@ impl<T> Result<T> {
             diagnostics: im::Vector::new(),
         }
     }
-    pub fn recover(self, f: impl FnOnce(T)) -> Result<()> {
+    pub fn on_fail(self, f: impl FnOnce()) -> Result<T> {
+        if self.value.is_none() {
+            f();
+        }
+        self
+    }
+    pub fn discard_value(self) -> Result<()> {
+        Result {
+            value: Some(()),
+            diagnostics: self.diagnostics,
+        }
+    }
+    pub fn take_value(self, f: impl FnOnce(T)) -> Result<()> {
         if let Some(t) = self.value {
             f(t);
         }
@@ -126,15 +139,15 @@ impl<T> Result<T> {
             diagnostics: im::Vector::unit(diagnostic),
         }
     }
-    pub fn prepended(self, diagnostics: im::Vector<LucuDiagnostic>) -> Self {
-        Self {
-            value: self.value,
-            diagnostics: diagnostics + self.diagnostics,
-        }
-    }
     pub fn and_then<U>(self, f: impl FnOnce(T) -> Result<U>) -> Result<U> {
         match self.value {
-            Some(t) => f(t).prepended(self.diagnostics),
+            Some(t) => {
+                let u = f(t);
+                Result {
+                    value: u.value,
+                    diagnostics: self.diagnostics + u.diagnostics,
+                }
+            }
             None => Result {
                 value: None,
                 diagnostics: self.diagnostics,

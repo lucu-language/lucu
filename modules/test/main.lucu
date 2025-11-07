@@ -12,3 +12,15 @@ fun f(i int) int = {
 fun g(i int, fun f(i int) int) int = {
 	
 }
+
+fun h[T] = {
+	
+}
+
+fun i[T type] = {
+	
+}
+
+fun j[N int] = {
+	
+}

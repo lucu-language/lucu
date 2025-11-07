@@ -27,12 +27,7 @@ impl<'a> Parser<'a> {
     }
     pub fn parse(module: &'a Module, source: &'a str) -> Result<ast::Module> {
         let tokens = Lexer::new(source).collect::<Box<_>>();
-        Parser {
-            module,
-            source,
-            tokens: &tokens,
-        }
-        .module()
+        Parser::new(module, source, &tokens).module()
     }
 
     pub fn string(&mut self) -> Result<ast::String> {
@@ -66,13 +61,10 @@ impl<'a> Parser<'a> {
     }
     pub fn function(&mut self) -> Result<ast::Function> {
         m! {
-            _ <- self.consume(Keyword::Fun);
-            name <- self.ident();
-            signature <- self.function_signature();
+            signature <- self.function_declaration();
             _ <- self.consume(Symbol::Assign(SymbolAssign::Equals));
             definition <- self.expression();
             return ast::Function {
-                name,
                 signature,
                 definition,
             };
@@ -92,36 +84,62 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn function_parameter(&mut self) -> Result<ast::FunctionParameter> {
-        if self.is_next(Keyword::Fun) {
-            self.skip();
-            m! {
-                name <- self.ident();
-                sign <- self.function_signature();
-                return ast::FunctionParameter::Lambda(name, sign);
+        match self.next().token {
+            TokenKind::Keyword(Keyword::Fun) => self
+                .function_declaration()
+                .map(ast::FunctionParameter::Lambda),
+            TokenKind::Identifier => {
+                m! {
+                    name <- self.ident();
+                    ty <- self.ty();
+                    return ast::FunctionParameter::Data(name, ty);
+                }
             }
-        } else {
-            m! {
-                name <- self.ident();
-                ty <- self.ty();
-                return ast::FunctionParameter::Data(name, ty);
-            }
+            _ => todo!("error"),
         }
     }
-    pub fn function_signature(&mut self) -> Result<ast::FunctionSignature> {
+    pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
         m! {
+            _ <- self.consume(Keyword::Fun);
+            name <- self.name();
             parameters <- self.when_next(TokenKind::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
                 Symbol::Comma,
                 Parser::function_parameter,
             ));
             return_ty <- self.unless_next(
-                &[TokenKind::Symbol(Symbol::Assign(SymbolAssign::Equals)), TokenKind::Symbol(Symbol::Comma), TokenKind::Symbol(Symbol::Semicolon)],
+                &[Symbol::Assign(SymbolAssign::Equals), Symbol::Comma, Symbol::Semicolon],
                 Parser::ty
             );
-            return ast::FunctionSignature {
-                parameters,
-                return_ty,
-            };
+            return ast::FunctionDeclaration { name, parameters, return_ty };
+        }
+    }
+    pub fn name(&mut self) -> Result<ast::Name> {
+        m! {
+            ident <- self.ident();
+            generics <- self.when_next(TokenKind::Open(Group::Bracket), |parser| parser.many_grouped(
+                Group::Bracket,
+                Symbol::Comma,
+                Parser::generic,
+            ));
+            return ast::Name { ident, generics };
+        }
+    }
+    pub fn generic(&mut self) -> Result<ast::Generic> {
+        m! {
+            name <- self.name();
+            kind <- self.unless_next(&[], Parser::kind);
+            return ast::Generic { name, kind };
+        }
+    }
+    pub fn kind(&mut self) -> Result<ast::Kind> {
+        match self.next().token {
+            TokenKind::Keyword(Keyword::Type) => {
+                self.skip();
+                Result::new(ast::Kind::Type)
+            }
+            _ => self.ty().map(ast::Kind::Constant),
+            // TODO: check if next token cannot start a type, then give error
         }
     }
 
@@ -161,10 +179,11 @@ impl<'a> Parser<'a> {
     }
     fn unless_next<T>(
         &mut self,
-        tokens: &[TokenKind],
+        tokens: &[Symbol],
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
-        if !tokens.contains(&self.next().token)
+        let next = self.next().token;
+        if !tokens.iter().copied().any(|t| next == TokenKind::from(t))
             && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
         {
             parse(self).map(Some)

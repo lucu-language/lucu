@@ -1,15 +1,27 @@
 use std::{
-    fmt::{self, Display},
+    fmt::{self, Debug, Display},
     ops::{Index, Range},
     str::FromStr,
 };
 
 use strum::{EnumString, IntoStaticStr};
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, Default, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Default, Hash)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
+}
+
+impl Debug for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}..{}", self.start, self.end)
+    }
+}
+
+impl Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}..{}", self.start, self.end)
+    }
 }
 
 impl Index<Span> for str {

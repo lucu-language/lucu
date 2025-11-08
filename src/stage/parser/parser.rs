@@ -336,9 +336,9 @@ impl<'a> Parser<'a> {
                     let parser = &mut *self;
                     m! {
                         t <- parse(parser)
-                            .on_fail(|| parser.skip_to_recovery(separator));
+                            .tap_none(|| parser.skip_to_recovery(separator));
                         _ <- parser.unless_next(&[], |parser| parser.consume(separator)
-                            .on_fail(|| parser.skip_to_recovery(separator)).discard_value());
+                            .tap_none(|| parser.skip_to_recovery(separator)).discard());
                         return t;
                     }
                 },

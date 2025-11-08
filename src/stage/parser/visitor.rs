@@ -3,16 +3,16 @@ use std::{fmt::Display, hash::Hash};
 
 pub trait Visitor: Copy {
     type Output<'a>: Default + Combine;
-    fn visit_path<'a>(self, path: &'a ast::Path) -> Self::Output<'a> {
+    fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         Self::Output::combine([path.package.visit(self), path.name.visit(self)])
     }
-    fn visit_function<'a>(self, function: &'a ast::Function) -> Self::Output<'a> {
+    fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
         Self::Output::combine([
             function.declaration.visit(self),
             function.definition.visit(self),
         ])
     }
-    fn visit_struct<'a>(self, struc: &'a ast::Struct) -> Self::Output<'a> {
+    fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
         struc.members.visit(self)
     }
 }
@@ -22,9 +22,7 @@ pub trait Combine {
 }
 
 impl Combine for () {
-    fn combine(_iter: impl IntoIterator<Item = Self>) -> Self {
-        ()
-    }
+    fn combine(_iter: impl IntoIterator<Item = Self>) -> Self {}
 }
 
 impl<T: Clone> Combine for im::Vector<T> {
@@ -53,14 +51,14 @@ impl<K: Clone + Hash + Eq, V: Clone> Combine for im::HashMap<K, V> {
     fn combine(iter: impl IntoIterator<Item = Self>) -> Self {
         let mut iter = iter.into_iter();
         let mut combined = iter.next().unwrap_or_default();
-        for set in iter {
-            combined.extend(set);
+        for map in iter {
+            combined.extend(map);
         }
         combined
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PathKind {
     Direct,
     Indirect,
@@ -74,34 +72,29 @@ impl Display for PathKind {
         }
     }
 }
-
 pub trait Ast {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_>;
 
-    fn module_paths(&self) -> im::HashMap<&str, PathKind> {
+    fn module_paths(&self) -> im::Vector<(&ast::Ident, PathKind)> {
         #[derive(Clone, Copy)]
         struct ModulePaths;
         impl Visitor for ModulePaths {
-            type Output<'a> = im::HashMap<&'a str, PathKind>;
-            fn visit_path<'a>(self, path: &'a ast::Path) -> Self::Output<'a> {
+            type Output<'a> = im::Vector<(&'a ast::Ident, PathKind)>;
+            fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
                 if path.package.is_none() {
-                    im::HashMap::unit(&path.name.0.0, PathKind::Direct)
+                    im::Vector::unit((&path.name, PathKind::Direct))
                 } else {
-                    im::HashMap::new()
+                    im::Vector::new()
                 }
             }
-            fn visit_function<'a>(self, function: &'a ast::Function) -> Self::Output<'a> {
-                Iterator::chain(
-                    function.declaration.visit(self).into_iter(),
-                    function
-                        .definition
-                        .visit(self)
-                        .into_iter()
-                        .map(|(k, _)| (k, PathKind::Indirect)),
-                )
-                .collect()
+            fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
+                // function definitions may have their own scopes,
+                // so checking those is out of scope (pun intended) for this visitor
+                function.declaration.visit(self)
             }
-            fn visit_struct<'a>(self, struc: &'a ast::Struct) -> Self::Output<'a> {
+            fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
+                // everything inside a struct definition is an *indirect* reference,
+                // as these references are allowed to be mutually recursive
                 struc
                     .members
                     .visit(self)
@@ -110,6 +103,7 @@ pub trait Ast {
                     .collect()
             }
         }
+
         self.visit(ModulePaths)
     }
 }

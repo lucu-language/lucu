@@ -5,6 +5,7 @@ use std::{
 
 use compact_str::{CompactString, format_compact};
 use do_notation::m;
+use im::HashSet;
 use petgraph::{
     algo::kosaraju_scc,
     dot::Dot,
@@ -19,24 +20,11 @@ use crate::{
         lexer::token::{Span, TokenKind},
         parser::{
             Parser,
-            ast::{self, Spanned},
+            ast::{self, Name, Spanned},
             visitor::{Ast, PathKind},
         },
     },
 };
-
-fn import_name(path: &ast::String) -> ast::Ident {
-    let without_extension = path.0.0.rsplit_once('.').map(|t| t.0).unwrap_or(&path.0.0);
-    let end = path.0.1.end - 1 - (path.0.0.len() - without_extension.len()) as u32;
-
-    let ident = without_extension
-        .rsplit_once(['/', '\\', ':'])
-        .map(|t| t.1)
-        .unwrap_or(without_extension);
-    let start = path.0.1.start + 1 + (without_extension.len() - ident.len()) as u32;
-
-    ast::Ident(Spanned(ident.into(), Span::new(start, end)))
-}
 
 #[derive(Debug)]
 pub enum Import {
@@ -55,17 +43,39 @@ impl Display for Import {
 
 #[derive(Debug)]
 pub struct ModuleGraph {
-    asts: HashMap<NodeIndex, ast::Module>,
+    asts: Vec<ast::Module>,
     graph: DiGraph<Module, Import>,
 }
 
 #[derive(Debug, Default)]
-pub struct ModuleScope {
+pub struct ModuleScope<'a> {
+    defs: Vec<ModuleDefinition<'a>>,
     scope: HashMap<CompactString, NodeIndex>,
     graph: DiGraph<CompactString, PathKind>,
 }
 
-impl ModuleScope {
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleDefinition<'a> {
+    parent: Option<NodeIndex>,
+    ast: &'a ast::Definition,
+}
+
+impl<'a> ModuleDefinition<'a> {
+    pub fn top(definition: &'a ast::Definition) -> Self {
+        Self {
+            ast: definition,
+            parent: None,
+        }
+    }
+    pub fn child(parent: NodeIndex, child: &'a ast::Definition) -> Self {
+        Self {
+            ast: child,
+            parent: Some(parent),
+        }
+    }
+}
+
+impl<'a> ModuleScope<'a> {
     pub fn postorder(&self) -> Result<Vec<NodeIndex>> {
         kosaraju_scc(&self.graph.filter_map(
             |_, _| Some(()),
@@ -79,29 +89,47 @@ impl ModuleScope {
         })
         .collect()
     }
-    pub fn dot<'a>(&self) -> Dot<'a, &DiGraph<CompactString, PathKind>> {
+    pub fn dot(&self) -> Dot<&DiGraph<CompactString, PathKind>> {
         Dot::new(&self.graph)
     }
-    pub fn from(ast: &ast::Module) -> Result<Self> {
+    pub fn from(ast: &'a ast::Module) -> Result<Self> {
         let mut result = Result::ok();
 
         let mut graph = DiGraph::new();
         let mut scope = HashMap::new();
+        let mut defs = Vec::new();
 
         for def in &ast.definitions {
-            let name = def.name().map(|name| name.ident.0.0.clone());
-            let node = graph.add_node(name.clone().unwrap_or_default());
-            if let Some(name) = name {
-                scope.entry(name).or_insert(Vec::new()).push(node);
-            }
+            Self::add_definition(
+                &mut graph,
+                &mut scope,
+                &mut defs,
+                ModuleDefinition::top(def),
+            );
         }
 
-        for (idx, def) in ast.definitions.iter().enumerate() {
+        for (idx, def) in defs.iter().enumerate() {
+            let generics: HashSet<&str> = def
+                .ast
+                .generics()
+                .iter()
+                .map(|g| g.name.ident.0.0.as_str())
+                .collect();
+
             let parent = NodeIndex::new(idx);
-            for (name, kind) in def.module_paths() {
-                match scope.get(name).map(Vec::as_slice) {
-                    Some([child]) => {
-                        graph.add_edge(parent, *child, kind);
+            for (name, kind) in def
+                .ast
+                .module_paths()
+                .into_iter()
+                .filter(|(k, _)| !generics.contains(k.as_str()))
+            {
+                match scope.get(name.as_str()).map(Vec::as_slice) {
+                    Some(&[child]) => {
+                        if let Some(edge) = graph.find_edge(parent, child) {
+                            graph[edge] = graph[edge].min(kind);
+                        } else {
+                            graph.add_edge(parent, child, kind);
+                        }
                     }
                     Some(_) => {}
                     None => todo!("unknown definition"),
@@ -117,9 +145,28 @@ impl ModuleScope {
                     [v] => Result::new((k, *v)),
                     _ => todo!("multiple definitions"),
                 })
-                .collect::<Result<_>>()
-                .or_default();
-            return Self { scope, graph };
+                .collect::<Result<_>>();
+            return Self { scope, graph, defs };
+        }
+    }
+    fn add_definition(
+        graph: &mut DiGraph<CompactString, PathKind>,
+        scope: &mut HashMap<CompactString, Vec<NodeIndex>>,
+        defs: &mut Vec<ModuleDefinition<'a>>,
+        def: ModuleDefinition<'a>,
+    ) {
+        let name = def.ast.name().map(Name::as_str).map(CompactString::new);
+        let node = graph.add_node(name.clone().unwrap_or_default());
+        defs.push(def);
+
+        if let Some(name) = name {
+            scope.entry(name).or_default().push(node);
+        }
+        if let Some(parent) = def.parent {
+            graph.add_edge(node, parent, PathKind::Direct);
+        }
+        for child in def.ast.children() {
+            Self::add_definition(graph, scope, defs, ModuleDefinition::child(node, child));
         }
     }
 }
@@ -140,8 +187,8 @@ impl ModuleGraph {
             .edges(idx)
             .map(|edge| (edge.weight(), edge.target()))
     }
-    pub fn ast(&self, idx: NodeIndex) -> Option<&ast::Module> {
-        self.asts.get(&idx)
+    pub fn ast(&self, idx: NodeIndex) -> &ast::Module {
+        &self.asts[idx.index()]
     }
     pub fn module(&self, idx: NodeIndex) -> &Module {
         &self.graph[idx]
@@ -152,7 +199,7 @@ impl ModuleGraph {
     pub fn from(resolver: &impl ModuleResolver) -> Result<Self> {
         let mut result = Result::ok();
 
-        let mut asts = HashMap::new();
+        let mut asts = Vec::new();
         let mut graph = DiGraph::new();
         let mut nodes = HashMap::new();
 
@@ -160,96 +207,108 @@ impl ModuleGraph {
 
         {
             let main = resolver.main();
-            let contents = resolver
+            let source = resolver
                 .contents(&main)
                 .expect("ICE: could not find main file");
-            let ast = Parser::parse(&main, &contents);
+
+            let ast = result
+                .add(Parser::parse(&main, &source))
+                .unwrap_or_default();
             let node = graph.add_node(main.clone());
             nodes.insert(main, node);
-
-            result += ast.take_value(|ast| queue.push_back((node, ast)));
+            queue.push_back((node, ast));
         }
 
         while let Some((parent_node, ast)) = queue.pop_front() {
             let parent = graph.node_weight(parent_node).unwrap().clone();
 
             if let Some(module) = resolver.preamble(&parent) {
-                let seen = nodes.contains_key(&module);
+                let source = resolver
+                    .contents(&module)
+                    .expect("ICE: could not find preamble");
 
-                // get graph node, add the edge to it
-                let node = *nodes
-                    .entry(module.clone())
-                    .or_insert_with(|| graph.add_node(module.clone()));
-                graph.add_edge(parent_node, node, Import::Implicit);
+                let node = *nodes.entry(module.clone()).or_insert_with(|| {
+                    let ast = result
+                        .add(Parser::parse(&module, &source))
+                        .unwrap_or_default();
+                    let node = graph.add_node(module.clone());
+                    queue.push_back((node, ast));
+                    node
+                });
 
-                // if this is a new node, queue its ast
-                if !seen {
-                    let source = resolver
-                        .contents(&module)
-                        .expect("ICE: could not find preamble");
-                    result += Parser::parse(&module, &source)
-                        .take_value(|ast| queue.push_back((node, ast)))
-                }
+                graph.add_edge(node, parent_node, Import::Implicit);
             }
 
             for import in &ast.imports {
                 let module = Module::from_import(&parent, &import.path.0.0);
-                let seen = nodes.contains_key(&module);
 
                 // get identifier and check if valid
                 let ident = match &import.ident {
-                    Some(ident) => ident.0.0.clone(),
+                    Some(ident) => ident.as_str().into(),
                     None => {
-                        let ident = import_name(&import.path);
-                        result +=
-                            Result::require(TokenKind::is_valid_identifier(&ident.0.0), || {
+                        let ident = Self::import_name(&import.path);
+                        result.add(Result::require(
+                            TokenKind::is_valid_identifier(ident.as_str()),
+                            || {
                                 LucuDiagnostic::InvalidIdentifier(SimpleDiagnostic::new(
                                     parent.clone(),
                                     ident.0.1,
                                 ))
-                            });
+                            },
+                        ));
                         ident.0.0
                     }
                 };
 
-                // get graph node, add the edge to it
-                let node = *nodes
-                    .entry(module.clone())
-                    .or_insert_with(|| graph.add_node(module.clone()));
-                graph.add_edge(parent_node, node, Import::Named(ident));
+                // adjust graph
+                let source = result
+                    .add(Self::resolve_import(resolver, import, &module, &parent))
+                    .unwrap_or_default();
 
-                // if this is a new node, queue its ast
-                let resolved = resolve_import(resolver, import, &module, &parent);
-                if seen {
-                    result += resolved.take_value(|_| ());
-                } else {
-                    result += resolved
-                        .and_then(|source| Parser::parse(&module, &source))
-                        .take_value(|ast| queue.push_back((node, ast)))
-                }
+                let node = *nodes.entry(module.clone()).or_insert_with(|| {
+                    let ast = result
+                        .add(Parser::parse(&module, &source))
+                        .unwrap_or_default();
+                    let node = graph.add_node(module.clone());
+                    queue.push_back((node, ast));
+                    node
+                });
+
+                graph.add_edge(node, parent_node, Import::Named(ident));
             }
 
-            asts.insert(parent_node, ast);
+            asts.push(ast);
         }
 
         result.map(|_| Self { asts, graph })
     }
-}
+    fn resolve_import(
+        resolver: &impl ModuleResolver,
+        import: &ast::Import,
+        module: &Module,
+        parent: &Module,
+    ) -> Result<String> {
+        match resolver.contents(module) {
+            Ok(source) => Result::new(source),
+            Err(UnknownModule::UnknownLibrary(_)) => Result::error(LucuDiagnostic::UnknownLibrary(
+                SimpleDiagnostic::new(parent.clone(), import.path.0.1),
+            )),
+            Err(UnknownModule::UnknownFile(file)) => Result::error(LucuDiagnostic::UnknownFile(
+                SimpleDiagnostic::new(parent.clone(), import.path.0.1)
+                    .label(format_compact!("Path resolved to {}", file.display())),
+            )),
+        }
+    }
+    fn import_name(path: &ast::String) -> ast::Ident {
+        let without_extension = path.0.0.rsplit_once('.').map(|t| t.0).unwrap_or(&path.0.0);
+        let end = path.0.1.end - 1 - (path.0.0.len() - without_extension.len()) as u32;
 
-fn resolve_import(
-    resolver: &impl ModuleResolver,
-    import: &ast::Import,
-    module: &Module,
-    parent: &Module,
-) -> Result<String> {
-    match resolver.contents(module) {
-        Ok(source) => Result::new(source),
-        Err(UnknownModule::UnknownLibrary(_)) => Result::error(LucuDiagnostic::UnknownLibrary(
-            SimpleDiagnostic::new(parent.clone(), import.path.0.1),
-        )),
-        Err(UnknownModule::UnknownFile(file)) => Result::error(LucuDiagnostic::UnknownFile(
-            SimpleDiagnostic::new(parent.clone(), import.path.0.1)
-                .label(format_compact!("Path resolved to {}", file.display())),
-        )),
+        let ident = without_extension
+            .rsplit_once(['/', '\\', ':'])
+            .map(|t| t.1)
+            .unwrap_or(without_extension);
+        let start = path.0.1.start + 1 + (without_extension.len() - ident.len()) as u32;
+
+        ast::Ident(Spanned(ident.into(), Span::new(start, end)))
     }
 }

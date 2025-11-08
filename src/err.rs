@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    ops::{Add, AddAssign},
-};
+use std::borrow::Cow;
 
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Group, Level, Origin, Renderer, Snippet, Title,
@@ -30,12 +27,6 @@ where
     }
 }
 
-impl<T> AddAssign<Result<()>> for Result<T> {
-    fn add_assign(&mut self, rhs: Result<()>) {
-        self.diagnostics.append(rhs.diagnostics);
-    }
-}
-
 impl Result<()> {
     pub fn ok() -> Self {
         Self::new(())
@@ -46,6 +37,10 @@ impl Result<()> {
         } else {
             Self::ok().with(f())
         }
+    }
+    pub fn add<T>(&mut self, rhs: Result<T>) -> Option<T> {
+        self.diagnostics.append(rhs.diagnostics);
+        rhs.value
     }
 }
 
@@ -105,22 +100,13 @@ impl<T> Result<T> {
             diagnostics: im::Vector::new(),
         }
     }
-    pub fn on_fail(self, f: impl FnOnce()) -> Result<T> {
+    pub fn tap_none(self, f: impl FnOnce()) -> Result<T> {
         if self.value.is_none() {
             f();
         }
         self
     }
-    pub fn discard_value(self) -> Result<()> {
-        Result {
-            value: Some(()),
-            diagnostics: self.diagnostics,
-        }
-    }
-    pub fn take_value(self, f: impl FnOnce(T)) -> Result<()> {
-        if let Some(t) = self.value {
-            f(t);
-        }
+    pub fn discard(self) -> Result<()> {
         Result {
             value: Some(()),
             diagnostics: self.diagnostics,

@@ -10,6 +10,12 @@ pub struct String(pub Spanned<CompactString>);
 #[derive(Debug)]
 pub struct Ident(pub Spanned<CompactString>);
 
+impl Ident {
+    pub fn as_str(&self) -> &str {
+        self.0.0.as_str()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Module {
     pub imports: Vec<Import>,
@@ -34,6 +40,16 @@ impl Definition {
             Definition::Function(fun) => Some(&fun.declaration.name),
             Definition::Type(ty) => Some(&ty.name),
         }
+    }
+    pub fn generics(&self) -> &[Generic] {
+        // TODO: those without a name may also have generics
+        self.name()
+            .and_then(|name| name.generics.as_deref())
+            .unwrap_or_default()
+    }
+    pub fn children(&self) -> &[Definition] {
+        // TODO: children
+        &[]
     }
 }
 
@@ -67,6 +83,12 @@ pub struct Generic {
 pub struct Name {
     pub ident: Ident,
     pub generics: Option<Vec<Generic>>,
+}
+
+impl Name {
+    pub fn as_str(&self) -> &str {
+        self.ident.as_str()
+    }
 }
 
 pub struct Path {

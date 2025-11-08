@@ -45,7 +45,7 @@ fn main() {
         let graph = graph.value.as_ref().unwrap();
         println!("{}", graph.dot());
 
-        let scope = ModuleScope::from(graph.ast(NodeIndex::new(0)).unwrap());
+        let scope = ModuleScope::from(graph.ast(NodeIndex::new(0)));
         let scope = scope.value.as_ref().unwrap();
         println!("{}", scope.dot());
 

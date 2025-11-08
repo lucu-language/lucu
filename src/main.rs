@@ -38,24 +38,24 @@ fn main() {
     let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
     loop {
         let graph = ModuleGraph::from(&watcher);
-        for diagnostic in graph.diagnostics {
+        for diagnostic in graph.diagnostics() {
             diagnostic.print(&watcher, &renderer);
         }
 
-        let graph = graph.value.as_ref().unwrap();
+        let graph = graph.value().unwrap();
         println!("{}", graph.dot());
 
         let scope = ModuleScope::from(graph.ast(NodeIndex::new(0)));
-        let scope = scope.value.as_ref().unwrap();
+        let scope = scope.value().unwrap();
         println!("{}", scope.dot());
 
         println!("{:#?}", graph.ast(NodeIndex::new(0)));
 
-        for def in scope.postorder().value.unwrap() {
+        for &def in scope.postorder().value().unwrap() {
             println!("{:?}", def);
         }
 
-        for node in graph.postorder().value.unwrap() {
+        for &node in graph.postorder().value().unwrap() {
             println!("{:?}", graph.module(node));
         }
 

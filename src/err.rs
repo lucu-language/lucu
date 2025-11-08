@@ -13,9 +13,24 @@ use crate::{
 
 #[must_use = "this `Result` may have diagnostics, which should be handled"]
 #[derive(Clone, Debug)]
-pub struct Result<T = ()> {
-    pub value: Option<T>,
-    pub diagnostics: im::Vector<LucuDiagnostic>,
+pub struct Result<T> {
+    value: Option<T>,
+    diagnostics: im::Vector<LucuDiagnostic>,
+}
+
+#[must_use = "`Problems` may have diagnostics, which should be handled"]
+#[derive(Clone, Debug, Default)]
+pub struct Problems {
+    diagnostics: im::Vector<LucuDiagnostic>,
+}
+
+impl From<Problems> for Result<()> {
+    fn from(value: Problems) -> Self {
+        Self {
+            value: Some(()),
+            diagnostics: value.diagnostics,
+        }
+    }
 }
 
 impl<T> Default for Result<T>
@@ -27,38 +42,45 @@ where
     }
 }
 
-impl Result<()> {
+impl Problems {
     pub fn ok() -> Self {
-        Self::new(())
-    }
-    pub fn require(cond: bool, f: impl FnOnce() -> LucuDiagnostic) -> Self {
-        if cond {
-            Self::ok()
-        } else {
-            Self::ok().with(f())
+        Self {
+            diagnostics: im::Vector::new(),
         }
     }
-    pub fn add<T>(&mut self, rhs: Result<T>) -> Option<T> {
+    pub fn new(diagnostic: LucuDiagnostic) -> Self {
+        Self {
+            diagnostics: im::Vector::unit(diagnostic),
+        }
+    }
+    pub fn with<T>(self, value: T) -> Result<T> {
+        Result {
+            value: Some(value),
+            diagnostics: self.diagnostics,
+        }
+    }
+    pub fn require(cond: bool, f: impl FnOnce() -> LucuDiagnostic) -> Self {
+        if cond { Self::ok() } else { Self::new(f()) }
+    }
+    pub fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+        self.diagnostics.iter()
+    }
+    pub fn append<T>(&mut self, rhs: impl Into<Result<T>>) -> Option<T> {
+        let rhs = rhs.into();
         self.diagnostics.append(rhs.diagnostics);
         rhs.value
     }
 }
 
-impl From<Option<LucuDiagnostic>> for Result<()> {
-    fn from(value: Option<LucuDiagnostic>) -> Self {
-        match value {
-            Some(diag) => Result::ok().with(diag),
-            None => Result::ok(),
-        }
-    }
-}
+impl FromIterator<Problems> for Problems {
+    fn from_iter<T: IntoIterator<Item = Problems>>(iter: T) -> Self {
+        let mut diagnostics = im::Vector::new();
 
-impl<T> From<std::result::Result<T, LucuDiagnostic>> for Result<T> {
-    fn from(value: std::result::Result<T, LucuDiagnostic>) -> Self {
-        match value {
-            Ok(t) => Result::new(t),
-            Err(e) => Result::error(e),
+        for problems in iter {
+            diagnostics.append(problems.diagnostics);
         }
+
+        Self { diagnostics }
     }
 }
 
@@ -78,26 +100,18 @@ impl<A, V: FromIterator<A>> FromIterator<Result<A>> for Result<V> {
     }
 }
 
-impl<T> Result<T>
-where
-    T: Default,
-{
-    pub fn or_default(self) -> Self {
-        match self.value {
-            Some(_) => self,
-            None => Result {
-                value: Some(T::default()),
-                diagnostics: self.diagnostics,
-            },
-        }
-    }
-}
-
 impl<T> Result<T> {
     pub fn new(t: T) -> Self {
         Self {
             value: Some(t),
             diagnostics: im::Vector::new(),
+        }
+    }
+    pub fn error(diagnostic: LucuDiagnostic) -> Self {
+        assert_eq!(diagnostic.level(), DiagnosticLevel::Error);
+        Self {
+            value: None,
+            diagnostics: im::Vector::unit(diagnostic),
         }
     }
     pub fn tap_none(self, f: impl FnOnce()) -> Result<T> {
@@ -106,23 +120,22 @@ impl<T> Result<T> {
         }
         self
     }
-    pub fn discard(self) -> Result<()> {
+    pub fn recover(self) -> Result<Option<T>> {
         Result {
-            value: Some(()),
+            value: Some(self.value),
             diagnostics: self.diagnostics,
         }
     }
-    pub fn with(self, diagnostic: LucuDiagnostic) -> Self {
-        Self {
-            value: self.value,
-            diagnostics: self.diagnostics + im::Vector::unit(diagnostic),
-        }
-    }
-    pub fn error(diagnostic: LucuDiagnostic) -> Self {
-        assert_eq!(diagnostic.level(), DiagnosticLevel::Error);
-        Self {
-            value: None,
-            diagnostics: im::Vector::unit(diagnostic),
+    pub fn recover_default(self) -> Self
+    where
+        T: Default,
+    {
+        match self.value {
+            Some(_) => self,
+            None => Result {
+                value: Some(T::default()),
+                diagnostics: self.diagnostics,
+            },
         }
     }
     pub fn and_then<U>(self, f: impl FnOnce(T) -> Result<U>) -> Result<U> {
@@ -145,6 +158,12 @@ impl<T> Result<T> {
             value: self.value.map(f),
             diagnostics: self.diagnostics,
         }
+    }
+    pub fn value(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+    pub fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+        self.diagnostics.iter()
     }
 }
 

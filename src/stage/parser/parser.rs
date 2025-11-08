@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
     pub fn r#type(&mut self) -> Result<ast::Type> {
         self.spanned(|parse| match parse.next().token {
             TokenKind::Identifier => parse.path().map(|path| {
-                if path.package.is_none() && path.name.0.0 == "int" {
+                if path.package.is_none() && path.name.as_str() == "int" {
                     ast::TypeEnum::Int
                 } else {
                     ast::TypeEnum::Path(path)
@@ -331,18 +331,18 @@ impl<'a> Parser<'a> {
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         std::iter::from_fn(|| {
-            (pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)).then(
-                || {
-                    let parser = &mut *self;
-                    m! {
-                        t <- parse(parser)
-                            .tap_none(|| parser.skip_to_recovery(separator));
-                        _ <- parser.unless_next(&[], |parser| parser.consume(separator)
-                            .tap_none(|| parser.skip_to_recovery(separator)).discard());
-                        return t;
-                    }
-                },
-            )
+            let has_next =
+                pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof);
+            has_next.then(|| {
+                let parser = &mut *self;
+                m! {
+                    t <- parse(parser)
+                        .tap_none(|| parser.skip_to_recovery(separator));
+                    _ <- parser.unless_next(&[], |parser| parser.consume(separator)
+                        .tap_none(|| parser.skip_to_recovery(separator)).recover());
+                    return t;
+                }
+            })
         })
         .collect()
     }

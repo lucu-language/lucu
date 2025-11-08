@@ -10,9 +10,21 @@ pub struct String(pub Spanned<CompactString>);
 #[derive(Debug)]
 pub struct Ident(pub Spanned<CompactString>);
 
+impl String {
+    pub fn as_str(&self) -> &str {
+        self.0.0.as_str()
+    }
+    pub fn span(&self) -> Span {
+        self.0.1
+    }
+}
+
 impl Ident {
     pub fn as_str(&self) -> &str {
         self.0.0.as_str()
+    }
+    pub fn span(&self) -> Span {
+        self.0.1
     }
 }
 

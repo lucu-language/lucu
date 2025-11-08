@@ -1,16 +1,16 @@
-use std::{borrow::Cow, cell::OnceCell, ops::Deref};
+use std::borrow::Cow;
+use std::cell::OnceCell;
+use std::ops::Deref;
 
 use annotate_snippets::{
-    Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title,
+    Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title
 };
 use compact_str::CompactString;
 use do_notation::Lift;
 
-use crate::{
-    module::{Module, ModuleResolver},
-    span::{HasSpan, Span},
-    stage::parser::visitor::Combine,
-};
+use crate::module::{Module, ModuleResolver};
+use crate::span::{HasSpan, Span};
+use crate::stage::ast::visit::Combine;
 
 pub trait HasProblems {
     fn problems(&self) -> impl Iterator<Item = &Problem>;
@@ -257,7 +257,7 @@ pub type Owned<T> = <<T as Deref>::Target as ToOwned>::Owned;
 pub type OwnedReport<'a> = Owned<Report<'a>>;
 
 pub trait Diagnostic {
-    fn label(&self) -> Option<Cow<str>>;
+    fn label(&self) -> Option<Cow<'_, str>>;
     fn report<'a>(
         &'a self,
         title: Title<'a>,
@@ -278,12 +278,12 @@ pub trait Diagnostic {
     }
 }
 impl Diagnostic for () {
-    fn label(&self) -> Option<Cow<str>> {
+    fn label(&self) -> Option<Cow<'_, str>> {
         None
     }
 }
 impl Diagnostic for CompactString {
-    fn label(&self) -> Option<Cow<str>> {
+    fn label(&self) -> Option<Cow<'_, str>> {
         Some(self.as_str().into())
     }
 }
@@ -314,7 +314,7 @@ impl Problem {
     pub fn header(&self) -> ProblemHeader {
         self.kind.header()
     }
-    pub fn label(&self) -> Option<Cow<str>> {
+    pub fn label(&self) -> Option<Cow<'_, str>> {
         self.kind.label()
     }
     pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
@@ -357,7 +357,7 @@ macro_rules! diagnostics {
             }
         }
         impl Diagnostic for ProblemKind {
-            fn label(&self) -> Option<Cow<str>> {
+            fn label(&self) -> Option<Cow<'_, str>> {
                 match self {
                     $(Self::$variant(v) => Diagnostic::label(v)),*
                 }

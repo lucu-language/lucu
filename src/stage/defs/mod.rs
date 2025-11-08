@@ -1,23 +1,16 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-};
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 
 use compact_str::CompactString;
-use petgraph::{
-    acyclic::Acyclic,
-    algo::kosaraju_scc,
-    dot::Dot,
-    graph::{DiGraph, NodeIndex},
-    visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable},
-};
+use petgraph::acyclic::Acyclic;
+use petgraph::algo::kosaraju_scc;
+use petgraph::dot::Dot;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
 use crate::err::{Problems, Result};
-
-use super::parser::{
-    ast,
-    visitor::{Ast, Visitor},
-};
+use crate::stage::ast;
+use crate::stage::ast::visit::{Ast, Visitor};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Edge;
@@ -100,6 +93,7 @@ impl Definitions {
     pub fn dot(
         &self,
     ) -> Dot<
+        '_,
         impl IntoEdgeReferences
         + IntoNodeReferences
         + GraphProp

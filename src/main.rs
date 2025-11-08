@@ -1,17 +1,13 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
+use std::time::Duration;
 
-use annotate_snippets::{Renderer, renderer::DecorStyle};
-use err::HasProblems;
+use annotate_snippets::Renderer;
+use annotate_snippets::renderer::DecorStyle;
 use include_dir::include_dir;
-use module::{Library, Module};
-use stage::ModuleGraph;
-use watcher::{FileWatcher, WatchedLibrary};
-
-mod err;
-mod module;
-mod span;
-mod stage;
-mod watcher;
+use lucu::err::HasProblems;
+use lucu::module::{Library, Module};
+use lucu::stage::ModuleGraph;
+use lucu::watcher::{FileWatcher, WatchedLibrary};
 
 fn main() {
     let mut dirs = HashMap::new();

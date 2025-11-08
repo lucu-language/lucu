@@ -1,7 +1,7 @@
-use std::{
-    fmt::{self, Debug, Display},
-    str::FromStr,
-};
+pub mod lexer;
+
+use std::fmt::{self, Debug, Display};
+use std::str::FromStr;
 
 use strum::{EnumString, IntoStaticStr};
 

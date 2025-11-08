@@ -1,37 +1,31 @@
-use std::{
-    cell::OnceCell,
-    collections::HashMap,
-    fmt::Display,
-    hash::{DefaultHasher, Hash, Hasher},
-};
-
-use definitions::Definitions;
-use importer::{Import, Imports};
-use lexer::{Lexer, token::Token};
-use parser::{
-    Parser,
-    ast::{self},
-};
-use petgraph::{
-    algo::{DfsSpace, has_path_connecting, kosaraju_scc},
-    dot::Dot,
-    graph::{DiGraph, NodeIndex},
-    visit::{Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable},
-};
-
-use crate::{
-    err::{HasProblems, Problem, Result},
-    module::{Module, ModuleResolver},
-};
-
 // stage 1
-pub mod lexer;
+pub mod token;
 // stage 2
-pub mod parser;
+pub mod ast;
 // stage 3
-pub mod importer;
+pub mod imports;
 // stage 4
-pub mod definitions;
+pub mod defs;
+
+use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
+use petgraph::dot::Dot;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::{
+    Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable
+};
+
+use crate::err::{HasProblems, Problem, Result};
+use crate::module::{Module, ModuleResolver};
+use crate::stage::ast::parser::Parser;
+use crate::stage::defs::Definitions;
+use crate::stage::imports::{Import, Imports};
+use crate::stage::token::Token;
+use crate::stage::token::lexer::Lexer;
 
 #[derive(Debug, Default)]
 pub struct Stages {
@@ -154,6 +148,7 @@ impl ModuleGraph {
     pub fn dot(
         &self,
     ) -> Dot<
+        '_,
         impl IntoEdgeReferences
         + IntoNodeReferences
         + GraphProp

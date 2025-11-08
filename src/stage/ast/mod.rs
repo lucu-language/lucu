@@ -1,3 +1,6 @@
+pub mod parser;
+pub mod visit;
+
 use std::fmt::{self, Debug};
 
 use compact_str::CompactString;

@@ -1,16 +1,13 @@
-use std::{
-    collections::{BTreeMap, btree_map},
-    fmt::Display,
-};
+use std::collections::{BTreeMap, btree_map};
+use std::fmt::Display;
 
 use compact_str::{CompactString, format_compact};
 
-use crate::{
-    err::{ProblemKind, Problems, Result},
-    module::{Module, ModuleResolver, UnknownModule},
-    span::{HasSpan, Span, Spanned},
-    stage::{lexer::token::TokenKind, parser::ast},
-};
+use crate::err::{ProblemKind, Problems, Result};
+use crate::module::{Module, ModuleResolver, UnknownModule};
+use crate::span::{HasSpan, Span, Spanned};
+use crate::stage::ast;
+use crate::stage::token::TokenKind;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Import {

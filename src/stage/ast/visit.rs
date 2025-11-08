@@ -1,5 +1,6 @@
-use super::ast;
 use std::hash::Hash;
+
+use crate::stage::ast;
 
 pub trait Visitor: Copy {
     type Output<'a>: Default + Combine;

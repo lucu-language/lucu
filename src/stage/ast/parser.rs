@@ -1,13 +1,11 @@
 use compact_str::format_compact;
 use do_notation::m;
 
-use super::ast;
-use crate::{
-    err::{ProblemKind, Result},
-    module::Module,
-    span::{Span, Spanned},
-    stage::lexer::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind},
-};
+use crate::err::{ProblemKind, Result};
+use crate::module::Module;
+use crate::span::{Span, Spanned};
+use crate::stage::ast;
+use crate::stage::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind};
 
 pub struct Parser<'a> {
     module: &'a Module,

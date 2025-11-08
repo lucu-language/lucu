@@ -1,15 +1,11 @@
-use std::{
-    collections::{HashMap, HashSet},
-    env,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crossbeam_channel::{Receiver, unbounded};
-use notify_debouncer_full::{
-    DebounceEventResult, Debouncer, RecommendedCache, new_debouncer,
-    notify::{RecommendedWatcher, RecursiveMode},
-};
+use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use path_clean::PathClean;
 
 use crate::module::{Library, Module, ModuleResolver, UnknownModule};

@@ -1,6 +1,5 @@
 use crate::span::Span;
-
-use super::token::{Group, Symbol, Token, TokenKind};
+use crate::stage::token::{Group, Symbol, Token, TokenKind};
 
 fn skip_whitespace(src: &mut &str) -> usize {
     let mut skipped = 0;
@@ -112,13 +111,13 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
         };
     }
 
-    use super::token::Group::*;
-    use super::token::Literal::*;
-    use super::token::Symbol::*;
-    use super::token::SymbolAssign::*;
-    use super::token::SymbolEquality::*;
-    use super::token::SymbolInequality::*;
-    use super::token::TokenKind::*;
+    use super::Group::*;
+    use super::Literal::*;
+    use super::Symbol::*;
+    use super::SymbolAssign::*;
+    use super::SymbolEquality::*;
+    use super::SymbolInequality::*;
+    use super::TokenKind::*;
 
     let first = src.as_bytes()[0];
     let token = match first {

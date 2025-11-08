@@ -1,4 +1,4 @@
-use core::fmt;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use compact_str::{CompactString, format_compact};

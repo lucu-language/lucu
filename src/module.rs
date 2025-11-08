@@ -93,9 +93,12 @@ impl fmt::Debug for Module {
 
 pub trait ModuleResolver {
     fn main(&self) -> Module;
+
+    fn exists(&self, module: &Module) -> Result<(), UnknownModule>;
+
     fn preamble(&self, module: &Module) -> Option<Module>;
+    fn contents(&self, module: &Module) -> Option<String>;
     fn readable_path(&self, module: &Module) -> String;
-    fn contents(&self, module: &Module) -> Result<String, UnknownModule>;
 }
 
 #[derive(Debug)]

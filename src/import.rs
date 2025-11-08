@@ -317,11 +317,12 @@ impl ModuleGraph {
                 };
 
                 // adjust graph
-                let source = problems
-                    .append(Self::resolve_import(resolver, import, &module, &parent))
-                    .unwrap_or_default();
+                problems.append(Self::require_import_exists(
+                    resolver, import, &module, &parent,
+                ));
 
                 let node = *nodes.entry(module.clone()).or_insert_with(|| {
+                    let source = resolver.contents(&module).unwrap_or_default();
                     let ast = problems
                         .append(Parser::parse(&module, &source))
                         .unwrap_or_default();
@@ -338,18 +339,21 @@ impl ModuleGraph {
 
         problems.with(Self { asts, graph })
     }
-    fn resolve_import(
+    fn require_import_exists(
         resolver: &impl ModuleResolver,
         import: &ast::Import,
         module: &Module,
         parent: &Module,
-    ) -> Result<String> {
-        match resolver.contents(module) {
-            Ok(source) => Result::new(source),
-            Err(UnknownModule::UnknownLibrary(_)) => Result::error(LucuDiagnostic::UnknownLibrary(
-                SimpleDiagnostic::new(parent.clone(), import.path.span()),
-            )),
-            Err(UnknownModule::UnknownFile(file)) => Result::error(LucuDiagnostic::UnknownFile(
+    ) -> Problems {
+        match resolver.exists(module) {
+            Ok(()) => Problems::ok(),
+            Err(UnknownModule::UnknownLibrary(lib)) => {
+                Problems::new(LucuDiagnostic::UnknownLibrary(
+                    SimpleDiagnostic::new(parent.clone(), import.path.span())
+                        .label(format_compact!("Unknown library '{}'", lib)),
+                ))
+            }
+            Err(UnknownModule::UnknownFile(file)) => Problems::new(LucuDiagnostic::UnknownFile(
                 SimpleDiagnostic::new(parent.clone(), import.path.span())
                     .label(format_compact!("Path resolved to {}", file.display())),
             )),

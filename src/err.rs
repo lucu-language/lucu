@@ -203,11 +203,11 @@ impl Module {
     ) -> Element<'a> {
         let path = resolver.readable_path(self);
         match resolver.contents(self) {
-            Ok(source) => Snippet::<Annotation>::source(source)
+            Some(source) => Snippet::<Annotation>::source(source)
                 .path(path)
                 .annotations(annotations)
                 .into(),
-            Err(_) => Origin::path(path).into(),
+            None => Origin::path(path).into(),
         }
     }
 }

@@ -131,11 +131,19 @@ impl ModuleResolver for FileWatcher {
             None => module.to_string(),
         }
     }
-    fn contents(&self, module: &Module) -> Result<String, UnknownModule> {
+    fn contents(&self, module: &Module) -> Option<String> {
+        self.library_path(&module.library)
+            .ok()
+            .map(|lib| lib.join(module.path_with_extension()))
+            .and_then(|path| std::fs::read_to_string(path).ok())
+    }
+    fn exists(&self, module: &Module) -> Result<(), UnknownModule> {
         let full_path = self
             .library_path(&module.library)?
             .join(module.path_with_extension());
-
-        std::fs::read_to_string(&full_path).map_err(|_| UnknownModule::UnknownFile(full_path))
+        full_path
+            .is_file()
+            .then_some(())
+            .ok_or_else(|| UnknownModule::UnknownFile(full_path))
     }
 }

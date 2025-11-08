@@ -9,7 +9,7 @@ use petgraph::{
     algo::kosaraju_scc,
     dot::Dot,
     graph::{DiGraph, NodeIndex},
-    visit::EdgeRef,
+    visit::{Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable},
 };
 
 use crate::{
@@ -88,7 +88,15 @@ impl<'a> ModuleScope<'a> {
         })
         .collect()
     }
-    pub fn dot(&self) -> Dot<&DiGraph<CompactString, PathKind>> {
+    pub fn dot(
+        &self,
+    ) -> Dot<
+        impl IntoEdgeReferences
+        + IntoNodeReferences
+        + GraphProp
+        + NodeIndexable
+        + Data<NodeWeight = impl Display, EdgeWeight = impl Display>,
+    > {
         Dot::new(&self.graph)
     }
     pub fn from(ast: &'a ast::Module) -> Result<Self> {
@@ -190,7 +198,15 @@ impl ModuleGraph {
     pub fn module(&self, idx: NodeIndex) -> &Module {
         &self.graph[idx]
     }
-    pub fn dot(&self) -> Dot<&DiGraph<Module, Import>> {
+    pub fn dot(
+        &self,
+    ) -> Dot<
+        impl IntoEdgeReferences
+        + IntoNodeReferences
+        + GraphProp
+        + NodeIndexable
+        + Data<NodeWeight = impl Display, EdgeWeight = impl Display>,
+    > {
         Dot::new(&self.graph)
     }
     pub fn from(resolver: &impl ModuleResolver) -> Result<Self> {

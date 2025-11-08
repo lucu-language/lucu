@@ -1,5 +1,5 @@
 use super::ast;
-use std::{fmt::Display, hash::Hash};
+use std::hash::Hash;
 
 pub trait Visitor: Copy {
     type Output<'a>: Default + Combine;
@@ -58,54 +58,8 @@ impl<K: Clone + Hash + Eq, V: Clone> Combine for im::HashMap<K, V> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PathKind {
-    Direct,
-    Indirect,
-}
-
-impl Display for PathKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PathKind::Direct => Ok(()),
-            PathKind::Indirect => write!(f, "*"),
-        }
-    }
-}
 pub trait Ast {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_>;
-
-    fn module_paths(&self) -> im::Vector<(&ast::Ident, PathKind)> {
-        #[derive(Clone, Copy)]
-        struct ModulePaths;
-        impl Visitor for ModulePaths {
-            type Output<'a> = im::Vector<(&'a ast::Ident, PathKind)>;
-            fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
-                if path.package.is_none() {
-                    im::Vector::unit((&path.name, PathKind::Direct))
-                } else {
-                    im::Vector::new()
-                }
-            }
-            fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
-                // function definitions may have their own scopes,
-                // so checking those is out of scope (pun intended) for this visitor
-                function.declaration.visit(self)
-            }
-            fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
-                // everything inside a struct definition is an *indirect* reference,
-                // as these references are allowed to be mutually recursive
-                struc
-                    .members
-                    .visit(self)
-                    .into_iter()
-                    .map(|(k, _)| (k, PathKind::Indirect))
-                    .collect()
-            }
-        }
-
-        self.visit(ModulePaths)
-    }
 }
 
 impl<T> Ast for Option<T>

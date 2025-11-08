@@ -8,7 +8,7 @@ use do_notation::Lift;
 
 use crate::{
     module::{Module, ModuleResolver},
-    stage::lexer::token::Span,
+    stage::{lexer::token::Span, parser::visitor::Combine},
 };
 
 #[must_use = "this `Result` may have diagnostics, which should be handled"]
@@ -89,6 +89,28 @@ impl<A, V: FromIterator<A>> FromIterator<Result<A>> for Result<V> {
         let mut diagnostics = im::Vector::new();
 
         let values = V::from_iter(iter.into_iter().filter_map(|r| {
+            diagnostics.append(r.diagnostics);
+            r.value
+        }));
+
+        Self {
+            value: Some(values),
+            diagnostics,
+        }
+    }
+}
+
+impl Combine for Problems {
+    fn combine(iter: impl IntoIterator<Item = Self>) -> Self {
+        Self::from_iter(iter)
+    }
+}
+
+impl<V: Combine> Combine for Result<V> {
+    fn combine(iter: impl IntoIterator<Item = Self>) -> Self {
+        let mut diagnostics = im::Vector::new();
+
+        let values = V::combine(iter.into_iter().filter_map(|r| {
             diagnostics.append(r.diagnostics);
             r.value
         }));

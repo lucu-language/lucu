@@ -20,7 +20,7 @@ use crate::{
         parser::{
             Parser,
             ast::{self, Name, Spanned},
-            visitor::{Ast, PathKind},
+            visitor::{Ast, Visitor},
         },
     },
 };
@@ -40,6 +40,49 @@ impl Display for Import {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DefinitionPathKind {
+    Direct,
+    Indirect,
+}
+
+impl Display for DefinitionPathKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefinitionPathKind::Direct => Ok(()),
+            DefinitionPathKind::Indirect => write!(f, "*"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DefinitionPaths;
+impl Visitor for DefinitionPaths {
+    type Output<'a> = im::Vector<(&'a ast::Ident, DefinitionPathKind)>;
+    fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
+        if path.package.is_none() {
+            im::Vector::unit((&path.name, DefinitionPathKind::Direct))
+        } else {
+            im::Vector::new()
+        }
+    }
+    fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
+        // function definitions may have their own scopes,
+        // so checking those is out of scope (pun intended) for this visitor
+        function.declaration.visit(self)
+    }
+    fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
+        // everything inside a struct definition is an *indirect* reference,
+        // as these references are allowed to be mutually recursive
+        struc
+            .members
+            .visit(self)
+            .into_iter()
+            .map(|(k, _)| (k, DefinitionPathKind::Indirect))
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 pub struct ModuleGraph {
     asts: Vec<ast::Module>,
@@ -50,7 +93,7 @@ pub struct ModuleGraph {
 pub struct ModuleScope<'a> {
     defs: Vec<ModuleDefinition<'a>>,
     scope: HashMap<CompactString, NodeIndex>,
-    graph: DiGraph<CompactString, PathKind>,
+    graph: DiGraph<CompactString, DefinitionPathKind>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,7 +121,7 @@ impl<'a> ModuleScope<'a> {
     pub fn postorder(&self) -> Result<Vec<NodeIndex>> {
         kosaraju_scc(&self.graph.filter_map(
             |_, _| Some(()),
-            |_, &p| (p == PathKind::Direct).then_some(()),
+            |_, &p| (p == DefinitionPathKind::Direct).then_some(()),
         ))
         .iter()
         .map(|v| match v.as_slice() {
@@ -126,7 +169,7 @@ impl<'a> ModuleScope<'a> {
             let parent = NodeIndex::new(idx);
             for (name, kind) in def
                 .ast
-                .module_paths()
+                .visit(DefinitionPaths)
                 .into_iter()
                 .filter(|(k, _)| !generics.contains(k.as_str()))
             {
@@ -155,7 +198,7 @@ impl<'a> ModuleScope<'a> {
         problems.with(Self { scope, graph, defs })
     }
     fn add_definition(
-        graph: &mut DiGraph<CompactString, PathKind>,
+        graph: &mut DiGraph<CompactString, DefinitionPathKind>,
         scope: &mut HashMap<CompactString, Vec<NodeIndex>>,
         defs: &mut Vec<ModuleDefinition<'a>>,
         def: ModuleDefinition<'a>,
@@ -168,7 +211,7 @@ impl<'a> ModuleScope<'a> {
             scope.entry(name).or_default().push(node);
         }
         if let Some(parent) = def.parent {
-            graph.add_edge(node, parent, PathKind::Direct);
+            graph.add_edge(node, parent, DefinitionPathKind::Direct);
         }
         for child in def.ast.children() {
             Self::add_definition(graph, scope, defs, ModuleDefinition::child(node, child));

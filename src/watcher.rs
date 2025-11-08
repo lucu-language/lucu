@@ -141,9 +141,10 @@ impl ModuleResolver for FileWatcher {
         let full_path = self
             .library_path(&module.library)?
             .join(module.path_with_extension());
-        full_path
-            .is_file()
-            .then_some(())
-            .ok_or_else(|| UnknownModule::UnknownFile(full_path))
+        full_path.is_file().then_some(()).ok_or_else(|| {
+            let current_dir = env::current_dir().ok();
+            let relative_dir = current_dir.and_then(|cur| full_path.strip_prefix(cur).ok());
+            UnknownModule::UnknownFile(relative_dir.map(Path::to_path_buf).unwrap_or(full_path))
+        })
     }
 }

@@ -20,6 +20,12 @@ impl Library {
     }
 }
 
+impl Default for Library {
+    fn default() -> Self {
+        Self::MAIN
+    }
+}
+
 impl fmt::Display for Library {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -32,7 +38,17 @@ pub struct Module {
     pub relative_path: CompactString,
 }
 
+impl Default for Module {
+    fn default() -> Self {
+        Self::MAIN
+    }
+}
+
 impl Module {
+    pub const MAIN: Module = Self {
+        library: Library::MAIN,
+        relative_path: CompactString::const_new("main"),
+    };
     pub fn new(library: Library, path: impl AsRef<Path>) -> Self {
         let relative_path = clean(path)
             .into_os_string()

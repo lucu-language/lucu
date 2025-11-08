@@ -14,5 +14,5 @@ include_dir = "0.7.4"
 lasso = "0.7.3"
 notify-debouncer-full = { version = "0.6.0", features = ["crossbeam-channel"] }
 path-clean = "1.0.1"
-petgraph = { version = "0.8.3", default-features = false, features = ["std", "graphmap"] }
+petgraph = { version = "0.8.3", path="../petgraph", default-features = false, features = ["std"] }
 strum = { version = "0.27.2", features = ["derive"] }

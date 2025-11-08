@@ -54,7 +54,7 @@ impl Iterator for Lexer<'_> {
                 self.saved = Some(next);
                 return Some(Token {
                     token: TokenKind::Symbol(Symbol::Semicolon),
-                    span: Span::new(pos, pos + 1),
+                    span: Span::new(pos, pos),
                 });
             }
         }

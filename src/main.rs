@@ -1,21 +1,16 @@
 use std::{collections::HashMap, time::Duration};
 
 use annotate_snippets::{Renderer, renderer::DecorStyle};
-use import::{ModuleGraph, ModuleScope};
+use err::HasDiagnostics;
 use include_dir::include_dir;
 use module::{Library, Module};
-use petgraph::graph::NodeIndex;
+use stage::ModuleGraph;
 use watcher::{FileWatcher, WatchedLibrary};
 
 mod err;
-mod import;
 mod module;
+mod stage;
 mod watcher;
-
-mod stage {
-    pub mod lexer;
-    pub mod parser;
-}
 
 fn main() {
     let mut dirs = HashMap::new();
@@ -36,29 +31,26 @@ fn main() {
     let mut watcher = FileWatcher::new(main.clone(), dirs, Duration::from_secs_f32(0.1));
 
     let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
-    loop {
-        let graph = ModuleGraph::from(&watcher);
-        for diagnostic in graph.diagnostics() {
-            diagnostic.print(&watcher, &renderer);
-        }
 
-        let graph = graph.value().unwrap();
+    let mut graph = ModuleGraph::new();
+    graph.insert_or_update(&watcher, main.clone());
+
+    loop {
         println!("{}", graph.dot());
 
-        let scope = ModuleScope::from(graph.ast(NodeIndex::new(0)));
-        let scope = scope.value().unwrap();
-        println!("{}", scope.dot());
+        let stages = graph.stages(&main).unwrap();
+        let definitions = stages.definitions().unwrap();
+        println!("{}", definitions.dot());
 
-        println!("{:#?}", graph.ast(NodeIndex::new(0)));
+        stages.print_diagnostics(&watcher, &renderer);
 
-        for &def in scope.postorder().value().unwrap() {
-            println!("{:?}", def);
+        // wait for changes
+        let changes = watcher.await_change();
+        for changed in changes {
+            if graph.contains(&changed) {
+                graph.insert_or_update(&watcher, changed);
+            }
         }
-
-        for &node in graph.postorder().value().unwrap() {
-            println!("{:?}", graph.module(node));
-        }
-
-        watcher.await_change();
+        graph.retain_connected(&main);
     }
 }

@@ -5,10 +5,7 @@ use super::ast::{self, Spanned};
 use crate::{
     err::{LucuDiagnostic, Result, SimpleDiagnostic},
     module::Module,
-    stage::lexer::{
-        Lexer,
-        token::{Group, Keyword, Literal, Span, Symbol, SymbolAssign, Token, TokenKind},
-    },
+    stage::lexer::token::{Group, Keyword, Literal, Span, Symbol, SymbolAssign, Token, TokenKind},
 };
 
 pub struct Parser<'a> {
@@ -26,10 +23,6 @@ impl<'a> Parser<'a> {
             tokens,
             last_token_end: 0,
         }
-    }
-    pub fn parse(module: &'a Module, source: &'a str) -> Result<ast::Module> {
-        let tokens = Lexer::new(source).collect::<Box<_>>();
-        Parser::new(module, source, &tokens).module()
     }
 
     pub fn string(&mut self) -> Result<ast::String> {
@@ -124,7 +117,7 @@ impl<'a> Parser<'a> {
         self.spanned(|parse| {
             m! {
                 _ <- parse.consume(TokenKind::Open(Group::Brace));
-                _ <- parse.consume(TokenKind::Close(Group::Brace));
+                _ <- parse.consume(TokenKind::Close(Group::Brace)).tap_none(|| parse.skip_group(Group::Brace));
                 return ast::ExpressionEnum::Block;
             }
         })
@@ -155,7 +148,7 @@ impl<'a> Parser<'a> {
                 Parser::function_parameter,
             ));
             returns <- self.unless_next(
-                &[Symbol::Assign(SymbolAssign::Equals), Symbol::Comma, Symbol::Semicolon],
+                &[TokenKind::Symbol(Symbol::Assign(SymbolAssign::Equals)), TokenKind::Symbol(Symbol::Comma), TokenKind::Symbol(Symbol::Semicolon), TokenKind::Open(Group::Brace)],
                 Parser::returns
             );
             return ast::FunctionDeclaration { name, parameters, returns };
@@ -221,6 +214,10 @@ impl<'a> Parser<'a> {
                     .label(format_compact!("Expected {}", token));
                 if next.token == TokenKind::Eof {
                     Result::error(LucuDiagnostic::UnexpectedEOF(diagnostic))
+                } else if next.token == TokenKind::Symbol(Symbol::Semicolon)
+                    && next.span.start == next.span.end
+                {
+                    Result::error(LucuDiagnostic::UnexpectedNewline(diagnostic))
                 } else {
                     Result::error(LucuDiagnostic::UnexpectedToken(diagnostic))
                 }
@@ -243,11 +240,11 @@ impl<'a> Parser<'a> {
     }
     fn unless_next<T>(
         &mut self,
-        tokens: &[Symbol],
+        tokens: &[TokenKind],
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
         let next = self.next().token;
-        if !tokens.iter().copied().any(|t| next == TokenKind::from(t))
+        if !tokens.contains(&next)
             && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
         {
             parse(self).map(Some)
@@ -267,7 +264,6 @@ impl<'a> Parser<'a> {
         }
     }
     fn skip_group(&mut self, group: Group) {
-        self.skip();
         loop {
             match self.next().token {
                 TokenKind::Eof => break,
@@ -277,7 +273,10 @@ impl<'a> Parser<'a> {
                     }
                     break;
                 }
-                TokenKind::Open(group) => self.skip_group(group),
+                TokenKind::Open(group) => {
+                    self.skip();
+                    self.skip_group(group)
+                }
                 _ => self.skip(),
             }
         }
@@ -290,7 +289,10 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 TokenKind::Close(_) | TokenKind::Eof => break,
-                TokenKind::Open(group) => self.skip_group(group),
+                TokenKind::Open(group) => {
+                    self.skip();
+                    self.skip_group(group)
+                }
                 _ => self.skip(),
             }
         }
@@ -303,7 +305,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<T>> {
         m! {
             _ <- self.consume(TokenKind::Open(group));
-            many <- self.many(separator, parse);
+            many <- self.many(separator, parse).tap_none(|| self.skip_group(group));
             _ <- self.consume(TokenKind::Close(group));
             return many;
         }

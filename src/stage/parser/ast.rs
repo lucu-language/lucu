@@ -4,10 +4,10 @@ use compact_str::CompactString;
 
 use crate::stage::lexer::token::Span;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct String(pub Spanned<CompactString>);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Ident(pub Spanned<CompactString>);
 
 impl String {
@@ -28,19 +28,19 @@ impl Ident {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Module {
     pub imports: Vec<Import>,
     pub definitions: Vec<Definition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Import {
     pub path: String,
     pub ident: Option<Ident>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Definition {
     Function(Function),
     Type(TypeAlias),
@@ -65,13 +65,13 @@ impl Definition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Function {
     pub declaration: FunctionDeclaration,
     pub definition: Expression,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TypeAlias {
     pub name: Name,
     pub definition: Type,
@@ -79,19 +79,19 @@ pub struct TypeAlias {
 
 pub type Kind = Spanned<KindEnum>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum KindEnum {
     Type,
     Constant(Type),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Generic {
     pub name: Name,
     pub kind: Option<Kind>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Name {
     pub ident: Ident,
     pub generics: Option<Vec<Generic>>,
@@ -103,6 +103,7 @@ impl Name {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub struct Path {
     pub package: Option<Ident>,
     pub name: Ident,
@@ -119,37 +120,37 @@ impl Debug for Path {
 
 pub type Type = Box<Spanned<TypeEnum>>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TypeEnum {
     Int,
     Path(Path),
     Struct(Struct),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Struct {
     pub members: Vec<StructMember>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum StructMember {
     Data(Ident, Type),
 }
 
 pub type Expression = Box<Spanned<ExpressionEnum>>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ExpressionEnum {
     Block,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum FunctionParameter {
     Data(Ident, Type),
     Lambda(FunctionDeclaration),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct FunctionDeclaration {
     pub name: Name,
     pub parameters: Option<Vec<FunctionParameter>>,
@@ -158,14 +159,21 @@ pub struct FunctionDeclaration {
 
 pub type Returns = Spanned<ReturnsEnum>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ReturnsEnum {
     Never,
     Data(Type),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq)]
 pub struct Spanned<T>(pub T, pub Span);
+
+// equality if the inner value is equal
+impl<T: PartialEq> PartialEq for Spanned<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
 
 impl<T> Debug for Spanned<T>
 where

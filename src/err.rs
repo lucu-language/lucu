@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::OnceCell};
 
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Group, Level, Origin, Renderer, Snippet, Title,
@@ -10,6 +10,15 @@ use crate::{
     module::{Module, ModuleResolver},
     stage::{lexer::token::Span, parser::visitor::Combine},
 };
+
+pub trait HasDiagnostics {
+    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic>;
+    fn print_diagnostics(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
+        for diagnostic in self.diagnostics() {
+            diagnostic.print(resolver, renderer);
+        }
+    }
+}
 
 #[must_use = "this `Result` may have diagnostics, which should be handled"]
 #[derive(Clone, Debug)]
@@ -59,16 +68,30 @@ impl Problems {
             diagnostics: self.diagnostics,
         }
     }
+    pub fn error<T>(self) -> Result<T> {
+        assert!(
+            self.diagnostics
+                .iter()
+                .any(|d| d.level() == DiagnosticLevel::Error)
+        );
+        Result {
+            value: None,
+            diagnostics: self.diagnostics,
+        }
+    }
     pub fn require(cond: bool, f: impl FnOnce() -> LucuDiagnostic) -> Self {
         if cond { Self::ok() } else { Self::new(f()) }
-    }
-    pub fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
-        self.diagnostics.iter()
     }
     pub fn append<T>(&mut self, rhs: impl Into<Result<T>>) -> Option<T> {
         let rhs = rhs.into();
         self.diagnostics.append(rhs.diagnostics);
         rhs.value
+    }
+}
+
+impl HasDiagnostics for Problems {
+    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+        self.diagnostics.iter()
     }
 }
 
@@ -184,8 +207,17 @@ impl<T> Result<T> {
     pub fn value(&self) -> Option<&T> {
         self.value.as_ref()
     }
-    pub fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+}
+
+impl<T> HasDiagnostics for Result<T> {
+    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
         self.diagnostics.iter()
+    }
+}
+
+impl<T> HasDiagnostics for OnceCell<Result<T>> {
+    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+        self.get().into_iter().flat_map(Result::diagnostics)
     }
 }
 
@@ -332,9 +364,10 @@ impl LucuDiagnostic {
 #[rustfmt::skip]
 diagnostics!(
     (UnexpectedToken  (SimpleDiagnostic),      0, Error, "Unexpected token"),
-    (UnexpectedEOF    (SimpleDiagnostic),      1, Error, "Unexpected end of file"),
+    (UnexpectedNewline(SimpleDiagnostic),      1, Error, "Unexpected newline"),
+    (UnexpectedEOF    (SimpleDiagnostic),      2, Error, "Unexpected end of file"),
 
-    (UnknownFile      (SimpleDiagnostic),      2, Error, "Could not access module file"),
-    (UnknownLibrary   (SimpleDiagnostic),      3, Error, "Unknown library"),
-    (InvalidIdentifier(SimpleDiagnostic),      4, Error, "File name is not a valid identifier"),
+    (UnknownFile      (SimpleDiagnostic),      3, Error, "Could not access module file"),
+    (UnknownLibrary   (SimpleDiagnostic),      4, Error, "Unknown library"),
+    (InvalidIdentifier(SimpleDiagnostic),      5, Error, "File name is not a valid identifier"),
 );

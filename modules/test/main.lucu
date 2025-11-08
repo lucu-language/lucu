@@ -1,7 +1,6 @@
-import ":test"
-import "core:preamble" core
+import "core:1"
 
-type A = A
+type A = B
 type B = struct(b B)
 
 type C = struct(d D)

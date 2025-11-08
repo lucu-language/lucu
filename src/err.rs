@@ -324,6 +324,7 @@ impl Problem {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ProblemHeader {
     pub id: u32,
     pub level: ProblemLevel,

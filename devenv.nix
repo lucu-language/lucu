@@ -21,5 +21,11 @@
 
   git-hooks.hooks = {
     clippy.enable = true;
+    tests = {
+      enable = true;
+      entry = "cargo test";
+      files = "\\.(rs|lucu)$";
+      pass_filenames = false;
+    };
   };
 }

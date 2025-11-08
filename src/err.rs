@@ -15,20 +15,20 @@ use crate::stage::ast::visit::Combine;
 pub trait HasProblems {
     fn problems(&self) -> impl Iterator<Item = &Problem>;
     fn print_problems(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
-        for diagnostic in self.problems() {
-            diagnostic.print(resolver, renderer);
+        for problem in self.problems() {
+            problem.print(resolver, renderer);
         }
     }
 }
 
-#[must_use = "this `Result` may have diagnostics, which should be handled"]
+#[must_use = "this `Result` may have problems, which should be handled"]
 #[derive(Clone, Debug)]
 pub struct Result<T> {
     value: Option<T>,
     problems: im::Vector<Problem>,
 }
 
-#[must_use = "`Problems` may have diagnostics, which should be handled"]
+#[must_use = "`Problems` may not be empty, which should be handled"]
 #[derive(Clone, Debug, Default)]
 pub struct Problems {
     problems: im::Vector<Problem>,
@@ -104,30 +104,28 @@ impl HasProblems for Problems {
 
 impl FromIterator<Problems> for Problems {
     fn from_iter<T: IntoIterator<Item = Problems>>(iter: T) -> Self {
-        let mut diagnostics = im::Vector::new();
+        let mut problems = im::Vector::new();
 
-        for problems in iter {
-            diagnostics.append(problems.problems);
+        for item in iter {
+            problems.append(item.problems);
         }
 
-        Self {
-            problems: diagnostics,
-        }
+        Self { problems }
     }
 }
 
 impl<A, V: FromIterator<A>> FromIterator<Result<A>> for Result<V> {
     fn from_iter<T: IntoIterator<Item = Result<A>>>(iter: T) -> Self {
-        let mut diagnostics = im::Vector::new();
+        let mut problems = im::Vector::new();
 
         let values = V::from_iter(iter.into_iter().filter_map(|r| {
-            diagnostics.append(r.problems);
+            problems.append(r.problems);
             r.value
         }));
 
         Self {
             value: Some(values),
-            problems: diagnostics,
+            problems,
         }
     }
 }
@@ -140,16 +138,16 @@ impl Combine for Problems {
 
 impl<V: Combine> Combine for Result<V> {
     fn combine(iter: impl IntoIterator<Item = Self>) -> Self {
-        let mut diagnostics = im::Vector::new();
+        let mut problems = im::Vector::new();
 
         let values = V::combine(iter.into_iter().filter_map(|r| {
-            diagnostics.append(r.problems);
+            problems.append(r.problems);
             r.value
         }));
 
         Self {
             value: Some(values),
-            problems: diagnostics,
+            problems,
         }
     }
 }

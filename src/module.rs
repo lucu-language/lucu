@@ -26,6 +26,12 @@ impl Default for Library {
     }
 }
 
+impl From<&Library> for Library {
+    fn from(value: &Library) -> Self {
+        Self(value.0.to_owned())
+    }
+}
+
 impl fmt::Display for Library {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -41,6 +47,15 @@ pub struct Module {
 impl Default for Module {
     fn default() -> Self {
         Self::MAIN
+    }
+}
+
+impl From<&Module> for Module {
+    fn from(value: &Module) -> Self {
+        Self {
+            library: value.library.to_owned(),
+            relative_path: value.relative_path.to_owned(),
+        }
     }
 }
 

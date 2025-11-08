@@ -20,7 +20,7 @@ use petgraph::{
 };
 
 use crate::{
-    err::{HasDiagnostics, LucuDiagnostic, Result},
+    err::{HasProblems, Problem, Result},
     module::{Module, ModuleResolver},
 };
 
@@ -44,13 +44,13 @@ pub struct Stages {
     definitions: OnceCell<Result<Definitions>>,
 }
 
-impl HasDiagnostics for Stages {
-    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
+impl HasProblems for Stages {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
         self.tokens
-            .diagnostics()
-            .chain(self.ast.diagnostics())
-            .chain(self.imports.diagnostics())
-            .chain(self.definitions.diagnostics())
+            .problems()
+            .chain(self.ast.problems())
+            .chain(self.imports.problems())
+            .chain(self.definitions.problems())
     }
 }
 
@@ -100,11 +100,7 @@ impl Stages {
     }
     pub fn definitions(&self) -> Option<&Definitions> {
         self.definitions
-            .get_or_init(|| {
-                self.ast()
-                    .map(|ast| Definitions::from(ast))
-                    .unwrap_or_default()
-            })
+            .get_or_init(|| self.ast().map(Definitions::from).unwrap_or_default())
             .value()
     }
 }
@@ -154,6 +150,7 @@ impl ModuleGraph {
     pub fn stages(&self, module: &Module) -> Option<&Stages> {
         self.cache.0.get(module)
     }
+    #[expect(clippy::implied_bounds_in_impls)]
     pub fn dot(
         &self,
     ) -> Dot<

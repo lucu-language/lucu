@@ -1,11 +1,12 @@
 use compact_str::format_compact;
 use do_notation::m;
 
-use super::ast::{self, Spanned};
+use super::ast;
 use crate::{
-    err::{LucuDiagnostic, Result, SimpleDiagnostic},
+    err::{ProblemKind, Result},
     module::Module,
-    stage::lexer::token::{Group, Keyword, Literal, Span, Symbol, SymbolAssign, Token, TokenKind},
+    span::{Span, Spanned},
+    stage::lexer::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind},
 };
 
 pub struct Parser<'a> {
@@ -210,17 +211,17 @@ impl<'a> Parser<'a> {
                 Result::new(*next)
             }
             (next, _) => {
-                let diagnostic = SimpleDiagnostic::new(self.module.clone(), next.span)
-                    .label(format_compact!("Expected {}", token));
-                if next.token == TokenKind::Eof {
-                    Result::error(LucuDiagnostic::UnexpectedEOF(diagnostic))
+                let label = format_compact!("Expected {}", token);
+                let error = if next.token == TokenKind::Eof {
+                    ProblemKind::UnexpectedEOF(label)
                 } else if next.token == TokenKind::Symbol(Symbol::Semicolon)
                     && next.span.start == next.span.end
                 {
-                    Result::error(LucuDiagnostic::UnexpectedNewline(diagnostic))
+                    ProblemKind::UnexpectedNewline(label)
                 } else {
-                    Result::error(LucuDiagnostic::UnexpectedToken(diagnostic))
-                }
+                    ProblemKind::UnexpectedToken(label)
+                };
+                Result::error(error.at(self.module, next))
             }
         }
     }

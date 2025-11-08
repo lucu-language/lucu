@@ -1,20 +1,21 @@
-use std::{borrow::Cow, cell::OnceCell};
+use std::{borrow::Cow, cell::OnceCell, ops::Deref};
 
 use annotate_snippets::{
-    Annotation, AnnotationKind, Element, Group, Level, Origin, Renderer, Snippet, Title,
+    Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title,
 };
 use compact_str::CompactString;
 use do_notation::Lift;
 
 use crate::{
     module::{Module, ModuleResolver},
-    stage::{lexer::token::Span, parser::visitor::Combine},
+    span::{HasSpan, Span},
+    stage::parser::visitor::Combine,
 };
 
-pub trait HasDiagnostics {
-    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic>;
-    fn print_diagnostics(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
-        for diagnostic in self.diagnostics() {
+pub trait HasProblems {
+    fn problems(&self) -> impl Iterator<Item = &Problem>;
+    fn print_problems(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
+        for diagnostic in self.problems() {
             diagnostic.print(resolver, renderer);
         }
     }
@@ -24,20 +25,26 @@ pub trait HasDiagnostics {
 #[derive(Clone, Debug)]
 pub struct Result<T> {
     value: Option<T>,
-    diagnostics: im::Vector<LucuDiagnostic>,
+    problems: im::Vector<Problem>,
 }
 
 #[must_use = "`Problems` may have diagnostics, which should be handled"]
 #[derive(Clone, Debug, Default)]
 pub struct Problems {
-    diagnostics: im::Vector<LucuDiagnostic>,
+    problems: im::Vector<Problem>,
+}
+
+impl From<Problem> for Problems {
+    fn from(value: Problem) -> Self {
+        Self::new(value)
+    }
 }
 
 impl From<Problems> for Result<()> {
     fn from(value: Problems) -> Self {
         Self {
             value: Some(()),
-            diagnostics: value.diagnostics,
+            problems: value.problems,
         }
     }
 }
@@ -54,44 +61,44 @@ where
 impl Problems {
     pub fn ok() -> Self {
         Self {
-            diagnostics: im::Vector::new(),
+            problems: im::Vector::new(),
         }
     }
-    pub fn new(diagnostic: LucuDiagnostic) -> Self {
+    pub fn new(problem: Problem) -> Self {
         Self {
-            diagnostics: im::Vector::unit(diagnostic),
+            problems: im::Vector::unit(problem),
         }
     }
     pub fn with<T>(self, value: T) -> Result<T> {
         Result {
             value: Some(value),
-            diagnostics: self.diagnostics,
+            problems: self.problems,
         }
     }
     pub fn error<T>(self) -> Result<T> {
         assert!(
-            self.diagnostics
+            self.problems
                 .iter()
-                .any(|d| d.level() == DiagnosticLevel::Error)
+                .any(|d| d.header().level == ProblemLevel::Error)
         );
         Result {
             value: None,
-            diagnostics: self.diagnostics,
+            problems: self.problems,
         }
     }
-    pub fn require(cond: bool, f: impl FnOnce() -> LucuDiagnostic) -> Self {
+    pub fn require(cond: bool, f: impl FnOnce() -> Problem) -> Self {
         if cond { Self::ok() } else { Self::new(f()) }
     }
     pub fn append<T>(&mut self, rhs: impl Into<Result<T>>) -> Option<T> {
         let rhs = rhs.into();
-        self.diagnostics.append(rhs.diagnostics);
+        self.problems.append(rhs.problems);
         rhs.value
     }
 }
 
-impl HasDiagnostics for Problems {
-    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
-        self.diagnostics.iter()
+impl HasProblems for Problems {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
+        self.problems.iter()
     }
 }
 
@@ -100,10 +107,12 @@ impl FromIterator<Problems> for Problems {
         let mut diagnostics = im::Vector::new();
 
         for problems in iter {
-            diagnostics.append(problems.diagnostics);
+            diagnostics.append(problems.problems);
         }
 
-        Self { diagnostics }
+        Self {
+            problems: diagnostics,
+        }
     }
 }
 
@@ -112,13 +121,13 @@ impl<A, V: FromIterator<A>> FromIterator<Result<A>> for Result<V> {
         let mut diagnostics = im::Vector::new();
 
         let values = V::from_iter(iter.into_iter().filter_map(|r| {
-            diagnostics.append(r.diagnostics);
+            diagnostics.append(r.problems);
             r.value
         }));
 
         Self {
             value: Some(values),
-            diagnostics,
+            problems: diagnostics,
         }
     }
 }
@@ -134,13 +143,13 @@ impl<V: Combine> Combine for Result<V> {
         let mut diagnostics = im::Vector::new();
 
         let values = V::combine(iter.into_iter().filter_map(|r| {
-            diagnostics.append(r.diagnostics);
+            diagnostics.append(r.problems);
             r.value
         }));
 
         Self {
             value: Some(values),
-            diagnostics,
+            problems: diagnostics,
         }
     }
 }
@@ -149,14 +158,14 @@ impl<T> Result<T> {
     pub fn new(t: T) -> Self {
         Self {
             value: Some(t),
-            diagnostics: im::Vector::new(),
+            problems: im::Vector::new(),
         }
     }
-    pub fn error(diagnostic: LucuDiagnostic) -> Self {
-        assert_eq!(diagnostic.level(), DiagnosticLevel::Error);
+    pub fn error(problem: Problem) -> Self {
+        assert_eq!(problem.header().level, ProblemLevel::Error);
         Self {
             value: None,
-            diagnostics: im::Vector::unit(diagnostic),
+            problems: im::Vector::unit(problem),
         }
     }
     pub fn tap_none(self, f: impl FnOnce()) -> Result<T> {
@@ -168,7 +177,7 @@ impl<T> Result<T> {
     pub fn recover(self) -> Result<Option<T>> {
         Result {
             value: Some(self.value),
-            diagnostics: self.diagnostics,
+            problems: self.problems,
         }
     }
     pub fn recover_default(self) -> Self
@@ -179,7 +188,7 @@ impl<T> Result<T> {
             Some(_) => self,
             None => Result {
                 value: Some(T::default()),
-                diagnostics: self.diagnostics,
+                problems: self.problems,
             },
         }
     }
@@ -189,19 +198,19 @@ impl<T> Result<T> {
                 let u = f(t);
                 Result {
                     value: u.value,
-                    diagnostics: self.diagnostics + u.diagnostics,
+                    problems: self.problems + u.problems,
                 }
             }
             None => Result {
                 value: None,
-                diagnostics: self.diagnostics,
+                problems: self.problems,
             },
         }
     }
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Result<U> {
         Result {
             value: self.value.map(f),
-            diagnostics: self.diagnostics,
+            problems: self.problems,
         }
     }
     pub fn value(&self) -> Option<&T> {
@@ -209,15 +218,15 @@ impl<T> Result<T> {
     }
 }
 
-impl<T> HasDiagnostics for Result<T> {
-    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
-        self.diagnostics.iter()
+impl<T> HasProblems for Result<T> {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
+        self.problems.iter()
     }
 }
 
-impl<T> HasDiagnostics for OnceCell<Result<T>> {
-    fn diagnostics(&self) -> impl Iterator<Item = &LucuDiagnostic> {
-        self.get().into_iter().flat_map(Result::diagnostics)
+impl<T> HasProblems for OnceCell<Result<T>> {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
+        self.get().into_iter().flat_map(Result::problems)
     }
 }
 
@@ -244,130 +253,137 @@ impl Module {
     }
 }
 
-pub trait Diagnostic {
-    fn module(&self) -> &Module;
-    fn span(&self) -> Span;
-    fn label(&self) -> Option<Cow<str>> {
-        None
-    }
+pub type Owned<T> = <<T as Deref>::Target as ToOwned>::Owned;
+pub type OwnedReport<'a> = Owned<Report<'a>>;
 
-    fn report<'a>(&'a self, title: Title<'a>, resolver: &impl ModuleResolver) -> Vec<Group<'a>> {
-        vec![
+pub trait Diagnostic {
+    fn label(&self) -> Option<Cow<str>>;
+    fn report<'a>(
+        &'a self,
+        title: Title<'a>,
+        module: &'a Module,
+        span: Span,
+        resolver: &impl ModuleResolver,
+    ) -> OwnedReport<'a> {
+        std::vec![
             title.element(
-                self.module().snippet(
+                module.snippet(
                     resolver,
                     [AnnotationKind::Primary
-                        .span(self.span().into())
-                        .label(self.label())],
-                ),
-            ),
+                        .span(span.into())
+                        .label(self.label())]
+                )
+            )
         ]
     }
 }
-
-#[derive(Clone, Debug)]
-pub struct SimpleDiagnostic(Module, Span, Option<CompactString>);
-
-impl SimpleDiagnostic {
-    pub fn new(module: Module, span: Span) -> Self {
-        Self(module, span, None)
-    }
-    pub fn label(mut self, label: impl Into<CompactString>) -> Self {
-        self.2 = Some(label.into());
-        self
+impl Diagnostic for () {
+    fn label(&self) -> Option<Cow<str>> {
+        None
     }
 }
-
-impl Diagnostic for SimpleDiagnostic {
-    fn module(&self) -> &Module {
-        &self.0
-    }
-    fn span(&self) -> Span {
-        self.1
-    }
+impl Diagnostic for CompactString {
     fn label(&self) -> Option<Cow<str>> {
-        self.2.as_ref().map(|label| Cow::Borrowed(label.as_str()))
+        Some(self.as_str().into())
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DiagnosticLevel {
+pub enum ProblemLevel {
     Error,
     Warning,
 }
 
-impl From<DiagnosticLevel> for Level<'static> {
-    fn from(value: DiagnosticLevel) -> Self {
+impl From<ProblemLevel> for Level<'static> {
+    fn from(value: ProblemLevel) -> Self {
         match value {
-            DiagnosticLevel::Error => Self::ERROR,
-            DiagnosticLevel::Warning => Self::WARNING,
+            ProblemLevel::Error => Self::ERROR,
+            ProblemLevel::Warning => Self::WARNING,
         }
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Problem {
+    module: Module,
+    span: Span,
+    kind: ProblemKind,
+}
+
+impl Problem {
+    pub fn header(&self) -> ProblemHeader {
+        self.kind.header()
+    }
+    pub fn label(&self) -> Option<Cow<str>> {
+        self.kind.label()
+    }
+    pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
+        let header = self.header();
+        let title =
+            Level::from(header.level).primary_title(format!("[{}] {}", header.id, header.title));
+        let report = self.kind.report(title, &self.module, self.span, resolver);
+        anstream::println!("{}", renderer.render(&report));
+    }
+}
+
+pub struct ProblemHeader {
+    pub id: u32,
+    pub level: ProblemLevel,
+    pub title: &'static str,
+}
+
 macro_rules! diagnostics {
-    ($(($variant:ident($value:ty), $id:literal, $level:ident, $title:literal $(,)?)),*$(,)?) => {
+    ($(($variant:ident$(($value:ty))?, $id:literal, $level:ident, $title:literal $(,)?)),*$(,)?) => {
         #[derive(Clone, Debug)]
-        pub enum LucuDiagnostic {
-            $($variant($value)),*
+        pub enum ProblemKind {
+            $($variant$(($value))?),*
         }
-        impl LucuDiagnostic {
-            pub fn id(&self) -> u32 {
+        impl ProblemKind {
+            pub fn header(&self) -> ProblemHeader {
                 match self {
-                    $(Self::$variant(_) => $id),*
+                    $(Self::$variant(_) => ProblemHeader {
+                        id: $id,
+                        level: ProblemLevel::$level,
+                        title: $title,
+                    }),*
                 }
             }
-            pub fn level(&self) -> DiagnosticLevel {
-                match self {
-                    $(Self::$variant(_) => DiagnosticLevel::$level),*
-                }
-            }
-            pub fn title(&self) -> &'static str {
-                match self {
-                    $(Self::$variant(_) => $title),*
+            pub fn at(self, module: impl Into<Module>, span: &impl HasSpan) -> Problem {
+                Problem {
+                    module: module.into(),
+                    span: span.span(),
+                    kind: self,
                 }
             }
         }
-        impl Diagnostic for LucuDiagnostic {
-            fn module(&self) -> &Module {
+        impl Diagnostic for ProblemKind {
+            fn label(&self) -> Option<Cow<str>> {
                 match self {
-                    $(Self::$variant(v) => Diagnostic::module(v)),*
-                }
-            }
-            fn span(&self) -> Span {
-                match self {
-                    $(Self::$variant(v) => Diagnostic::span(v)),*
+                    $(Self::$variant(v) => Diagnostic::label(v)),*
                 }
             }
             fn report<'a>(
                 &'a self,
                 title: Title<'a>,
+                module: &'a Module,
+                span: Span,
                 resolver: &impl ModuleResolver,
-            ) -> Vec<Group<'a>> {
+            ) -> OwnedReport<'a> {
                 match self {
-                    $(Self::$variant(v) => Diagnostic::report(v, title, resolver)),*
+                    $(Self::$variant(v) => Diagnostic::report(v, title, module, span, resolver)),*
                 }
             }
         }
     };
 }
 
-impl LucuDiagnostic {
-    pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
-        let title =
-            Level::from(self.level()).primary_title(format!("[{}] {}", self.id(), self.title()));
-        let report = self.report(title, resolver);
-        anstream::println!("{}", renderer.render(&report));
-    }
-}
-
 #[rustfmt::skip]
 diagnostics!(
-    (UnexpectedToken  (SimpleDiagnostic),      0, Error, "Unexpected token"),
-    (UnexpectedNewline(SimpleDiagnostic),      1, Error, "Unexpected newline"),
-    (UnexpectedEOF    (SimpleDiagnostic),      2, Error, "Unexpected end of file"),
+    (UnexpectedToken  (CompactString), 0, Error, "Unexpected token"),
+    (UnexpectedNewline(CompactString), 1, Error, "Unexpected newline"),
+    (UnexpectedEOF    (CompactString), 2, Error, "Unexpected end of file"),
 
-    (UnknownFile      (SimpleDiagnostic),      3, Error, "Could not access module file"),
-    (UnknownLibrary   (SimpleDiagnostic),      4, Error, "Unknown library"),
-    (InvalidIdentifier(SimpleDiagnostic),      5, Error, "File name is not a valid identifier"),
+    (UnknownFile      (CompactString), 3, Error, "Could not access module file"),
+    (UnknownLibrary   (CompactString), 4, Error, "Unknown library"),
+    (InvalidIdentifier(()),            5, Error, "File name is not a valid identifier"),
 );

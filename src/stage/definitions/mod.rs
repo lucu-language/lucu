@@ -96,6 +96,7 @@ impl Definitions {
     pub fn postorder(&self) -> impl Iterator<Item = NodeIndex> {
         self.graph.nodes_iter().rev()
     }
+    #[expect(clippy::implied_bounds_in_impls)]
     pub fn dot(
         &self,
     ) -> Dot<

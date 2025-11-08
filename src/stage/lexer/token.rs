@@ -1,52 +1,15 @@
 use std::{
     fmt::{self, Debug, Display},
-    ops::{Index, Range},
     str::FromStr,
 };
 
 use strum::{EnumString, IntoStaticStr};
 
-#[derive(PartialEq, Eq, Clone, Copy, Default, Hash)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-}
+use crate::span::{HasSpan, Span};
 
-impl Debug for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start, self.end)
-    }
-}
-
-impl Display for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start, self.end)
-    }
-}
-
-impl Index<Span> for str {
-    type Output = str;
-    fn index(&self, index: Span) -> &Self::Output {
-        &self[Range::from(index)]
-    }
-}
-
-impl Span {
-    pub const START: Span = Span::new(0, 0);
-    pub const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-    pub const fn inner(self) -> Self {
-        Self {
-            start: self.start + 1,
-            end: self.end - 1,
-        }
-    }
-}
-
-impl From<Span> for Range<usize> {
-    fn from(value: Span) -> Self {
-        value.start as usize..value.end as usize
+impl HasSpan for Token {
+    fn span(&self) -> Span {
+        self.span
     }
 }
 

@@ -1,4 +1,6 @@
-use super::token::{Group, Span, Symbol, Token, TokenKind};
+use crate::span::Span;
+
+use super::token::{Group, Symbol, Token, TokenKind};
 
 fn skip_whitespace(src: &mut &str) -> usize {
     let mut skipped = 0;

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use annotate_snippets::{Renderer, renderer::DecorStyle};
-use err::HasDiagnostics;
+use err::HasProblems;
 use include_dir::include_dir;
 use module::{Library, Module};
 use stage::ModuleGraph;
@@ -9,6 +9,7 @@ use watcher::{FileWatcher, WatchedLibrary};
 
 mod err;
 mod module;
+mod span;
 mod stage;
 mod watcher;
 
@@ -42,7 +43,7 @@ fn main() {
         let definitions = stages.definitions().unwrap();
         println!("{}", definitions.dot());
 
-        stages.print_diagnostics(&watcher, &renderer);
+        stages.print_problems(&watcher, &renderer);
 
         // wait for changes
         let changes = watcher.await_change();

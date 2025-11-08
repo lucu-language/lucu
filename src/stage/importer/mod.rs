@@ -6,12 +6,10 @@ use std::{
 use compact_str::{CompactString, format_compact};
 
 use crate::{
-    err::{LucuDiagnostic, Problems, Result, SimpleDiagnostic},
+    err::{ProblemKind, Problems, Result},
     module::{Module, ModuleResolver, UnknownModule},
-    stage::{
-        lexer::token::{Span, TokenKind},
-        parser::ast::{self, Spanned},
-    },
+    span::{HasSpan, Span, Spanned},
+    stage::{lexer::token::TokenKind, parser::ast},
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -60,7 +58,7 @@ impl Imports {
         }
 
         for import in &ast.imports {
-            let module = Module::from_import(&parent, import.path.as_str());
+            let module = Module::from_import(parent, import.path.as_str());
 
             // get identifier and check if valid
             let ident = match &import.ident {
@@ -69,19 +67,14 @@ impl Imports {
                     let ident = Self::import_name(&import.path);
                     problems.append(Problems::require(
                         TokenKind::is_valid_identifier(ident.as_str()),
-                        || {
-                            LucuDiagnostic::InvalidIdentifier(SimpleDiagnostic::new(
-                                parent.clone(),
-                                ident.span(),
-                            ))
-                        },
+                        || ProblemKind::InvalidIdentifier(()).at(parent, &ident),
                     ));
                     ident.0.0
                 }
             };
 
             problems.append(Self::require_import_exists(
-                resolver, import, &module, &parent,
+                resolver, import, &module, parent,
             ));
 
             // TODO: check for duplicates
@@ -95,7 +88,7 @@ impl Imports {
             .as_str()
             .rsplit_once('.')
             .map(|t| t.0)
-            .unwrap_or(&path.as_str());
+            .unwrap_or(path.as_str());
         let end = path.span().end - 1 - (path.as_str().len() - without_extension.len()) as u32;
 
         let ident = without_extension
@@ -115,15 +108,15 @@ impl Imports {
         match resolver.exists(module) {
             Ok(()) => Problems::ok(),
             Err(UnknownModule::UnknownLibrary(lib)) => {
-                Problems::new(LucuDiagnostic::UnknownLibrary(
-                    SimpleDiagnostic::new(parent.clone(), import.path.span())
-                        .label(format_compact!("Unknown library '{}'", lib)),
-                ))
+                ProblemKind::UnknownLibrary(format_compact!("Unknown library '{}'", lib))
+                    .at(parent, &import.path)
+                    .into()
             }
-            Err(UnknownModule::UnknownFile(file)) => Problems::new(LucuDiagnostic::UnknownFile(
-                SimpleDiagnostic::new(parent.clone(), import.path.span())
-                    .label(format_compact!("Path resolved to {}", file.display())),
-            )),
+            Err(UnknownModule::UnknownFile(file)) => {
+                ProblemKind::UnknownFile(format_compact!("Path resolved to {}", file.display()))
+                    .at(parent, &import.path)
+                    .into()
+            }
         }
     }
 }

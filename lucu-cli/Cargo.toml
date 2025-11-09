@@ -1,0 +1,9 @@
+[package]
+name = "lucu-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+annotate-snippets.workspace = true
+include_dir.workspace = true
+lucu = { path = "../lucu" }

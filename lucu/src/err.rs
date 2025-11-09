@@ -332,10 +332,10 @@ pub struct ProblemHeader {
 }
 
 macro_rules! diagnostics {
-    ($(($variant:ident$(($value:ty))?, $id:literal, $level:ident, $title:literal $(,)?)),*$(,)?) => {
+    ($(($variant:ident($value:ty), $id:literal, $level:ident, $title:literal $(,)?)),*$(,)?) => {
         #[derive(Clone, Debug)]
         pub enum ProblemKind {
-            $($variant$(($value))?),*
+            $($variant($value)),*
         }
         impl ProblemKind {
             pub fn header(&self) -> ProblemHeader {

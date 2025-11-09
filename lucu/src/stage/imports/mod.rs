@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map};
+use std::collections::{HashMap, hash_map};
 use std::fmt::Display;
 
 use compact_str::{CompactString, format_compact};
@@ -9,7 +9,7 @@ use crate::span::{HasSpan, Span, Spanned};
 use crate::stage::ast;
 use crate::stage::token::TokenKind;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Import {
     Implicit,
     Named(CompactString),
@@ -24,13 +24,13 @@ impl Display for Import {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Default, Hash)]
-pub struct Imports(BTreeMap<Import, Module>);
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+pub struct Imports(HashMap<Import, Module>);
 
 impl<'a> IntoIterator for &'a Imports {
     type Item = (&'a Import, &'a Module);
 
-    type IntoIter = btree_map::Iter<'a, Import, Module>;
+    type IntoIter = hash_map::Iter<'a, Import, Module>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -48,7 +48,7 @@ impl Imports {
     ) -> Result<Self> {
         let mut problems = Problems::ok();
 
-        let mut map = BTreeMap::new();
+        let mut map = HashMap::new();
 
         if let Some(module) = resolver.preamble(parent) {
             map.insert(Import::Implicit, module);

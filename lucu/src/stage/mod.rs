@@ -208,25 +208,16 @@ impl ModuleGraph {
 
                 if exists {
                     // check if the import list changed
-                    fn hash<T>(obj: T) -> u64
-                    where
-                        T: Hash,
-                    {
-                        let mut hasher = DefaultHasher::new();
-                        obj.hash(&mut hasher);
-                        hasher.finish()
-                    }
                     let stages = self
                         .cache
                         .get_mut(&module)
                         .expect("ICE: module is in node map but has no cache");
 
-                    let old_hash = hash(stages.imports(resolver));
+                    let old_imports = stages.imports(resolver).cloned();
                     stages.reset(resolver);
-                    let new_hash = hash(stages.imports(resolver));
+                    let new_imports = stages.imports(resolver);
 
-                    // in theory this could lead to a hash collision, but we assume these are rare enough
-                    if old_hash != new_hash {
+                    if old_imports.as_ref() != new_imports {
                         reimport_nodes.push(node);
                     }
                 } else {

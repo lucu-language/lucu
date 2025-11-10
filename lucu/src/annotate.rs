@@ -3,6 +3,7 @@ use std::ops::Range;
 
 use anstyle::{AnsiColor, Style};
 use itertools::Itertools;
+use lucu_annotate::ansi::MarkStyle;
 use lucu_annotate::{Annotate, Annotated, Annotation, Mark};
 
 use crate::span::HasSpan;
@@ -102,12 +103,11 @@ where
 
 struct InlinePos(usize);
 impl Mark for InlinePos {
-    fn fmt_before(&self, _segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let style = AnsiColor::BrightBlack.on_default();
-        write!(f, "{}[{}]{:#} ", style, self.0, style)
+    fn style(&self) -> MarkStyle {
+        MarkStyle::before(AnsiColor::BrightBlack.on_default())
     }
-    fn fmt_after(&self, _segment: &str, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Ok(())
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}] ", self.0)
     }
 }
 
@@ -115,21 +115,20 @@ pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
 
 struct LineNumber(usize);
 impl Mark for LineNumber {
-    fn fmt_before(&self, _segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{LINE_STYLE}{: >3} |{LINE_STYLE:#} ", self.0)
+    fn style(&self) -> MarkStyle {
+        MarkStyle::before(LINE_STYLE)
     }
-    fn fmt_after(&self, _segment: &str, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Ok(())
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{: >3} | ", self.0)
     }
 }
 
 struct InsertedSemicolon;
 impl Mark for InsertedSemicolon {
-    fn fmt_before(&self, _segment: &str, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let style = AnsiColor::BrightBlack.on_default();
-        write!(f, "{};{:#}", style, style)
+    fn style(&self) -> MarkStyle {
+        MarkStyle::before(AnsiColor::BrightBlack.on_default())
     }
-    fn fmt_after(&self, _segment: &str, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        Ok(())
+    fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, ";")
     }
 }

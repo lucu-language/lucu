@@ -8,6 +8,7 @@ use annotate_snippets::{
 use anstyle::{AnsiColor, Style};
 use compact_str::CompactString;
 use do_notation::Lift;
+use lucu_annotate::ansi::MarkStyle;
 use lucu_annotate::{Annotate, Mark};
 
 use crate::annotate::{AnnotateExt, LINE_STYLE};
@@ -357,22 +358,17 @@ impl Problem {
 
             struct Error(Style);
             impl Mark for Error {
-                fn fmt_force(&self, _segment: &str) -> bool {
+                fn ignore_nested(&self) -> bool {
                     true
                 }
-                fn fmt_before(
-                    &self,
-                    _segment: &str,
-                    f: &mut core::fmt::Formatter<'_>,
-                ) -> core::fmt::Result {
-                    write!(f, "{} ", self.0.render())
+                fn style(&self) -> MarkStyle {
+                    self.0.into()
                 }
-                fn fmt_after(
-                    &self,
-                    _segment: &str,
-                    f: &mut core::fmt::Formatter<'_>,
-                ) -> core::fmt::Result {
-                    write!(f, " {}", self.0.render_reset())
+                fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    write!(f, " ")
+                }
+                fn fmt_after(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    write!(f, " ")
                 }
             }
 

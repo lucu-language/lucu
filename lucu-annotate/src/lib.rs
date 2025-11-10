@@ -1,7 +1,7 @@
 #![no_std]
 
 #[cfg(feature = "anstyle")]
-pub mod anstyle;
+pub mod ansi;
 
 use core::cell::RefCell;
 use core::cmp::Ordering;
@@ -12,9 +12,19 @@ use core::ops::Range;
 use itertools::{Either, Itertools};
 
 pub trait Mark {
-    fn fmt_before(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result;
-    fn fmt_after(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result;
-    fn fmt_force(&self, _segment: &str) -> bool {
+    #[cfg(feature = "anstyle")]
+    fn style(&self) -> ansi::MarkStyle {
+        ansi::MarkStyle::default()
+    }
+    #[expect(unused)]
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+    #[expect(unused)]
+    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+    fn ignore_nested(&self) -> bool {
         false
     }
 
@@ -35,14 +45,18 @@ impl<T> Mark for &'_ T
 where
     T: Mark,
 {
-    fn fmt_before(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (*self).fmt_before(segment, f)
+    #[cfg(feature = "anstyle")]
+    fn style(&self) -> ansi::MarkStyle {
+        (*self).style()
     }
-    fn fmt_after(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (*self).fmt_after(segment, f)
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (*self).fmt_before(f)
     }
-    fn fmt_force(&self, segment: &str) -> bool {
-        (*self).fmt_force(segment)
+    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (*self).fmt_after(f)
+    }
+    fn ignore_nested(&self) -> bool {
+        (*self).ignore_nested()
     }
 }
 
@@ -51,22 +65,29 @@ where
     L: Mark,
     R: Mark,
 {
-    fn fmt_before(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    #[cfg(feature = "anstyle")]
+    fn style(&self) -> ansi::MarkStyle {
         match self {
-            Either::Left(l) => l.fmt_before(segment, f),
-            Either::Right(r) => r.fmt_before(segment, f),
+            Either::Left(l) => l.style(),
+            Either::Right(r) => r.style(),
         }
     }
-    fn fmt_after(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Either::Left(l) => l.fmt_after(segment, f),
-            Either::Right(r) => r.fmt_after(segment, f),
+            Either::Left(l) => l.fmt_before(f),
+            Either::Right(r) => r.fmt_before(f),
         }
     }
-    fn fmt_force(&self, segment: &str) -> bool {
+    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Either::Left(l) => l.fmt_force(segment),
-            Either::Right(r) => r.fmt_force(segment),
+            Either::Left(l) => l.fmt_after(f),
+            Either::Right(r) => r.fmt_after(f),
+        }
+    }
+    fn ignore_nested(&self) -> bool {
+        match self {
+            Either::Left(l) => l.ignore_nested(),
+            Either::Right(r) => r.ignore_nested(),
         }
     }
 }
@@ -255,6 +276,7 @@ where
             src: &str,
             range: Range<usize>,
             iter: &mut Peekable<I>,
+            #[cfg(feature = "anstyle")] style: &mut anstyle::Style,
             f: &mut fmt::Formatter<'_>,
         ) -> fmt::Result
         where
@@ -263,29 +285,53 @@ where
         {
             let mut current = range.start;
 
+            #[cfg(feature = "anstyle")]
+            let unstyled = *style;
+
             while let Some(annotation) = iter.next_if(|annotation| annotation.end <= range.end) {
                 if annotation.start < current {
                     continue;
                 }
 
-                let segment = &src[annotation.start..annotation.end];
+                #[cfg(feature = "anstyle")]
+                let mark_style = annotation.mark.style();
 
                 // print up until annotation
+                #[cfg(feature = "anstyle")]
+                ansi::apply(unstyled, style, f)?;
                 write!(f, "{}", &src[current..annotation.start])?;
 
                 // print annotation
-                annotation.mark.fmt_before(segment, f)?;
-                if annotation.mark.fmt_force(segment) {
+                #[cfg(feature = "anstyle")]
+                ansi::apply(mark_style.before.unwrap_or(unstyled), style, f)?;
+                annotation.mark.fmt_before(f)?;
+
+                #[cfg(feature = "anstyle")]
+                ansi::apply(mark_style.content.unwrap_or(unstyled), style, f)?;
+                if annotation.mark.ignore_nested() {
+                    let segment = &src[annotation.start..annotation.end];
                     write!(f, "{}", segment)?;
                 } else {
-                    fmt_mut(src, annotation.start..annotation.end, iter, f)?;
+                    fmt_mut(
+                        src,
+                        annotation.start..annotation.end,
+                        iter,
+                        #[cfg(feature = "anstyle")]
+                        style,
+                        f,
+                    )?;
                 }
-                annotation.mark.fmt_after(segment, f)?;
+
+                #[cfg(feature = "anstyle")]
+                ansi::apply(mark_style.after.unwrap_or(unstyled), style, f)?;
+                annotation.mark.fmt_after(f)?;
 
                 current = annotation.end;
             }
 
             // print rest
+            #[cfg(feature = "anstyle")]
+            ansi::apply(unstyled, style, f)?;
             write!(f, "{}", &src[current..range.end])
         }
 
@@ -293,6 +339,8 @@ where
             self.snippet.src,
             self.snippet.start..self.snippet.end,
             &mut (&mut *self.annotations.borrow_mut()).peekable(),
+            #[cfg(feature = "anstyle")]
+            &mut anstyle::Style::new(),
             f,
         )
     }

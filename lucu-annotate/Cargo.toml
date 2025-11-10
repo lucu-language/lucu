@@ -1,0 +1,12 @@
+[package]
+name = "lucu-annotate"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anstyle = { workspace = true, optional = true }
+itertools = { version = "0.14.0", default-features = false }
+
+[features]
+default = ["anstyle"]
+anstyle = ["dep:anstyle"]

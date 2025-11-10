@@ -4,6 +4,7 @@ use std::time::Duration;
 use annotate_snippets::Renderer;
 use annotate_snippets::renderer::DecorStyle;
 use include_dir::include_dir;
+use lucu::annotate::AnnotateExt;
 use lucu::err::HasProblems;
 use lucu::module::{Library, Module};
 use lucu::stage::ModuleGraph;
@@ -36,6 +37,20 @@ fn main() {
         println!("{}", graph.dot());
 
         let stages = graph.stages(&main).unwrap();
+
+        {
+            let source = stages.source().unwrap();
+            let tokens = stages.tokens().unwrap();
+            let ast = stages.ast().unwrap();
+            let definitions = stages.definitions().unwrap();
+
+            let annotated = source
+                .mark_syntax(tokens)
+                .mark_semicolons(tokens)
+                .mark_definition_order(ast, definitions);
+            anstream::println!("{}", annotated);
+        }
+
         let definitions = stages.definitions().unwrap();
         println!("{}", definitions.dot());
 

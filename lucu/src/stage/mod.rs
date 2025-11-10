@@ -10,7 +10,6 @@ pub mod defs;
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
 use petgraph::dot::Dot;
@@ -65,12 +64,12 @@ impl Stages {
         self.imports = OnceCell::new();
     }
 
-    pub fn source(&self) -> &str {
-        self.source.as_deref().unwrap_or_default()
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
     }
     pub fn tokens(&self) -> Option<&[Token]> {
         self.tokens
-            .get_or_init(|| Result::new(Lexer::new(self.source()).collect()))
+            .get_or_init(|| Result::new(Lexer::new(self.source().unwrap_or_default()).collect()))
             .value()
             .map(|v| &**v)
     }
@@ -78,7 +77,10 @@ impl Stages {
         self.ast
             .get_or_init(|| {
                 self.tokens()
-                    .map(|tokens| Parser::new(&self.module, self.source(), tokens).module())
+                    .map(|tokens| {
+                        Parser::new(&self.module, self.source().unwrap_or_default(), tokens)
+                            .module()
+                    })
                     .unwrap_or_default()
             })
             .value()

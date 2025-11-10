@@ -1,3 +1,4 @@
+pub mod annotate;
 pub mod err;
 pub mod module;
 pub mod span;

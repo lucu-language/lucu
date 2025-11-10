@@ -48,11 +48,13 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn definition(&mut self) -> Result<ast::Definition> {
-        match self.next().token {
-            TokenKind::Keyword(Keyword::Fun) => self.function().map(ast::Definition::Function),
-            TokenKind::Keyword(Keyword::Type) => self.type_alias().map(ast::Definition::Type),
+        self.spanned(|parser| match parser.next().token {
+            TokenKind::Keyword(Keyword::Fun) => {
+                parser.function().map(ast::DefinitionEnum::Function)
+            }
+            TokenKind::Keyword(Keyword::Type) => parser.type_alias().map(ast::DefinitionEnum::Type),
             tok => todo!("error: unknown definition with token {tok}"),
-        }
+        })
     }
     pub fn function(&mut self) -> Result<ast::Function> {
         m! {
@@ -74,9 +76,9 @@ impl<'a> Parser<'a> {
     pub fn path(&mut self) -> Result<ast::Path> {
         m! {
             first <- self.ident();
-            second <- self.when_next(Symbol::Dot, |parse| {
-                parse.skip();
-                parse.ident()
+            second <- self.when_next(Symbol::Dot, |parser| {
+                parser.skip();
+                parser.ident()
             });
             return match second {
                 Some(name) => ast::Path { package: Some(first), name },
@@ -85,15 +87,15 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn r#type(&mut self) -> Result<ast::Type> {
-        self.spanned(|parse| match parse.next().token {
-            TokenKind::Identifier => parse.path().map(|path| {
+        self.spanned(|parser| match parser.next().token {
+            TokenKind::Identifier => parser.path().map(|path| {
                 if path.package.is_none() && path.name.as_str() == "int" {
                     ast::TypeEnum::Int
                 } else {
                     ast::TypeEnum::Path(path)
                 }
             }),
-            TokenKind::Keyword(Keyword::Struct) => parse.r#struct().map(ast::TypeEnum::Struct),
+            TokenKind::Keyword(Keyword::Struct) => parser.r#struct().map(ast::TypeEnum::Struct),
             _ => todo!("error"),
         })
         .map(Box::new)
@@ -113,10 +115,10 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn expression(&mut self) -> Result<ast::Expression> {
-        self.spanned(|parse| {
+        self.spanned(|parser| {
             m! {
-                _ <- parse.consume(TokenKind::Open(Group::Brace));
-                _ <- parse.consume(TokenKind::Close(Group::Brace)).tap_none(|| parse.skip_group(Group::Brace));
+                _ <- parser.consume(TokenKind::Open(Group::Brace));
+                _ <- parser.consume(TokenKind::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
                 return ast::ExpressionEnum::Block;
             }
         })
@@ -154,13 +156,13 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn returns(&mut self) -> Result<ast::Returns> {
-        self.spanned(|parse| {
-            match parse.next().token {
+        self.spanned(|parser| {
+            match parser.next().token {
                 TokenKind::Symbol(Symbol::Bang) => {
-                    parse.skip();
+                    parser.skip();
                     Result::new(ast::ReturnsEnum::Never)
                 }
-                _ => parse.r#type().map(ast::ReturnsEnum::Data),
+                _ => parser.r#type().map(ast::ReturnsEnum::Data),
                 // TODO: check if next token cannot start a type, then give error
             }
         })
@@ -184,21 +186,27 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn kind(&mut self) -> Result<ast::Kind> {
-        self.spanned(|parse| {
-            match parse.next().token {
+        self.spanned(|parser| {
+            match parser.next().token {
                 TokenKind::Keyword(Keyword::Type) => {
-                    parse.skip();
+                    parser.skip();
                     Result::new(ast::KindEnum::Type)
                 }
-                _ => parse.r#type().map(ast::KindEnum::Constant),
+                _ => parser.r#type().map(ast::KindEnum::Constant),
                 // TODO: check if next token cannot start a type, then give error
             }
         })
     }
 
-    fn spanned<T>(&mut self, parse: impl Fn(&mut Self) -> Result<T>) -> Result<Spanned<T>> {
+    fn spanned<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<Spanned<T>> {
+        self.with_span(|parser| parse(parser).map(|t| |span| Spanned(t, span)))
+    }
+    fn with_span<T, F>(&mut self, parse: impl FnOnce(&mut Self) -> Result<F>) -> Result<T>
+    where
+        F: FnOnce(Span) -> T,
+    {
         let start = self.next().span.start;
-        parse(self).map(|t| Spanned(t, Span::new(start, self.last_token_end)))
+        parse(self).map(|t| t(Span::new(start, self.last_token_end)))
     }
     fn consume(&mut self, token: impl Into<TokenKind>) -> Result<Token> {
         let token = token.into();
@@ -240,7 +248,7 @@ impl<'a> Parser<'a> {
     fn unless_next<T>(
         &mut self,
         tokens: &[TokenKind],
-        parse: impl Fn(&mut Self) -> Result<T>,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
         let next = self.next().token;
         if !tokens.contains(&next)
@@ -254,7 +262,7 @@ impl<'a> Parser<'a> {
     fn when_next<T>(
         &mut self,
         token: impl Into<TokenKind>,
-        parse: impl Fn(&mut Self) -> Result<T>,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
         if self.is_next(token) {
             parse(self).map(Some)

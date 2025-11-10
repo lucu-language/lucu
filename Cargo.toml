@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["lucu", "lucu-cli"]
+members = ["lucu", "lucu-cli", "lucu-annotate"]
 
 [workspace.dependencies]
 annotate-snippets = "0.12.8"
-anstream = "0.6.21"
+anstyle = { version = "1.0.13", default-features = false }
 include_dir = "0.7.4"

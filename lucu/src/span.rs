@@ -73,14 +73,6 @@ impl HasSpan for Span {
 #[derive(Clone, Copy, Eq)]
 pub struct Spanned<T>(pub T, pub Span);
 
-impl<T> Deref for Spanned<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 // equality if the inner value is equal
 impl<T: PartialEq> PartialEq for Spanned<T> {
     fn eq(&self, other: &Self) -> bool {

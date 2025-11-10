@@ -86,6 +86,9 @@ impl ast::Module {
 }
 
 impl Definitions {
+    pub fn spans<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Definition> {
+        self.postorder().map(|idx| ast.definition(idx, &self.defs))
+    }
     pub fn postorder(&self) -> impl Iterator<Item = NodeIndex> {
         self.graph.nodes_iter().rev()
     }

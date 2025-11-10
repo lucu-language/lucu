@@ -98,9 +98,9 @@ impl Ast for ast::Import {
 
 impl Ast for ast::Definition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match self {
-            ast::Definition::Function(function) => function.visit(visitor),
-            ast::Definition::Type(type_alias) => type_alias.visit(visitor),
+        match &self.0 {
+            ast::DefinitionEnum::Function(function) => function.visit(visitor),
+            ast::DefinitionEnum::Type(type_alias) => type_alias.visit(visitor),
         }
     }
 }

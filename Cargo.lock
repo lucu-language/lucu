@@ -158,6 +158,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3e16a80c1dda2cf52fa07106427d3d798b6331dca8155fcb8c39f7fc78f6dd2"
 
 [[package]]
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -294,6 +300,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -346,12 +361,15 @@ version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "anstream",
+ "anstyle",
  "compact_str",
  "crossbeam-channel",
  "do-notation",
  "im",
  "include_dir",
+ "itertools",
  "lasso",
+ "lucu-annotate",
  "notify-debouncer-full",
  "path-clean",
  "petgraph",
@@ -359,10 +377,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lucu-annotate"
+version = "0.1.0"
+dependencies = [
+ "anstyle",
+ "itertools",
+]
+
+[[package]]
 name = "lucu-cli"
 version = "0.1.0"
 dependencies = [
  "annotate-snippets",
+ "anstream",
  "include_dir",
  "lucu",
 ]

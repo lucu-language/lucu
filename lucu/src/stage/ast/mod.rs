@@ -49,17 +49,19 @@ pub struct Import {
     pub ident: Option<Ident>,
 }
 
+pub type Definition = Spanned<DefinitionEnum>;
+
 #[derive(Debug, PartialEq, Eq)]
-pub enum Definition {
+pub enum DefinitionEnum {
     Function(Function),
     Type(TypeAlias),
 }
 
 impl Definition {
     pub fn name(&self) -> Option<&Name> {
-        match self {
-            Definition::Function(fun) => Some(&fun.declaration.name),
-            Definition::Type(ty) => Some(&ty.name),
+        match &self.0 {
+            DefinitionEnum::Function(fun) => Some(&fun.declaration.name),
+            DefinitionEnum::Type(ty) => Some(&ty.name),
         }
     }
     pub fn generics(&self) -> &[Generic] {

@@ -1,3 +1,4 @@
+pub mod anstyle;
 pub mod lexer;
 
 use std::fmt::{self, Debug, Display};

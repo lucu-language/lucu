@@ -9,6 +9,7 @@ use lucu::err::HasProblems;
 use lucu::module::{Library, Module};
 use lucu::stage::ModuleGraph;
 use lucu::watcher::{FileWatcher, WatchedLibrary};
+use lucu_annotate::Annotate;
 
 fn main() {
     let mut dirs = HashMap::new();
@@ -45,6 +46,8 @@ fn main() {
             let definitions = stages.definitions().unwrap();
 
             let annotated = source
+                .snippet()
+                .lines(5..9)
                 .mark_syntax(tokens)
                 .mark_semicolons(tokens)
                 .mark_definition_order(ast, definitions);

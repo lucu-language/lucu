@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Range;
 
 use anstyle::AnsiColor;
 use itertools::Itertools;
@@ -25,6 +26,20 @@ pub trait AnnotateExt<'a> {
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
 }
 
+fn tokens_in_range(tokens: &[Token], range: Range<usize>) -> &[Token] {
+    // FIXME: this can be made more efficient with binary search
+    let start = tokens
+        .iter()
+        .position(|t| t.span.start as usize >= range.start)
+        .unwrap_or(tokens.len());
+    let end = tokens
+        .iter()
+        .rposition(|t| t.span.end as usize <= range.end)
+        .map(|n| n + 1)
+        .unwrap_or(0);
+    &tokens[start..end]
+}
+
 impl<'a, T> AnnotateExt<'a> for T
 where
     T: Annotate<'a>,
@@ -33,6 +48,7 @@ where
         self,
         tokens: &[Token],
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        let tokens = tokens_in_range(tokens, self.snippet().range());
         self.annotate(
             tokens
                 .iter()
@@ -43,6 +59,7 @@ where
         self,
         tokens: &[Token],
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        let tokens = tokens_in_range(tokens, self.snippet().range());
         self.annotate(tokens.iter().filter_map(|token| {
             (token.span.start == token.span.end
                 && token.token == TokenKind::Symbol(Symbol::Semicolon))

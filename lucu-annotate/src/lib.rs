@@ -103,13 +103,48 @@ impl<T> Annotation<T> {
     }
 }
 
-pub struct Annotated<'a, I> {
+#[derive(Clone, Copy)]
+pub struct Snippet<'a> {
     src: &'a str,
+    start: usize,
+    end: usize,
+}
+
+impl Snippet<'_> {
+    pub fn range(&self) -> Range<usize> {
+        self.start..self.end
+    }
+    pub fn bytes(mut self, bytes: Range<usize>) -> Self {
+        self.start = bytes.start;
+        self.end = bytes.end;
+        self
+    }
+    pub fn lines(self, lines: Range<usize>) -> Self {
+        let start = self
+            .src
+            .split_inclusive('\n')
+            .take(lines.start)
+            .map(str::len)
+            .sum();
+        let end = start
+            + self
+                .src
+                .split_inclusive('\n')
+                .skip(lines.start)
+                .take(lines.end - lines.start)
+                .map(str::len)
+                .sum::<usize>();
+        self.bytes(start..end)
+    }
+}
+
+pub struct Annotated<'a, I> {
+    snippet: Snippet<'a>,
     annotations: RefCell<I>,
-    range: Range<usize>,
 }
 
 pub trait Annotate<'a> {
+    fn snippet(&self) -> Snippet<'a>;
     fn annotate(
         self,
         iter: impl IntoIterator<Item = Annotation<impl Mark>>,
@@ -121,30 +156,53 @@ where
     I: Iterator<Item = Annotation<T>>,
     T: Mark,
 {
+    fn snippet(&self) -> Snippet<'a> {
+        self.snippet
+    }
     fn annotate(
         self,
         iter: impl IntoIterator<Item = Annotation<impl Mark>>,
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
         Annotated {
-            src: self.src,
+            snippet: self.snippet(),
             annotations: RefCell::new(Itertools::merge(
                 self.annotations.into_inner().map(Annotation::left),
                 iter.into_iter().map(Annotation::right),
             )),
-            range: self.range,
         }
     }
 }
 
 impl<'a> Annotate<'a> for &'a str {
+    fn snippet(&self) -> Snippet<'a> {
+        Snippet {
+            src: self,
+            start: 0,
+            end: self.len(),
+        }
+    }
     fn annotate(
         self,
         iter: impl IntoIterator<Item = Annotation<impl Mark>>,
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
         Annotated {
-            src: self,
+            snippet: self.snippet(),
             annotations: RefCell::new(iter.into_iter()),
-            range: 0..self.len(),
+        }
+    }
+}
+
+impl<'a> Annotate<'a> for Snippet<'a> {
+    fn snippet(&self) -> Snippet<'a> {
+        *self
+    }
+    fn annotate(
+        self,
+        iter: impl IntoIterator<Item = Annotation<impl Mark>>,
+    ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        Annotated {
+            snippet: self.snippet(),
+            annotations: RefCell::new(iter.into_iter()),
         }
     }
 }
@@ -168,6 +226,10 @@ where
             let mut current = range.start;
 
             while let Some(annotation) = iter.next_if(|annotation| annotation.end <= range.end) {
+                if annotation.start < current {
+                    continue;
+                }
+
                 let segment = &src[annotation.start..annotation.end];
 
                 // print up until annotation
@@ -186,8 +248,8 @@ where
         }
 
         fmt_mut(
-            self.src,
-            self.range.clone(),
+            self.snippet.src,
+            self.snippet.start..self.snippet.end,
             &mut (&mut *self.annotations.borrow_mut()).peekable(),
             f,
         )

@@ -392,6 +392,7 @@ dependencies = [
  "anstream",
  "include_dir",
  "lucu",
+ "lucu-annotate",
 ]
 
 [[package]]

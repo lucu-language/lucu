@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use annotate_snippets::Renderer;
-use annotate_snippets::renderer::DecorStyle;
 use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
 use lucu::err::HasProblems;
@@ -28,8 +26,6 @@ fn main() {
 
     let main = Module::new(Library::MAIN, "main");
     let mut watcher = FileWatcher::new(main.clone(), dirs, Duration::from_secs_f32(0.1));
-
-    let renderer = Renderer::styled().decor_style(DecorStyle::Unicode);
 
     let mut graph = ModuleGraph::new();
     graph.insert_or_update(&watcher, main.clone());
@@ -57,7 +53,7 @@ fn main() {
         let definitions = stages.definitions().unwrap();
         println!("{}", definitions.dot());
 
-        stages.print_problems(&watcher, &renderer);
+        stages.print_problems2(&watcher);
 
         // wait for changes
         let changes = watcher.await_change();

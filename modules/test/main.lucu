@@ -1,4 +1,4 @@
-import "core:1"
+import "not existy"
 
 type A = B
 type B = struct(b B)

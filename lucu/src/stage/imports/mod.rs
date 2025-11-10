@@ -80,6 +80,14 @@ impl Imports {
 
         problems.with(Self(map))
     }
+    fn library_span(path: &ast::String) -> Span {
+        let len = path.as_str().find(':').unwrap_or_default();
+
+        let mut inner = path.span().inner();
+        inner.end = inner.start + len as u32;
+
+        inner
+    }
     fn import_name(path: &ast::String) -> ast::Ident {
         let without_extension = path
             .as_str()
@@ -105,12 +113,12 @@ impl Imports {
         match resolver.exists(module) {
             Ok(()) => Problems::ok(),
             Err(UnknownModule::UnknownLibrary(lib)) => {
-                ProblemKind::UnknownLibrary(format_compact!("Unknown library '{}'", lib))
-                    .at(parent, &import.path)
+                ProblemKind::UnknownLibrary(format_compact!("'{}'", lib))
+                    .at(parent, &Self::library_span(&import.path))
                     .into()
             }
             Err(UnknownModule::UnknownFile(file)) => {
-                ProblemKind::UnknownFile(format_compact!("Path resolved to {}", file.display()))
+                ProblemKind::UnknownFile(format_compact!("path resolved to {}", file.display()))
                     .at(parent, &import.path)
                     .into()
             }

@@ -5,18 +5,27 @@ use std::ops::Deref;
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title
 };
+use anstyle::{AnsiColor, Style};
 use compact_str::CompactString;
 use do_notation::Lift;
+use lucu_annotate::{Annotate, Mark};
 
+use crate::annotate::{AnnotateExt, LINE_STYLE};
 use crate::module::{Module, ModuleResolver};
 use crate::span::{HasSpan, Span};
 use crate::stage::ast::visit::Combine;
+use crate::stage::token::lexer::Lexer;
 
 pub trait HasProblems {
     fn problems(&self) -> impl Iterator<Item = &Problem>;
     fn print_problems(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
         for problem in self.problems() {
             problem.print(resolver, renderer);
+        }
+    }
+    fn print_problems2(&self, resolver: &impl ModuleResolver) {
+        for problem in self.problems() {
+            problem.print2(resolver);
         }
     }
 }
@@ -315,6 +324,74 @@ impl Problem {
     pub fn label(&self) -> Option<Cow<'_, str>> {
         self.kind.label()
     }
+    pub fn print2(&self, resolver: &impl ModuleResolver) {
+        let header = self.header();
+        let title = header.title;
+        let id = header.id;
+        let (name, color) = match header.level {
+            ProblemLevel::Error => ("error", AnsiColor::Red),
+            ProblemLevel::Warning => ("warning", AnsiColor::Yellow),
+        };
+
+        let err_style = color
+            .bright(true)
+            .on_default()
+            .bg_color(Some(AnsiColor::Black.into()));
+        let title_kind_style = color.on_default().bold();
+        let title_style = Style::new().bold();
+
+        anstream::print!(
+            "{title_kind_style}{name} {id:03}{title_kind_style:#}{title_style}: {title}"
+        );
+        if let Some(label) = self.label() {
+            anstream::println!(":{title_style:#} {label}");
+        } else {
+            anstream::println!("{title_style:#}");
+        }
+
+        if let Some(contents) = resolver.contents(&self.module) {
+            let snippet = contents.as_str().snippet().lines_containing(self.span);
+            let tokens = Lexer::new(&contents)
+                .for_range(snippet.range())
+                .collect::<Box<_>>();
+
+            struct Error(Style);
+            impl Mark for Error {
+                fn fmt_force(&self, _segment: &str) -> bool {
+                    true
+                }
+                fn fmt_before(
+                    &self,
+                    _segment: &str,
+                    f: &mut core::fmt::Formatter<'_>,
+                ) -> core::fmt::Result {
+                    write!(f, "{} ", self.0.render())
+                }
+                fn fmt_after(
+                    &self,
+                    _segment: &str,
+                    f: &mut core::fmt::Formatter<'_>,
+                ) -> core::fmt::Result {
+                    write!(f, " {}", self.0.render_reset())
+                }
+            }
+
+            anstream::println!(
+                "   {LINE_STYLE}/->{LINE_STYLE:#} {}",
+                resolver.readable_path(&self.module)
+            );
+            anstream::println!("    {LINE_STYLE}|{LINE_STYLE:#}");
+            anstream::println!(
+                "{}",
+                snippet
+                    .mark_line_numbers()
+                    .mark_syntax(&tokens)
+                    .mark_semicolons(&tokens)
+                    .annotate(std::iter::once(Error(err_style).at(self.span)))
+            );
+            anstream::println!("    {LINE_STYLE}|{LINE_STYLE:#}");
+        }
+    }
     pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
         let header = self.header();
         let title =
@@ -378,11 +455,12 @@ macro_rules! diagnostics {
 
 #[rustfmt::skip]
 diagnostics!(
-    (UnexpectedToken  (CompactString), 0, Error, "Unexpected token"),
-    (UnexpectedNewline(CompactString), 1, Error, "Unexpected newline"),
-    (UnexpectedEOF    (CompactString), 2, Error, "Unexpected end of file"),
 
-    (UnknownFile      (CompactString), 3, Error, "Could not access module file"),
-    (UnknownLibrary   (CompactString), 4, Error, "Unknown library"),
-    (InvalidIdentifier(()),            5, Error, "File name is not a valid identifier"),
+    (UnexpectedToken  (CompactString), 100, Error, "Unexpected token"),
+    (UnexpectedNewline(CompactString), 101, Error, "Unexpected newline"),
+    (UnexpectedEOF    (CompactString), 102, Error, "Unexpected end of file"),
+
+    (UnknownFile      (CompactString), 103, Error, "Could not access module file"),
+    (UnknownLibrary   (CompactString), 104, Error, "Unknown library"),
+    (InvalidIdentifier(()),            105, Error, "File name is not a valid identifier"),
 );

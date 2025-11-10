@@ -217,7 +217,7 @@ impl<'a> Parser<'a> {
                 Result::new(*next)
             }
             (next, _) => {
-                let label = format_compact!("Expected {}", token);
+                let label = format_compact!("expected {}", token);
                 let error = if next.token == TokenKind::Eof {
                     ProblemKind::UnexpectedEOF(label)
                 } else if next.token == TokenKind::Symbol(Symbol::Semicolon)

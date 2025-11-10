@@ -14,6 +14,9 @@ use itertools::{Either, Itertools};
 pub trait Mark {
     fn fmt_before(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn fmt_after(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn fmt_force(&self, _segment: &str) -> bool {
+        false
+    }
 
     fn at(self, span: impl Into<Range<usize>>) -> Annotation<Self>
     where
@@ -38,6 +41,9 @@ where
     fn fmt_after(&self, segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (*self).fmt_after(segment, f)
     }
+    fn fmt_force(&self, segment: &str) -> bool {
+        (*self).fmt_force(segment)
+    }
 }
 
 impl<L, R> Mark for Either<L, R>
@@ -55,6 +61,12 @@ where
         match self {
             Either::Left(l) => l.fmt_after(segment, f),
             Either::Right(r) => r.fmt_after(segment, f),
+        }
+    }
+    fn fmt_force(&self, segment: &str) -> bool {
+        match self {
+            Either::Left(l) => l.fmt_force(segment),
+            Either::Right(r) => r.fmt_force(segment),
         }
     }
 }
@@ -144,6 +156,23 @@ impl<'a> Snippet<'a> {
                 .map(str::len)
                 .sum::<usize>();
         self.bytes(start..end)
+    }
+    pub fn lines_containing(self, span: impl Into<Range<usize>>) -> Self {
+        let range = span.into();
+        let start = self.src[..range.start]
+            .bytes()
+            .rposition(|b| b == b'\n')
+            .map(|n| n + 1)
+            .unwrap_or(0);
+        let end = self.src[range.end..]
+            .bytes()
+            .position(|b| b == b'\n')
+            .map(|n| n + range.end)
+            .unwrap_or(self.src.len());
+        self.bytes(start..end)
+    }
+    pub fn outer(self) -> Self {
+        self.lines_containing(self.start.saturating_sub(1)..(self.end + 1).min(self.src.len()))
     }
 }
 
@@ -246,7 +275,11 @@ where
 
                 // print annotation
                 annotation.mark.fmt_before(segment, f)?;
-                fmt_mut(src, annotation.start..annotation.end, iter, f)?;
+                if annotation.mark.fmt_force(segment) {
+                    write!(f, "{}", segment)?;
+                } else {
+                    fmt_mut(src, annotation.start..annotation.end, iter, f)?;
+                }
                 annotation.mark.fmt_after(segment, f)?;
 
                 current = annotation.end;

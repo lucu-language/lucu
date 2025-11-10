@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use anstyle::AnsiColor;
+use anstyle::{AnsiColor, Style};
 use itertools::Itertools;
 use lucu_annotate::{Annotate, Annotated, Annotation, Mark};
 
@@ -53,7 +53,7 @@ where
             snippet
                 .source()
                 .bytes()
-                .take(range.end.saturating_sub(1))
+                .take(range.end)
                 .enumerate()
                 .filter_map(|(pos, b)| (b == b'\n').then_some(pos + 1)),
         );
@@ -111,11 +111,12 @@ impl Mark for InlinePos {
     }
 }
 
+pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
+
 struct LineNumber(usize);
 impl Mark for LineNumber {
     fn fmt_before(&self, _segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let style = AnsiColor::Blue.on_default();
-        write!(f, "{}{: >3} |{:#} ", style, self.0, style)
+        write!(f, "{LINE_STYLE}{: >3} |{LINE_STYLE:#} ", self.0)
     }
     fn fmt_after(&self, _segment: &str, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Ok(())

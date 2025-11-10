@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::span::Span;
 use crate::stage::token::{Group, Symbol, Token, TokenKind};
 
@@ -23,6 +25,13 @@ pub struct Lexer<'a> {
     groups: Vec<Group>,
     saved: Option<Token>,
     no_insertion: bool,
+}
+
+impl Lexer<'_> {
+    pub fn for_range(mut self, range: Range<usize>) -> impl Iterator<Item = Token> {
+        self.pos = range.start as u32;
+        self.take_while(move |t| t.span.end <= range.end as u32)
+    }
 }
 
 impl Iterator for Lexer<'_> {

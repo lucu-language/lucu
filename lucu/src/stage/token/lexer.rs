@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::span::Span;
-use crate::stage::token::{Group, Symbol, Token, TokenKind};
+use crate::stage::token::{Group, Symbol, Token, TokenEnum};
 
 fn skip_whitespace(src: &mut &str) -> usize {
     let mut skipped = 0;
@@ -50,9 +50,9 @@ impl Iterator for Lexer<'_> {
                 .filter(|_| !self.no_insertion);
             self.pos = next.span.end;
 
-            if let TokenKind::Open(g) = next.token {
+            if let TokenEnum::Open(g) = next.token {
                 self.groups.push(g);
-            } else if let TokenKind::Close(g) = next.token {
+            } else if let TokenEnum::Close(g) = next.token {
                 while self.groups.pop().is_some_and(|popped| popped != g) {}
             }
 
@@ -63,7 +63,7 @@ impl Iterator for Lexer<'_> {
             }) {
                 self.saved = Some(next);
                 return Some(Token {
-                    token: TokenKind::Symbol(Symbol::Semicolon),
+                    token: TokenEnum::Symbol(Symbol::Semicolon),
                     span: Span::new(pos, pos),
                 });
             }
@@ -75,7 +75,7 @@ impl Iterator for Lexer<'_> {
                 self.pos = u32::MAX;
                 let end = self.src.len() as u32;
                 Some(Token {
-                    token: TokenKind::Eof,
+                    token: TokenEnum::Eof,
                     span: Span::new(end, end),
                 })
             }
@@ -116,7 +116,7 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
     }
     macro_rules! equals {
         ($single: expr, $double: expr) => {
-            TokenKind::Symbol(if next!(b'=') { $double } else { $single })
+            TokenEnum::Symbol(if next!(b'=') { $double } else { $single })
         };
     }
 
@@ -126,7 +126,7 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
     use super::SymbolAssign::*;
     use super::SymbolEquality::*;
     use super::SymbolInequality::*;
-    use super::TokenKind::*;
+    use super::TokenEnum::*;
 
     let first = src.as_bytes()[0];
     let token = match first {
@@ -218,7 +218,7 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
             {
                 Literal(Integer)
             } else {
-                TokenKind::from_word(word)
+                TokenEnum::from_word(word)
             }
         }
 

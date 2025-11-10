@@ -5,7 +5,7 @@ use crate::err::{ProblemKind, Result};
 use crate::module::Module;
 use crate::span::{Span, Spanned};
 use crate::stage::ast;
-use crate::stage::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenKind};
+use crate::stage::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
 
 pub struct Parser<'a> {
     module: &'a Module,
@@ -29,14 +29,14 @@ impl<'a> Parser<'a> {
             .map(|tok| ast::String(Spanned((&self.source[tok.span.inner()]).into(), tok.span)))
     }
     pub fn ident(&mut self) -> Result<ast::Ident> {
-        self.consume(TokenKind::Identifier)
+        self.consume(TokenEnum::Identifier)
             .map(|tok| ast::Ident(Spanned((&self.source[tok.span]).into(), tok.span)))
     }
     pub fn import(&mut self) -> Result<ast::Import> {
         m! {
             _ <- self.consume(Keyword::Import);
             path <- self.string();
-            ident <- self.when_next(TokenKind::Identifier, Parser::ident);
+            ident <- self.when_next(TokenEnum::Identifier, Parser::ident);
             return ast::Import { path, ident };
         }
     }
@@ -49,10 +49,10 @@ impl<'a> Parser<'a> {
     }
     pub fn definition(&mut self) -> Result<ast::Definition> {
         self.spanned(|parser| match parser.next().token {
-            TokenKind::Keyword(Keyword::Fun) => {
+            TokenEnum::Keyword(Keyword::Fun) => {
                 parser.function().map(ast::DefinitionEnum::Function)
             }
-            TokenKind::Keyword(Keyword::Type) => parser.type_alias().map(ast::DefinitionEnum::Type),
+            TokenEnum::Keyword(Keyword::Type) => parser.type_alias().map(ast::DefinitionEnum::Type),
             tok => todo!("error: unknown definition with token {tok}"),
         })
     }
@@ -88,14 +88,14 @@ impl<'a> Parser<'a> {
     }
     pub fn r#type(&mut self) -> Result<ast::Type> {
         self.spanned(|parser| match parser.next().token {
-            TokenKind::Identifier => parser.path().map(|path| {
+            TokenEnum::Identifier => parser.path().map(|path| {
                 if path.package.is_none() && path.name.as_str() == "int" {
                     ast::TypeEnum::Int
                 } else {
                     ast::TypeEnum::Path(path)
                 }
             }),
-            TokenKind::Keyword(Keyword::Struct) => parser.r#struct().map(ast::TypeEnum::Struct),
+            TokenEnum::Keyword(Keyword::Struct) => parser.r#struct().map(ast::TypeEnum::Struct),
             _ => todo!("error"),
         })
         .map(Box::new)
@@ -117,8 +117,8 @@ impl<'a> Parser<'a> {
     pub fn expression(&mut self) -> Result<ast::Expression> {
         self.spanned(|parser| {
             m! {
-                _ <- parser.consume(TokenKind::Open(Group::Brace));
-                _ <- parser.consume(TokenKind::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
+                _ <- parser.consume(TokenEnum::Open(Group::Brace));
+                _ <- parser.consume(TokenEnum::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
                 return ast::ExpressionEnum::Block;
             }
         })
@@ -126,10 +126,10 @@ impl<'a> Parser<'a> {
     }
     pub fn function_parameter(&mut self) -> Result<ast::FunctionParameter> {
         match self.next().token {
-            TokenKind::Keyword(Keyword::Fun) => self
+            TokenEnum::Keyword(Keyword::Fun) => self
                 .function_declaration()
                 .map(ast::FunctionParameter::Lambda),
-            TokenKind::Identifier => {
+            TokenEnum::Identifier => {
                 m! {
                     name <- self.ident();
                     ty <- self.r#type();
@@ -143,13 +143,13 @@ impl<'a> Parser<'a> {
         m! {
             _ <- self.consume(Keyword::Fun);
             name <- self.name();
-            parameters <- self.when_next(TokenKind::Open(Group::Parenthesis), |parser| parser.many_grouped(
+            parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
                 Symbol::Comma,
                 Parser::function_parameter,
             ));
             returns <- self.unless_next(
-                &[TokenKind::Symbol(Symbol::Assign(SymbolAssign::Equals)), TokenKind::Symbol(Symbol::Comma), TokenKind::Symbol(Symbol::Semicolon), TokenKind::Open(Group::Brace)],
+                &[TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)), TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Semicolon), TokenEnum::Open(Group::Brace)],
                 Parser::returns
             );
             return ast::FunctionDeclaration { name, parameters, returns };
@@ -158,7 +158,7 @@ impl<'a> Parser<'a> {
     pub fn returns(&mut self) -> Result<ast::Returns> {
         self.spanned(|parser| {
             match parser.next().token {
-                TokenKind::Symbol(Symbol::Bang) => {
+                TokenEnum::Symbol(Symbol::Bang) => {
                     parser.skip();
                     Result::new(ast::ReturnsEnum::Never)
                 }
@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
     pub fn name(&mut self) -> Result<ast::Name> {
         m! {
             ident <- self.ident();
-            generics <- self.when_next(TokenKind::Open(Group::Bracket), |parser| parser.many_grouped(
+            generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                 Group::Bracket,
                 Symbol::Comma,
                 Parser::generic,
@@ -188,7 +188,7 @@ impl<'a> Parser<'a> {
     pub fn kind(&mut self) -> Result<ast::Kind> {
         self.spanned(|parser| {
             match parser.next().token {
-                TokenKind::Keyword(Keyword::Type) => {
+                TokenEnum::Keyword(Keyword::Type) => {
                     parser.skip();
                     Result::new(ast::KindEnum::Type)
                 }
@@ -208,7 +208,7 @@ impl<'a> Parser<'a> {
         let start = self.next().span.start;
         parse(self).map(|t| t(Span::new(start, self.last_token_end)))
     }
-    fn consume(&mut self, token: impl Into<TokenKind>) -> Result<Token> {
+    fn consume(&mut self, token: impl Into<TokenEnum>) -> Result<Token> {
         let token = token.into();
         match self.tokens.split_first().expect("ICE: consumed EOF token") {
             (next, rest) if next.token == token => {
@@ -218,11 +218,9 @@ impl<'a> Parser<'a> {
             }
             (next, _) => {
                 let label = format_compact!("expected {}", token);
-                let error = if next.token == TokenKind::Eof {
+                let error = if next.is_eof() {
                     ProblemKind::UnexpectedEOF(label)
-                } else if next.token == TokenKind::Symbol(Symbol::Semicolon)
-                    && next.span.start == next.span.end
-                {
+                } else if next.is_newline() {
                     ProblemKind::UnexpectedNewline(label)
                 } else {
                     ProblemKind::UnexpectedToken(label)
@@ -242,17 +240,17 @@ impl<'a> Parser<'a> {
             .copied()
             .expect("ICE: consumed EOF token")
     }
-    fn is_next(&self, token: impl Into<TokenKind>) -> bool {
+    fn is_next(&self, token: impl Into<TokenEnum>) -> bool {
         self.next().token == token.into()
     }
     fn unless_next<T>(
         &mut self,
-        tokens: &[TokenKind],
+        tokens: &[TokenEnum],
         parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
         let next = self.next().token;
         if !tokens.contains(&next)
-            && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof)
+            && !matches!(self.next().token, TokenEnum::Close(_) | TokenEnum::Eof)
         {
             parse(self).map(Some)
         } else {
@@ -261,7 +259,7 @@ impl<'a> Parser<'a> {
     }
     fn when_next<T>(
         &mut self,
-        token: impl Into<TokenKind>,
+        token: impl Into<TokenEnum>,
         parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
         if self.is_next(token) {
@@ -273,14 +271,14 @@ impl<'a> Parser<'a> {
     fn skip_group(&mut self, group: Group) {
         loop {
             match self.next().token {
-                TokenKind::Eof => break,
-                TokenKind::Close(c) => {
+                TokenEnum::Eof => break,
+                TokenEnum::Close(c) => {
                     if c == group {
                         self.skip();
                     }
                     break;
                 }
-                TokenKind::Open(group) => {
+                TokenEnum::Open(group) => {
                     self.skip();
                     self.skip_group(group)
                 }
@@ -291,12 +289,12 @@ impl<'a> Parser<'a> {
     fn skip_to_recovery(&mut self, sep: Symbol) {
         loop {
             match self.next().token {
-                TokenKind::Symbol(sym) if sym == sep => {
+                TokenEnum::Symbol(sym) if sym == sep => {
                     self.skip();
                     break;
                 }
-                TokenKind::Close(_) | TokenKind::Eof => break,
-                TokenKind::Open(group) => {
+                TokenEnum::Close(_) | TokenEnum::Eof => break,
+                TokenEnum::Open(group) => {
                     self.skip();
                     self.skip_group(group)
                 }
@@ -311,9 +309,9 @@ impl<'a> Parser<'a> {
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         m! {
-            _ <- self.consume(TokenKind::Open(group));
+            _ <- self.consume(TokenEnum::Open(group));
             many <- self.many(separator, parse).tap_none(|| self.skip_group(group));
-            _ <- self.consume(TokenKind::Close(group));
+            _ <- self.consume(TokenEnum::Close(group));
             return many;
         }
     }
@@ -327,7 +325,7 @@ impl<'a> Parser<'a> {
     fn many_while_next<T>(
         &mut self,
         separator: Symbol,
-        token: impl Into<TokenKind>,
+        token: impl Into<TokenEnum>,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         let token = token.into();
@@ -341,7 +339,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Vec<T>> {
         std::iter::from_fn(|| {
             let has_next =
-                pred(self) && !matches!(self.next().token, TokenKind::Close(_) | TokenKind::Eof);
+                pred(self) && !matches!(self.next().token, TokenEnum::Close(_) | TokenEnum::Eof);
             has_next.then(|| {
                 let parser = &mut *self;
                 m! {

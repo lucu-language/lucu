@@ -5,7 +5,7 @@ use std::ops::Deref;
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title
 };
-use anstyle::{AnsiColor, Style};
+use anstyle::{AnsiColor, Color, Style};
 use compact_str::CompactString;
 use do_notation::Lift;
 use lucu_annotate::ansi::MarkStyle;
@@ -318,6 +318,17 @@ pub struct Problem {
     kind: ProblemKind,
 }
 
+pub const ERROR_COLOR: Color = Color::Ansi(AnsiColor::Red);
+pub const WARNING_COLOR: Color = Color::Ansi(AnsiColor::Yellow);
+
+const HIGHLIGHT_BG: Color = Color::Ansi(AnsiColor::Black);
+pub const ERROR_HIGHLIGHT: Style = Style::new()
+    .fg_color(Some(ERROR_COLOR))
+    .bg_color(Some(HIGHLIGHT_BG));
+pub const WARNING_HIGHLIGHT: Style = Style::new()
+    .fg_color(Some(WARNING_COLOR))
+    .bg_color(Some(HIGHLIGHT_BG));
+
 impl Problem {
     pub fn header(&self) -> ProblemHeader {
         self.kind.header()
@@ -329,15 +340,11 @@ impl Problem {
         let header = self.header();
         let title = header.title;
         let id = header.id;
-        let (name, color) = match header.level {
-            ProblemLevel::Error => ("error", AnsiColor::Red),
-            ProblemLevel::Warning => ("warning", AnsiColor::Yellow),
+        let (name, color, highlight) = match header.level {
+            ProblemLevel::Error => ("error", ERROR_COLOR, ERROR_HIGHLIGHT),
+            ProblemLevel::Warning => ("warning", WARNING_COLOR, WARNING_HIGHLIGHT),
         };
 
-        let err_style = color
-            .bright(true)
-            .on_default()
-            .bg_color(Some(AnsiColor::Black.into()));
         let title_kind_style = color.on_default().bold();
         let title_style = Style::new().bold();
 
@@ -373,19 +380,19 @@ impl Problem {
             }
 
             anstream::println!(
-                "   {LINE_STYLE}/->{LINE_STYLE:#} {}",
+                "{LINE_STYLE}   /->{LINE_STYLE:#} {}",
                 resolver.readable_path(&self.module)
             );
-            anstream::println!("    {LINE_STYLE}|{LINE_STYLE:#}");
+            anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
             anstream::println!(
                 "{}",
                 snippet
                     .mark_line_numbers()
                     .mark_syntax(&tokens)
                     .mark_semicolons(&tokens)
-                    .annotate(std::iter::once(Error(err_style).at(self.span)))
+                    .annotate(std::iter::once(Error(highlight).at(self.span)))
             );
-            anstream::println!("    {LINE_STYLE}|{LINE_STYLE:#}");
+            anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
         }
     }
     pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {

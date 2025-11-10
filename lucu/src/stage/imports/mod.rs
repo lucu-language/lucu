@@ -7,7 +7,7 @@ use crate::err::{ProblemKind, Problems, Result};
 use crate::module::{Module, ModuleResolver, UnknownModule};
 use crate::span::{HasSpan, Span, Spanned};
 use crate::stage::ast;
-use crate::stage::token::TokenKind;
+use crate::stage::token::{TokenEnum, is_valid_identifier};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Import {
@@ -63,7 +63,7 @@ impl Imports {
                 None => {
                     let ident = Self::import_name(&import.path);
                     problems.append(Problems::require(
-                        TokenKind::is_valid_identifier(ident.as_str()),
+                        is_valid_identifier(ident.as_str()),
                         || ProblemKind::InvalidIdentifier(()).at(parent, &ident),
                     ));
                     ident.0.0

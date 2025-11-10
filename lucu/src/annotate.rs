@@ -9,7 +9,7 @@ use lucu_annotate::{Annotate, Annotated, Annotation, Mark};
 use crate::span::HasSpan;
 use crate::stage::ast;
 use crate::stage::defs::Definitions;
-use crate::stage::token::{Symbol, Token, TokenKind};
+use crate::stage::token::Token;
 
 pub trait AnnotateExt<'a> {
     fn mark_line_numbers(self) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
@@ -81,9 +81,9 @@ where
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
         let tokens = tokens_in_range(tokens, self.snippet().range());
         self.annotate(tokens.iter().filter_map(|token| {
-            (token.span.start == token.span.end
-                && token.token == TokenKind::Symbol(Symbol::Semicolon))
-            .then_some(InsertedSemicolon.at(token.span))
+            token
+                .is_newline()
+                .then_some(InsertedSemicolon.at(token.span))
         }))
     }
     fn mark_definition_order(
@@ -101,17 +101,18 @@ where
     }
 }
 
+pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
+pub const INLINE_STYLE: Style = AnsiColor::BrightBlack.on_default();
+
 struct InlinePos(usize);
 impl Mark for InlinePos {
     fn style(&self) -> MarkStyle {
-        MarkStyle::before(AnsiColor::BrightBlack.on_default())
+        MarkStyle::before(INLINE_STYLE)
     }
     fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}] ", self.0)
     }
 }
-
-pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
 
 struct LineNumber(usize);
 impl Mark for LineNumber {
@@ -126,7 +127,7 @@ impl Mark for LineNumber {
 struct InsertedSemicolon;
 impl Mark for InsertedSemicolon {
     fn style(&self) -> MarkStyle {
-        MarkStyle::before(AnsiColor::BrightBlack.on_default())
+        MarkStyle::before(INLINE_STYLE)
     }
     fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, ";")

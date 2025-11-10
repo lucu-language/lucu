@@ -1,4 +1,4 @@
-pub mod anstyle;
+pub mod ansi;
 pub mod lexer;
 
 use std::fmt::{self, Debug, Display};
@@ -15,7 +15,7 @@ impl HasSpan for Token {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub enum TokenKind {
+pub enum TokenEnum {
     Keyword(Keyword),
     Symbol(Symbol),
     Literal(Literal),
@@ -27,11 +27,11 @@ pub enum TokenKind {
     Unknown,
 }
 
-impl Display for TokenKind {
+impl Display for TokenEnum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TokenKind::Keyword(k) => write!(f, "'{}'", Into::<&'static str>::into(k)),
-            TokenKind::Symbol(s) => write!(
+            TokenEnum::Keyword(k) => write!(f, "'{}'", Into::<&'static str>::into(k)),
+            TokenEnum::Symbol(s) => write!(
                 f,
                 "'{}'",
                 match s {
@@ -75,71 +75,81 @@ impl Display for TokenKind {
                     },
                 }
             ),
-            TokenKind::Literal(l) => match l {
+            TokenEnum::Literal(l) => match l {
                 Literal::String => write!(f, "string"),
                 Literal::Character => write!(f, "character"),
                 Literal::Integer => write!(f, "integer"),
             },
-            TokenKind::Open(g) => match g {
+            TokenEnum::Open(g) => match g {
                 Group::Parenthesis => write!(f, "'('"),
                 Group::Brace => write!(f, "'{{'"),
                 Group::Bracket => write!(f, "'['"),
             },
-            TokenKind::Close(g) => match g {
+            TokenEnum::Close(g) => match g {
                 Group::Parenthesis => write!(f, "')'"),
                 Group::Brace => write!(f, "'}}'"),
                 Group::Bracket => write!(f, "']'"),
             },
-            TokenKind::Identifier => write!(f, "identifier"),
-            TokenKind::Eof => write!(f, "end of file"),
-            TokenKind::Unknown => write!(f, "unknown symbol"),
+            TokenEnum::Identifier => write!(f, "identifier"),
+            TokenEnum::Eof => write!(f, "end of file"),
+            TokenEnum::Unknown => write!(f, "unknown symbol"),
         }
     }
 }
 
-impl TokenKind {
-    pub fn is_valid_identifier(s: &str) -> bool {
-        s.as_bytes()
-            .iter()
-            .all(|&c| c.is_ascii_alphanumeric() || c == b'_')
-            && (s.starts_with('_') || s.as_bytes().iter().any(u8::is_ascii_alphabetic))
+pub fn is_valid_identifier(s: &str) -> bool {
+    s.as_bytes()
+        .iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == b'_')
+        && (s.starts_with('_') || s.as_bytes().iter().any(u8::is_ascii_alphabetic))
+}
+
+impl Token {
+    pub fn is_eof(self) -> bool {
+        self.token == TokenEnum::Eof
     }
-    pub fn from_word(word: &str) -> TokenKind {
+    pub fn is_newline(self) -> bool {
+        self.span.start == self.span.end && self.token == TokenEnum::Symbol(Symbol::Semicolon)
+    }
+}
+
+impl TokenEnum {
+    pub fn from_word(word: &str) -> TokenEnum {
         let default = if word.starts_with('@') {
-            TokenKind::Keyword(Keyword::Unknown)
+            TokenEnum::Keyword(Keyword::Unknown)
         } else {
-            TokenKind::Identifier
+            TokenEnum::Identifier
         };
 
         Keyword::from_str(word)
-            .map(TokenKind::Keyword)
+            .map(TokenEnum::Keyword)
             .unwrap_or(default)
     }
 
     pub fn prevent_semi_after(self) -> bool {
         matches!(
             self,
-            TokenKind::Open(_)
-                | TokenKind::Symbol(Symbol::Arrow)
-                | TokenKind::Symbol(Symbol::Semicolon)
-                | TokenKind::Symbol(Symbol::Comma)
-                | TokenKind::Symbol(Symbol::Pipe)
+            TokenEnum::Open(_)
+                | TokenEnum::Symbol(Symbol::Arrow)
+                | TokenEnum::Symbol(Symbol::Semicolon)
+                | TokenEnum::Symbol(Symbol::Comma)
+                | TokenEnum::Symbol(Symbol::Pipe)
         )
     }
     pub fn prevent_semi_before(self) -> bool {
         matches!(
             self,
-            TokenKind::Close(_)
-                | TokenKind::Symbol(Symbol::Semicolon)
-                | TokenKind::Symbol(Symbol::Comma)
-                | TokenKind::Symbol(Symbol::Pipe)
+            TokenEnum::Close(_)
+                | TokenEnum::Symbol(Symbol::Semicolon)
+                | TokenEnum::Symbol(Symbol::Comma)
+                | TokenEnum::Symbol(Symbol::Pipe)
         )
     }
 }
 
 #[derive(Debug, Clone, Copy, Default, Hash, PartialEq, Eq)]
 pub struct Token {
-    pub token: TokenKind,
+    pub token: TokenEnum,
     pub span: Span,
 }
 
@@ -236,19 +246,19 @@ pub enum Group {
     Bracket,     // []
 }
 
-impl From<Keyword> for TokenKind {
+impl From<Keyword> for TokenEnum {
     fn from(value: Keyword) -> Self {
         Self::Keyword(value)
     }
 }
 
-impl From<Symbol> for TokenKind {
+impl From<Symbol> for TokenEnum {
     fn from(value: Symbol) -> Self {
         Self::Symbol(value)
     }
 }
 
-impl From<Literal> for TokenKind {
+impl From<Literal> for TokenEnum {
     fn from(value: Literal) -> Self {
         Self::Literal(value)
     }

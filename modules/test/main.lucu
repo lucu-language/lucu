@@ -1,5 +1,3 @@
-import "not existy"
-
 type A = B
 type B = struct(b B)
 

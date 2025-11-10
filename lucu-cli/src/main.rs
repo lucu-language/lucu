@@ -44,9 +44,16 @@ fn main() {
             let annotated = source
                 .snippet()
                 .mark_line_numbers()
-                .mark_syntax(tokens)
-                .mark_semicolons(tokens)
-                .mark_definition_order(ast, definitions);
+                .mark_definition_order(ast, definitions)
+                .mark_syntax(tokens);
+            anstream::println!("{}", annotated);
+
+            let annotated = source
+                .snippet()
+                .mark_line_numbers()
+                .mark_definition_order(ast, definitions)
+                .debug()
+                .mark_syntax(tokens);
             anstream::println!("{}", annotated);
         }
 

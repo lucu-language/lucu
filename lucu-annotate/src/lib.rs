@@ -27,6 +27,11 @@ pub trait Mark {
     fn ignore_nested(&self) -> bool {
         false
     }
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = core::any::type_name::<Self>();
+        let simple_name = name.split('<').next().unwrap().rsplit("::").next().unwrap();
+        write!(f, "{simple_name}")
+    }
 
     fn at(self, span: impl Into<Range<usize>>) -> Annotation<Self>
     where
@@ -38,25 +43,6 @@ pub trait Mark {
             end: range.end,
             mark: self,
         }
-    }
-}
-
-impl<T> Mark for &'_ T
-where
-    T: Mark,
-{
-    #[cfg(feature = "anstyle")]
-    fn style(&self) -> ansi::MarkStyle {
-        (*self).style()
-    }
-    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (*self).fmt_before(f)
-    }
-    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (*self).fmt_after(f)
-    }
-    fn ignore_nested(&self) -> bool {
-        (*self).ignore_nested()
     }
 }
 
@@ -88,6 +74,12 @@ where
         match self {
             Either::Left(l) => l.ignore_nested(),
             Either::Right(r) => r.ignore_nested(),
+        }
+    }
+    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Either::Left(l) => l.fmt_debug(f),
+            Either::Right(r) => r.fmt_debug(f),
         }
     }
 }
@@ -126,18 +118,11 @@ impl<T> PartialEq for Annotation<T> {
 impl<T> Eq for Annotation<T> {}
 
 impl<T> Annotation<T> {
-    fn left<U>(self) -> Annotation<Either<T, U>> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Annotation<U> {
         Annotation {
             start: self.start,
             end: self.end,
-            mark: Either::Left(self.mark),
-        }
-    }
-    fn right<U>(self) -> Annotation<Either<U, T>> {
-        Annotation {
-            start: self.start,
-            end: self.end,
-            mark: Either::Right(self.mark),
+            mark: f(self.mark),
         }
     }
 }
@@ -225,8 +210,8 @@ where
         Annotated {
             snippet: self.snippet(),
             annotations: RefCell::new(Itertools::merge(
-                self.annotations.into_inner().map(Annotation::left),
-                iter.into_iter().map(Annotation::right),
+                self.annotations.into_inner().map(|l| l.map(Either::Left)),
+                iter.into_iter().map(|r| r.map(Either::Right)),
             )),
         }
     }
@@ -266,76 +251,64 @@ impl<'a> Annotate<'a> for Snippet<'a> {
     }
 }
 
+struct Debug<T>(T);
+
+impl<T> Mark for Debug<T>
+where
+    T: Mark,
+{
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_debug(f)?;
+        write!(f, "(")
+    }
+    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ")")
+    }
+}
+
+impl<'a, I, T> Annotated<'a, I>
+where
+    I: Iterator<Item = Annotation<T>>,
+    T: Mark,
+{
+    pub fn debug(self) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        Annotated {
+            snippet: self.snippet,
+            annotations: RefCell::new(
+                self.annotations
+                    .into_inner()
+                    .map(|annotation| annotation.map(Debug)),
+            ),
+        }
+    }
+}
+
+impl<I, T> fmt::Debug for Annotated<'_, I>
+where
+    I: Iterator<Item = Annotation<T>>,
+    T: Mark,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_impl(
+            self.snippet.src,
+            self.snippet.start..self.snippet.end,
+            &mut (&mut *self.annotations.borrow_mut())
+                .map(|annotation| annotation.map(Debug))
+                .peekable(),
+            #[cfg(feature = "anstyle")]
+            &mut anstyle::Style::new(),
+            f,
+        )
+    }
+}
+
 impl<I, T> fmt::Display for Annotated<'_, I>
 where
     I: Iterator<Item = Annotation<T>>,
     T: Mark,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn fmt_mut<I, T>(
-            src: &str,
-            range: Range<usize>,
-            iter: &mut Peekable<I>,
-            #[cfg(feature = "anstyle")] style: &mut anstyle::Style,
-            f: &mut fmt::Formatter<'_>,
-        ) -> fmt::Result
-        where
-            I: Iterator<Item = Annotation<T>>,
-            T: Mark,
-        {
-            let mut current = range.start;
-
-            #[cfg(feature = "anstyle")]
-            let unstyled = *style;
-
-            while let Some(annotation) = iter.next_if(|annotation| annotation.end <= range.end) {
-                if annotation.start < current {
-                    continue;
-                }
-
-                #[cfg(feature = "anstyle")]
-                let mark_style = annotation.mark.style();
-
-                // print up until annotation
-                #[cfg(feature = "anstyle")]
-                ansi::apply(unstyled, style, f)?;
-                write!(f, "{}", &src[current..annotation.start])?;
-
-                // print annotation
-                #[cfg(feature = "anstyle")]
-                ansi::apply(mark_style.before.unwrap_or(unstyled), style, f)?;
-                annotation.mark.fmt_before(f)?;
-
-                #[cfg(feature = "anstyle")]
-                ansi::apply(mark_style.content.unwrap_or(unstyled), style, f)?;
-                if annotation.mark.ignore_nested() {
-                    let segment = &src[annotation.start..annotation.end];
-                    write!(f, "{}", segment)?;
-                } else {
-                    fmt_mut(
-                        src,
-                        annotation.start..annotation.end,
-                        iter,
-                        #[cfg(feature = "anstyle")]
-                        style,
-                        f,
-                    )?;
-                }
-
-                #[cfg(feature = "anstyle")]
-                ansi::apply(mark_style.after.unwrap_or(unstyled), style, f)?;
-                annotation.mark.fmt_after(f)?;
-
-                current = annotation.end;
-            }
-
-            // print rest
-            #[cfg(feature = "anstyle")]
-            ansi::apply(unstyled, style, f)?;
-            write!(f, "{}", &src[current..range.end])
-        }
-
-        fmt_mut(
+        fmt_impl(
             self.snippet.src,
             self.snippet.start..self.snippet.end,
             &mut (&mut *self.annotations.borrow_mut()).peekable(),
@@ -344,4 +317,69 @@ where
             f,
         )
     }
+}
+
+fn fmt_impl<I, T>(
+    src: &str,
+    range: Range<usize>,
+    iter: &mut Peekable<I>,
+    #[cfg(feature = "anstyle")] style: &mut anstyle::Style,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result
+where
+    I: Iterator<Item = Annotation<T>>,
+    T: Mark,
+{
+    let mut current = range.start;
+
+    #[cfg(feature = "anstyle")]
+    let unstyled = *style;
+
+    while let Some(annotation) =
+        iter.next_if(|annotation| annotation.start < range.end && annotation.end <= range.end)
+    {
+        if annotation.start < current {
+            continue;
+        }
+
+        #[cfg(feature = "anstyle")]
+        let mark_style = annotation.mark.style();
+
+        // print up until annotation
+        #[cfg(feature = "anstyle")]
+        ansi::apply(unstyled, style, f)?;
+        write!(f, "{}", &src[current..annotation.start])?;
+
+        // print annotation
+        #[cfg(feature = "anstyle")]
+        ansi::apply(mark_style.before.unwrap_or(unstyled), style, f)?;
+        annotation.mark.fmt_before(f)?;
+
+        #[cfg(feature = "anstyle")]
+        ansi::apply(mark_style.content.unwrap_or(unstyled), style, f)?;
+        if annotation.mark.ignore_nested() {
+            let segment = &src[annotation.start..annotation.end];
+            write!(f, "{}", segment)?;
+        } else {
+            fmt_impl(
+                src,
+                annotation.start..annotation.end,
+                iter,
+                #[cfg(feature = "anstyle")]
+                style,
+                f,
+            )?;
+        }
+
+        #[cfg(feature = "anstyle")]
+        ansi::apply(mark_style.after.unwrap_or(unstyled), style, f)?;
+        annotation.mark.fmt_after(f)?;
+
+        current = annotation.end;
+    }
+
+    // print rest
+    #[cfg(feature = "anstyle")]
+    ansi::apply(unstyled, style, f)?;
+    write!(f, "{}", &src[current..range.end])
 }

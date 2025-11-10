@@ -8,6 +8,7 @@ use annotate_snippets::{
 use anstyle::{AnsiColor, Color, Style};
 use compact_str::CompactString;
 use do_notation::Lift;
+use line_column::line_column;
 use lucu_annotate::ansi::MarkStyle;
 use lucu_annotate::{Annotate, Mark};
 
@@ -329,6 +330,10 @@ pub const WARNING_HIGHLIGHT: Style = Style::new()
     .fg_color(Some(WARNING_COLOR))
     .bg_color(Some(HIGHLIGHT_BG));
 
+pub const TITLE_STYLE: Style = Style::new().bold();
+pub const LABEL_STYLE: Style = Style::new();
+pub const PATH_STYLE: Style = Style::new();
+
 impl Problem {
     pub fn header(&self) -> ProblemHeader {
         self.kind.header()
@@ -345,19 +350,18 @@ impl Problem {
             ProblemLevel::Warning => ("warning", WARNING_COLOR, WARNING_HIGHLIGHT),
         };
 
-        let title_kind_style = color.on_default().bold();
-        let title_style = Style::new().bold();
-
+        let title_kind_style = TITLE_STYLE.fg_color(Some(color));
         anstream::print!(
-            "{title_kind_style}{name} {id:03}{title_kind_style:#}{title_style}: {title}"
+            "{title_kind_style}{name} {id:03}{title_kind_style:#}{TITLE_STYLE}: {title}"
         );
         if let Some(label) = self.label() {
-            anstream::println!(":{title_style:#} {label}");
+            anstream::println!(":{TITLE_STYLE:#} {LABEL_STYLE}{label}{LABEL_STYLE:#}");
         } else {
-            anstream::println!("{title_style:#}");
+            anstream::println!("{TITLE_STYLE:#}");
         }
 
         if let Some(contents) = resolver.contents(&self.module) {
+            let (line, col) = line_column(&contents, self.span.start as usize);
             let snippet = contents.as_str().snippet().lines_containing(self.span);
             let tokens = Lexer::new(&contents)
                 .for_range(snippet.range())
@@ -380,7 +384,7 @@ impl Problem {
             }
 
             anstream::println!(
-                "{LINE_STYLE}   /->{LINE_STYLE:#} {}",
+                "{LINE_STYLE}   /->{LINE_STYLE:#} {PATH_STYLE}{}:{line}:{col}{PATH_STYLE:#}",
                 resolver.readable_path(&self.module)
             );
             anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");

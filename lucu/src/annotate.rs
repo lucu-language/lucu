@@ -61,7 +61,7 @@ where
         self.annotate(
             line_starts
                 .enumerate()
-                .map(|(line, pos)| LineNumber(line + 1).at(pos..pos)),
+                .map(|(line, pos)| Line(line + 1).at(pos..pos)),
         )
     }
     fn mark_syntax(
@@ -72,6 +72,7 @@ where
         self.annotate(
             tokens
                 .iter()
+                .filter(|token| token.span.start < token.span.end)
                 .filter_map(|token| token.token.color().map(|color| color.at(token.span))),
         )
     }
@@ -95,7 +96,7 @@ where
             definitions
                 .spans(ast)
                 .enumerate()
-                .map(|(idx, def)| InlinePos(idx).at(def.span()))
+                .map(|(idx, def)| Definition(idx).at(def.span()))
                 .sorted(),
         )
     }
@@ -104,8 +105,8 @@ where
 pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
 pub const INLINE_STYLE: Style = AnsiColor::BrightBlack.on_default();
 
-struct InlinePos(usize);
-impl Mark for InlinePos {
+struct Definition(usize);
+impl Mark for Definition {
     fn style(&self) -> MarkStyle {
         MarkStyle::before(INLINE_STYLE)
     }
@@ -114,8 +115,8 @@ impl Mark for InlinePos {
     }
 }
 
-struct LineNumber(usize);
-impl Mark for LineNumber {
+struct Line(usize);
+impl Mark for Line {
     fn style(&self) -> MarkStyle {
         MarkStyle::before(LINE_STYLE)
     }

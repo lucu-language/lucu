@@ -74,6 +74,12 @@ impl<T> PartialOrd for Annotation<T> {
 
 impl<T> Ord for Annotation<T> {
     fn cmp(&self, other: &Self) -> Ordering {
+        if self.start == self.end && self.end == other.start && other.start < other.end {
+            return Ordering::Less;
+        }
+        if other.start == other.end && other.end == self.start && self.start < self.end {
+            return Ordering::Greater;
+        }
         self.start.cmp(&other.start).then(other.end.cmp(&self.end))
     }
 }
@@ -110,7 +116,10 @@ pub struct Snippet<'a> {
     end: usize,
 }
 
-impl Snippet<'_> {
+impl<'a> Snippet<'a> {
+    pub fn source(&self) -> &'a str {
+        self.src
+    }
     pub fn range(&self) -> Range<usize> {
         self.start..self.end
     }

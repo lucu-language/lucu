@@ -11,6 +11,7 @@ use crate::stage::defs::Definitions;
 use crate::stage::token::{Symbol, Token, TokenKind};
 
 pub trait AnnotateExt<'a> {
+    fn mark_line_numbers(self) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
     fn mark_syntax(
         self,
         tokens: &[Token],
@@ -44,6 +45,24 @@ impl<'a, T> AnnotateExt<'a> for T
 where
     T: Annotate<'a>,
 {
+    fn mark_line_numbers(self) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        let snippet = self.snippet();
+        let range = snippet.range();
+        let line_starts = Iterator::chain(
+            std::iter::once(0),
+            snippet
+                .source()
+                .bytes()
+                .take(range.end.saturating_sub(1))
+                .enumerate()
+                .filter_map(|(pos, b)| (b == b'\n').then_some(pos + 1)),
+        );
+        self.annotate(
+            line_starts
+                .enumerate()
+                .map(|(line, pos)| LineNumber(line + 1).at(pos..pos)),
+        )
+    }
     fn mark_syntax(
         self,
         tokens: &[Token],
@@ -86,6 +105,17 @@ impl Mark for InlinePos {
     fn fmt_before(&self, _segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let style = AnsiColor::BrightBlack.on_default();
         write!(f, "{}[{}]{:#} ", style, self.0, style)
+    }
+    fn fmt_after(&self, _segment: &str, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
+struct LineNumber(usize);
+impl Mark for LineNumber {
+    fn fmt_before(&self, _segment: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let style = AnsiColor::Blue.on_default();
+        write!(f, "{}{: >3} |{:#} ", style, self.0, style)
     }
     fn fmt_after(&self, _segment: &str, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Ok(())

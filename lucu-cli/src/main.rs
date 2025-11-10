@@ -47,7 +47,7 @@ fn main() {
 
             let annotated = source
                 .snippet()
-                .lines(5..9)
+                .mark_line_numbers()
                 .mark_syntax(tokens)
                 .mark_semicolons(tokens)
                 .mark_definition_order(ast, definitions);

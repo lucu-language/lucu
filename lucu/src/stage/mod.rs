@@ -180,7 +180,12 @@ impl ModuleGraph {
             .filter(|&node| !has_path_connecting(&self.graph, root, node, Some(&mut space)))
             .collect::<Vec<_>>();
         for node in unconnected {
-            self.graph.remove_node(node);
+            let module = self
+                .graph
+                .remove_node(node)
+                .expect("ICE: graph node index has no node");
+            self.nodes.remove(&module);
+            self.cache.0.remove(&module);
         }
     }
     pub fn insert_or_update(&mut self, resolver: &impl ModuleResolver, module: Module) {

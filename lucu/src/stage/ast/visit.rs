@@ -112,10 +112,46 @@ impl Ast for ast::Definition {
         match &self.0 {
             inner::Definition::Function(function) => visitor.visit_function(function),
             inner::Definition::Type(type_alias) => visitor.visit(type_alias),
+            inner::Definition::Effect(effect) => visitor.visit(effect),
         }
     }
     fn node_name(&self) -> &'static str {
         (&self.0).into()
+    }
+}
+
+impl Ast for ast::Effect {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        V::Output::combine([
+            visitor.visit(&self.0.name),
+            visitor.visit(&self.0.definition),
+        ])
+    }
+    fn node_name(&self) -> &'static str {
+        "Effect"
+    }
+}
+
+impl Ast for ast::EffectDefinition {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        match &self.0 {
+            inner::EffectDefinition::Body(body) => visitor.visit(body),
+            inner::EffectDefinition::Alias(alias) => {
+                V::Output::combine(alias.iter().map(|inner| visitor.visit_path(inner)))
+            }
+        }
+    }
+    fn node_name(&self) -> &'static str {
+        (&self.0).into()
+    }
+}
+
+impl Ast for ast::EffectBody {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_vec(&self.0.functions, visitor)
+    }
+    fn node_name(&self) -> &'static str {
+        "EffectBody"
     }
 }
 
@@ -137,6 +173,7 @@ impl Ast for ast::FunctionDeclaration {
             visitor.visit(&self.0.name),
             visit_option_vec(&self.0.parameters, visitor),
             visit_option(&self.0.returns, visitor),
+            visit_option_vec(&self.0.effects, visitor),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -198,6 +235,7 @@ impl Ast for ast::Kind {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
             inner::Kind::Type => V::Output::default(),
+            inner::Kind::Effect => V::Output::default(),
             inner::Kind::Constant(ty) => visitor.visit(&**ty),
         }
     }

@@ -6,6 +6,10 @@ type D = struct(c C)
 
 type E[T] = struct(t T)
 
+effect Yield[T] = {
+	fun yield(t T)
+}
+
 fun main = {
 	
 }

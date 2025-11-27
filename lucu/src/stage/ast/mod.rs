@@ -31,6 +31,7 @@ pub mod inner {
     pub enum Definition {
         Function(ast::Function),
         Type(ast::TypeAlias),
+        Effect(ast::Effect),
     }
     #[derive(Debug, PartialEq, Eq)]
     pub struct Function {
@@ -42,10 +43,26 @@ pub mod inner {
         pub name: ast::Name,
         pub definition: Box<ast::Type>,
     }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Effect {
+        pub name: ast::Name,
+        pub definition: ast::EffectDefinition,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "EffectDefinition::")]
+    pub enum EffectDefinition {
+        Body(ast::EffectBody),
+        Alias(Vec<ast::Path>),
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct EffectBody {
+        pub functions: Vec<ast::FunctionDeclaration>,
+    }
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "Kind::")]
     pub enum Kind {
         Type,
+        Effect,
         Constant(Box<ast::Type>),
     }
     #[derive(Debug, PartialEq, Eq)]
@@ -108,6 +125,7 @@ pub mod inner {
         pub name: ast::Name,
         pub parameters: Option<Vec<ast::FunctionParameter>>,
         pub returns: Option<ast::Returns>,
+        pub effects: Option<Vec<ast::Path>>,
     }
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "Returns::")]
@@ -139,6 +157,7 @@ pub mod inner {
             match self {
                 Definition::Function(fun) => Some(&fun.declaration.name),
                 Definition::Type(ty) => Some(&ty.name),
+                Definition::Effect(ty) => Some(&ty.name),
             }
         }
         pub fn generics(&self) -> &[ast::GenericParameter] {
@@ -183,3 +202,6 @@ pub type Expression = Spanned<inner::Expression>;
 pub type FunctionParameter = Spanned<inner::FunctionParameter>;
 pub type FunctionDeclaration = Spanned<inner::FunctionDeclaration>;
 pub type Returns = Spanned<inner::Returns>;
+pub type Effect = Spanned<inner::Effect>;
+pub type EffectDefinition = Spanned<inner::EffectDefinition>;
+pub type EffectBody = Spanned<inner::EffectBody>;

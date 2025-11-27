@@ -45,6 +45,7 @@ fn main() {
                 .snippet()
                 .mark_line_numbers()
                 .mark_definition_order(ast, definitions)
+                // .mark_ast(ast)
                 .mark_syntax(tokens);
             anstream::println!("{}", annotated);
 

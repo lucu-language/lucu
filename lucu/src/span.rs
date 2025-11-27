@@ -27,7 +27,7 @@ impl Index<Span> for str {
 }
 
 impl Span {
-    pub const START: Span = Span::new(0, 0);
+    pub const ZERO: Span = Span::new(0, 0);
     pub const fn new(start: u32, end: u32) -> Self {
         Self { start, end }
     }
@@ -95,5 +95,13 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl<T> Deref for Spanned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

@@ -15,6 +15,7 @@ use lucu_annotate::{Annotate, Mark};
 use crate::annotate::{AnnotateExt, LINE_STYLE};
 use crate::module::{Module, ModuleResolver};
 use crate::span::{HasSpan, Span};
+use crate::stage::ast::err::Expected;
 use crate::stage::ast::visit::Combine;
 use crate::stage::token::lexer::Lexer;
 
@@ -462,10 +463,9 @@ macro_rules! diagnostics {
 
 #[rustfmt::skip]
 diagnostics!(
-
-    (UnexpectedToken  (CompactString), 100, Error, "Unexpected token"),
-    (UnexpectedNewline(CompactString), 101, Error, "Unexpected newline"),
-    (UnexpectedEOF    (CompactString), 102, Error, "Unexpected end of file"),
+    (UnexpectedToken  (Expected), 100, Error, "Unexpected token"),
+    (UnexpectedNewline(Expected), 101, Error, "Unexpected newline"),
+    (UnexpectedEOF    (Expected), 102, Error, "Unexpected end of file"),
 
     (UnknownFile      (CompactString), 103, Error, "Could not access module file"),
     (UnknownLibrary   (CompactString), 104, Error, "Unknown library"),

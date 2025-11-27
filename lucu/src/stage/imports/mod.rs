@@ -6,8 +6,8 @@ use compact_str::{CompactString, format_compact};
 use crate::err::{ProblemKind, Problems, Result};
 use crate::module::{Module, ModuleResolver, UnknownModule};
 use crate::span::{HasSpan, Span, Spanned};
-use crate::stage::ast;
-use crate::stage::token::{TokenEnum, is_valid_identifier};
+use crate::stage::ast::{self, inner};
+use crate::stage::token::is_valid_identifier;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Import {
@@ -102,7 +102,7 @@ impl Imports {
             .unwrap_or(without_extension);
         let start = path.span().start + 1 + (without_extension.len() - ident.len()) as u32;
 
-        ast::Ident(Spanned(ident.into(), Span::new(start, end)))
+        Spanned(inner::Ident(ident.into()), Span::new(start, end))
     }
     fn require_import_exists(
         resolver: &impl ModuleResolver,

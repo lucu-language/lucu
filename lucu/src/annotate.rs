@@ -8,6 +8,7 @@ use lucu_annotate::{Annotate, Annotated, Annotation, Mark};
 
 use crate::span::HasSpan;
 use crate::stage::ast;
+use crate::stage::ast::visit::{Ast, Combine, Visitor};
 use crate::stage::defs::Definitions;
 use crate::stage::token::Token;
 
@@ -20,6 +21,10 @@ pub trait AnnotateExt<'a> {
     fn mark_semicolons(
         self,
         tokens: &[Token],
+    ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
+    fn mark_ast(
+        self,
+        ast: &ast::Module,
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
     fn mark_definition_order(
         self,
@@ -87,6 +92,23 @@ where
                 .then_some(InsertedSemicolon.at(token.span))
         }))
     }
+    fn mark_ast(
+        self,
+        ast: &ast::Module,
+    ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
+        #[derive(Clone, Copy)]
+        struct Nodes;
+        impl Visitor for Nodes {
+            type Output<'a> = im::Vector<Annotation<Node>>;
+            fn visit(self, ast: &impl ast::visit::Ast) -> Self::Output<'_> {
+                Self::Output::combine([
+                    im::Vector::unit(Node(ast.node_name()).at(ast.span())),
+                    ast.visit(self),
+                ])
+            }
+        }
+        self.annotate(ast.visit(Nodes))
+    }
     fn mark_definition_order(
         self,
         ast: &ast::Module,
@@ -94,7 +116,7 @@ where
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
         self.annotate(
             definitions
-                .spans(ast)
+                .postorder(ast)
                 .enumerate()
                 .map(|(idx, def)| Definition(idx).at(def.span()))
                 .sorted(),
@@ -130,7 +152,18 @@ impl Mark for InsertedSemicolon {
     fn style(&self) -> MarkStyle {
         MarkStyle::before(INLINE_STYLE)
     }
-    fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, ";")
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Node(&'static str);
+impl Mark for Node {
+    fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(", self.0)
+    }
+    fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ")")
     }
 }

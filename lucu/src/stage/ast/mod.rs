@@ -1,177 +1,185 @@
+pub mod err;
 pub mod parser;
 pub mod visit;
 
-use std::fmt::{self, Debug};
+use crate::span::Spanned;
 
-use compact_str::CompactString;
+pub mod inner {
+    use std::fmt;
 
-use crate::span::{HasSpan, Span, Spanned};
+    use compact_str::CompactString;
+    use strum::IntoStaticStr;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct String(pub Spanned<CompactString>);
+    use crate::stage::ast;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Ident(pub Spanned<CompactString>);
-
-impl String {
-    pub fn as_str(&self) -> &str {
-        self.0.0.as_str()
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct String(pub CompactString);
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Ident(pub CompactString);
+    #[derive(Debug, Default, PartialEq, Eq)]
+    pub struct Module {
+        pub imports: Vec<ast::Import>,
+        pub definitions: Vec<ast::Definition>,
     }
-}
-
-impl Ident {
-    pub fn as_str(&self) -> &str {
-        self.0.0.as_str()
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Import {
+        pub path: ast::String,
+        pub ident: Option<ast::Ident>,
     }
-}
-
-impl HasSpan for String {
-    fn span(&self) -> Span {
-        self.0.span()
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Definition::")]
+    pub enum Definition {
+        Function(ast::Function),
+        Type(ast::TypeAlias),
     }
-}
-
-impl HasSpan for Ident {
-    fn span(&self) -> Span {
-        self.0.span()
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Function {
+        pub declaration: ast::FunctionDeclaration,
+        pub definition: Box<ast::Expression>,
     }
-}
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct TypeAlias {
+        pub name: ast::Name,
+        pub definition: Box<ast::Type>,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Kind::")]
+    pub enum Kind {
+        Type,
+        Constant(Box<ast::Type>),
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct GenericParameter {
+        pub name: ast::Name,
+        pub kind: Option<ast::Kind>,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "GenericArgument::")]
+    pub enum GenericArgument {
+        Path(ast::Path),
+        Type(Box<ast::Type>),
+        Constant(Box<ast::Constant>),
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Constant::")]
+    pub enum Constant {
+        // TODO
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Name {
+        pub ident: ast::Ident,
+        pub generics: Option<Vec<ast::GenericParameter>>,
+    }
+    #[derive(PartialEq, Eq)]
+    pub struct Path {
+        pub package: Option<ast::Ident>,
+        pub name: ast::Ident,
+        pub generics: Option<Vec<ast::GenericArgument>>,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Type::")]
+    pub enum Type {
+        Int,
+        Path(ast::Path),
+        Struct(ast::Struct),
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Struct {
+        pub members: Vec<ast::StructMember>,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "StructMember::")]
+    pub enum StructMember {
+        Data(ast::Ident, Box<ast::Type>),
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Expression::")]
+    pub enum Expression {
+        Block,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "FunctionParameter::")]
+    pub enum FunctionParameter {
+        Data(ast::Ident, Box<ast::Type>),
+        Lambda(ast::FunctionDeclaration),
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct FunctionDeclaration {
+        pub name: ast::Name,
+        pub parameters: Option<Vec<ast::FunctionParameter>>,
+        pub returns: Option<ast::Returns>,
+    }
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "Returns::")]
+    pub enum Returns {
+        Never,
+        Data(Box<ast::Type>),
+    }
 
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Module {
-    pub imports: Vec<Import>,
-    pub definitions: Vec<Definition>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Import {
-    pub path: String,
-    pub ident: Option<Ident>,
-}
-
-pub type Definition = Spanned<DefinitionEnum>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum DefinitionEnum {
-    Function(Function),
-    Type(TypeAlias),
-}
-
-impl Definition {
-    pub fn name(&self) -> Option<&Name> {
-        match &self.0 {
-            DefinitionEnum::Function(fun) => Some(&fun.declaration.name),
-            DefinitionEnum::Type(ty) => Some(&ty.name),
+    impl String {
+        pub fn as_str(&self) -> &str {
+            self.0.as_str()
         }
     }
-    pub fn generics(&self) -> &[Generic] {
-        // TODO: those without a name may also have generics
-        self.name()
-            .and_then(|name| name.generics.as_deref())
-            .unwrap_or_default()
+
+    impl Ident {
+        pub fn as_str(&self) -> &str {
+            self.0.as_str()
+        }
     }
-    pub fn children(&self) -> &[Definition] {
-        // TODO: children
-        &[]
+
+    impl Name {
+        pub fn as_str(&self) -> &str {
+            self.ident.as_str()
+        }
     }
-}
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Function {
-    pub declaration: FunctionDeclaration,
-    pub definition: Expression,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct TypeAlias {
-    pub name: Name,
-    pub definition: Type,
-}
-
-pub type Kind = Spanned<KindEnum>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum KindEnum {
-    Type,
-    Constant(Type),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Generic {
-    pub name: Name,
-    pub kind: Option<Kind>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Name {
-    pub ident: Ident,
-    pub generics: Option<Vec<Generic>>,
-}
-
-impl Name {
-    pub fn as_str(&self) -> &str {
-        self.ident.as_str()
+    impl Definition {
+        pub fn name(&self) -> Option<&ast::Name> {
+            match self {
+                Definition::Function(fun) => Some(&fun.declaration.name),
+                Definition::Type(ty) => Some(&ty.name),
+            }
+        }
+        pub fn generics(&self) -> &[ast::GenericParameter] {
+            // TODO: those without a name may also have generics
+            self.name()
+                .and_then(|name| name.generics.as_deref())
+                .unwrap_or_default()
+        }
+        pub fn children(&self) -> &[ast::Definition] {
+            // TODO: children
+            &[]
+        }
     }
-}
 
-#[derive(PartialEq, Eq)]
-pub struct Path {
-    pub package: Option<Ident>,
-    pub name: Ident,
-}
-
-impl Debug for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.package {
-            Some(pkg) => write!(f, "\"{}.{}\"", pkg.0, self.name.0),
-            None => write!(f, "\"{}\"", self.name.0),
+    impl fmt::Debug for Path {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match &self.package {
+                Some(pkg) => write!(f, "\"{}.{}\"", pkg.0.0, self.name.0.0),
+                None => write!(f, "\"{}\"", self.name.0.0),
+            }
         }
     }
 }
 
-pub type Type = Box<Spanned<TypeEnum>>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum TypeEnum {
-    Int,
-    Path(Path),
-    Struct(Struct),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Struct {
-    pub members: Vec<StructMember>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum StructMember {
-    Data(Ident, Type),
-}
-
-pub type Expression = Box<Spanned<ExpressionEnum>>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ExpressionEnum {
-    Block,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum FunctionParameter {
-    Data(Ident, Type),
-    Lambda(FunctionDeclaration),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct FunctionDeclaration {
-    pub name: Name,
-    pub parameters: Option<Vec<FunctionParameter>>,
-    pub returns: Option<Returns>,
-}
-
-pub type Returns = Spanned<ReturnsEnum>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ReturnsEnum {
-    Never,
-    Data(Type),
-}
+pub type String = Spanned<inner::String>;
+pub type Ident = Spanned<inner::Ident>;
+pub type Module = Spanned<inner::Module>;
+pub type Import = Spanned<inner::Import>;
+pub type Definition = Spanned<inner::Definition>;
+pub type Function = Spanned<inner::Function>;
+pub type TypeAlias = Spanned<inner::TypeAlias>;
+pub type Kind = Spanned<inner::Kind>;
+pub type GenericParameter = Spanned<inner::GenericParameter>;
+pub type GenericArgument = Spanned<inner::GenericArgument>;
+pub type Constant = Spanned<inner::Constant>;
+pub type Name = Spanned<inner::Name>;
+pub type Path = Spanned<inner::Path>;
+pub type Type = Spanned<inner::Type>;
+pub type Struct = Spanned<inner::Struct>;
+pub type StructMember = Spanned<inner::StructMember>;
+pub type Expression = Spanned<inner::Expression>;
+pub type FunctionParameter = Spanned<inner::FunctionParameter>;
+pub type FunctionDeclaration = Spanned<inner::FunctionDeclaration>;
+pub type Returns = Spanned<inner::Returns>;

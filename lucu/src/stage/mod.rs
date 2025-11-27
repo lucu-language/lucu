@@ -20,6 +20,7 @@ use petgraph::visit::{
 
 use crate::err::{HasProblems, Problem, Result};
 use crate::module::{Module, ModuleResolver};
+use crate::span::{Span, Spanned};
 use crate::stage::ast::parser::Parser;
 use crate::stage::defs::Definitions;
 use crate::stage::imports::{Import, Imports};
@@ -81,7 +82,10 @@ impl Stages {
                         Parser::new(&self.module, self.source().unwrap_or_default(), tokens)
                             .module()
                     })
-                    .unwrap_or_default()
+                    .unwrap_or(Result::new(Spanned(
+                        ast::inner::Module::default(),
+                        Span::ZERO,
+                    )))
             })
             .value()
     }

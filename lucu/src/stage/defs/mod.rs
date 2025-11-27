@@ -9,8 +9,8 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
 use crate::err::{Problems, Result};
-use crate::stage::ast;
-use crate::stage::ast::visit::{Ast, Visitor};
+use crate::stage::ast::visit::{Ast, Combine, Visitor};
+use crate::stage::ast::{self, visit};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Edge;
@@ -26,11 +26,14 @@ struct DefinitionPaths;
 impl Visitor for DefinitionPaths {
     type Output<'a> = im::Vector<&'a ast::Ident>;
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
-        if path.package.is_none() {
-            im::Vector::unit(&path.name)
-        } else {
-            im::Vector::new()
-        }
+        Self::Output::combine([
+            if path.package.is_none() {
+                im::Vector::unit(&path.name)
+            } else {
+                im::Vector::new()
+            },
+            visit::visit_option_vec(&path.generics, self),
+        ])
     }
     fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
         // function definitions may have their own scopes,
@@ -86,11 +89,17 @@ impl ast::Module {
 }
 
 impl Definitions {
-    pub fn spans<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Definition> {
-        self.postorder().map(|idx| ast.definition(idx, &self.defs))
+    pub fn postorder<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Definition> {
+        self.graph
+            .nodes_iter()
+            .rev()
+            .map(|idx| ast.definition(idx, &self.defs))
     }
-    pub fn postorder(&self) -> impl Iterator<Item = NodeIndex> {
-        self.graph.nodes_iter().rev()
+    pub fn indices(&self) -> impl Iterator<Item = NodeIndex> {
+        self.graph.node_indices()
+    }
+    pub fn get(&self, name: &str) -> Option<NodeIndex> {
+        self.scope.get(name).copied()
     }
     #[expect(clippy::implied_bounds_in_impls)]
     pub fn dot(
@@ -169,7 +178,7 @@ impl Definitions {
         ast: &ast::Definition,
         def: Definition,
     ) {
-        let name = ast.name().map(ast::Name::as_str).map(CompactString::new);
+        let name = ast.name().map(|name| name.as_str()).map(CompactString::new);
         let node = graph.add_node(name.clone().unwrap_or_default());
         defs.push(def);
 

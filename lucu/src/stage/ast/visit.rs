@@ -8,11 +8,17 @@ pub trait Visitor: Copy {
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         self.visit(path)
     }
-    fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
-        self.visit(function)
+    fn visit_definition(self, def: &ast::Definition) -> Self::Output<'_> {
+        self.visit(def)
     }
     fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
         self.visit(struc)
+    }
+    fn visit_function_definition(self, function: &ast::FunctionDefinition) -> Self::Output<'_> {
+        self.visit(function)
+    }
+    fn visit_effect_body(self, body: &ast::EffectBody) -> Self::Output<'_> {
+        self.visit(body)
     }
     fn visit(self, ast: &impl Ast) -> Self::Output<'_> {
         ast.visit(self)
@@ -90,7 +96,12 @@ impl Ast for ast::Module {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
             visit_vec(&self.0.imports, visitor),
-            visit_vec(&self.0.definitions, visitor),
+            V::Output::combine(
+                self.0
+                    .definitions
+                    .iter()
+                    .map(|def| visitor.visit_definition(def)),
+            ),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -110,9 +121,19 @@ impl Ast for ast::Import {
 impl Ast for ast::Definition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
-            inner::Definition::Function(function) => visitor.visit_function(function),
-            inner::Definition::Type(type_alias) => visitor.visit(type_alias),
-            inner::Definition::Effect(effect) => visitor.visit(effect),
+            inner::Definition::Function(fun, opt) => V::Output::combine([
+                visitor.visit(fun),
+                match opt {
+                    Some(def) => visitor.visit_function_definition(def),
+                    None => V::Output::default(),
+                },
+            ]),
+            inner::Definition::Type(name, opt) => {
+                V::Output::combine([visitor.visit(name), visit_option(opt, visitor)])
+            }
+            inner::Definition::Effect(name, opt) => {
+                V::Output::combine([visitor.visit(name), visit_option(opt, visitor)])
+            }
         }
     }
     fn node_name(&self) -> &'static str {
@@ -120,25 +141,14 @@ impl Ast for ast::Definition {
     }
 }
 
-impl Ast for ast::Effect {
-    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visitor.visit(&self.0.name),
-            visitor.visit(&self.0.definition),
-        ])
-    }
-    fn node_name(&self) -> &'static str {
-        "Effect"
-    }
-}
-
 impl Ast for ast::EffectDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
-            inner::EffectDefinition::Body(body) => visitor.visit(body),
+            inner::EffectDefinition::Body(body) => visitor.visit_effect_body(body),
             inner::EffectDefinition::Alias(alias) => {
                 V::Output::combine(alias.iter().map(|inner| visitor.visit_path(inner)))
             }
+            inner::EffectDefinition::Intrinsic => V::Output::default(),
         }
     }
     fn node_name(&self) -> &'static str {
@@ -148,22 +158,26 @@ impl Ast for ast::EffectDefinition {
 
 impl Ast for ast::EffectBody {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        visit_vec(&self.0.functions, visitor)
+        V::Output::combine(
+            self.definitions
+                .iter()
+                .map(|def| visitor.visit_definition(def)),
+        )
     }
     fn node_name(&self) -> &'static str {
         "EffectBody"
     }
 }
 
-impl Ast for ast::Function {
+impl Ast for ast::FunctionDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visitor.visit(&self.0.declaration),
-            visitor.visit(&*self.0.definition),
-        ])
+        match &self.0 {
+            inner::FunctionDefinition::Expression(spanned) => visitor.visit(&**spanned),
+            inner::FunctionDefinition::Intrinsic => V::Output::default(),
+        }
     }
     fn node_name(&self) -> &'static str {
-        "Function"
+        (&self.0).into()
     }
 }
 
@@ -236,6 +250,7 @@ impl Ast for ast::Kind {
         match &self.0 {
             inner::Kind::Type => V::Output::default(),
             inner::Kind::Effect => V::Output::default(),
+            inner::Kind::Region => V::Output::default(),
             inner::Kind::Constant(ty) => visitor.visit(&**ty),
         }
     }
@@ -247,9 +262,16 @@ impl Ast for ast::Kind {
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
-            inner::Type::Int => V::Output::default(),
+            inner::Type::Pointer(inner, region) | inner::Type::Slice(inner, region) => {
+                V::Output::combine([
+                    visitor.visit(&**inner),
+                    match region {
+                        Some(t) => visitor.visit_path(t),
+                        None => V::Output::default(),
+                    },
+                ])
+            }
             inner::Type::Path(path) => visitor.visit_path(path),
-            inner::Type::Struct(struc) => visitor.visit_struct(struc),
         }
     }
     fn node_name(&self) -> &'static str {
@@ -268,15 +290,16 @@ impl Ast for ast::Expression {
     }
 }
 
-impl Ast for ast::TypeAlias {
+impl Ast for ast::TypeDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visitor.visit(&self.0.name),
-            visitor.visit(&*self.0.definition),
-        ])
+        match &self.0 {
+            inner::TypeDefinition::Type(spanned) => visitor.visit(&**spanned),
+            inner::TypeDefinition::Intrinsic => V::Output::default(),
+            inner::TypeDefinition::Struct(struc) => visitor.visit_struct(struc),
+        }
     }
     fn node_name(&self) -> &'static str {
-        "TypeAlias"
+        (&self.0).into()
     }
 }
 

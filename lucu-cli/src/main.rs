@@ -35,33 +35,26 @@ fn main() {
 
         let stages = graph.stages(&main).unwrap();
 
-        {
-            let source = stages.source().unwrap();
-            let tokens = stages.tokens().unwrap();
-            let ast = stages.ast().unwrap();
-            let definitions = stages.definitions().unwrap();
-
-            let annotated = source
-                .snippet()
-                .mark_line_numbers()
-                .mark_definition_order(ast, definitions)
-                // .mark_ast(ast)
-                .mark_syntax(tokens);
-            anstream::println!("{}", annotated);
-
-            let annotated = source
-                .snippet()
-                .mark_line_numbers()
-                .mark_definition_order(ast, definitions)
-                .debug()
-                .mark_syntax(tokens);
-            anstream::println!("{}", annotated);
-        }
-
         let definitions = stages.definitions().unwrap();
         println!("{}", definitions.dot());
 
-        stages.print_problems2(&watcher);
+        for module in graph.modules() {
+            if let Some(stages) = graph.stages(module) {
+                let source = stages.source().unwrap();
+                let tokens = stages.tokens().unwrap();
+                let ast = stages.ast().unwrap();
+                let definitions = stages.definitions().unwrap();
+
+                let annotated = source
+                    .snippet()
+                    .mark_line_numbers()
+                    .mark_syntax(tokens)
+                    .mark_definition_order(ast, definitions);
+                anstream::println!("{}", annotated);
+
+                stages.print_problems2(&watcher);
+            }
+        }
 
         // wait for changes
         let changes = watcher.await_change();

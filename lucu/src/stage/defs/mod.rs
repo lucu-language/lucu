@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Display;
 
 use compact_str::CompactString;
@@ -24,26 +24,25 @@ impl Display for Edge {
 #[derive(Clone, Copy)]
 struct DefinitionPaths;
 impl Visitor for DefinitionPaths {
-    type Output<'a> = im::Vector<&'a ast::Ident>;
+    type Output<'a> = im::HashSet<&'a str>;
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         Self::Output::combine([
             if path.package.is_none() {
-                im::Vector::unit(&path.name)
+                im::HashSet::unit(path.name.as_str())
             } else {
-                im::Vector::new()
+                im::HashSet::new()
             },
             visit::visit_option_vec(&path.generics, self),
         ])
     }
-    fn visit_function(self, function: &ast::Function) -> Self::Output<'_> {
-        // function definitions may have their own scopes,
-        // so checking those is out of scope (pun intended) for this visitor
-        function.declaration.visit(self)
-    }
     fn visit_struct(self, _struc: &ast::Struct) -> Self::Output<'_> {
-        // everything inside a struct definition is an *indirect* reference,
-        // as these references are allowed to be mutually recursive
-        im::Vector::new()
+        im::HashSet::new()
+    }
+    fn visit_effect_body(self, _body: &ast::EffectBody) -> Self::Output<'_> {
+        im::HashSet::new()
+    }
+    fn visit_function_definition(self, _function: &ast::FunctionDefinition) -> Self::Output<'_> {
+        im::HashSet::new()
     }
 }
 
@@ -86,6 +85,23 @@ impl ast::Module {
             None => &self.definitions[module_definition.index],
         }
     }
+    fn remove_generics(
+        &self,
+        node: NodeIndex,
+        defs: &[Definition],
+        gens: &mut im::HashSet<&str>,
+    ) -> &ast::Definition {
+        let module_definition = defs[node.index()];
+        let ast = match module_definition.parent {
+            Some(parent_node) => {
+                let parent = self.remove_generics(parent_node, defs, gens);
+                &parent.children()[module_definition.index]
+            }
+            None => &self.definitions[module_definition.index],
+        };
+        gens.retain(|&i| !ast.generics().iter().any(|g| g.name.as_str() == i));
+        ast
+    }
 }
 
 impl Definitions {
@@ -127,23 +143,12 @@ impl Definitions {
 
         for parent in (0..graph.node_count()).map(NodeIndex::new) {
             let def = ast.definition(parent, &defs);
-            let generics: HashSet<&str> = def
-                .generics()
-                .iter()
-                .map(|g| g.name.ident.as_str())
-                .collect();
+            let mut names = def.visit(DefinitionPaths);
+            ast.remove_generics(parent, &defs, &mut names);
 
-            for name in def
-                .visit(DefinitionPaths)
-                .into_iter()
-                .filter(|ident| !generics.contains(ident.as_str()))
-            {
-                match scope.get(name.as_str()).map(Vec::as_slice) {
-                    Some(&[child]) => {
-                        graph.update_edge(parent, child, Edge);
-                    }
-                    Some(_) => {}
-                    None => todo!("unknown definition"),
+            for name in names {
+                if let Some(&[child]) = scope.get(name).map(Vec::as_slice) {
+                    graph.update_edge(parent, child, Edge);
                 }
             }
         }
@@ -186,7 +191,7 @@ impl Definitions {
             scope.entry(name).or_default().push(node);
         }
         if let Some(parent) = def.parent {
-            graph.update_edge(node, parent, Edge);
+            graph.update_edge(parent, node, Edge);
         }
         for (idx, child) in ast.children().iter().enumerate() {
             Self::add_definition(graph, scope, defs, child, Definition::child(node, idx));

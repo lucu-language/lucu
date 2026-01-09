@@ -1,0 +1,92 @@
+# integer types
+type u8 = @intrinsic
+type u16 = @intrinsic
+type u32 = @intrinsic
+type u64 = @intrinsic
+
+type uint = @intrinsic
+type uptr = @intrinsic
+type usize = @intrinsic
+
+type i8 = @intrinsic
+type i16 = @intrinsic
+type i32 = @intrinsic
+type i64 = @intrinsic
+
+type int = @intrinsic
+type iptr = @intrinsic
+type isize = @intrinsic
+
+# regions
+
+effect Read[R region] = {
+	fun read[T](ptr ^T in R) T
+}
+
+effect Write[R region] = {
+	fun write[T](ptr ^T in R, value T)
+}
+
+fun replace[T, R region](ptr ^T in R, value T) T with Read[R] Write[R] = {
+	let old = read(ptr)
+	write(ptr, value)
+	old
+}
+
+# printing
+
+fun print_int(n int) = {
+	mut buf [21]u8 = ---
+
+	mut remaining = if n < 0 then -n else n
+
+	mut start = try {
+		for(20, 0) { current ->
+			let digit u8 = '0' + @cast (remaining % 10)
+			remaining /= 10
+
+			buf[current] = digit
+
+			if remaining == 0 {
+				break current
+			}
+		}
+		break 1
+	}
+
+	if n < 0 {
+		start -= 1
+		buf[start] = '-'
+	}
+
+	print_str(buf[start..21])
+}
+
+fun print_str[R region](buf []u8 in R) with Read[R]
+	= @intrinsic
+
+# divergence
+
+effect Div
+	= @intrinsic
+
+fun loop(fun body) with Div
+	= @intrinsic
+
+fun unfounded[T](fun body T with Div) T
+	= @intrinsic
+
+fun for(from usize, to usize, fun body(n usize)) = {
+	let rising = to > from
+	mut current = from
+	try unfounded loop {
+		if current == to then break
+		body(current)
+
+		if rising {
+			current += 1
+		} else {
+			current -= 1
+		}
+	}
+}

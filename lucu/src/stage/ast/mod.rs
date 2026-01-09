@@ -29,40 +29,40 @@ pub mod inner {
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "Definition::")]
     pub enum Definition {
-        Function(ast::Function),
-        Type(ast::TypeAlias),
-        Effect(ast::Effect),
+        Function(ast::FunctionDeclaration, Option<ast::FunctionDefinition>),
+        Type(ast::Name, Option<ast::TypeDefinition>),
+        Effect(ast::Name, Option<ast::EffectDefinition>),
     }
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Function {
-        pub declaration: ast::FunctionDeclaration,
-        pub definition: Box<ast::Expression>,
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "FunctionDefinition::")]
+    pub enum FunctionDefinition {
+        Expression(Box<ast::Expression>),
+        Intrinsic,
     }
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct TypeAlias {
-        pub name: ast::Name,
-        pub definition: Box<ast::Type>,
-    }
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct Effect {
-        pub name: ast::Name,
-        pub definition: ast::EffectDefinition,
+    #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+    #[strum(prefix = "TypeDefinition::")]
+    pub enum TypeDefinition {
+        Type(Box<ast::Type>),
+        Struct(ast::Struct),
+        Intrinsic,
     }
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "EffectDefinition::")]
     pub enum EffectDefinition {
         Body(ast::EffectBody),
         Alias(Vec<ast::Path>),
+        Intrinsic,
     }
     #[derive(Debug, PartialEq, Eq)]
     pub struct EffectBody {
-        pub functions: Vec<ast::FunctionDeclaration>,
+        pub definitions: Vec<ast::Definition>,
     }
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "Kind::")]
     pub enum Kind {
         Type,
         Effect,
+        Region,
         Constant(Box<ast::Type>),
     }
     #[derive(Debug, PartialEq, Eq)]
@@ -96,9 +96,9 @@ pub mod inner {
     #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
     #[strum(prefix = "Type::")]
     pub enum Type {
-        Int,
         Path(ast::Path),
-        Struct(ast::Struct),
+        Pointer(Box<ast::Type>, Option<ast::Path>),
+        Slice(Box<ast::Type>, Option<ast::Path>),
     }
     #[derive(Debug, PartialEq, Eq)]
     pub struct Struct {
@@ -155,20 +155,32 @@ pub mod inner {
     impl Definition {
         pub fn name(&self) -> Option<&ast::Name> {
             match self {
-                Definition::Function(fun) => Some(&fun.declaration.name),
-                Definition::Type(ty) => Some(&ty.name),
-                Definition::Effect(ty) => Some(&ty.name),
+                Definition::Function(fun, _) => Some(&fun.name),
+                Definition::Type(name, _) => Some(name),
+                Definition::Effect(name, _) => Some(name),
             }
         }
         pub fn generics(&self) -> &[ast::GenericParameter] {
-            // TODO: those without a name may also have generics
-            self.name()
-                .and_then(|name| name.generics.as_deref())
-                .unwrap_or_default()
+            match self {
+                Definition::Function(fun, _) => fun.name.generics.as_deref().unwrap_or_default(),
+                Definition::Type(name, _) => name.generics.as_deref().unwrap_or_default(),
+                Definition::Effect(name, _) => name.generics.as_deref().unwrap_or_default(),
+            }
         }
         pub fn children(&self) -> &[ast::Definition] {
-            // TODO: children
-            &[]
+            match self {
+                Definition::Effect(_, def) => {
+                    if let Some(def) = def {
+                        match &def.0 {
+                            EffectDefinition::Body(body) => &body.definitions,
+                            _ => &[],
+                        }
+                    } else {
+                        &[]
+                    }
+                }
+                _ => &[],
+            }
         }
     }
 
@@ -187,8 +199,7 @@ pub type Ident = Spanned<inner::Ident>;
 pub type Module = Spanned<inner::Module>;
 pub type Import = Spanned<inner::Import>;
 pub type Definition = Spanned<inner::Definition>;
-pub type Function = Spanned<inner::Function>;
-pub type TypeAlias = Spanned<inner::TypeAlias>;
+pub type TypeDefinition = Spanned<inner::TypeDefinition>;
 pub type Kind = Spanned<inner::Kind>;
 pub type GenericParameter = Spanned<inner::GenericParameter>;
 pub type GenericArgument = Spanned<inner::GenericArgument>;
@@ -201,7 +212,7 @@ pub type StructMember = Spanned<inner::StructMember>;
 pub type Expression = Spanned<inner::Expression>;
 pub type FunctionParameter = Spanned<inner::FunctionParameter>;
 pub type FunctionDeclaration = Spanned<inner::FunctionDeclaration>;
+pub type FunctionDefinition = Spanned<inner::FunctionDefinition>;
 pub type Returns = Spanned<inner::Returns>;
-pub type Effect = Spanned<inner::Effect>;
 pub type EffectDefinition = Spanned<inner::EffectDefinition>;
 pub type EffectBody = Spanned<inner::EffectBody>;

@@ -134,15 +134,23 @@ impl TokenEnum {
                 | TokenEnum::Symbol(Symbol::Semicolon)
                 | TokenEnum::Symbol(Symbol::Comma)
                 | TokenEnum::Symbol(Symbol::Pipe)
+                | TokenEnum::Symbol(Symbol::Assign(_))
+                | TokenEnum::Symbol(Symbol::Equality(_))
+                | TokenEnum::Symbol(Symbol::Inequality(_))
         )
     }
     pub fn prevent_semi_before(self) -> bool {
         matches!(
             self,
             TokenEnum::Close(_)
+                | TokenEnum::Symbol(Symbol::Arrow)
                 | TokenEnum::Symbol(Symbol::Semicolon)
                 | TokenEnum::Symbol(Symbol::Comma)
                 | TokenEnum::Symbol(Symbol::Pipe)
+                | TokenEnum::Symbol(Symbol::Assign(_))
+                | TokenEnum::Symbol(Symbol::Equality(_))
+                | TokenEnum::Symbol(Symbol::Inequality(_))
+                | TokenEnum::Keyword(Keyword::Intrinsic)
         )
     }
 }
@@ -171,12 +179,15 @@ pub enum Keyword {
     Else,
     Struct,
     Do,
+    In,
     Break,
-    Use,
+    Region,
     #[strum(serialize = "@cast")]
     Cast,
     #[strum(serialize = "@addr")]
     Addr,
+    #[strum(serialize = "@intrinsic")]
+    Intrinsic,
     #[strum(disabled)]
     Unknown,
 }

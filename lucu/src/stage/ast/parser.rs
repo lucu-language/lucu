@@ -57,25 +57,38 @@ impl<'a> Parser<'a> {
     }
     pub fn definition(&mut self) -> Result<ast::Definition> {
         self.spanned(|parser| match parser.next().token {
-            TokenEnum::Keyword(Keyword::Fun) => parser.function().map(inner::Definition::Function),
-            TokenEnum::Keyword(Keyword::Type) => parser.type_alias().map(inner::Definition::Type),
-            TokenEnum::Keyword(Keyword::Effect) => parser.effect().map(inner::Definition::Effect),
-            _ => parser.error(Expected::Definition),
-        })
-    }
-    pub fn effect(&mut self) -> Result<ast::Effect> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(Keyword::Effect);
-                name <- parser.name();
-                _ <- parser.consume(Symbol::Assign(SymbolAssign::Equals));
-                definition <- parser.effect_definition();
-                return inner::Effect { name, definition };
+            TokenEnum::Keyword(Keyword::Fun) => {
+                m! {
+                    declaration <- parser.function_declaration();
+                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::function_definition);
+                    return inner::Definition::Function(declaration, definition);
+                }
             }
+            TokenEnum::Keyword(Keyword::Type) => {
+                m! {
+                    _ <- parser.consume(Keyword::Type);
+                    name <- parser.name();
+                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
+                    return inner::Definition::Type(name, definition);
+                }
+            }
+            TokenEnum::Keyword(Keyword::Effect) => {
+                m! {
+                    _ <- parser.consume(Keyword::Effect);
+                    name <- parser.name();
+                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
+                    return inner::Definition::Effect(name, definition);
+                }
+            },
+            _ => parser.error(Expected::Definition),
         })
     }
     pub fn effect_definition(&mut self) -> Result<ast::EffectDefinition> {
         self.spanned(|parser| match parser.next().token {
+            TokenEnum::Keyword(Keyword::Intrinsic) => {
+                parser.skip();
+                Result::new(inner::EffectDefinition::Intrinsic)
+            }
             TokenEnum::Open(Group::Brace) => {
                 parser.effect_body().map(inner::EffectDefinition::Body)
             }
@@ -88,41 +101,40 @@ impl<'a> Parser<'a> {
         self.spanned(|parser| {
             m! {
                 _ <- parser.consume(TokenEnum::Open(Group::Brace));
-                functions <- parser.many(Symbol::Semicolon, Parser::function_declaration);
+                definitions <- parser.many(Symbol::Semicolon, Parser::definition);
                 _ <- parser.consume(TokenEnum::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
-                return inner::EffectBody { functions };
+                return inner::EffectBody { definitions };
             }
         })
     }
-    pub fn function(&mut self) -> Result<ast::Function> {
-        self.spanned(|parser| {
-            m! {
-                declaration <- parser.function_declaration();
-                _ <- parser.consume(Symbol::Assign(SymbolAssign::Equals));
-                definition <- parser.expression();
-                return inner::Function { declaration, definition };
+    pub fn function_definition(&mut self) -> Result<ast::FunctionDefinition> {
+        self.spanned(|parser| match parser.next().token {
+            TokenEnum::Keyword(Keyword::Intrinsic) => {
+                parser.skip();
+                Result::new(inner::FunctionDefinition::Intrinsic)
             }
+            _ => parser
+                .expression()
+                .map(inner::FunctionDefinition::Expression),
         })
     }
-    pub fn type_alias(&mut self) -> Result<ast::TypeAlias> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(Keyword::Type);
-                name <- parser.name();
-                _ <- parser.consume(Symbol::Assign(SymbolAssign::Equals));
-                definition <- parser.r#type();
-                return inner::TypeAlias { name, definition };
+    pub fn type_definition(&mut self) -> Result<ast::TypeDefinition> {
+        self.spanned(|parser| match parser.next().token {
+            TokenEnum::Keyword(Keyword::Intrinsic) => {
+                parser.skip();
+                Result::new(inner::TypeDefinition::Intrinsic)
             }
+            TokenEnum::Keyword(Keyword::Struct) => {
+                parser.r#struct().map(inner::TypeDefinition::Struct)
+            }
+            _ => parser.r#type().map(inner::TypeDefinition::Type),
         })
     }
     pub fn path(&mut self) -> Result<ast::Path> {
         self.spanned(|parser| {
             m! {
                 first <- parser.ident();
-                second <- parser.when_next(Symbol::Dot, |parser| {
-                    parser.skip();
-                    parser.ident()
-                });
+                second <- parser.consume_next(Symbol::Dot, Parser::ident);
                 generics <- parser.when_next(TokenEnum::Open(Group::Bracket), |parser| {
                     parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
                 });
@@ -152,19 +164,32 @@ impl<'a> Parser<'a> {
     fn starts_type(&self) -> bool {
         matches!(
             self.next().token,
-            TokenEnum::Identifier | TokenEnum::Keyword(Keyword::Struct)
+            TokenEnum::Identifier
+                | TokenEnum::Keyword(Keyword::Struct)
+                | TokenEnum::Symbol(Symbol::Caret)
+                | TokenEnum::Open(Group::Bracket)
         )
     }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         self.spanned(|parser| match parser.next().token {
-            TokenEnum::Identifier => parser.path().map(|path| {
-                if path.package.is_none() && path.name.as_str() == "int" {
-                    inner::Type::Int
-                } else {
-                    inner::Type::Path(path)
+            TokenEnum::Identifier => parser.path().map(inner::Type::Path),
+            TokenEnum::Symbol(Symbol::Caret) => {
+                parser.skip();
+                m! {
+                    inner <- parser.r#type();
+                    region <- parser.consume_next(Keyword::In, Parser::path);
+                    return inner::Type::Pointer(inner, region);
                 }
-            }),
-            TokenEnum::Keyword(Keyword::Struct) => parser.r#struct().map(inner::Type::Struct),
+            }
+            TokenEnum::Open(Group::Bracket) => {
+                parser.skip();
+                m! {
+                    _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
+                    inner <- parser.r#type();
+                    region <- parser.consume_next(Keyword::In, Parser::path);
+                    return inner::Type::Slice(inner, region);
+                }
+            }
             _ => parser.error(Expected::Type),
         })
         .map(Box::new)
@@ -218,7 +243,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Symbol(Symbol::Comma),
             TokenEnum::Symbol(Symbol::Semicolon),
             TokenEnum::Open(Group::Brace),
-            TokenEnum::Symbol(Symbol::Slash),
+            TokenEnum::Keyword(Keyword::With),
         ];
         self.spanned(|parser| {
             m! {
@@ -233,8 +258,7 @@ impl<'a> Parser<'a> {
                     DECL_END,
                     Parser::returns
                 );
-                effects <- parser.when_next(TokenEnum::Symbol(Symbol::Slash), |parser| {
-                    parser.skip();
+                effects <- parser.consume_next(TokenEnum::Keyword(Keyword::With), |parser| {
                     parser.many_until(DECL_END, Parser::path)
                 });
                 return inner::FunctionDeclaration { name, parameters, returns, effects };
@@ -273,7 +297,7 @@ impl<'a> Parser<'a> {
         self.spanned(|parser| {
             m! {
                 name <- parser.name();
-                kind <- parser.unless_next(&[], Parser::kind);
+                kind <- parser.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
                 return inner::GenericParameter { name, kind };
             }
         })
@@ -287,6 +311,10 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Effect) => {
                 parser.skip();
                 Result::new(inner::Kind::Effect)
+            }
+            TokenEnum::Keyword(Keyword::Region) => {
+                parser.skip();
+                Result::new(inner::Kind::Region)
             }
             _ => {
                 if parser.starts_type() {
@@ -368,6 +396,16 @@ impl<'a> Parser<'a> {
         } else {
             Result::new(None)
         }
+    }
+    fn consume_next<T>(
+        &mut self,
+        token: impl Into<TokenEnum>,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.when_next(token, |parser| {
+            parser.skip();
+            parse(parser)
+        })
     }
     fn skip_group(&mut self, group: Group) {
         loop {

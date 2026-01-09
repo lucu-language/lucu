@@ -1,0 +1,19 @@
+import "builtin:preamble" builtin
+
+type u8 = builtin.u8
+type u16 = builtin.u16
+type u32 = builtin.u32
+type u64 = builtin.u64
+
+type uint = builtin.uint
+type uptr = builtin.uptr
+type usize = builtin.usize
+
+type i8 = builtin.i8
+type i16 = builtin.i16
+type i32 = builtin.i32
+type i64 = builtin.i64
+
+type int = builtin.int
+type iptr = builtin.iptr
+type isize = builtin.isize

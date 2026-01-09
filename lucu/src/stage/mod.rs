@@ -147,6 +147,9 @@ impl ModuleGraph {
             })
             .collect()
     }
+    pub fn modules(&self) -> impl Iterator<Item = &Module> {
+        self.graph.node_weights()
+    }
     pub fn stages(&self, module: &Module) -> Option<&Stages> {
         self.cache.0.get(module)
     }

@@ -5,9 +5,11 @@ use crate::stage::token::{Group, Symbol, Token, TokenEnum};
 
 fn skip_whitespace(src: &mut &str) -> usize {
     let mut skipped = 0;
-    while !src.is_empty() && (src.as_bytes()[0].is_ascii_whitespace() || src.as_bytes()[0] == b'#')
+    while !src.is_empty()
+        && (src.as_bytes()[0].is_ascii_whitespace()
+            || (src.starts_with("--") && !src.starts_with("---")))
     {
-        if src.as_bytes()[0] == b'#' {
+        if src.starts_with("--") && !src.starts_with("---") {
             while !src.is_empty() && src.as_bytes()[0] != b'\n' {
                 *src = &src[1..];
                 skipped += 1;
@@ -138,6 +140,7 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
         b'}' => Close(Brace),
         b']' => Close(Bracket),
 
+        b'@' => Symbol(At),
         b';' => Symbol(Semicolon),
         b':' => Symbol(Colon),
         b'~' => Symbol(Tilde),
@@ -201,7 +204,7 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
             }
         }
 
-        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'@' => {
+        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'#' => {
             while src.len() > len
                 && matches!(src.as_bytes()[len], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
             {

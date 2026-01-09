@@ -2,7 +2,6 @@ use core::fmt;
 
 use crate::Mark;
 
-#[cfg(feature = "anstyle")]
 #[derive(Default, Clone, Copy)]
 pub struct MarkStyle {
     pub before: Option<anstyle::Style>,

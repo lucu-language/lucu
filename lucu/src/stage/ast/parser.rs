@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
                 parser.skip();
                 m! {
                     inner <- parser.r#type();
-                    region <- parser.consume_next(Keyword::In, Parser::path);
+                    region <- parser.consume_next(Symbol::At, Parser::path);
                     return inner::Type::Pointer(inner, region);
                 }
             }
@@ -186,7 +186,7 @@ impl<'a> Parser<'a> {
                 m! {
                     _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
                     inner <- parser.r#type();
-                    region <- parser.consume_next(Keyword::In, Parser::path);
+                    region <- parser.consume_next(Symbol::At, Parser::path);
                     return inner::Type::Slice(inner, region);
                 }
             }

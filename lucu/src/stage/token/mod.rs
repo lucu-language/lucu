@@ -35,6 +35,7 @@ impl Display for TokenEnum {
                 f,
                 "'{}'",
                 match s {
+                    Symbol::At => "@",
                     Symbol::Semicolon => return write!(f, "newline, ';'"),
                     Symbol::Colon => ":",
                     Symbol::Tilde => "~",
@@ -115,7 +116,7 @@ impl Token {
 
 impl TokenEnum {
     pub fn from_word(word: &str) -> TokenEnum {
-        let default = if word.starts_with('@') {
+        let default = if word.starts_with('#') {
             TokenEnum::Keyword(Keyword::Unknown)
         } else {
             TokenEnum::Identifier
@@ -179,14 +180,13 @@ pub enum Keyword {
     Else,
     Struct,
     Do,
-    In,
     Break,
     Region,
-    #[strum(serialize = "@cast")]
+    #[strum(serialize = "#cast")]
     Cast,
-    #[strum(serialize = "@addr")]
+    #[strum(serialize = "#addr")]
     Addr,
-    #[strum(serialize = "@intrinsic")]
+    #[strum(serialize = "#intrinsic")]
     Intrinsic,
     #[strum(disabled)]
     Unknown,
@@ -194,6 +194,7 @@ pub enum Keyword {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Symbol {
+    At,             // @
     Semicolon,      // ;
     Colon,          // :
     Tilde,          // ~

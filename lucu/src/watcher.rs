@@ -45,8 +45,8 @@ impl WatchedLibrary {
             modules_override: None,
         }
     }
-    pub fn with_preamble(mut self, library: Library, path: impl AsRef<Path>) -> Self {
-        self.preamble = Some(Module::new(library, path));
+    pub fn with_preamble(mut self, module: Module) -> Self {
+        self.preamble = Some(module);
         self
     }
     pub fn with_modules(mut self, modules: Dir<'static>) -> Self {

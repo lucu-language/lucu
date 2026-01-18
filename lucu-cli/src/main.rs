@@ -18,11 +18,11 @@ fn main() {
     );
     dirs.insert(
         Library::CORE,
-        WatchedLibrary::new("./modules/core").with_preamble(Library::BUILTIN, "preamble"),
+        WatchedLibrary::new("./modules/core").with_preamble(Module::BUILTIN_PREAMBLE),
     );
     dirs.insert(
         Library::MAIN,
-        WatchedLibrary::new("./modules/test").with_preamble(Library::CORE, "preamble"),
+        WatchedLibrary::new("./modules/test").with_preamble(Module::CORE_PREAMBLE),
     );
 
     let main = Module::new(Library::MAIN, "main");

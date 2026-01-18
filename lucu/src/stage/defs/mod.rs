@@ -49,7 +49,6 @@ impl Visitor for DefinitionPaths {
 #[derive(Debug, Default)]
 pub struct Definitions {
     defs: Vec<Definition>,
-    scope: HashMap<CompactString, NodeIndex>,
     graph: Acyclic<DiGraph<CompactString, Edge>>,
 }
 
@@ -114,9 +113,6 @@ impl Definitions {
     pub fn indices(&self) -> impl Iterator<Item = NodeIndex> {
         self.graph.node_indices()
     }
-    pub fn get(&self, name: &str) -> Option<NodeIndex> {
-        self.scope.get(name).copied()
-    }
     #[expect(clippy::implied_bounds_in_impls)]
     pub fn dot(
         &self,
@@ -153,14 +149,6 @@ impl Definitions {
             }
         }
 
-        let scope = scope
-            .into_iter()
-            .map(|(k, v)| match v.as_slice() {
-                [v] => (k, *v),
-                _ => todo!("multiple definitions"),
-            })
-            .collect();
-
         for compound in kosaraju_scc(&graph) {
             match compound.as_slice() {
                 &[v] if graph.contains_edge(v, v) => {
@@ -172,7 +160,7 @@ impl Definitions {
         }
 
         match Acyclic::try_from_graph(graph) {
-            Ok(graph) => problems.with(Self { defs, scope, graph }),
+            Ok(graph) => problems.with(Self { defs, graph }),
             Err(_) => problems.error(),
         }
     }
@@ -191,7 +179,7 @@ impl Definitions {
             scope.entry(name).or_default().push(node);
         }
         if let Some(parent) = def.parent {
-            graph.update_edge(parent, node, Edge);
+            graph.update_edge(node, parent, Edge);
         }
         for (idx, child) in ast.children().iter().enumerate() {
             Self::add_definition(graph, scope, defs, child, Definition::child(node, idx));

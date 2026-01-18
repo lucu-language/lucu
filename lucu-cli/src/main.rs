@@ -4,6 +4,7 @@ use std::time::Duration;
 use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
 use lucu::err::HasProblems;
+use lucu::ir::untyped::IR;
 use lucu::module::{Library, Module};
 use lucu::stage::ModuleGraph;
 use lucu::watcher::{FileWatcher, WatchedLibrary};
@@ -56,6 +57,11 @@ fn main() {
             }
         }
 
+        let stages = graph.stages(&Module::MAIN).unwrap();
+        let mut ir = IR::new();
+        let untyped = stages.untyped_ir(&graph, &mut ir).unwrap();
+        println!("{}", untyped.display(&ir));
+
         // wait for changes
         let changes = watcher.await_change();
         for changed in changes {
@@ -63,6 +69,6 @@ fn main() {
                 graph.insert_or_update(&watcher, changed);
             }
         }
-        graph.retain_connected(&main);
+        // graph.retain_connected(&main);
     }
 }

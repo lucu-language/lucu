@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, unbounded};
+use include_dir::Dir;
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use path_clean::PathClean;
@@ -23,7 +24,7 @@ pub struct FileWatcher {
 pub struct WatchedLibrary {
     pub location: PathBuf,
     pub preamble: Option<Module>,
-    pub modules_override: Option<include_dir::Dir<'static>>,
+    pub modules_override: Option<Dir<'static>>,
 }
 
 impl WatchedLibrary {
@@ -48,7 +49,7 @@ impl WatchedLibrary {
         self.preamble = Some(Module::new(library, path));
         self
     }
-    pub fn with_modules(mut self, modules: include_dir::Dir<'static>) -> Self {
+    pub fn with_modules(mut self, modules: Dir<'static>) -> Self {
         self.modules_override = Some(modules);
         self
     }

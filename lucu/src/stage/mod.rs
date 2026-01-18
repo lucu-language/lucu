@@ -19,6 +19,7 @@ use petgraph::visit::{
 };
 
 use crate::err::{HasProblems, Problem, Result};
+use crate::ir::untyped::{IR, Untyped};
 use crate::module::{Module, ModuleResolver};
 use crate::span::{Span, Spanned};
 use crate::stage::ast::parser::Parser;
@@ -36,6 +37,8 @@ pub struct Stages {
     ast: OnceCell<Result<ast::Module>>,
     imports: OnceCell<Result<Imports>>,
     definitions: OnceCell<Result<Definitions>>,
+
+    untyped_ir: OnceCell<Result<Untyped>>,
 }
 
 impl HasProblems for Stages {
@@ -63,6 +66,16 @@ impl Stages {
     fn reset_imports(&mut self) {
         // reset imports and everything that depends on imports
         self.imports = OnceCell::new();
+        self.untyped_ir = OnceCell::new();
+    }
+    fn resolve_imports(&self, resolver: &impl ModuleResolver) -> Option<&Imports> {
+        self.imports
+            .get_or_init(|| {
+                self.ast()
+                    .map(|ast| Imports::from(resolver, &self.module, ast))
+                    .unwrap_or_default()
+            })
+            .value()
     }
 
     pub fn source(&self) -> Option<&str> {
@@ -89,18 +102,18 @@ impl Stages {
             })
             .value()
     }
-    pub fn imports(&self, resolver: &impl ModuleResolver) -> Option<&Imports> {
-        self.imports
-            .get_or_init(|| {
-                self.ast()
-                    .map(|ast| Imports::from(resolver, &self.module, ast))
-                    .unwrap_or_default()
-            })
-            .value()
+    pub fn imports(&self) -> Option<&Imports> {
+        self.imports.get().and_then(Result::value)
     }
     pub fn definitions(&self) -> Option<&Definitions> {
         self.definitions
             .get_or_init(|| self.ast().map(Definitions::from).unwrap_or_default())
+            .value()
+    }
+
+    pub fn untyped_ir(&self, graph: &ModuleGraph, ir: &mut IR) -> Option<&Untyped> {
+        self.untyped_ir
+            .get_or_init(|| Untyped::from(graph, &self.module, ir).unwrap_or_default())
             .value()
     }
 }
@@ -173,6 +186,8 @@ impl ModuleGraph {
         self.nodes.contains_key(module)
     }
     pub fn retain_connected(&mut self, main: &Module) {
+        // FIXME: Node indices get changed when a node gets removed!
+
         let Some(&root) = self.nodes.get(main) else {
             // we don't even contain the main module
             // so we can reset all state
@@ -227,9 +242,9 @@ impl ModuleGraph {
                         .get_mut(&module)
                         .expect("ICE: module is in node map but has no cache");
 
-                    let old_imports = stages.imports(resolver).cloned();
+                    let old_imports = stages.resolve_imports(resolver).cloned();
                     stages.reset(resolver);
-                    let new_imports = stages.imports(resolver);
+                    let new_imports = stages.resolve_imports(resolver);
 
                     if old_imports.as_ref() != new_imports {
                         reimport_nodes.push(node);
@@ -256,7 +271,7 @@ impl ModuleGraph {
 
             let parent = self.graph.node_weight(parent_node).unwrap().clone();
             let stages = self.cache.get_or_insert(resolver, &parent);
-            let imports = stages.imports(resolver);
+            let imports = stages.resolve_imports(resolver);
 
             for (import, child) in imports.into_iter().flatten() {
                 let child_node = *self.nodes.entry(child.clone()).or_insert_with(|| {

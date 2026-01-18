@@ -22,3 +22,4 @@ petgraph = { version = "0.8.3", path="../../petgraph", default-features = false,
 strum = { version = "0.27.2", features = ["derive"] }
 itertools = "0.14.0"
 line-column = "0.2.0"
+indexmap = "2.13.0"

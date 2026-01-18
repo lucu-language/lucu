@@ -1,7 +1,7 @@
 use std::collections::{HashMap, hash_map};
 use std::fmt::Display;
 
-use compact_str::{CompactString, format_compact};
+use compact_str::{CompactString, ToCompactString, format_compact};
 
 use crate::err::{ProblemKind, Problems, Result};
 use crate::module::{Module, ModuleResolver, UnknownModule};
@@ -38,6 +38,12 @@ impl<'a> IntoIterator for &'a Imports {
 }
 
 impl Imports {
+    pub fn preamble(&self) -> Option<&Module> {
+        self.0.get(&Import::Implicit)
+    }
+    pub fn get(&self, import: &str) -> Option<&Module> {
+        self.0.get(&Import::Named(import.to_compact_string()))
+    }
     pub fn iter(&self) -> impl Iterator<Item = (&Import, &Module)> {
         self.0.iter()
     }

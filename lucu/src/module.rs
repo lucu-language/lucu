@@ -64,6 +64,14 @@ impl Module {
         library: Library::MAIN,
         relative_path: CompactString::const_new("main"),
     };
+    pub const BUILTIN_PREAMBLE: Module = Self {
+        library: Library::BUILTIN,
+        relative_path: CompactString::const_new("preamble"),
+    };
+    pub const CORE_PREAMBLE: Module = Self {
+        library: Library::CORE,
+        relative_path: CompactString::const_new("preamble"),
+    };
     pub fn new(library: Library, path: impl AsRef<Path>) -> Self {
         let relative_path = clean(path)
             .into_os_string()
@@ -77,6 +85,14 @@ impl Module {
             library,
             relative_path,
         }
+    }
+    pub fn name(&self) -> &str {
+        let relative = self.relative_path.as_str();
+        let without_extension = relative.rsplit_once('.').map(|t| t.0).unwrap_or(relative);
+        without_extension
+            .rsplit_once(['/', '\\'])
+            .map(|t| t.1)
+            .unwrap_or(without_extension)
     }
     pub fn from_import(parent: &Module, import: &str) -> Self {
         match import.split_once(':') {

@@ -1,35 +1,5 @@
-type A = B
-type B = struct(b B)
+type Id[T] = T
 
-type C = struct(d D)
-type D = struct(c C)
+type Apply[M[_], T] = M[T]
 
-type E[T] = struct(t T)
-
-effect Yield[T] = {
-	fun yield(t T)
-}
-
-fun main = {
-	
-}
-
-fun f(i int) int = {
-	
-}
-
-fun g(i int, fun f(i int) int) int = {
-	
-}
-
-fun h[T] = {
-	
-}
-
-fun i[T type] = {
-	
-}
-
-fun j[N int] = {
-	
-}
+type ApplyApply[A[_[_], _], M[_], T] = A[M, T]

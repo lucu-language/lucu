@@ -88,11 +88,7 @@ impl Problems {
         }
     }
     pub fn error<T>(self) -> Result<T> {
-        assert!(
-            self.problems
-                .iter()
-                .any(|d| d.header().level == ProblemLevel::Error)
-        );
+        assert!(self.has_error());
         Result {
             value: None,
             problems: self.problems,
@@ -105,6 +101,14 @@ impl Problems {
         let rhs = rhs.into();
         self.problems.append(rhs.problems);
         rhs.value
+    }
+    pub fn has_error(&self) -> bool {
+        self.problems
+            .iter()
+            .any(|d| d.header().level == ProblemLevel::Error)
+    }
+    pub fn and_then<T>(self, f: impl FnOnce(()) -> Result<T>) -> Result<T> {
+        self.with(()).and_then(f)
     }
 }
 

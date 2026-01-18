@@ -198,7 +198,7 @@ impl<'a> Parser<'a> {
         self.spanned(|parser| {
             m! {
                 _ <- parser.consume(Keyword::Struct);
-                members <- parser.many_grouped(Group::Parenthesis, Symbol::Colon, Parser::struct_member);
+                members <- parser.many_grouped(Group::Parenthesis, Symbol::Comma, Parser::struct_member);
                 return inner::Struct { members };
             }
         })

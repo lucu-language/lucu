@@ -25,7 +25,7 @@ pub struct Untyped {
 #[derive(Debug)]
 pub enum Item {
     Alias(Kind, Term),
-    Struct(Kind, Vec<StructMember>),
+    Struct(Kind, Option<Vec<StructMember>>),
     Effect,
     EffectFunction,
     Function,
@@ -75,6 +75,7 @@ pub enum TypeEnum {
     Generic(GenericParameter),
     Struct(Module, CompactString, Option<Arc<[GenericArgument]>>),
     Integer(Integer),
+    Boolean,
     Pointer(Type, Region),
     Slice(Type, Region),
 }
@@ -257,7 +258,7 @@ impl Substitute for Type {
             TypeEnum::Slice(ty, region) => {
                 TypeEnum::Slice(ty.subst(ir, start, args), region.subst(ir, start, args))
             }
-            TypeEnum::Integer(_) => return self,
+            TypeEnum::Integer(_) | TypeEnum::Boolean => return self,
         };
         ir.insert_type(changed)
     }

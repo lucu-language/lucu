@@ -17,3 +17,5 @@ type i64 = builtin.i64
 type int = builtin.int
 type iptr = builtin.iptr
 type isize = builtin.isize
+
+type bool = builtin.bool

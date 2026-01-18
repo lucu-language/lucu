@@ -18,6 +18,8 @@ type int = #intrinsic
 type iptr = #intrinsic
 type isize = #intrinsic
 
+type bool = #intrinsic
+
 -- regions
 
 effect Read[R region] = {

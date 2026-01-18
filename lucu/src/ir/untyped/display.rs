@@ -77,6 +77,7 @@ impl fmt::Display for Interned<'_, Type> {
                 }
                 Ok(())
             }
+            TypeEnum::Boolean => write!(f, "Bool"),
             TypeEnum::Integer(size) => write!(f, "{size}"),
             TypeEnum::Pointer(ty, region) => {
                 write!(f, "^{}@{}", ty.display(self.1), region.display(self.1))
@@ -150,8 +151,12 @@ impl fmt::Display for Interned<'_, &'_ Untyped> {
                         write!(f, "λ ")?;
                     }
                     writeln!(f, "{name} {{")?;
-                    for member in struct_members {
-                        writeln!(f, "  {} :: {},", member.name, member.ty.display(self.1))?;
+                    if let Some(struct_members) = struct_members {
+                        for member in struct_members {
+                            writeln!(f, "  {} :: {},", member.name, member.ty.display(self.1))?;
+                        }
+                    } else {
+                        writeln!(f, "  ?")?;
                     }
                     writeln!(f, "}}")?;
                 }

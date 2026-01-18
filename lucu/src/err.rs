@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
-use std::ops::Deref;
+use std::ops::{Add, Deref};
 
 use annotate_snippets::{
     Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title
@@ -44,6 +44,16 @@ pub struct Result<T> {
 #[derive(Clone, Debug, Default)]
 pub struct Problems {
     problems: im::Vector<Problem>,
+}
+
+impl Add for Problems {
+    type Output = Problems;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Problems {
+            problems: self.problems + rhs.problems,
+        }
+    }
 }
 
 impl From<Problem> for Problems {

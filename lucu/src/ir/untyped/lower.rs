@@ -9,6 +9,7 @@ use crate::ir::untyped::{
     GenericArgument, GenericParameter, IR, IntSize, Integer, Item, Kind, KindEnum, KindStruct, Region, RegionEnum, StructMember, Substitute, Term, Type, TypeEnum, Untyped
 };
 use crate::module::Module;
+use crate::span::Spanned;
 use crate::stage::ast::inner;
 use crate::stage::defs::Definitions;
 use crate::stage::imports::Imports;
@@ -78,12 +79,17 @@ impl Untyped {
 
 impl Lower<'_> {
     fn module(mut self) -> Result<Untyped> {
-        let problems = self
+        let decl_problems = self
+            .definitions
+            .postorder(self.ast)
+            .map(|def| self.declaration(def))
+            .collect::<Problems>();
+        let def_problems = self
             .definitions
             .postorder(self.ast)
             .map(|def| self.definition(def))
             .collect::<Problems>();
-        problems.with(self.untyped)
+        (decl_problems + def_problems).with(self.untyped)
     }
     fn generics<'a>(&self, kind: Kind, name: &'a ast::Name, base: &Generics<'a>) -> Generics<'a> {
         match (&self.ir[kind].params, &name.generics) {
@@ -99,9 +105,44 @@ impl Lower<'_> {
         }
     }
     fn definition(&mut self, def: &ast::Definition) -> Problems {
+        let mut problems = Problems::ok();
+
         match &def.0 {
             inner::Definition::Type(name, def) => {
-                let mut problems = Problems::ok();
+                if let Some(Spanned(inner::TypeDefinition::Struct(struc), _)) = def {
+                    let Some(&Item::Struct(kind, _)) = self.untyped.items.get(name.as_str()) else {
+                        unreachable!();
+                    };
+                    let generics = self.generics(kind, name, &Generics::new());
+                    let members = problems.append(
+                        struc
+                            .members
+                            .iter()
+                            .map(|member| self.struct_member(member, &generics))
+                            .collect::<Result<_>>(),
+                    );
+                    let Some(Item::Struct(_, ptr)) = self.untyped.items.get_mut(name.as_str())
+                    else {
+                        unreachable!();
+                    };
+                    *ptr = members;
+                }
+            }
+            inner::Definition::Function(_, _) => {
+                // TODO
+            }
+            inner::Definition::Effect(_, _) => {
+                // TODO
+            }
+        }
+
+        problems
+    }
+    fn declaration(&mut self, def: &ast::Definition) -> Problems {
+        let mut problems = Problems::ok();
+
+        match &def.0 {
+            inner::Definition::Type(name, def) => {
                 let kind = problems.append(self.item_kind(name, None));
 
                 match def {
@@ -119,18 +160,10 @@ impl Lower<'_> {
                             }
                         }
                         inner::TypeDefinition::Struct(_) => {
-                            // TODO: members should be added in a seperate pass
-                            // let members = problems.append(
-                            //     spanned
-                            //         .members
-                            //         .iter()
-                            //         .map(|member| self.struct_member(member))
-                            //         .collect::<Result<_>>(),
-                            // );
                             if let Some(kind) = kind {
                                 self.untyped.items.insert(
                                     name.as_str().to_compact_string(),
-                                    Item::Struct(kind, Vec::new()),
+                                    Item::Struct(kind, None),
                                 );
                             }
                         }
@@ -146,8 +179,6 @@ impl Lower<'_> {
                     },
                     None => todo!("error"),
                 }
-
-                problems
             }
             inner::Definition::Function(decl, _) => {
                 // TODO
@@ -155,16 +186,16 @@ impl Lower<'_> {
                 self.untyped
                     .items
                     .insert(decl.name.as_str().to_compact_string(), Item::Function);
-                Problems::ok()
             }
             inner::Definition::Effect(name, _) => {
                 // TODO
                 self.untyped
                     .items
                     .insert(name.as_str().to_compact_string(), Item::Effect);
-                Problems::ok()
             }
         }
+
+        problems
     }
     fn struct_member(
         &mut self,
@@ -430,6 +461,7 @@ impl Lower<'_> {
             ("builtin:preamble", "int") => TypeEnum::Integer(Integer::signed(IntSize::Register)),
             ("builtin:preamble", "iptr") => TypeEnum::Integer(Integer::signed(IntSize::Address)),
             ("builtin:preamble", "isize") => TypeEnum::Integer(Integer::signed(IntSize::Index)),
+            ("builtin:preamble", "bool") => TypeEnum::Boolean,
             _ => todo!("error"),
         };
         Result::new(self.ir.insert_type(ty))

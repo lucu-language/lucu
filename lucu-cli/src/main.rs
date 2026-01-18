@@ -36,32 +36,28 @@ fn main() {
     loop {
         println!("{}", graph.dot());
 
-        let stages = graph.stages(&main).unwrap();
-
-        let definitions = stages.definitions().unwrap();
-        println!("{}", definitions.dot());
-
         for module in graph.modules() {
             if let Some(stages) = graph.stages(module) {
                 let source = stages.source().unwrap();
                 let tokens = stages.tokens().unwrap();
                 let ast = stages.ast().unwrap();
-                let definitions = stages.definitions().unwrap();
 
-                let annotated = source
-                    .snippet()
-                    .mark_line_numbers()
-                    .mark_syntax(tokens)
-                    .mark_definition_order(ast, definitions);
-                anstream::println!("{}", annotated);
+                let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
 
-                stages.print_problems2(&watcher);
+                if let Some(definitions) = stages.definitions() {
+                    anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
+                } else {
+                    anstream::println!("{}", annotated);
+                }
+
+                if let Some(untyped) = stages.untyped_ir(&graph, &mut ir) {
+                    println!("{}", untyped.display(&ir));
+                }
+
+                stages.print_problems(&watcher, true);
+                println!();
             }
         }
-
-        let stages = graph.stages(&Module::MAIN).unwrap();
-        let untyped = stages.untyped_ir(&graph, &mut ir).unwrap();
-        println!("{}", untyped.display(&ir));
 
         // wait for changes
         let changes = watcher.await_change();

@@ -124,7 +124,10 @@ impl fmt::Display for Interned<'_, GenericArgument> {
 
 impl fmt::Display for Interned<'_, &'_ Untyped> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (name, item) in self.0.items.iter() {
+        for (i, (name, item)) in self.0.items.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
             match item {
                 Item::Alias(kind, term) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
@@ -170,7 +173,6 @@ impl fmt::Display for Interned<'_, &'_ Untyped> {
                     writeln!(f, "{name} :: ?")?;
                 }
             }
-            writeln!(f)?;
         }
         Ok(())
     }

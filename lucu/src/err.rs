@@ -1,10 +1,6 @@
 use std::borrow::Cow;
-use std::cell::OnceCell;
-use std::ops::{Add, Deref};
+use std::ops::Add;
 
-use annotate_snippets::{
-    Annotation, AnnotationKind, Element, Level, Origin, Renderer, Report, Snippet, Title
-};
 use anstyle::{AnsiColor, Color, Style};
 use compact_str::CompactString;
 use do_notation::Lift;
@@ -17,18 +13,17 @@ use crate::module::{Module, ModuleResolver};
 use crate::span::{HasSpan, Span};
 use crate::stage::ast::err::Expected;
 use crate::stage::ast::visit::Combine;
+use crate::stage::defs::err::MultipleDefinitions;
 use crate::stage::token::lexer::Lexer;
 
 pub trait HasProblems {
     fn problems(&self) -> impl Iterator<Item = &Problem>;
-    fn print_problems(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
-        for problem in self.problems() {
-            problem.print(resolver, renderer);
-        }
-    }
-    fn print_problems2(&self, resolver: &impl ModuleResolver) {
-        for problem in self.problems() {
-            problem.print2(resolver);
+    fn print_problems(&self, resolver: &impl ModuleResolver, compact: bool) {
+        for (i, problem) in self.problems().enumerate() {
+            if i > 0 && compact {
+                println!();
+            }
+            problem.print(resolver, compact);
         }
     }
 }
@@ -248,66 +243,39 @@ impl<T> HasProblems for Result<T> {
     }
 }
 
-impl<T> HasProblems for OnceCell<Result<T>> {
-    fn problems(&self) -> impl Iterator<Item = &Problem> {
-        self.get().into_iter().flat_map(Result::problems)
-    }
-}
-
 impl<T> Lift<T> for Result<T> {
     fn lift(a: T) -> Self {
         Self::new(a)
     }
 }
 
-impl Module {
-    pub fn snippet<'a>(
-        &'a self,
-        resolver: &impl ModuleResolver,
-        annotations: impl IntoIterator<Item = Annotation<'a>>,
-    ) -> Element<'a> {
-        let path = resolver.readable_path(self);
-        match resolver.contents(self) {
-            Some(source) => Snippet::<Annotation>::source(source)
-                .path(path)
-                .annotations(annotations)
-                .into(),
-            None => Origin::path(path).into(),
-        }
-    }
+pub type Label<'a> = Cow<'a, str>;
+
+pub struct Context<'a> {
+    pub module: Option<Module>,
+    pub span: Span,
+    pub label: Option<Label<'a>>,
+    pub level: ContextLevel,
 }
 
-pub type Owned<T> = <<T as Deref>::Target as ToOwned>::Owned;
-pub type OwnedReport<'a> = Owned<Report<'a>>;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ContextLevel {
+    Same,
+    Info,
+}
 
 pub trait Diagnostic {
-    fn label(&self) -> Option<Cow<'_, str>>;
-    fn report<'a>(
-        &'a self,
-        title: Title<'a>,
-        module: &'a Module,
-        span: Span,
-        resolver: &impl ModuleResolver,
-    ) -> OwnedReport<'a> {
-        std::vec![
-            title.element(
-                module.snippet(
-                    resolver,
-                    [AnnotationKind::Primary
-                        .span(span.into())
-                        .label(self.label())]
-                )
-            )
-        ]
-    }
+    fn label(&self) -> Option<Label<'_>>;
+    #[expect(unused_variables)]
+    fn context(&self, f: &mut dyn FnMut(Context<'_>)) {}
 }
 impl Diagnostic for () {
-    fn label(&self) -> Option<Cow<'_, str>> {
+    fn label(&self) -> Option<Label<'_>> {
         None
     }
 }
 impl Diagnostic for CompactString {
-    fn label(&self) -> Option<Cow<'_, str>> {
+    fn label(&self) -> Option<Label<'_>> {
         Some(self.as_str().into())
     }
 }
@@ -316,15 +284,6 @@ impl Diagnostic for CompactString {
 pub enum ProblemLevel {
     Error,
     Warning,
-}
-
-impl From<ProblemLevel> for Level<'static> {
-    fn from(value: ProblemLevel) -> Self {
-        match value {
-            ProblemLevel::Error => Self::ERROR,
-            ProblemLevel::Warning => Self::WARNING,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -336,6 +295,7 @@ pub struct Problem {
 
 pub const ERROR_COLOR: Color = Color::Ansi(AnsiColor::Red);
 pub const WARNING_COLOR: Color = Color::Ansi(AnsiColor::Yellow);
+pub const INFO_COLOR: Color = Color::Ansi(AnsiColor::Green);
 
 const HIGHLIGHT_BG: Color = Color::Ansi(AnsiColor::Black);
 pub const ERROR_HIGHLIGHT: Style = Style::new()
@@ -344,10 +304,16 @@ pub const ERROR_HIGHLIGHT: Style = Style::new()
 pub const WARNING_HIGHLIGHT: Style = Style::new()
     .fg_color(Some(WARNING_COLOR))
     .bg_color(Some(HIGHLIGHT_BG));
+pub const INFO_HIGHLIGHT: Style = Style::new()
+    .fg_color(Some(INFO_COLOR))
+    .bg_color(Some(HIGHLIGHT_BG));
 
 pub const TITLE_STYLE: Style = Style::new().bold();
+pub const CONTEXT_STYLE: Style = Style::new()
+    .italic()
+    .fg_color(Some(Color::Ansi(AnsiColor::BrightWhite)));
 pub const LABEL_STYLE: Style = Style::new();
-pub const PATH_STYLE: Style = Style::new();
+pub const PATH_STYLE: Style = LINE_STYLE;
 
 impl Problem {
     pub fn header(&self) -> ProblemHeader {
@@ -356,7 +322,7 @@ impl Problem {
     pub fn label(&self) -> Option<Cow<'_, str>> {
         self.kind.label()
     }
-    pub fn print2(&self, resolver: &impl ModuleResolver) {
+    pub fn print(&self, resolver: &impl ModuleResolver, compact: bool) {
         let header = self.header();
         let title = header.title;
         let id = header.id;
@@ -375,51 +341,92 @@ impl Problem {
             anstream::println!("{TITLE_STYLE:#}");
         }
 
-        if let Some(contents) = resolver.contents(&self.module) {
-            let (line, col) = line_column(&contents, self.span.start as usize);
-            let snippet = contents.as_str().snippet().lines_containing(self.span);
-            let tokens = Lexer::new(&contents)
-                .for_range(snippet.range())
-                .collect::<Box<_>>();
+        // Problem location
+        let contents = resolver.contents(&self.module);
+        let path = resolver.readable_path(&self.module);
 
-            struct Error(Style);
-            impl Mark for Error {
-                fn ignore_nested(&self) -> bool {
-                    true
+        if let Some(contents) = contents.as_deref() {
+            print_highlight(highlight, self.span, Some(&path), contents, compact);
+        }
+
+        // Context locations
+        self.kind.context(&mut |ctx| {
+            let (contents, path) = if let Some(module) = ctx.module {
+                (
+                    resolver.contents(&module).map(Cow::Owned),
+                    Some(resolver.readable_path(&module)),
+                )
+            } else {
+                (contents.as_deref().map(Cow::Borrowed), None)
+            };
+
+            if let Some(contents) = contents.as_deref() {
+                let (name, color, highlight) = match ctx.level {
+                    ContextLevel::Same => (name, color, highlight),
+                    ContextLevel::Info => ("info", INFO_COLOR, INFO_HIGHLIGHT),
+                };
+                let context_kind_style = CONTEXT_STYLE.fg_color(Some(color));
+
+                if let Some(label) = ctx.label {
+                    anstream::println!("{context_kind_style}{name}{context_kind_style:#}{CONTEXT_STYLE}: {label}{CONTEXT_STYLE:#}");
+                } else if path.is_none() {
+                    anstream::println!("{LINE_STYLE} ...  {LINE_STYLE:#}");
                 }
-                fn style(&self) -> MarkStyle {
-                    self.0.into()
-                }
-                fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    write!(f, " ")
-                }
-                fn fmt_after(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                    write!(f, " ")
-                }
+
+                print_highlight(highlight, ctx.span, path.as_deref(), contents,compact);
             }
+        });
+    }
+}
 
-            anstream::println!(
-                "{LINE_STYLE}   /->{LINE_STYLE:#} {PATH_STYLE}{}:{line}:{col}{PATH_STYLE:#}",
-                resolver.readable_path(&self.module)
-            );
-            anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
-            anstream::println!(
-                "{}",
-                snippet
-                    .mark_line_numbers()
-                    .mark_syntax(&tokens)
-                    .mark_semicolons(&tokens)
-                    .annotate(std::iter::once(Error(highlight).at(self.span)))
-            );
-            anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
+fn print_highlight(
+    highlight: Style,
+    span: Span,
+    path: Option<&str>,
+    contents: &str,
+    compact: bool,
+) {
+    struct Error(Style);
+    impl Mark for Error {
+        fn ignore_nested(&self) -> bool {
+            true
+        }
+        fn style(&self) -> MarkStyle {
+            self.0.into()
+        }
+        fn fmt_before(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, " ")
+        }
+        fn fmt_after(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, " ")
         }
     }
-    pub fn print(&self, resolver: &impl ModuleResolver, renderer: &Renderer) {
-        let header = self.header();
-        let title =
-            Level::from(header.level).primary_title(format!("[{}] {}", header.id, header.title));
-        let report = self.kind.report(title, &self.module, self.span, resolver);
-        anstream::println!("{}", renderer.render(&report));
+
+    let (line, col) = line_column(contents, span.start as usize);
+    let snippet = contents.snippet().lines_containing(span);
+    let tokens = Lexer::new(contents)
+        .for_range(snippet.range())
+        .collect::<Box<_>>();
+
+    if let Some(path) = path {
+        anstream::println!(
+            "{LINE_STYLE}   /->{LINE_STYLE:#} {PATH_STYLE}{path}:{line}:{col}{PATH_STYLE:#}",
+        );
+    }
+
+    if !compact {
+        anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
+    }
+    anstream::println!(
+        "{}",
+        snippet
+            .mark_line_numbers()
+            .mark_syntax(&tokens)
+            .mark_semicolons(&tokens)
+            .annotate(std::iter::once(Error(highlight).at(span)))
+    );
+    if !compact {
+        anstream::println!("{LINE_STYLE}    | {LINE_STYLE:#}");
     }
 }
 
@@ -460,15 +467,9 @@ macro_rules! diagnostics {
                     $(Self::$variant(v) => Diagnostic::label(v)),*
                 }
             }
-            fn report<'a>(
-                &'a self,
-                title: Title<'a>,
-                module: &'a Module,
-                span: Span,
-                resolver: &impl ModuleResolver,
-            ) -> OwnedReport<'a> {
+            fn context(&self, f: &mut dyn FnMut(Context<'_>)) {
                 match self {
-                    $(Self::$variant(v) => Diagnostic::report(v, title, module, span, resolver)),*
+                    $(Self::$variant(v) => Diagnostic::context(v, f)),*
                 }
             }
         }
@@ -484,4 +485,6 @@ diagnostics!(
     (UnknownFile      (CompactString), 103, Error, "Could not access module file"),
     (UnknownLibrary   (CompactString), 104, Error, "Unknown library"),
     (InvalidIdentifier(()),            105, Error, "File name is not a valid identifier"),
+
+    (MultipleDefinitions(MultipleDefinitions), 106, Error, "Name is defined multiple times"),
 );

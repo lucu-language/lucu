@@ -9,5 +9,4 @@ lucu-annotate = { path = "../lucu-annotate" }
 
 anstream = "0.6.21"
 
-annotate-snippets.workspace = true
 include_dir.workspace = true

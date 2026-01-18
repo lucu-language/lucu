@@ -10,6 +10,7 @@ pub mod defs;
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::ops::Deref;
 
 use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
 use petgraph::dot::Dot;
@@ -21,7 +22,6 @@ use petgraph::visit::{
 use crate::err::{HasProblems, Problem, Result};
 use crate::ir::untyped::{IR, Untyped};
 use crate::module::{Module, ModuleResolver};
-use crate::span::{Span, Spanned};
 use crate::stage::ast::parser::Parser;
 use crate::stage::defs::Definitions;
 use crate::stage::imports::{Import, Imports};
@@ -33,12 +33,12 @@ pub struct Stages {
     module: Module,
     source: Option<String>,
 
-    tokens: OnceCell<Result<Box<[Token]>>>,
-    ast: OnceCell<Result<ast::Module>>,
-    imports: OnceCell<Result<Imports>>,
-    definitions: OnceCell<Result<Definitions>>,
+    tokens: Lazy<Box<[Token]>>,
+    ast: Lazy<ast::Module>,
+    imports: Lazy<Imports>,
+    definitions: Lazy<Definitions>,
 
-    untyped_ir: OnceCell<Result<Untyped>>,
+    untyped_ir: Lazy<Untyped>,
 }
 
 impl HasProblems for Stages {
@@ -48,6 +48,39 @@ impl HasProblems for Stages {
             .chain(self.ast.problems())
             .chain(self.imports.problems())
             .chain(self.definitions.problems())
+    }
+}
+
+#[derive(Debug)]
+struct Lazy<T>(OnceCell<Result<T>>);
+
+impl<T> Default for Lazy<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> HasProblems for Lazy<T> {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
+        self.0.get().into_iter().flat_map(Result::problems)
+    }
+}
+
+impl<T> Lazy<T> {
+    const fn new() -> Self {
+        Self(OnceCell::new())
+    }
+    fn get_or_init(&self, f: impl FnOnce() -> Option<Result<T>>) -> Option<&T> {
+        match self.0.get() {
+            Some(t) => t.value(),
+            None => {
+                let t = f()?;
+                self.0.get_or_init(|| t).value()
+            }
+        }
+    }
+    fn get(&self) -> Option<&T> {
+        self.0.get().and_then(Result::value)
     }
 }
 
@@ -65,17 +98,14 @@ impl Stages {
     }
     fn reset_imports(&mut self) {
         // reset imports and everything that depends on imports
-        self.imports = OnceCell::new();
-        self.untyped_ir = OnceCell::new();
+        self.imports = Lazy::new();
+        self.untyped_ir = Lazy::new();
     }
     fn resolve_imports(&self, resolver: &impl ModuleResolver) -> Option<&Imports> {
-        self.imports
-            .get_or_init(|| {
-                self.ast()
-                    .map(|ast| Imports::from(resolver, &self.module, ast))
-                    .unwrap_or_default()
-            })
-            .value()
+        self.imports.get_or_init(|| {
+            let ast = self.ast()?;
+            Some(Imports::from(resolver, &self.module, ast))
+        })
     }
 
     pub fn source(&self) -> Option<&str> {
@@ -83,38 +113,32 @@ impl Stages {
     }
     pub fn tokens(&self) -> Option<&[Token]> {
         self.tokens
-            .get_or_init(|| Result::new(Lexer::new(self.source().unwrap_or_default()).collect()))
-            .value()
-            .map(|v| &**v)
+            .get_or_init(|| {
+                let source = self.source()?;
+                Some(Result::new(Lexer::new(source).collect()))
+            })
+            .map(Deref::deref)
     }
     pub fn ast(&self) -> Option<&ast::Module> {
-        self.ast
-            .get_or_init(|| {
-                self.tokens()
-                    .map(|tokens| {
-                        Parser::new(&self.module, self.source().unwrap_or_default(), tokens)
-                            .module()
-                    })
-                    .unwrap_or(Result::new(Spanned(
-                        ast::inner::Module::default(),
-                        Span::ZERO,
-                    )))
-            })
-            .value()
+        self.ast.get_or_init(|| {
+            let source = self.source()?;
+            let tokens = self.tokens()?;
+            Some(Parser::new(&self.module, source, tokens).module())
+        })
     }
     pub fn imports(&self) -> Option<&Imports> {
-        self.imports.get().and_then(Result::value)
+        self.imports.get()
     }
     pub fn definitions(&self) -> Option<&Definitions> {
-        self.definitions
-            .get_or_init(|| self.ast().map(Definitions::from).unwrap_or_default())
-            .value()
+        self.definitions.get_or_init(|| {
+            let ast = self.ast()?;
+            Some(Definitions::from(&self.module, ast))
+        })
     }
 
     pub fn untyped_ir(&self, graph: &ModuleGraph, ir: &mut IR) -> Option<&Untyped> {
         self.untyped_ir
-            .get_or_init(|| Untyped::from(graph, &self.module, ir).unwrap_or_default())
-            .value()
+            .get_or_init(|| Untyped::from(graph, &self.module, ir))
     }
 }
 

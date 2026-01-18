@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 lucu-annotate = { path = "../lucu-annotate" }
 
-annotate-snippets.workspace = true
 anstyle.workspace = true
 include_dir.workspace = true
 

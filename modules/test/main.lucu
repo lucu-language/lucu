@@ -1,17 +1,13 @@
 type Id[T] = T
 
+type Test1 = Id[u32]
+
 type Apply[M[_], T] = M[T]
 
-type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
-
-type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]
-
-type Test1 = Id[u32]
 type Test2 = Apply[Id, u32]
-type Test3 = ApplyApply[Apply, Id, u32]
 
-type ConstU64[T] = u64
-type Test4 = ConstU64[u32]
-type Test5 = Apply[ConstU64, u32]
+-- type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
 
-type Maybe[T] = struct(t T, tag bool)
+-- type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]
+
+-- type Maybe[T] = struct(t T, tag bool)

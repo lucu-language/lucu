@@ -8,9 +8,14 @@ use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
-use crate::err::{Problems, Result};
+use crate::err::{Problem, ProblemKind, Problems, Result};
+use crate::module::Module;
+use crate::span::HasSpan;
 use crate::stage::ast::visit::{Ast, Combine, Visitor};
 use crate::stage::ast::{self, visit};
+use crate::stage::defs::err::MultipleDefinitions;
+
+pub mod err;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Edge;
@@ -126,7 +131,7 @@ impl Definitions {
     > {
         Dot::new(&self.graph)
     }
-    pub fn from(ast: &ast::Module) -> Result<Self> {
+    pub fn from(module: &Module, ast: &ast::Module) -> Result<Self> {
         let mut problems = Problems::ok();
 
         let mut graph = DiGraph::new();
@@ -137,13 +142,49 @@ impl Definitions {
             Self::add_definition(&mut graph, &mut scope, &mut defs, def, Definition::top(idx));
         }
 
+        // gaze upon this majestic code
+        let scope = problems
+            .append(
+                scope
+                    .into_iter()
+                    .map(
+                        |(k, v)| match v.split_first().expect("ICE: empty def vec") {
+                            (&v, []) => Result::new((k, v)),
+                            (&first, rest) => Result::error(
+                                ProblemKind::MultipleDefinitions(MultipleDefinitions {
+                                    name: k,
+                                    redefined: rest
+                                        .iter()
+                                        .map(|&node| {
+                                            ast.definition(node, &defs)
+                                                .name()
+                                                .expect("ICE: named definition has no name")
+                                                .ident
+                                                .span()
+                                        })
+                                        .collect(),
+                                })
+                                .at(
+                                    module,
+                                    &ast.definition(first, &defs)
+                                        .name()
+                                        .expect("ICE: named definition has no name")
+                                        .ident,
+                                ),
+                            ),
+                        },
+                    )
+                    .collect::<Result<HashMap<_, _>>>(),
+            )
+            .unwrap_or_default();
+
         for parent in (0..graph.node_count()).map(NodeIndex::new) {
             let def = ast.definition(parent, &defs);
             let mut names = def.visit(DefinitionPaths);
             ast.remove_generics(parent, &defs, &mut names);
 
             for name in names {
-                if let Some(&[child]) = scope.get(name).map(Vec::as_slice) {
+                if let Some(&child) = scope.get(name) {
                     graph.update_edge(parent, child, Edge);
                 }
             }
@@ -159,9 +200,11 @@ impl Definitions {
             }
         }
 
-        match Acyclic::try_from_graph(graph) {
-            Ok(graph) => problems.with(Self { defs, graph }),
-            Err(_) => problems.error(),
+        if problems.has_error() {
+            problems.error()
+        } else {
+            let graph = Acyclic::try_from_graph(graph).expect("ICE: cyclic graph passed ssc test");
+            problems.with(Self { defs, graph })
         }
     }
     fn add_definition(

@@ -231,8 +231,9 @@ impl Substitute for Type {
             TypeEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
                 let generic = generic.clone().subst(ir, start, args);
-                if let Some(arg) = index.and_then(|i| args.get(i).copied()) {
-                    match generic.instantiate(ir, arg) {
+                // generics have *reversed* indices
+                if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
+                    match generic.instantiate(ir, args[index]) {
                         Term::Type(ty) => return ty,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
@@ -268,8 +269,9 @@ impl Substitute for Region {
             RegionEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
                 let generic = generic.clone().subst(ir, start, args);
-                if let Some(arg) = index.and_then(|i| args.get(i).copied()) {
-                    match generic.instantiate(ir, arg) {
+                // generics have *reversed* indices
+                if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
+                    match generic.instantiate(ir, args[index]) {
                         Term::Region(region) => return region,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }

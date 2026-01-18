@@ -45,7 +45,8 @@ impl<'a> Generics<'a> {
         let len = generics.len();
         let mut shifted = self.shifted(len);
         for (index, (ident, kind)) in generics.enumerate() {
-            shifted.0.insert(ident, (index, kind));
+            // generics have *reversed* indices
+            shifted.0.insert(ident, (len - (index + 1), kind));
         }
         shifted
     }
@@ -251,7 +252,10 @@ impl Lower<'_> {
             params
                 .iter()
                 .copied()
+                // generics have *reversed* indices
+                .rev()
                 .enumerate()
+                .rev()
                 .map(|(i, kind)| {
                     let apply = self.dummy_args(kind);
                     let arity = apply.as_ref().map(|params| params.len());

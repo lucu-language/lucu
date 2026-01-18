@@ -31,6 +31,8 @@ fn main() {
     let mut graph = ModuleGraph::new();
     graph.insert_or_update(&watcher, main.clone());
 
+    let mut ir = IR::new();
+
     loop {
         println!("{}", graph.dot());
 
@@ -58,7 +60,6 @@ fn main() {
         }
 
         let stages = graph.stages(&Module::MAIN).unwrap();
-        let mut ir = IR::new();
         let untyped = stages.untyped_ir(&graph, &mut ir).unwrap();
         println!("{}", untyped.display(&ir));
 

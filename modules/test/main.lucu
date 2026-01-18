@@ -3,3 +3,11 @@ type Id[T] = T
 type Apply[M[_], T] = M[T]
 
 type ApplyApply[A[_[_], _], M[_], T] = A[M, T]
+
+type Test1 = Id[u32]
+type Test2 = Apply[Id, u32]
+type Test3 = ApplyApply[Apply, Id, u32]
+
+type ConstU64[T] = u64
+type Test4 = ConstU64[u32]
+type Test5 = Apply[ConstU64, u32]

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::span::Span;
-use crate::stage::token::{Group, Symbol, Token, TokenEnum};
+use crate::tokens::{Group, Symbol, Token, TokenEnum};
 
 fn skip_whitespace(src: &mut &str) -> usize {
     let mut skipped = 0;
@@ -122,13 +122,13 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
         };
     }
 
-    use super::Group::*;
-    use super::Literal::*;
-    use super::Symbol::*;
-    use super::SymbolAssign::*;
-    use super::SymbolEquality::*;
-    use super::SymbolInequality::*;
-    use super::TokenEnum::*;
+    use crate::tokens::Group::*;
+    use crate::tokens::Literal::*;
+    use crate::tokens::Symbol::*;
+    use crate::tokens::SymbolAssign::*;
+    use crate::tokens::SymbolEquality::*;
+    use crate::tokens::SymbolInequality::*;
+    use crate::tokens::TokenEnum::*;
 
     let first = src.as_bytes()[0];
     let token = match first {

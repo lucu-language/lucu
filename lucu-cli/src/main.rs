@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
-use lucu::err::HasProblems;
-use lucu::ir::untyped::TypeTable;
+use lucu::error::print::PrintProblems;
+use lucu::module::watcher::{FileWatcher, WatchedLibrary};
 use lucu::module::{Library, Module};
-use lucu::stage::ModuleGraph;
-use lucu::watcher::{FileWatcher, WatchedLibrary};
+use lucu::pass::ModuleGraph;
+use lucu::type_table::TypeTable;
 use lucu_annotate::Annotate;
 
 fn main() {

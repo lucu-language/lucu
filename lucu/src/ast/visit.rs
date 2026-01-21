@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
+use crate::ast::{self, inner};
 use crate::span::HasSpan;
-use crate::stage::ast::{self, inner};
 
 pub trait Visitor: Copy {
     type Output<'a>: Default + Combine;

@@ -8,12 +8,12 @@ use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
-use crate::err::{ProblemKind, Problems, Result};
+use crate::ast;
+use crate::ast::visit::{Ast, Combine, Visitor, visit_option_vec};
+use crate::error::{ProblemKind, Problems, Result};
 use crate::module::Module;
+use crate::pass::defs::err::MultipleDefinitions;
 use crate::span::HasSpan;
-use crate::stage::ast::visit::{Ast, Combine, Visitor};
-use crate::stage::ast::{self, visit};
-use crate::stage::defs::err::MultipleDefinitions;
 
 pub mod err;
 
@@ -37,7 +37,7 @@ impl Visitor for DefinitionPaths {
             } else {
                 im::HashSet::new()
             },
-            visit::visit_option_vec(&path.generics, self),
+            visit_option_vec(&path.generics, self),
         ])
     }
     fn visit_struct(self, _struc: &ast::Struct) -> Self::Output<'_> {

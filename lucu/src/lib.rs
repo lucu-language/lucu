@@ -1,7 +1,10 @@
+#[cfg(feature = "annotate")]
 pub mod annotate;
-pub mod err;
+pub mod ast;
+pub mod error;
 pub mod ir;
 pub mod module;
+pub mod pass;
 pub mod span;
-pub mod stage;
-pub mod watcher;
+pub mod tokens;
+pub mod type_table;

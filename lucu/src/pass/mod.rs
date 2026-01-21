@@ -1,11 +1,8 @@
-// stage 1
-pub mod token;
-// stage 2
-pub mod ast;
-// stage 3
-pub mod imports;
-// stage 4
 pub mod defs;
+pub mod imports;
+pub mod lexer;
+pub mod lower;
+pub mod parser;
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
@@ -19,14 +16,15 @@ use petgraph::visit::{
     Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable,
 };
 
-use crate::err::{HasProblems, Problem, Result};
-use crate::ir::untyped::{TypeTable, Untyped};
+use crate::error::{HasProblems, Problem, Result};
+use crate::ir::IR;
 use crate::module::{Module, ModuleResolver};
-use crate::stage::ast::parser::Parser;
-use crate::stage::defs::Definitions;
-use crate::stage::imports::{Import, Imports};
-use crate::stage::token::Token;
-use crate::stage::token::lexer::Lexer;
+use crate::pass::defs::Definitions;
+use crate::pass::imports::{Import, Imports};
+use crate::pass::lexer::Lexer;
+use crate::pass::parser::Parser;
+use crate::tokens::Token;
+use crate::type_table::TypeTable;
 
 #[derive(Debug, Default)]
 pub struct Stages {
@@ -34,11 +32,11 @@ pub struct Stages {
     source: Option<String>,
 
     tokens: Lazy<Box<[Token]>>,
-    ast: Lazy<ast::Module>,
+    ast: Lazy<crate::ast::Module>,
     imports: Lazy<Imports>,
     definitions: Lazy<Definitions>,
 
-    untyped_ir: Lazy<Untyped>,
+    untyped_ir: Lazy<IR>,
 }
 
 impl HasProblems for Stages {
@@ -119,7 +117,7 @@ impl Stages {
             })
             .map(Deref::deref)
     }
-    pub fn ast(&self) -> Option<&ast::Module> {
+    pub fn ast(&self) -> Option<&crate::ast::Module> {
         self.ast.get_or_init(|| {
             let source = self.source()?;
             let tokens = self.tokens()?;
@@ -136,9 +134,9 @@ impl Stages {
         })
     }
 
-    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &mut TypeTable) -> Option<&Untyped> {
+    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &mut TypeTable) -> Option<&IR> {
         self.untyped_ir
-            .get_or_init(|| Untyped::from(graph, &self.module, tt))
+            .get_or_init(|| IR::from(graph, &self.module, tt))
     }
 }
 

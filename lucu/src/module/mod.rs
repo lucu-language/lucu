@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use compact_str::{CompactString, format_compact};
 use path_clean::clean;
 
+#[cfg(feature = "watcher")]
+pub mod watcher;
+
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct Library(CompactString);
 

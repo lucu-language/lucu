@@ -3,11 +3,11 @@ use std::fmt::Display;
 
 use compact_str::{CompactString, ToCompactString, format_compact};
 
-use crate::err::{ProblemKind, Problems, Result};
+use crate::ast::{self, inner};
+use crate::error::{ProblemKind, Problems, Result};
 use crate::module::{Module, ModuleResolver, UnknownModule};
 use crate::span::{HasSpan, Span, Spanned};
-use crate::stage::ast::{self, inner};
-use crate::stage::token::is_valid_identifier;
+use crate::tokens::is_valid_identifier;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Import {

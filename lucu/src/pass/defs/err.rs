@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use compact_str::CompactString;
 
-use crate::err::{Context, ContextLevel, Diagnostic, Label};
+use crate::error::{Context, ContextLevel, Diagnostic, Label};
 use crate::span::Span;
 
 #[derive(Clone, Debug)]

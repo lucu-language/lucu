@@ -1,6 +1,6 @@
 use anstyle::{AnsiColor, Color};
 
-use crate::stage::token::{Keyword, TokenEnum};
+use crate::tokens::{Keyword, TokenEnum};
 
 pub const KEYWORD: Color = Color::Ansi(AnsiColor::Cyan);
 pub const LITERAL: Color = Color::Ansi(AnsiColor::BrightGreen);

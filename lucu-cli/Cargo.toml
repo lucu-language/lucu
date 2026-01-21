@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lucu = { path = "../lucu" }
+lucu = { path = "../lucu", features = ["watcher", "print"] }
 lucu-annotate = { path = "../lucu-annotate" }
 
 anstream = "0.6.21"

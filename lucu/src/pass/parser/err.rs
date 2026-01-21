@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
-use crate::err::Diagnostic;
-use crate::stage::token::TokenEnum;
+use crate::error::Diagnostic;
+use crate::tokens::TokenEnum;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Expected {

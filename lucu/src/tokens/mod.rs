@@ -1,5 +1,5 @@
+#[cfg(feature = "anstyle")]
 pub mod ansi;
-pub mod lexer;
 
 use std::fmt::{self, Debug, Display};
 use std::str::FromStr;

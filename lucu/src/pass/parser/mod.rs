@@ -1,11 +1,13 @@
 use do_notation::m;
 
-use crate::err::{ProblemKind, Result};
+use crate::ast::{self, inner};
+use crate::error::{ProblemKind, Result};
 use crate::module::Module;
+use crate::pass::parser::err::Expected;
 use crate::span::{Span, Spanned};
-use crate::stage::ast::err::Expected;
-use crate::stage::ast::{self, inner};
-use crate::stage::token::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
+use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
+
+pub mod err;
 
 pub struct Parser<'a> {
     module: &'a Module,

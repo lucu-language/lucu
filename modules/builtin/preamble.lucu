@@ -19,6 +19,7 @@ type iptr = #intrinsic
 type isize = #intrinsic
 
 type bool = #intrinsic
+type unit = #intrinsic
 
 -- regions
 
@@ -73,7 +74,7 @@ fun print_str[R region](buf []u8@R) with Read[R]
 effect Div
 	= #intrinsic
 
-fun loop(fun body) with Div
+fun loop(fun body) ! with Div
 	= #intrinsic
 
 fun unfounded[T](fun body T with Div) T

@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ops::Index;
 use std::sync::Arc;
@@ -12,23 +13,148 @@ pub mod lower;
 
 #[derive(Default, Debug)]
 pub struct IR {
-    kinds: IndexSet<KindStruct>,
+    kinds: IndexSet<KindEnum>,
     types: IndexSet<TypeEnum>,
     regions: IndexSet<RegionEnum>,
+    effects: IndexSet<EffectEnum>,
+    function_signatures: IndexSet<FunctionSignatureValue>,
 }
 
 #[derive(Default, Debug)]
 pub struct Untyped {
+    functions: Vec<OnceCell<FunctionDefinition>>,
+    structs: Vec<OnceCell<StructDefinition>>,
+    effects: Vec<OnceCell<EffectDefinition>>,
     items: HashMap<CompactString, Item>,
 }
 
+impl Untyped {
+    fn push_function(&mut self) -> FunctionDef {
+        let idx = self.functions.len();
+        self.functions.push(OnceCell::new());
+        FunctionDef(idx)
+    }
+    fn push_struct(&mut self) -> StructDef {
+        let idx = self.structs.len();
+        self.structs.push(OnceCell::new());
+        StructDef(idx)
+    }
+    fn push_effect(&mut self) -> EffectDef {
+        let idx = self.effects.len();
+        self.effects.push(OnceCell::new());
+        EffectDef(idx)
+    }
+    fn realize_function(&self, fun: FunctionDef, value: FunctionDefinition) {
+        self.functions[fun.0]
+            .set(value)
+            .expect("ICE: function already realized");
+    }
+    fn realize_struct(&self, struc: StructDef, value: StructDefinition) {
+        self.structs[struc.0]
+            .set(value)
+            .expect("ICE: struct already realized");
+    }
+    fn realize_effect(&self, effect: EffectDef, value: EffectDefinition) {
+        self.effects[effect.0]
+            .set(value)
+            .expect("ICE: effect already realized")
+    }
+}
+
+impl Index<FunctionDef> for Untyped {
+    type Output = FunctionDefinition;
+
+    fn index(&self, index: FunctionDef) -> &Self::Output {
+        self.functions[index.0]
+            .get()
+            .expect("ICE: function not yet realized")
+    }
+}
+
+impl Index<StructDef> for Untyped {
+    type Output = StructDefinition;
+
+    fn index(&self, index: StructDef) -> &Self::Output {
+        self.structs[index.0]
+            .get()
+            .expect("ICE: struct not yet realized")
+    }
+}
+
+impl Index<EffectDef> for Untyped {
+    type Output = EffectDefinition;
+
+    fn index(&self, index: EffectDef) -> &Self::Output {
+        self.effects[index.0]
+            .get()
+            .expect("ICE: effect not yet realized")
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct FunctionDef(usize);
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct StructDef(usize);
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct EffectDef(usize);
+
+// TODO
+pub type Body = ();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicFunction {
+    // Div-related functions
+    Loop,
+    Unfounded,
+    // debug printing
+    PrintStr,
+}
+
 #[derive(Debug)]
+pub enum FunctionDefinition {
+    Expression {
+        /// The amount of outer variables this function captures.
+        /// Top level functions and default effect functions have a value of 0.
+        captures: usize,
+        body: Body,
+    },
+    Intrinsic(IntrinsicFunction),
+}
+
+#[derive(Debug)]
+pub struct StructDefinition {
+    pub members: Vec<StructMember>,
+}
+
+#[derive(Debug)]
+pub enum EffectDefinition {
+    Body {
+        members: Vec<EffectMember>,
+    },
+    /// Does not allow user-defined handlers
+    Intrinsic,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum Item {
     Alias(Kind, Term),
-    Struct(Kind, Option<Vec<StructMember>>),
-    Effect,
-    EffectFunction,
-    Function,
+    Struct(Kind, StructDef),
+    Effect(Kind, EffectDef),
+    Function(FunctionSignature, Parent<FunctionDef>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Parent<T> {
+    TopLevel(T),
+    Effect(EffectDef),
+}
+
+#[derive(Debug)]
+pub struct EffectMember {
+    pub name: CompactString,
+    pub signature: FunctionSignature,
 }
 
 #[derive(Debug)]
@@ -73,9 +199,10 @@ impl Integer {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum TypeEnum {
     Generic(GenericParameter),
-    Struct(Module, CompactString, Option<Arc<[GenericArgument]>>),
+    Item(Module, CompactString, Option<Arc<[GenericArgument]>>),
     Integer(Integer),
     Boolean,
+    Unit,
     Pointer(Type, Region),
     Slice(Type, Region),
 }
@@ -85,8 +212,14 @@ pub enum RegionEnum {
     Generic(GenericParameter),
 }
 
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum EffectEnum {
+    Generic(GenericParameter),
+    Item(Module, CompactString, Option<Arc<[GenericArgument]>>),
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub enum KindEnum {
+pub enum SimpleKind {
     Type,
     Effect,
     Region,
@@ -94,23 +227,43 @@ pub enum KindEnum {
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
-pub struct KindStruct {
+pub struct KindEnum {
     params: Option<Arc<[Kind]>>,
-    output: KindEnum,
+    output: SimpleKind,
 }
 
-impl KindStruct {
-    pub const TYPE: KindStruct = KindStruct {
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct FunctionSignatureValue {
+    type_params: Option<Arc<[Kind]>>,
+    params: Option<Arc<[FunctionParameter]>>,
+    returns: FunctionReturns,
+    effects: Arc<[Effect]>,
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub enum FunctionParameter {
+    Data(Type),
+    Lambda(FunctionSignature),
+}
+
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub enum FunctionReturns {
+    Data(Type),
+    Never,
+}
+
+impl KindEnum {
+    pub const TYPE: KindEnum = KindEnum {
         params: None,
-        output: KindEnum::Type,
+        output: SimpleKind::Type,
     };
-    pub const EFFECT: KindStruct = KindStruct {
+    pub const EFFECT: KindEnum = KindEnum {
         params: None,
-        output: KindEnum::Effect,
+        output: SimpleKind::Effect,
     };
-    pub const REGION: KindStruct = KindStruct {
+    pub const REGION: KindEnum = KindEnum {
         params: None,
-        output: KindEnum::Region,
+        output: SimpleKind::Region,
     };
 }
 
@@ -121,12 +274,19 @@ pub struct Type(usize);
 pub struct Region(usize);
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct Effect(usize);
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub struct Kind(usize);
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct FunctionSignature(usize);
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum Term {
     Type(Type),
     Region(Region),
+    Effect(Effect),
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -151,11 +311,27 @@ impl Index<Region> for IR {
     }
 }
 
+impl Index<Effect> for IR {
+    type Output = EffectEnum;
+
+    fn index(&self, index: Effect) -> &Self::Output {
+        &self.effects[index.0]
+    }
+}
+
 impl Index<Kind> for IR {
-    type Output = KindStruct;
+    type Output = KindEnum;
 
     fn index(&self, index: Kind) -> &Self::Output {
         &self.kinds[index.0]
+    }
+}
+
+impl Index<FunctionSignature> for IR {
+    type Output = FunctionSignatureValue;
+
+    fn index(&self, index: FunctionSignature) -> &Self::Output {
+        &self.function_signatures[index.0]
     }
 }
 
@@ -169,8 +345,17 @@ impl IR {
     pub fn insert_region(&mut self, value: RegionEnum) -> Region {
         Region(self.regions.insert_full(value).0)
     }
-    pub fn insert_kind(&mut self, value: KindStruct) -> Kind {
+    pub fn insert_effect(&mut self, value: EffectEnum) -> Effect {
+        Effect(self.effects.insert_full(value).0)
+    }
+    pub fn insert_kind(&mut self, value: KindEnum) -> Kind {
         Kind(self.kinds.insert_full(value).0)
+    }
+    pub fn insert_function_signature(
+        &mut self,
+        value: FunctionSignatureValue,
+    ) -> FunctionSignature {
+        FunctionSignature(self.function_signatures.insert_full(value).0)
     }
 }
 
@@ -222,6 +407,7 @@ impl Substitute for Term {
         match self {
             Term::Type(ty) => Term::Type(ty.subst(ir, start, args)),
             Term::Region(region) => Term::Region(region.subst(ir, start, args)),
+            Term::Effect(effect) => Term::Effect(effect.subst(ir, start, args)),
         }
     }
 }
@@ -242,11 +428,11 @@ impl Substitute for Type {
                     TypeEnum::Generic(generic)
                 }
             }
-            TypeEnum::Struct(ref module, ref name, ref types) => {
+            TypeEnum::Item(ref module, ref name, ref types) => {
                 let module = module.clone();
                 let name = name.clone();
                 let types = types.clone();
-                TypeEnum::Struct(
+                TypeEnum::Item(
                     module,
                     name,
                     types.map(|types| types.iter().map(|ty| ty.subst(ir, start, args)).collect()),
@@ -258,7 +444,7 @@ impl Substitute for Type {
             TypeEnum::Slice(ty, region) => {
                 TypeEnum::Slice(ty.subst(ir, start, args), region.subst(ir, start, args))
             }
-            TypeEnum::Integer(_) | TypeEnum::Boolean => return self,
+            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };
         ir.insert_type(changed)
     }
@@ -294,9 +480,40 @@ impl Substitute for Kind {
                 .collect()
         });
         let output = match ir[self].output {
-            KindEnum::Constant(ty) => KindEnum::Constant(ty.subst(ir, start, args)),
+            SimpleKind::Constant(ty) => SimpleKind::Constant(ty.subst(ir, start, args)),
             k => k,
         };
-        ir.insert_kind(KindStruct { params, output })
+        ir.insert_kind(KindEnum { params, output })
+    }
+}
+
+impl Substitute for Effect {
+    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
+        let changed = match ir[self] {
+            EffectEnum::Generic(ref generic) => {
+                let index = generic.index.checked_sub(start);
+                let generic = generic.clone().subst(ir, start, args);
+                // generics have *reversed* indices
+                if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
+                    match generic.instantiate(ir, args[index]) {
+                        Term::Effect(effect) => return effect,
+                        _ => panic!("ICE: unexpected kind of generic argument"),
+                    }
+                } else {
+                    EffectEnum::Generic(generic)
+                }
+            }
+            EffectEnum::Item(ref module, ref name, ref types) => {
+                let module = module.clone();
+                let name = name.clone();
+                let types = types.clone();
+                EffectEnum::Item(
+                    module,
+                    name,
+                    types.map(|types| types.iter().map(|ty| ty.subst(ir, start, args)).collect()),
+                )
+            }
+        };
+        ir.insert_effect(changed)
     }
 }

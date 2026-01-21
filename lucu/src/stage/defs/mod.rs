@@ -8,7 +8,7 @@ use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
-use crate::err::{Problem, ProblemKind, Problems, Result};
+use crate::err::{ProblemKind, Problems, Result};
 use crate::module::Module;
 use crate::span::HasSpan;
 use crate::stage::ast::visit::{Ast, Combine, Visitor};
@@ -80,13 +80,20 @@ impl Definition {
 
 impl ast::Module {
     fn definition(&self, node: NodeIndex, defs: &[Definition]) -> &ast::Definition {
+        self.definition_with_parent(node, defs).0
+    }
+    fn definition_with_parent(
+        &self,
+        node: NodeIndex,
+        defs: &[Definition],
+    ) -> (&ast::Definition, Option<&ast::Definition>) {
         let module_definition = defs[node.index()];
         match module_definition.parent {
             Some(parent_node) => {
                 let parent = self.definition(parent_node, defs);
-                &parent.children()[module_definition.index]
+                (&parent.children()[module_definition.index], Some(parent))
             }
-            None => &self.definitions[module_definition.index],
+            None => (&self.definitions[module_definition.index], None),
         }
     }
     fn remove_generics(
@@ -114,6 +121,15 @@ impl Definitions {
             .nodes_iter()
             .rev()
             .map(|idx| ast.definition(idx, &self.defs))
+    }
+    pub fn postorder_with_parent<'a>(
+        &self,
+        ast: &'a ast::Module,
+    ) -> impl Iterator<Item = (&'a ast::Definition, Option<&'a ast::Definition>)> {
+        self.graph
+            .nodes_iter()
+            .rev()
+            .map(|idx| ast.definition_with_parent(idx, &self.defs))
     }
     pub fn indices(&self) -> impl Iterator<Item = NodeIndex> {
         self.graph.node_indices()

@@ -19,3 +19,15 @@ type iptr = builtin.iptr
 type isize = builtin.isize
 
 type bool = builtin.bool
+type unit = builtin.unit
+
+effect Yield[T] = {
+	fun yield(t T)
+}
+
+fun map[A, B](
+	fun f(a A) B,
+	fun body with Yield[A],
+) with Yield[B] = {
+	
+}

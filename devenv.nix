@@ -14,13 +14,13 @@
       "rustfmt"
       "clippy"
       "rust-analyzer"
-      "miri"
     ];
     enable = true;
   };
 
   git-hooks.hooks = {
-    clippy.enable = true;
+    # rustfmt.enable = true;
+    # clippy.enable = true;
     tests = {
       enable = true;
       entry = "cargo test";

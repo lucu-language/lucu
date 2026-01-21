@@ -4,7 +4,7 @@ use std::time::Duration;
 use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
 use lucu::err::HasProblems;
-use lucu::ir::untyped::IR;
+use lucu::ir::untyped::TypeTable;
 use lucu::module::{Library, Module};
 use lucu::stage::ModuleGraph;
 use lucu::watcher::{FileWatcher, WatchedLibrary};
@@ -31,7 +31,7 @@ fn main() {
     let mut graph = ModuleGraph::new();
     graph.insert_or_update(&watcher, main.clone());
 
-    let mut ir = IR::new();
+    let mut tt = TypeTable::new();
 
     loop {
         println!("{}", graph.dot());
@@ -50,8 +50,8 @@ fn main() {
                     anstream::println!("{}", annotated);
                 }
 
-                if let Some(untyped) = stages.untyped_ir(&graph, &mut ir) {
-                    println!("{}", untyped.display(&ir));
+                if let Some(untyped) = stages.untyped_ir(&graph, &mut tt) {
+                    println!("{}", untyped.display(&tt));
                 }
 
                 stages.print_problems(&watcher, true);

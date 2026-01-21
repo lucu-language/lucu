@@ -16,11 +16,11 @@ use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
 use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{
-    Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable
+    Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable,
 };
 
 use crate::err::{HasProblems, Problem, Result};
-use crate::ir::untyped::{IR, Untyped};
+use crate::ir::untyped::{TypeTable, Untyped};
 use crate::module::{Module, ModuleResolver};
 use crate::stage::ast::parser::Parser;
 use crate::stage::defs::Definitions;
@@ -136,9 +136,9 @@ impl Stages {
         })
     }
 
-    pub fn untyped_ir(&self, graph: &ModuleGraph, ir: &mut IR) -> Option<&Untyped> {
+    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &mut TypeTable) -> Option<&Untyped> {
         self.untyped_ir
-            .get_or_init(|| Untyped::from(graph, &self.module, ir))
+            .get_or_init(|| Untyped::from(graph, &self.module, tt))
     }
 }
 

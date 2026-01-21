@@ -1,4 +1,3 @@
 unstable_features = true
-imports_layout = "Horizontal"
 imports_granularity = "Module"
 group_imports = "StdExternalCrate"

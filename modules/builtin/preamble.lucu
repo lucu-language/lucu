@@ -18,24 +18,18 @@ type int = #intrinsic
 type iptr = #intrinsic
 type isize = #intrinsic
 
+-- other types
+
 type bool = #intrinsic
 type unit = #intrinsic
 
 -- regions
 
-effect Read[R region] = {
-	fun read[T](ptr ^T@R) T
-}
+effect Read[R region] =
+	#intrinsic
 
-effect Write[R region] = {
-	fun write[T](ptr ^T@R, value T)
-}
-
-fun replace[T, R region](ptr ^T@R, value T) T with Read[R] Write[R] = {
-	let old = read(ptr)
-	write(ptr, value)
-	old
-}
+effect Write[R region] =
+	#intrinsic
 
 -- printing
 

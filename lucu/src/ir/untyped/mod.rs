@@ -12,7 +12,7 @@ pub mod display;
 pub mod lower;
 
 #[derive(Default, Debug)]
-pub struct IR {
+pub struct TypeTable {
     kinds: IndexSet<KindEnum>,
     types: IndexSet<TypeEnum>,
     regions: IndexSet<RegionEnum>,
@@ -295,7 +295,7 @@ pub struct GenericArgument {
     pub arity: Option<usize>,
 }
 
-impl Index<Type> for IR {
+impl Index<Type> for TypeTable {
     type Output = TypeEnum;
 
     fn index(&self, index: Type) -> &Self::Output {
@@ -303,7 +303,7 @@ impl Index<Type> for IR {
     }
 }
 
-impl Index<Region> for IR {
+impl Index<Region> for TypeTable {
     type Output = RegionEnum;
 
     fn index(&self, index: Region) -> &Self::Output {
@@ -311,7 +311,7 @@ impl Index<Region> for IR {
     }
 }
 
-impl Index<Effect> for IR {
+impl Index<Effect> for TypeTable {
     type Output = EffectEnum;
 
     fn index(&self, index: Effect) -> &Self::Output {
@@ -319,7 +319,7 @@ impl Index<Effect> for IR {
     }
 }
 
-impl Index<Kind> for IR {
+impl Index<Kind> for TypeTable {
     type Output = KindEnum;
 
     fn index(&self, index: Kind) -> &Self::Output {
@@ -327,7 +327,7 @@ impl Index<Kind> for IR {
     }
 }
 
-impl Index<FunctionSignature> for IR {
+impl Index<FunctionSignature> for TypeTable {
     type Output = FunctionSignatureValue;
 
     fn index(&self, index: FunctionSignature) -> &Self::Output {
@@ -335,7 +335,7 @@ impl Index<FunctionSignature> for IR {
     }
 }
 
-impl IR {
+impl TypeTable {
     pub fn new() -> Self {
         Self::default()
     }
@@ -360,67 +360,118 @@ impl IR {
 }
 
 pub trait Substitute {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self;
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self;
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self;
 }
 
 impl GenericParameter {
-    fn instantiate(self, ir: &mut IR, arg: GenericArgument) -> Term {
+    fn instantiate(self, tt: &mut TypeTable, start: usize, arg: GenericArgument) -> Term {
+        let term = if start > 0 {
+            arg.shift(tt, 0, start).term
+        } else {
+            arg.term
+        };
         match &self.apply {
             Some(apply) => {
                 assert_eq!(arg.arity, Some(apply.len()));
-                arg.term.subst(ir, 0, apply)
+                term.subst(tt, 0, apply)
             }
             None => {
                 assert_eq!(arg.arity, None);
-                arg.term
+                term
             }
         }
     }
 }
 
+impl<T> Substitute for Arc<[T]>
+where
+    T: Substitute + Copy,
+{
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        self.iter().map(|ty| ty.subst(tt, start, args)).collect()
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        self.iter().map(|ty| ty.shift(tt, start, offset)).collect()
+    }
+}
+
+impl<T> Substitute for Option<T>
+where
+    T: Substitute,
+{
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        self.map(|tys| tys.subst(tt, start, args))
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        self.map(|tys| tys.shift(tt, start, offset))
+    }
+}
+
 impl Substitute for GenericParameter {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         GenericParameter {
             index: if self.index < start + args.len() {
                 self.index
             } else {
                 self.index - args.len()
             },
-            apply: self
-                .apply
-                .map(|apply| apply.iter().map(|arg| arg.subst(ir, start, args)).collect()),
+            apply: self.apply.subst(tt, start, args),
+        }
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        GenericParameter {
+            index: if self.index < start {
+                self.index
+            } else {
+                self.index + offset
+            },
+            apply: self.apply.shift(tt, start, offset),
         }
     }
 }
 
 impl Substitute for GenericArgument {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         GenericArgument {
-            term: self.term.subst(ir, start + self.arity.unwrap_or(0), args),
+            term: self.term.subst(tt, start + self.arity.unwrap_or(0), args),
+            arity: self.arity,
+        }
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        GenericArgument {
+            term: self.term.shift(tt, start + self.arity.unwrap_or(0), offset),
             arity: self.arity,
         }
     }
 }
 
 impl Substitute for Term {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         match self {
-            Term::Type(ty) => Term::Type(ty.subst(ir, start, args)),
-            Term::Region(region) => Term::Region(region.subst(ir, start, args)),
-            Term::Effect(effect) => Term::Effect(effect.subst(ir, start, args)),
+            Term::Type(ty) => Term::Type(ty.subst(tt, start, args)),
+            Term::Region(region) => Term::Region(region.subst(tt, start, args)),
+            Term::Effect(effect) => Term::Effect(effect.subst(tt, start, args)),
+        }
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        match self {
+            Term::Type(ty) => Term::Type(ty.shift(tt, start, offset)),
+            Term::Region(region) => Term::Region(region.shift(tt, start, offset)),
+            Term::Effect(effect) => Term::Effect(effect.shift(tt, start, offset)),
         }
     }
 }
 
 impl Substitute for Type {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
-        let changed = match ir[self] {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        let changed = match tt[self] {
             TypeEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
-                let generic = generic.clone().subst(ir, start, args);
+                let generic = generic.clone().subst(tt, start, args);
                 // generics have *reversed* indices
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
-                    match generic.instantiate(ir, args[index]) {
+                    match generic.instantiate(tt, start, args[index]) {
                         Term::Type(ty) => return ty,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
@@ -428,37 +479,52 @@ impl Substitute for Type {
                     TypeEnum::Generic(generic)
                 }
             }
-            TypeEnum::Item(ref module, ref name, ref types) => {
-                let module = module.clone();
-                let name = name.clone();
-                let types = types.clone();
-                TypeEnum::Item(
-                    module,
-                    name,
-                    types.map(|types| types.iter().map(|ty| ty.subst(ir, start, args)).collect()),
-                )
-            }
+            TypeEnum::Item(ref module, ref name, ref types) => TypeEnum::Item(
+                module.clone(),
+                name.clone(),
+                types.clone().subst(tt, start, args),
+            ),
             TypeEnum::Pointer(ty, region) => {
-                TypeEnum::Pointer(ty.subst(ir, start, args), region.subst(ir, start, args))
+                TypeEnum::Pointer(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
             TypeEnum::Slice(ty, region) => {
-                TypeEnum::Slice(ty.subst(ir, start, args), region.subst(ir, start, args))
+                TypeEnum::Slice(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
             TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };
-        ir.insert_type(changed)
+        tt.insert_type(changed)
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        let changed = match tt[self] {
+            TypeEnum::Generic(ref generic) => {
+                TypeEnum::Generic(generic.clone().shift(tt, start, offset))
+            }
+            TypeEnum::Item(ref module, ref name, ref types) => TypeEnum::Item(
+                module.clone(),
+                name.clone(),
+                types.clone().shift(tt, start, offset),
+            ),
+            TypeEnum::Pointer(ty, region) => {
+                TypeEnum::Pointer(ty.shift(tt, start, offset), region.shift(tt, start, offset))
+            }
+            TypeEnum::Slice(ty, region) => {
+                TypeEnum::Slice(ty.shift(tt, start, offset), region.shift(tt, start, offset))
+            }
+            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
+        };
+        tt.insert_type(changed)
     }
 }
 
 impl Substitute for Region {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
-        let changed = match ir[self] {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        let changed = match tt[self] {
             RegionEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
-                let generic = generic.clone().subst(ir, start, args);
+                let generic = generic.clone().subst(tt, start, args);
                 // generics have *reversed* indices
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
-                    match generic.instantiate(ir, args[index]) {
+                    match generic.instantiate(tt, start, args[index]) {
                         Term::Region(region) => return region,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
@@ -467,35 +533,27 @@ impl Substitute for Region {
                 }
             }
         };
-        ir.insert_region(changed)
+        tt.insert_region(changed)
     }
-}
-
-impl Substitute for Kind {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
-        let params = ir[self].params.clone().map(|params| {
-            params
-                .iter()
-                .map(|arg| arg.subst(ir, start, args))
-                .collect()
-        });
-        let output = match ir[self].output {
-            SimpleKind::Constant(ty) => SimpleKind::Constant(ty.subst(ir, start, args)),
-            k => k,
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        let changed = match tt[self] {
+            RegionEnum::Generic(ref generic) => {
+                RegionEnum::Generic(generic.clone().shift(tt, start, offset))
+            }
         };
-        ir.insert_kind(KindEnum { params, output })
+        tt.insert_region(changed)
     }
 }
 
 impl Substitute for Effect {
-    fn subst(self, ir: &mut IR, start: usize, args: &[GenericArgument]) -> Self {
-        let changed = match ir[self] {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        let changed = match tt[self] {
             EffectEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
-                let generic = generic.clone().subst(ir, start, args);
+                let generic = generic.clone().subst(tt, start, args);
                 // generics have *reversed* indices
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
-                    match generic.instantiate(ir, args[index]) {
+                    match generic.instantiate(tt, start, args[index]) {
                         Term::Effect(effect) => return effect,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
@@ -503,17 +561,104 @@ impl Substitute for Effect {
                     EffectEnum::Generic(generic)
                 }
             }
-            EffectEnum::Item(ref module, ref name, ref types) => {
-                let module = module.clone();
-                let name = name.clone();
-                let types = types.clone();
-                EffectEnum::Item(
-                    module,
-                    name,
-                    types.map(|types| types.iter().map(|ty| ty.subst(ir, start, args)).collect()),
-                )
-            }
+            EffectEnum::Item(ref module, ref name, ref types) => EffectEnum::Item(
+                module.clone(),
+                name.clone(),
+                types.clone().subst(tt, start, args),
+            ),
         };
-        ir.insert_effect(changed)
+        tt.insert_effect(changed)
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        let changed = match tt[self] {
+            EffectEnum::Generic(ref generic) => {
+                EffectEnum::Generic(generic.clone().shift(tt, start, offset))
+            }
+            EffectEnum::Item(ref module, ref name, ref types) => EffectEnum::Item(
+                module.clone(),
+                name.clone(),
+                types.clone().shift(tt, start, offset),
+            ),
+        };
+        tt.insert_effect(changed)
+    }
+}
+
+impl Substitute for FunctionParameter {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        match self {
+            FunctionParameter::Data(ty) => FunctionParameter::Data(ty.subst(tt, start, args)),
+            FunctionParameter::Lambda(sig) => FunctionParameter::Lambda(sig.subst(tt, start, args)),
+        }
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        match self {
+            FunctionParameter::Data(ty) => FunctionParameter::Data(ty.shift(tt, start, offset)),
+            FunctionParameter::Lambda(sig) => {
+                FunctionParameter::Lambda(sig.shift(tt, start, offset))
+            }
+        }
+    }
+}
+
+impl Substitute for FunctionSignature {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        let sig = tt[self].clone();
+        let type_params = sig.type_params;
+        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0);
+        let params = sig.params.subst(tt, start + arity, args);
+        let returns = match sig.returns {
+            FunctionReturns::Data(ty) => FunctionReturns::Data(ty.subst(tt, start + arity, args)),
+            FunctionReturns::Never => FunctionReturns::Never,
+        };
+        let effects = sig.effects.subst(tt, start + arity, args);
+        tt.insert_function_signature(FunctionSignatureValue {
+            type_params,
+            params,
+            returns,
+            effects,
+        })
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        let sig = tt[self].clone();
+        let type_params = sig.type_params;
+        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0);
+        let params = sig.params.shift(tt, start + arity, offset);
+        let returns = match sig.returns {
+            FunctionReturns::Data(ty) => FunctionReturns::Data(ty.shift(tt, start + arity, offset)),
+            FunctionReturns::Never => FunctionReturns::Never,
+        };
+        let effects = sig.effects.shift(tt, start + arity, offset);
+        tt.insert_function_signature(FunctionSignatureValue {
+            type_params,
+            params,
+            returns,
+            effects,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shift() {
+        let mut table = TypeTable::new();
+        let lhs = GenericArgument {
+            term: Term::Type(table.insert_type(TypeEnum::Generic(GenericParameter {
+                index: 1,
+                apply: None,
+            }))),
+            arity: Some(1),
+        };
+        let rhs = GenericArgument {
+            term: Term::Type(table.insert_type(TypeEnum::Generic(GenericParameter {
+                index: 0,
+                apply: None,
+            }))),
+            arity: None,
+        };
+        assert_eq!(lhs.subst(&mut table, 0, &[rhs]), lhs);
     }
 }

@@ -6,7 +6,11 @@ use do_notation::m;
 
 use crate::err::{Problems, Result};
 use crate::ir::untyped::{
-    Effect, EffectDef, EffectDefinition, EffectEnum, EffectMember, FunctionDef, FunctionDefinition, FunctionParameter, FunctionReturns, FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, IR, IntSize, Integer, IntrinsicFunction, Item, Kind, KindEnum, Parent, Region, RegionEnum, SimpleKind, StructDefinition, StructMember, Substitute, Term, Type, TypeEnum, Untyped
+    Effect, EffectDef, EffectDefinition, EffectEnum, EffectMember, FunctionDef, FunctionDefinition,
+    FunctionParameter, FunctionReturns, FunctionSignature, FunctionSignatureValue, GenericArgument,
+    GenericParameter, IntSize, Integer, IntrinsicFunction, Item, Kind, KindEnum, Parent, Region,
+    RegionEnum, SimpleKind, StructDefinition, StructMember, Substitute, Term, Type, TypeEnum,
+    TypeTable, Untyped,
 };
 use crate::module::Module;
 use crate::span::Spanned;
@@ -16,7 +20,7 @@ use crate::stage::imports::Imports;
 use crate::stage::{ModuleGraph, ast};
 
 struct Lower<'a> {
-    ir: &'a mut IR,
+    tt: &'a mut TypeTable,
     module: &'a Module,
 
     ast: &'a ast::Module,
@@ -57,7 +61,7 @@ impl<'a> Generics<'a> {
 }
 
 impl Untyped {
-    pub fn from(graph: &ModuleGraph, module: &Module, ir: &mut IR) -> Option<Result<Self>> {
+    pub fn from(graph: &ModuleGraph, module: &Module, tt: &mut TypeTable) -> Option<Result<Self>> {
         let stages = graph.stages(module)?;
 
         let ast = stages.ast()?;
@@ -65,7 +69,7 @@ impl Untyped {
         let definitions = stages.definitions()?;
 
         let lower = Lower {
-            ir,
+            tt,
             module,
             ast,
             imports,
@@ -121,7 +125,7 @@ impl Lower<'_> {
                     };
 
                     let generics =
-                        self.generics(self.ir[kind].params.as_ref(), name, &Generics::new());
+                        self.generics(self.tt[kind].params.as_ref(), name, &Generics::new());
                     let members = problems
                         .append(
                             struc
@@ -199,7 +203,7 @@ impl Lower<'_> {
                         inner::TypeDefinition::Type(spanned) => {
                             if let Some(kind) = kind {
                                 let generics = self.generics(
-                                    self.ir[kind].params.as_ref(),
+                                    self.tt[kind].params.as_ref(),
                                     name,
                                     &Generics::new(),
                                 );
@@ -247,7 +251,7 @@ impl Lower<'_> {
                     };
 
                     let generics =
-                        self.generics(self.ir[kind].params.as_ref(), name, &Generics::new());
+                        self.generics(self.tt[kind].params.as_ref(), name, &Generics::new());
                     let sig = problems.append(self.function_signature(decl, &generics));
                     if let Some(sig) = sig {
                         self.untyped.items.insert(
@@ -339,7 +343,7 @@ impl Lower<'_> {
                 Some(module) => match self
                     .graph
                     .stages(module)
-                    .and_then(|stages| stages.untyped_ir(self.graph, self.ir))
+                    .and_then(|stages| stages.untyped_ir(self.graph, self.tt))
                 {
                     Some(untyped) => ((module, untyped), None),
                     None => todo!("recover"),
@@ -351,7 +355,7 @@ impl Lower<'_> {
                 self.imports.preamble().and_then(|module| {
                     self.graph.stages(module).and_then(|stages| {
                         stages
-                            .untyped_ir(self.graph, self.ir)
+                            .untyped_ir(self.graph, self.tt)
                             .map(|untyped| (module, untyped))
                     })
                 }),
@@ -380,7 +384,7 @@ impl Lower<'_> {
     ) -> Result<(Kind, Term)> {
         match ast {
             Some(ast) => {
-                let kind = self.ir[kind].clone();
+                let kind = self.tt[kind].clone();
                 let Some(params) = kind.params else {
                     todo!("error");
                 };
@@ -388,20 +392,20 @@ impl Lower<'_> {
                     todo!("error");
                 }
 
-                let output = self.ir.insert_kind(KindEnum {
+                let output = self.tt.insert_kind(KindEnum {
                     params: None,
                     output: kind.output,
                 });
                 Iterator::zip(params.iter().copied(), ast.iter())
                     .map(|(param, arg)| self.generic_argument(param, arg, generics))
                     .collect::<Result<Arc<_>>>()
-                    .map(|args| (output, term.subst(self.ir, 0, &args)))
+                    .map(|args| (output, term.subst(self.tt, 0, &args)))
             }
             None => Result::new((kind, term)),
         }
     }
     fn dummy_args(&mut self, kind: Kind) -> Option<Arc<[GenericArgument]>> {
-        self.ir[kind].params.clone().map(|params| {
+        self.tt[kind].params.clone().map(|params| {
             params
                 .iter()
                 .copied()
@@ -416,13 +420,13 @@ impl Lower<'_> {
                         index: i + arity.unwrap_or(0),
                         apply,
                     };
-                    let term = match self.ir[kind].output {
+                    let term = match self.tt[kind].output {
                         SimpleKind::Type => {
-                            Term::Type(self.ir.insert_type(TypeEnum::Generic(param)))
+                            Term::Type(self.tt.insert_type(TypeEnum::Generic(param)))
                         }
                         SimpleKind::Effect => todo!(),
                         SimpleKind::Region => {
-                            Term::Region(self.ir.insert_region(RegionEnum::Generic(param)))
+                            Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                         }
                         SimpleKind::Constant(_) => todo!(),
                     };
@@ -443,11 +447,11 @@ impl Lower<'_> {
                     index: index + arity.unwrap_or(0),
                     apply,
                 };
-                let term = match self.ir[kind].output {
-                    SimpleKind::Type => Term::Type(self.ir.insert_type(TypeEnum::Generic(param))),
+                let term = match self.tt[kind].output {
+                    SimpleKind::Type => Term::Type(self.tt.insert_type(TypeEnum::Generic(param))),
                     SimpleKind::Effect => todo!(),
                     SimpleKind::Region => {
-                        Term::Region(self.ir.insert_region(RegionEnum::Generic(param)))
+                        Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                     }
                     SimpleKind::Constant(_) => todo!(),
                 };
@@ -463,7 +467,7 @@ impl Lower<'_> {
                     Item::Struct(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
-                        let base = self.ir.insert_type(TypeEnum::Item(
+                        let base = self.tt.insert_type(TypeEnum::Item(
                             module,
                             path.name.as_str().to_compact_string(),
                             generics,
@@ -473,7 +477,7 @@ impl Lower<'_> {
                     Item::Effect(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
-                        let base = self.ir.insert_effect(EffectEnum::Item(
+                        let base = self.tt.insert_effect(EffectEnum::Item(
                             module,
                             path.name.as_str().to_compact_string(),
                             generics,
@@ -500,12 +504,12 @@ impl Lower<'_> {
         arg: &ast::GenericArgument,
         generics: &Generics,
     ) -> Result<GenericArgument> {
-        let arity = self.ir[param].params.as_ref().map(|params| params.len());
+        let arity = self.tt[param].params.as_ref().map(|params| params.len());
         let generics = generics.shifted(arity.unwrap_or(0));
         match &arg.0 {
             inner::GenericArgument::Path(path) => self.term_path(param, path, &generics),
             inner::GenericArgument::Type(ty) => {
-                if self.ir[param] == KindEnum::TYPE {
+                if self.tt[param] == KindEnum::TYPE {
                     self.r#type(ty, &generics).map(Term::Type)
                 } else {
                     todo!("error")
@@ -516,7 +520,7 @@ impl Lower<'_> {
         .map(|term| GenericArgument { term, arity })
     }
     fn region(&mut self, region: &ast::Path, generics: &Generics) -> Result<Region> {
-        let kind = self.ir.insert_kind(KindEnum::REGION);
+        let kind = self.tt.insert_kind(KindEnum::REGION);
         self.term_path(kind, region, generics)
             .map(|path| match path {
                 Term::Region(region) => region,
@@ -524,7 +528,7 @@ impl Lower<'_> {
             })
     }
     fn effect(&mut self, effect: &ast::Path, generics: &Generics) -> Result<Effect> {
-        let kind = self.ir.insert_kind(KindEnum::EFFECT);
+        let kind = self.tt.insert_kind(KindEnum::EFFECT);
         self.term_path(kind, effect, generics)
             .map(|path| match path {
                 Term::Effect(effect) => effect,
@@ -534,7 +538,7 @@ impl Lower<'_> {
     fn r#type(&mut self, ty: &ast::Type, generics: &Generics) -> Result<Type> {
         match &ty.0 {
             inner::Type::Path(path) => {
-                let kind = self.ir.insert_kind(KindEnum::TYPE);
+                let kind = self.tt.insert_kind(KindEnum::TYPE);
                 self.term_path(kind, path, generics).map(|path| match path {
                     Term::Type(ty) => ty,
                     _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
@@ -543,12 +547,12 @@ impl Lower<'_> {
             inner::Type::Pointer(ty, region) => m! {
                 ty <- self.r#type(ty, generics);
                 region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
-                return self.ir.insert_type(TypeEnum::Pointer(ty, region));
+                return self.tt.insert_type(TypeEnum::Pointer(ty, region));
             },
             inner::Type::Slice(ty, region) => m! {
                 ty <- self.r#type(ty, generics);
                 region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
-                return self.ir.insert_type(TypeEnum::Slice(ty, region));
+                return self.tt.insert_type(TypeEnum::Slice(ty, region));
             },
         }
     }
@@ -581,7 +585,7 @@ impl Lower<'_> {
     }
     fn kind(&mut self, name: &ast::Name, output: SimpleKind) -> Result<Kind> {
         self.kind_params(name)
-            .map(|params| self.ir.insert_kind(KindEnum { params, output }))
+            .map(|params| self.tt.insert_kind(KindEnum { params, output }))
     }
 
     fn intrinsic_type(&mut self, name: &ast::Name) -> Result<Type> {
@@ -609,7 +613,7 @@ impl Lower<'_> {
                 name.as_str()
             ),
         };
-        Result::new(self.ir.insert_type(ty))
+        Result::new(self.tt.insert_type(ty))
     }
     fn intrinsic_function(&mut self, name: &ast::Name) -> Result<FunctionDef> {
         let module = self.module.to_compact_string();
@@ -633,6 +637,8 @@ impl Lower<'_> {
         if !matches!(
             (module.as_str(), name.as_str()),
             ("builtin:preamble", "Div")
+                | ("builtin:preamble", "Read")
+                | ("builtin:preamble", "Write"),
         ) {
             todo!(
                 "error: unknown intrinsic {}.{}",
@@ -668,7 +674,7 @@ impl Lower<'_> {
                 .flatten()
                 .map(|effect| self.effect(effect, &generics))
                 .collect::<Result<_>>();
-            return self.ir.insert_function_signature(FunctionSignatureValue {
+            return self.tt.insert_function_signature(FunctionSignatureValue {
                 type_params,
                 params,
                 returns,
@@ -687,7 +693,7 @@ impl Lower<'_> {
                 inner::Returns::Data(ty) => self.r#type(ty, generics).map(FunctionReturns::Data),
             },
             None => {
-                let unit = self.ir.insert_type(TypeEnum::Unit);
+                let unit = self.tt.insert_type(TypeEnum::Unit);
                 Result::new(FunctionReturns::Data(unit))
             }
         }

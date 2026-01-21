@@ -12,7 +12,6 @@ use crate::ir::{
     IntrinsicFunction, Item, Parent, StructDefinition, StructMember,
 };
 use crate::module::Module;
-use crate::pass::ModuleGraph;
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::span::Spanned;
@@ -31,8 +30,12 @@ struct Lower<'a> {
     imports: &'a Imports,
     definitions: &'a Definitions,
 
-    graph: &'a ModuleGraph,
+    query: &'a dyn IRQuery,
     ir: IR,
+}
+
+pub trait IRQuery {
+    fn untyped_ir(&self, module: &Module, tt: &mut TypeTable) -> Option<&IR>;
 }
 
 #[derive(Clone, Default)]
@@ -65,20 +68,21 @@ impl<'a> Generics<'a> {
 }
 
 impl IR {
-    pub fn from(graph: &ModuleGraph, module: &Module, tt: &mut TypeTable) -> Option<Result<Self>> {
-        let stages = graph.stages(module)?;
-
-        let ast = stages.ast()?;
-        let imports = stages.imports()?;
-        let definitions = stages.definitions()?;
-
+    pub fn from(
+        query: &impl IRQuery,
+        module: &Module,
+        ast: &ast::Module,
+        imports: &Imports,
+        definitions: &Definitions,
+        tt: &mut TypeTable,
+    ) -> Option<Result<Self>> {
         let lower = Lower {
             tt,
             module,
             ast,
             imports,
             definitions,
-            graph,
+            query,
             ir: IR::default(),
         };
         Some(lower.module())
@@ -328,11 +332,7 @@ impl Lower<'_> {
     fn item(&mut self, path: &ast::Path) -> std::result::Result<(&Module, Item), Problems> {
         let (module, preamble) = match &path.package {
             Some(pkg) => match self.imports.get(pkg.as_str()) {
-                Some(module) => match self
-                    .graph
-                    .stages(module)
-                    .and_then(|stages| stages.untyped_ir(self.graph, self.tt))
-                {
+                Some(module) => match self.query.untyped_ir(module, self.tt) {
                     Some(ir) => ((module, ir), None),
                     None => todo!("recover"),
                 },
@@ -341,11 +341,9 @@ impl Lower<'_> {
             None => (
                 (self.module, &self.ir),
                 self.imports.preamble().and_then(|module| {
-                    self.graph.stages(module).and_then(|stages| {
-                        stages
-                            .untyped_ir(self.graph, self.tt)
-                            .map(|ir| (module, ir))
-                    })
+                    self.query
+                        .untyped_ir(module, self.tt)
+                        .map(|ir| (module, ir))
                 }),
             ),
         };

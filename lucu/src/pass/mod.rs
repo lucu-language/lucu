@@ -22,6 +22,7 @@ use crate::module::{Module, ModuleResolver};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::{Import, Imports};
 use crate::pass::lexer::Lexer;
+use crate::pass::lower::IRQuery;
 use crate::pass::parser::Parser;
 use crate::tokens::Token;
 use crate::type_table::TypeTable;
@@ -135,8 +136,11 @@ impl Stages {
     }
 
     pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &mut TypeTable) -> Option<&IR> {
+        let ast = self.ast()?;
+        let imports = self.imports()?;
+        let definitions = self.definitions()?;
         self.untyped_ir
-            .get_or_init(|| IR::from(graph, &self.module, tt))
+            .get_or_init(|| IR::from(graph, &self.module, ast, imports, definitions, tt))
     }
 }
 
@@ -167,6 +171,13 @@ pub struct ModuleGraph {
     nodes: HashMap<Module, NodeIndex>,
     cache: ModuleCache,
     graph: DiGraph<Module, Import>,
+}
+
+impl IRQuery for ModuleGraph {
+    fn untyped_ir(&self, module: &Module, tt: &mut TypeTable) -> Option<&IR> {
+        self.stages(module)
+            .and_then(|stages| stages.untyped_ir(self, tt))
+    }
 }
 
 impl ModuleGraph {

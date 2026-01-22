@@ -1,8 +1,10 @@
 use std::ops::Index;
+use std::slice;
 use std::sync::Arc;
 
 use compact_str::CompactString;
 use indexmap::IndexSet;
+use itertools::Itertools;
 
 use crate::module::Module;
 
@@ -101,7 +103,7 @@ pub struct FunctionSignatureValue {
     pub type_params: Option<Arc<[Kind]>>,
     pub params: Option<Arc<[FunctionParameter]>>,
     pub returns: FunctionReturns,
-    pub effects: Arc<[Effect]>,
+    pub effect: Effect, // a singular (row) effect
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -157,6 +159,23 @@ pub enum Term {
 pub struct GenericArgument {
     pub term: Term,
     pub arity: Option<usize>,
+}
+
+impl Effect {
+    pub fn row<'a>(effects: impl IntoIterator<Item = &'a Effect>, tt: &mut TypeTable) -> Self {
+        let row = effects
+            .into_iter()
+            .flat_map(|e| match &tt[*e] {
+                EffectEnum::Row(effects) => effects.iter().copied(),
+                _ => slice::from_ref(e).iter().copied(),
+            })
+            .unique()
+            .collect::<Arc<_>>();
+        match *row {
+            [single] => single,
+            _ => tt.insert_effect(EffectEnum::Row(row)),
+        }
+    }
 }
 
 impl Index<Type> for TypeTable {

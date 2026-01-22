@@ -187,14 +187,7 @@ impl fmt::Display for Interned<'_, FunctionSignature> {
             }
         }
 
-        write!(f, "⟨")?;
-        for (i, effect) in sig.effects.iter().enumerate() {
-            if i > 0 {
-                write!(f, " | ")?;
-            }
-            write!(f, "{}", effect.display(self.1))?;
-        }
-        write!(f, "⟩ ")?;
+        write!(f, "⟨{}⟩ ", sig.effect.display(self.1))?;
 
         match sig.returns {
             FunctionReturns::Data(ty) => write!(f, "{}", ty.display(self.1))?,

@@ -1,9 +1,8 @@
+use std::iter;
 use std::sync::Arc;
-use std::{iter, slice};
 
 use compact_str::ToCompactString;
 use do_notation::m;
-use itertools::Itertools;
 
 use crate::ast;
 use crate::ast::inner;
@@ -317,20 +316,7 @@ impl Lower<'_> {
                                         .collect::<Result<Arc<_>>>(),
                                 );
                                 if let Some(effects) = effects {
-                                    let row = effects
-                                        .iter()
-                                        .flat_map(|e| match self.tt[*e] {
-                                            EffectEnum::Row(ref effects) => effects.iter().copied(),
-                                            _ => slice::from_ref(e).iter().copied(),
-                                        })
-                                        .unique()
-                                        .collect::<Arc<_>>();
-
-                                    let effect = match *row {
-                                        [single] => single,
-                                        _ => self.tt.insert_effect(EffectEnum::Row(row)),
-                                    };
-
+                                    let effect = Effect::row(effects.iter(), self.tt);
                                     self.ir.insert(
                                         name.as_str(),
                                         ItemDef::Alias(kind, Term::Effect(effect)),
@@ -705,12 +691,13 @@ impl Lower<'_> {
                 .iter()
                 .flatten()
                 .map(|effect| self.effect(effect, &generics))
-                .collect::<Result<_>>();
+                .collect::<Result<Arc<_>>>();
+            let effect = Effect::row(effects.iter(), self.tt);
             return self.tt.insert_function_signature(FunctionSignatureValue {
                 type_params,
                 params,
                 returns,
-                effects,
+                effect,
             });
         }
     }

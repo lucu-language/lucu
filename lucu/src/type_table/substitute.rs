@@ -1,7 +1,4 @@
-use std::slice;
 use std::sync::Arc;
-
-use itertools::Itertools;
 
 use crate::type_table::{
     Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
@@ -234,21 +231,7 @@ impl Substitute for Effect {
             }
             EffectEnum::Item(ref item) => EffectEnum::Item(item.clone().subst(tt, start, args)),
             EffectEnum::Row(ref row) => {
-                let row = row
-                    .clone()
-                    .subst(tt, start, args)
-                    .iter()
-                    .flat_map(|e| match tt[*e] {
-                        EffectEnum::Row(ref effects) => effects.iter().copied(),
-
-                        _ => slice::from_ref(e).iter().copied(),
-                    })
-                    .unique()
-                    .collect::<Arc<_>>();
-                match *row {
-                    [single] => return single,
-                    _ => EffectEnum::Row(row),
-                }
+                return Effect::row(row.clone().subst(tt, start, args).iter(), tt);
             }
         };
         tt.insert_effect(changed)
@@ -292,12 +275,12 @@ impl Substitute for FunctionSignature {
             FunctionReturns::Data(ty) => FunctionReturns::Data(ty.subst(tt, start + arity, args)),
             FunctionReturns::Never => FunctionReturns::Never,
         };
-        let effects = sig.effects.subst(tt, start + arity, args);
+        let effect = sig.effect.subst(tt, start + arity, args);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
             params,
             returns,
-            effects,
+            effect,
         })
     }
     fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
@@ -309,12 +292,12 @@ impl Substitute for FunctionSignature {
             FunctionReturns::Data(ty) => FunctionReturns::Data(ty.shift(tt, start + arity, offset)),
             FunctionReturns::Never => FunctionReturns::Never,
         };
-        let effects = sig.effects.shift(tt, start + arity, offset);
+        let effect = sig.effect.shift(tt, start + arity, offset);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
             params,
             returns,
-            effects,
+            effect,
         })
     }
 }

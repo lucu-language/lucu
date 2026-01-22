@@ -4,7 +4,7 @@ use crate::ast::{self, inner};
 use crate::error::{ProblemKind, Result};
 use crate::module::Module;
 use crate::pass::parser::err::Expected;
-use crate::span::{Span, Spanned};
+use crate::span::{HasSpan, Span, Spanned};
 use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
 
 pub mod err;
@@ -135,28 +135,29 @@ impl<'a> Parser<'a> {
             _ => parser.r#type().map(inner::TypeDefinition::Type),
         })
     }
-    fn starts_generic_arguments(&self, may_have_type_afterwards: bool) -> bool {
-        if self.is_next(TokenEnum::Open(Group::Bracket)) {
-            if may_have_type_afterwards {
-                let mut copy = *self;
-                copy.skip();
-                copy.skip_group(Group::Bracket);
-                !copy.starts_type()
-            } else {
-                true
-            }
-        } else {
-            false
-        }
-    }
     pub fn path(&mut self, may_have_type_afterwards: bool) -> Result<ast::Path> {
         self.spanned(|parser| {
             m! {
                 first <- parser.ident();
                 second <- parser.consume_next(Symbol::Dot, Parser::ident);
-                generics <- parser.when(|parser| parser.starts_generic_arguments(may_have_type_afterwards), |parser| {
-                    parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
-                });
+                generics <-
+                    parser.when(
+                        |parser| {
+                            // There is an ambiguous statement in the language.
+                            // ^@R[..]T can be parsed as:
+                            //  - ^@(R[..]) T  where R is a region function
+                            //  - ^@R ([..]T)  where the pointee is an array
+                            // 
+                            // To fix this, we enforce that the generic arguments MUST be
+                            // adjacent to the region function, with no whitespace inbetween.
+                            // Otherwise, we assume the pointee is some kind of array.
+                            parser.is_next(TokenEnum::Open(Group::Bracket))
+                                && (!may_have_type_afterwards || parser.last_token_end == parser.next().span.start)
+                        },
+                        |parser| {
+                            parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                        },
+                    );
                 return match second {
                     Some(name) => inner::Path { package: Some(first), name, generics },
                     None => inner::Path { package: None, name: first, generics },

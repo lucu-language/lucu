@@ -1,4 +1,4 @@
-#[cfg(feature = "anstyle")]
+#[cfg(feature = "annotate")]
 pub mod ansi;
 
 use std::fmt::{self, Debug, Display};

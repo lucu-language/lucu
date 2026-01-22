@@ -1,10 +1,8 @@
 use std::fmt;
 use std::ops::Range;
 
-#[cfg(feature = "anstyle")]
 use anstyle::{AnsiColor, Style};
 use itertools::Itertools;
-#[cfg(feature = "anstyle")]
 use lucu_annotate::ansi::MarkStyle;
 use lucu_annotate::{Annotate, Annotated, Annotation, Mark};
 
@@ -16,7 +14,6 @@ use crate::tokens::Token;
 
 pub trait AnnotateExt<'a> {
     fn mark_line_numbers(self) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>>;
-    #[cfg(feature = "anstyle")]
     fn mark_syntax(
         self,
         tokens: &[Token],
@@ -72,7 +69,6 @@ where
                 .map(|(line, pos)| Line(line + 1).at(pos..pos)),
         )
     }
-    #[cfg(feature = "anstyle")]
     fn mark_syntax(
         self,
         tokens: &[Token],
@@ -128,14 +124,11 @@ where
     }
 }
 
-#[cfg(feature = "anstyle")]
 pub const LINE_STYLE: Style = AnsiColor::Blue.on_default();
-#[cfg(feature = "anstyle")]
 pub const INLINE_STYLE: Style = AnsiColor::BrightBlack.on_default();
 
 struct Definition(usize);
 impl Mark for Definition {
-    #[cfg(feature = "anstyle")]
     fn style(&self) -> MarkStyle {
         MarkStyle::before(INLINE_STYLE)
     }
@@ -146,7 +139,6 @@ impl Mark for Definition {
 
 struct Line(usize);
 impl Mark for Line {
-    #[cfg(feature = "anstyle")]
     fn style(&self) -> MarkStyle {
         MarkStyle::before(LINE_STYLE)
     }
@@ -157,7 +149,6 @@ impl Mark for Line {
 
 struct InsertedSemicolon;
 impl Mark for InsertedSemicolon {
-    #[cfg(feature = "anstyle")]
     fn style(&self) -> MarkStyle {
         MarkStyle::before(INLINE_STYLE)
     }

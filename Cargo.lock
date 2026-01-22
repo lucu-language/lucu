@@ -463,6 +463,7 @@ checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
 [[package]]
 name = "petgraph"
 version = "0.8.3"
+source = "git+https://github.com/astavie/petgraph.git?rev=c9d1b2a5f3968ab37c3b32cd02fc1f244be7f22b#c9d1b2a5f3968ab37c3b32cd02fc1f244be7f22b"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",

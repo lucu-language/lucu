@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ir::{EffectDefinition, FunctionDefinition, IR, Item, Parent, TypeTable};
+use crate::ir::{EffectDefinition, FunctionDefinition, IR, ItemDef, Parent, TypeTable};
 
 #[derive(Clone, Copy)]
 struct Interned<'a, T>(T, &'a TypeTable);
@@ -8,14 +8,14 @@ struct Interned<'a, T>(T, &'a TypeTable);
 impl fmt::Display for Interned<'_, &'_ IR> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, (name, &item)) in self.0.items.iter().enumerate() {
-            if let Item::Function(_, Parent::Effect(_)) = item {
+            if let ItemDef::Function(_, Parent::Effect(_)) = item {
                 continue;
             }
             if i > 0 {
                 writeln!(f)?;
             }
             match item {
-                Item::Alias(kind, term) => {
+                ItemDef::Alias(kind, term) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -28,7 +28,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
                     writeln!(f, "{}", term.display(self.1))?;
                 }
-                Item::Struct(kind, def) => {
+                ItemDef::Struct(kind, def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -45,7 +45,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
                     writeln!(f, "}}")?;
                 }
-                Item::Effect(kind, def) => {
+                ItemDef::Effect(kind, def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
 
                     if let EffectDefinition::Body { members } = &self.0[def] {
@@ -71,7 +71,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                         writeln!(f, "}}")?;
                     }
                 }
-                Item::Function(sign, def) => {
+                ItemDef::Function(sign, def) => {
                     let Parent::TopLevel(def) = def else {
                         unreachable!()
                     };

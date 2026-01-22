@@ -13,14 +13,14 @@ pub struct IR {
     functions: Vec<OnceCell<FunctionDefinition>>,
     structs: Vec<OnceCell<StructDefinition>>,
     effects: Vec<OnceCell<EffectDefinition>>,
-    items: HashMap<CompactString, Item>,
+    items: HashMap<CompactString, ItemDef>,
 }
 
 impl IR {
-    pub fn get(&self, name: &str) -> Option<Item> {
+    pub fn get(&self, name: &str) -> Option<ItemDef> {
         self.items.get(name).copied()
     }
-    pub fn insert(&mut self, name: &str, item: Item) {
+    pub fn insert(&mut self, name: &str, item: ItemDef) {
         self.items.insert(name.to_compact_string(), item);
     }
     pub fn push_function(&mut self) -> FunctionDef {
@@ -132,7 +132,7 @@ pub enum EffectDefinition {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Item {
+pub enum ItemDef {
     Alias(Kind, Term),
     Struct(Kind, StructDef),
     Effect(Kind, EffectDef),

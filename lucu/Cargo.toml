@@ -12,6 +12,7 @@ path-clean = "1.0.1"
 petgraph = { git = "https://github.com/astavie/petgraph.git", rev = "c9d1b2a5f3968ab37c3b32cd02fc1f244be7f22b", default-features = false, features = ["std"] }
 strum = { version = "0.27.2", features = ["derive"] }
 indexmap = "2.13.0"
+itertools = "0.14.0"
 
 include_dir = { workspace = true, optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
@@ -19,12 +20,11 @@ notify-debouncer-full = { version = "0.6.0", features = ["crossbeam-channel"], o
 
 lucu-annotate = { path = "../lucu-annotate", optional = true }
 anstyle = { workspace = true, optional = true }
-itertools = { version = "0.14.0", optional = true }
 
 anstream = { version = "0.6.21", optional = true }
 line-column = { version = "0.2.0", optional = true }
 
 [features]
 watcher = ["dep:include_dir", "dep:crossbeam-channel", "dep:notify-debouncer-full"]
-annotate = ["dep:lucu-annotate", "dep:itertools", "dep:anstyle", "lucu-annotate/anstyle"]
+annotate = ["dep:lucu-annotate", "lucu-annotate/anstyle", "dep:anstyle"]
 print = ["annotate", "dep:anstream", "dep:line-column"]

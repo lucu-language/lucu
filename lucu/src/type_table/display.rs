@@ -2,8 +2,8 @@ use std::fmt;
 
 use crate::type_table::{
     Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature, GenericArgument,
-    GenericParameter, IntSize, Integer, Kind, KindEnum, Region, RegionEnum, SimpleKind, Term, Type,
-    TypeEnum, TypeTable,
+    GenericParameter, IntSize, Integer, Item, Kind, KindEnum, Region, RegionEnum, SimpleKind, Term,
+    Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy)]
@@ -60,27 +60,33 @@ impl fmt::Display for Interned<'_, &'_ GenericParameter> {
     }
 }
 
+impl fmt::Display for Interned<'_, &'_ Item> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.module.name() != "preamble" {
+            write!(f, "{}.", self.0.module.name())?;
+        }
+        write!(f, "{}", self.0.name)?;
+        if let Some(args) = &self.0.apply {
+            for arg in args.iter() {
+                if arg.enclosed(self.1) {
+                    write!(f, " ({})", arg.display(self.1))?;
+                } else {
+                    write!(f, " {}", arg.display(self.1))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Display for Interned<'_, Type> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.1[self.0] {
             TypeEnum::Generic(ref param) => {
                 write!(f, "{}", param.display(self.1))
             }
-            TypeEnum::Item(ref module, ref name, ref generic_arguments) => {
-                if module.name() != "preamble" {
-                    write!(f, "{}.", module.name())?;
-                }
-                write!(f, "{name}")?;
-                if let Some(args) = generic_arguments {
-                    for arg in args.iter() {
-                        if arg.enclosed(self.1) {
-                            write!(f, " ({})", arg.display(self.1))?;
-                        } else {
-                            write!(f, " {}", arg.display(self.1))?;
-                        }
-                    }
-                }
-                Ok(())
+            TypeEnum::Item(ref item) => {
+                write!(f, "{}", item.display(self.1))
             }
             TypeEnum::Boolean => write!(f, "Bool"),
             TypeEnum::Unit => write!(f, "()"),
@@ -107,19 +113,13 @@ impl fmt::Display for Interned<'_, Effect> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.1[self.0] {
             EffectEnum::Generic(ref param) => write!(f, "{}", param.display(self.1)),
-            EffectEnum::Item(ref module, ref name, ref generic_arguments) => {
-                if module.name() != "preamble" {
-                    write!(f, "{}.", module.name())?;
-                }
-                write!(f, "{name}")?;
-                if let Some(args) = generic_arguments {
-                    for arg in args.iter() {
-                        if arg.enclosed(self.1) {
-                            write!(f, " ({})", arg.display(self.1))?;
-                        } else {
-                            write!(f, " {}", arg.display(self.1))?;
-                        }
+            EffectEnum::Item(ref item) => write!(f, "{}", item.display(self.1)),
+            EffectEnum::Row(ref effects) => {
+                for (i, effect) in effects.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " | ")?;
                     }
+                    write!(f, "{}", effect.display(self.1))?;
                 }
                 Ok(())
             }
@@ -216,7 +216,7 @@ impl Type {
     fn enclosed(self, tt: &TypeTable) -> bool {
         match &tt[self] {
             TypeEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
-            TypeEnum::Item(_, _, generic_arguments) => generic_arguments.is_some(),
+            TypeEnum::Item(item) => item.apply.is_some(),
             _ => false,
         }
     }
@@ -238,7 +238,8 @@ impl Effect {
     fn enclosed(self, tt: &TypeTable) -> bool {
         match &tt[self] {
             EffectEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
-            EffectEnum::Item(_, _, generic_arguments) => generic_arguments.is_some(),
+            EffectEnum::Item(item) => item.apply.is_some(),
+            EffectEnum::Row(_) => true,
         }
     }
 }
@@ -271,6 +272,11 @@ impl FunctionSignature {
     }
 }
 impl GenericParameter {
+    pub fn display(&self, tt: &TypeTable) -> impl fmt::Display {
+        Interned(self, tt)
+    }
+}
+impl Item {
     pub fn display(&self, tt: &TypeTable) -> impl fmt::Display {
         Interned(self, tt)
     }

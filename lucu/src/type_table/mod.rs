@@ -35,8 +35,8 @@ pub struct GenericParameter {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub struct Integer {
-    signed: bool,
-    size: IntSize,
+    pub signed: bool,
+    pub size: IntSize,
 }
 
 impl Integer {
@@ -51,10 +51,17 @@ impl Integer {
     }
 }
 
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
+pub struct Item {
+    pub module: Module,
+    pub name: CompactString,
+    pub apply: Option<Arc<[GenericArgument]>>,
+}
+
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum TypeEnum {
     Generic(GenericParameter),
-    Item(Module, CompactString, Option<Arc<[GenericArgument]>>),
+    Item(Item),
     Integer(Integer),
     Boolean,
     Unit,
@@ -70,7 +77,8 @@ pub enum RegionEnum {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum EffectEnum {
     Generic(GenericParameter),
-    Item(Module, CompactString, Option<Arc<[GenericArgument]>>),
+    Item(Item),
+    Row(Arc<[Effect]>),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]

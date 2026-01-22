@@ -1,9 +1,12 @@
+use std::slice;
 use std::sync::Arc;
+
+use itertools::Itertools;
 
 use crate::type_table::{
     Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, Region, RegionEnum, Term, Type,
-    TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Term,
+    Type, TypeEnum, TypeTable,
 };
 
 pub trait Substitute {
@@ -52,6 +55,23 @@ where
     }
     fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
         self.map(|tys| tys.shift(tt, start, offset))
+    }
+}
+
+impl Substitute for Item {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        Self {
+            module: self.module,
+            name: self.name,
+            apply: self.apply.subst(tt, start, args),
+        }
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        Self {
+            module: self.module,
+            name: self.name,
+            apply: self.apply.shift(tt, start, offset),
+        }
     }
 }
 
@@ -126,11 +146,7 @@ impl Substitute for Type {
                     TypeEnum::Generic(generic)
                 }
             }
-            TypeEnum::Item(ref module, ref name, ref types) => TypeEnum::Item(
-                module.clone(),
-                name.clone(),
-                types.clone().subst(tt, start, args),
-            ),
+            TypeEnum::Item(ref item) => TypeEnum::Item(item.clone().subst(tt, start, args)),
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
@@ -146,11 +162,7 @@ impl Substitute for Type {
             TypeEnum::Generic(ref generic) => {
                 TypeEnum::Generic(generic.clone().shift(tt, start, offset))
             }
-            TypeEnum::Item(ref module, ref name, ref types) => TypeEnum::Item(
-                module.clone(),
-                name.clone(),
-                types.clone().shift(tt, start, offset),
-            ),
+            TypeEnum::Item(ref item) => TypeEnum::Item(item.clone().shift(tt, start, offset)),
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.shift(tt, start, offset), region.shift(tt, start, offset))
             }
@@ -208,11 +220,24 @@ impl Substitute for Effect {
                     EffectEnum::Generic(generic)
                 }
             }
-            EffectEnum::Item(ref module, ref name, ref types) => EffectEnum::Item(
-                module.clone(),
-                name.clone(),
-                types.clone().subst(tt, start, args),
-            ),
+            EffectEnum::Item(ref item) => EffectEnum::Item(item.clone().subst(tt, start, args)),
+            EffectEnum::Row(ref row) => {
+                let row = row
+                    .clone()
+                    .subst(tt, start, args)
+                    .iter()
+                    .flat_map(|e| match tt[*e] {
+                        EffectEnum::Row(ref effects) => effects.iter().copied(),
+
+                        _ => slice::from_ref(e).iter().copied(),
+                    })
+                    .unique()
+                    .collect::<Arc<_>>();
+                match *row {
+                    [single] => return single,
+                    _ => EffectEnum::Row(row),
+                }
+            }
         };
         tt.insert_effect(changed)
     }
@@ -221,11 +246,8 @@ impl Substitute for Effect {
             EffectEnum::Generic(ref generic) => {
                 EffectEnum::Generic(generic.clone().shift(tt, start, offset))
             }
-            EffectEnum::Item(ref module, ref name, ref types) => EffectEnum::Item(
-                module.clone(),
-                name.clone(),
-                types.clone().shift(tt, start, offset),
-            ),
+            EffectEnum::Item(ref item) => EffectEnum::Item(item.clone().shift(tt, start, offset)),
+            EffectEnum::Row(ref row) => EffectEnum::Row(row.clone().shift(tt, start, offset)),
         };
         tt.insert_effect(changed)
     }

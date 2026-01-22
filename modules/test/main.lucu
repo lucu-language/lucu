@@ -6,6 +6,15 @@ type Apply[M[_], T] = M[T]
 
 type Test2 = Apply[Id, u32]
 
+effect YieldABCD[A, B, C, D] = Yield[A] Yield[B] Yield[C] Yield[D]
+
+effect Yield1 = Yield[u32]
+effect Yield2 = Yield[u32] Yield[u64]
+effect Yield3 = Yield[u32] Yield[Test1] Yield[Test2]
+effect Yield4 = YieldABCD[u64, u64, u64, u64]
+
+effect Empty =
+
 -- type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
 
 -- type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]

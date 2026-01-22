@@ -1,15 +1,16 @@
-use std::iter;
 use std::sync::Arc;
+use std::{iter, slice};
 
 use compact_str::ToCompactString;
 use do_notation::m;
+use itertools::Itertools;
 
 use crate::ast;
 use crate::ast::inner;
 use crate::error::{Problems, Result};
 use crate::ir::{
     EffectDef, EffectDefinition, EffectMember, FunctionDef, FunctionDefinition, IR,
-    IntrinsicFunction, Item, Parent, StructDefinition, StructMember,
+    IntrinsicFunction, ItemDef, Parent, StructDefinition, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -18,8 +19,8 @@ use crate::span::Spanned;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Kind, KindEnum,
-    Region, RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind,
+    KindEnum, Region, RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
 };
 
 struct Lower<'a> {
@@ -127,7 +128,7 @@ impl Lower<'_> {
         match &def.0 {
             inner::Definition::Type(name, def) => {
                 if let Some(Spanned(inner::TypeDefinition::Struct(struc), _)) = def {
-                    let Some(Item::Struct(kind, idx)) = self.ir.get(name.as_str()) else {
+                    let Some(ItemDef::Struct(kind, idx)) = self.ir.get(name.as_str()) else {
                         return problems;
                     };
 
@@ -148,7 +149,7 @@ impl Lower<'_> {
             }
             inner::Definition::Function(decl, def) => {
                 if let Some(Spanned(inner::FunctionDefinition::Expression(body), _)) = def {
-                    let Some(Item::Function(_, Parent::TopLevel(fun))) =
+                    let Some(ItemDef::Function(_, Parent::TopLevel(fun))) =
                         self.ir.get(decl.name.as_str())
                     else {
                         return problems;
@@ -165,7 +166,7 @@ impl Lower<'_> {
             }
             inner::Definition::Effect(name, defs) => {
                 if let Some(Spanned(inner::EffectDefinition::Body(body), _)) = defs {
-                    let Some(Item::Effect(_, eff)) = self.ir.get(name.as_str()) else {
+                    let Some(ItemDef::Effect(_, eff)) = self.ir.get(name.as_str()) else {
                         return problems;
                     };
 
@@ -174,7 +175,7 @@ impl Lower<'_> {
                         .iter()
                         .filter_map(|def| {
                             let name = def.name()?;
-                            let Item::Function(sig, _) = self.ir.get(name.as_str())? else {
+                            let ItemDef::Function(sig, _) = self.ir.get(name.as_str())? else {
                                 return None;
                             };
                             Some(EffectMember {
@@ -214,22 +215,24 @@ impl Lower<'_> {
                                 );
                                 let ty = problems.append(self.r#type(spanned, &generics));
                                 if let Some(ty) = ty {
-                                    self.ir
-                                        .insert(name.as_str(), Item::Alias(kind, Term::Type(ty)));
+                                    self.ir.insert(
+                                        name.as_str(),
+                                        ItemDef::Alias(kind, Term::Type(ty)),
+                                    );
                                 }
                             }
                         }
                         inner::TypeDefinition::Struct(_) => {
                             if let Some(kind) = kind {
                                 let struc = self.ir.push_struct();
-                                self.ir.insert(name.as_str(), Item::Struct(kind, struc));
+                                self.ir.insert(name.as_str(), ItemDef::Struct(kind, struc));
                             }
                         }
                         inner::TypeDefinition::Intrinsic => {
                             let ty = problems.append(self.intrinsic_type(name));
                             if let (Some(kind), Some(ty)) = (kind, ty) {
                                 self.ir
-                                    .insert(name.as_str(), Item::Alias(kind, Term::Type(ty)));
+                                    .insert(name.as_str(), ItemDef::Alias(kind, Term::Type(ty)));
                             }
                         }
                     },
@@ -244,7 +247,7 @@ impl Lower<'_> {
                     let Some(item) = self.ir.get(name.as_str()) else {
                         return problems;
                     };
-                    let Item::Effect(kind, effect) = item else {
+                    let ItemDef::Effect(kind, effect) = item else {
                         todo!("error")
                     };
 
@@ -254,7 +257,7 @@ impl Lower<'_> {
                     if let Some(sig) = sig {
                         self.ir.insert(
                             decl.name.as_str(),
-                            Item::Function(sig, Parent::Effect(effect)),
+                            ItemDef::Function(sig, Parent::Effect(effect)),
                         );
                     }
                 }
@@ -267,7 +270,7 @@ impl Lower<'_> {
                                     let fun = self.ir.push_function();
                                     self.ir.insert(
                                         decl.name.as_str(),
-                                        Item::Function(sig, Parent::TopLevel(fun)),
+                                        ItemDef::Function(sig, Parent::TopLevel(fun)),
                                     );
                                 }
                             }
@@ -276,7 +279,7 @@ impl Lower<'_> {
                                 if let (Some(sig), Some(fun)) = (sig, fun) {
                                     self.ir.insert(
                                         decl.name.as_str(),
-                                        Item::Function(sig, Parent::TopLevel(fun)),
+                                        ItemDef::Function(sig, Parent::TopLevel(fun)),
                                     );
                                 }
                             }
@@ -297,14 +300,48 @@ impl Lower<'_> {
                         inner::EffectDefinition::Body(_) => {
                             if let Some(kind) = kind {
                                 let effect = self.ir.push_effect();
-                                self.ir.insert(name.as_str(), Item::Effect(kind, effect));
+                                self.ir.insert(name.as_str(), ItemDef::Effect(kind, effect));
                             }
                         }
-                        inner::EffectDefinition::Alias(effects) => todo!(),
+                        inner::EffectDefinition::Alias(effects) => {
+                            if let Some(kind) = kind {
+                                let generics = self.generics(
+                                    self.tt[kind].params.as_ref(),
+                                    name,
+                                    &Generics::new(),
+                                );
+                                let effects = problems.append(
+                                    effects
+                                        .iter()
+                                        .map(|path| self.effect(path, &generics))
+                                        .collect::<Result<Arc<_>>>(),
+                                );
+                                if let Some(effects) = effects {
+                                    let row = effects
+                                        .iter()
+                                        .flat_map(|e| match self.tt[*e] {
+                                            EffectEnum::Row(ref effects) => effects.iter().copied(),
+                                            _ => slice::from_ref(e).iter().copied(),
+                                        })
+                                        .unique()
+                                        .collect::<Arc<_>>();
+
+                                    let effect = match *row {
+                                        [single] => single,
+                                        _ => self.tt.insert_effect(EffectEnum::Row(row)),
+                                    };
+
+                                    self.ir.insert(
+                                        name.as_str(),
+                                        ItemDef::Alias(kind, Term::Effect(effect)),
+                                    );
+                                }
+                            }
+                        }
                         inner::EffectDefinition::Intrinsic => {
                             let eff = problems.append(self.intrinsic_effect(name));
                             if let (Some(kind), Some(eff)) = (kind, eff) {
-                                self.ir.insert(name.as_str(), Item::Effect(kind, eff));
+                                self.ir.insert(name.as_str(), ItemDef::Effect(kind, eff));
                             }
                         }
                     },
@@ -329,7 +366,7 @@ impl Lower<'_> {
             }
         }
     }
-    fn item(&mut self, path: &ast::Path) -> std::result::Result<(&Module, Item), Problems> {
+    fn item(&mut self, path: &ast::Path) -> std::result::Result<(&Module, ItemDef), Problems> {
         let (module, preamble) = match &path.package {
             Some(pkg) => match self.imports.get(pkg.as_str()) {
                 Some(module) => match self.query.untyped_ir(module, self.tt) {
@@ -449,28 +486,28 @@ impl Lower<'_> {
                     Err(problems) => return problems.with(todo!("recovery value")),
                 };
                 match item {
-                    Item::Alias(item_kind, term) => (item_kind, term),
-                    Item::Struct(item_kind, _) => {
+                    ItemDef::Alias(item_kind, term) => (item_kind, term),
+                    ItemDef::Struct(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
-                        let base = self.tt.insert_type(TypeEnum::Item(
+                        let base = self.tt.insert_type(TypeEnum::Item(Item {
                             module,
-                            path.name.as_str().to_compact_string(),
-                            generics,
-                        ));
+                            name: path.name.as_str().to_compact_string(),
+                            apply: generics,
+                        }));
                         (item_kind, Term::Type(base))
                     }
-                    Item::Effect(item_kind, _) => {
+                    ItemDef::Effect(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
-                        let base = self.tt.insert_effect(EffectEnum::Item(
+                        let base = self.tt.insert_effect(EffectEnum::Item(Item {
                             module,
-                            path.name.as_str().to_compact_string(),
-                            generics,
-                        ));
+                            name: path.name.as_str().to_compact_string(),
+                            apply: generics,
+                        }));
                         (item_kind, Term::Effect(base))
                     }
-                    Item::Function(_, _) => todo!("error"),
+                    ItemDef::Function(_, _) => todo!("error"),
                 }
             }
         };

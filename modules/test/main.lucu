@@ -1,3 +1,6 @@
+import "core:io"
+import "builtin:ops"
+
 type Id[T] = T
 
 type Test1 = Id[u32]

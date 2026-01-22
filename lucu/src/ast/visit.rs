@@ -187,7 +187,10 @@ impl Ast for ast::FunctionDeclaration {
             visitor.visit(&self.0.name),
             visit_option_vec(&self.0.parameters, visitor),
             visit_option(&self.0.returns, visitor),
-            visit_option_vec(&self.0.effects, visitor),
+            match &self.0.effects {
+                Some(ast) => V::Output::combine(ast.iter().map(|inner| visitor.visit_path(inner))),
+                None => V::Output::default(),
+            },
         ])
     }
     fn node_name(&self) -> &'static str {

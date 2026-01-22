@@ -99,6 +99,11 @@ pub type Body = ();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntrinsicFunction {
+    // regions
+    Local,
+    Alloca,
+    // slices
+    Len,
     // Div-related functions
     Loop,
     Unfounded,

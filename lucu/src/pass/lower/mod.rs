@@ -472,7 +472,9 @@ impl Lower<'_> {
                 };
                 let term = match self.tt[kind].output {
                     SimpleKind::Type => Term::Type(self.tt.insert_type(TypeEnum::Generic(param))),
-                    SimpleKind::Effect => todo!(),
+                    SimpleKind::Effect => {
+                        Term::Effect(self.tt.insert_effect(EffectEnum::Generic(param)))
+                    }
                     SimpleKind::Region => {
                         Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                     }
@@ -641,6 +643,9 @@ impl Lower<'_> {
     fn intrinsic_function(&mut self, name: &ast::Name) -> Result<FunctionDef> {
         let module = self.module.to_compact_string();
         let value = match (module.as_str(), name.as_str()) {
+            ("builtin:preamble", "len") => IntrinsicFunction::Len,
+            ("builtin:preamble", "local") => IntrinsicFunction::Local,
+            ("builtin:preamble", "alloca") => IntrinsicFunction::Alloca,
             ("builtin:preamble", "print_str") => IntrinsicFunction::PrintStr,
             ("builtin:preamble", "loop") => IntrinsicFunction::Loop,
             ("builtin:preamble", "unfounded") => IntrinsicFunction::Unfounded,

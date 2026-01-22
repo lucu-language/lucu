@@ -25,11 +25,26 @@ type unit = #intrinsic
 
 -- regions
 
-effect Read[R region] =
-	#intrinsic
+effect Read[R region]
+	= #intrinsic
 
-effect Write[R region] =
-	#intrinsic
+effect Write[R region]
+	= #intrinsic
+
+fun local[T, U](
+	val T,
+	fun body[R region](ptr ^T@R) U with Read[R] Write[R]
+) U = #intrinsic
+
+fun alloca[T, U](
+	len usize,
+	fun body[R region](slice []T@R) U with Read[R] Write[R]
+) U = #intrinsic
+
+-- slices
+
+fun len[T, R region](slice []T@R) usize
+	= #intrinsic
 
 -- printing
 

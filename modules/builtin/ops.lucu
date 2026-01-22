@@ -1,0 +1,28 @@
+effect Index[T, I, E] = {
+	fun index(t T, index I) E
+}
+
+type Range = struct(
+	start usize,
+	end usize,
+)
+
+type RangeOpen = struct(
+	start usize,
+)
+
+-- default[E, N usize ] Index[[N  ]E  , usize,  E  ]
+-- default[E, N usize ] Index[[N:0]E  , usize,  E  ]
+-- default[E, R region] Index[[   ]E@R, usize, ^E@R]
+-- default[E, R region] Index[[ :0]E@R, usize, ^E@R]
+
+-- default[E, N usize, R region] Index[^[N  ]E@R, Range,     [  ]E@R]
+-- default[E, N usize, R region] Index[^[N  ]E@R, RangeOpen, [  ]E@R]
+-- default[E, N usize, R region] Index[^[N:0]E@R, Range,     [  ]E@R]
+-- default[E, N usize, R region] Index[^[N:0]E@R, RangeOpen, [:0]E@R]
+-- default[E,          R region] Index[ [   ]E@R, Range,     [  ]E@R]
+-- default[E,          R region] Index[ [   ]E@R, RangeOpen, [  ]E@R]
+-- default[E,          R region] Index[ [ :0]E@R, Range,     [  ]E@R]
+-- default[E,          R region] Index[ [ :0]E@R, RangeOpen, [:0]E@R]
+
+-- &var[2] should be parsed as (&var)[2]

@@ -56,7 +56,9 @@ impl Imports {
 
         let mut map = HashMap::new();
 
-        if let Some(module) = resolver.preamble(parent) {
+        if let Some(module) = resolver.preamble(parent)
+            && &module != parent
+        {
             map.insert(Import::Implicit, module);
         }
 

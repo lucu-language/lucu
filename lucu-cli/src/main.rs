@@ -14,7 +14,9 @@ fn main() {
     let mut dirs = HashMap::new();
     dirs.insert(
         Library::BUILTIN,
-        WatchedLibrary::new("./modules/builtin").with_modules(include_dir!("modules/builtin")),
+        WatchedLibrary::new("./modules/builtin")
+            .with_modules(include_dir!("modules/builtin"))
+            .with_preamble(Module::BUILTIN_PREAMBLE),
     );
     dirs.insert(
         Library::CORE,

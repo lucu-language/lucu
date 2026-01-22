@@ -579,6 +579,11 @@ impl Lower<'_> {
                 region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
                 return self.tt.insert_type(TypeEnum::PointerSlice(ty, region));
             },
+            inner::Type::PointerSliceNullTerminated(ty, region) => m! {
+                ty <- self.r#type(ty, generics);
+                region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
+                return self.tt.insert_type(TypeEnum::PointerSliceNullTerminated(ty, region));
+            },
         }
     }
     fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {

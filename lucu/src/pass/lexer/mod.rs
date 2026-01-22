@@ -219,7 +219,11 @@ fn next_token(mut src: &str, pos: usize) -> Option<Token> {
                     .copied()
                     .all(|c| c.is_ascii_digit() || c == b'_')
             {
-                Literal(Integer)
+                if word == "0" {
+                    Literal(Zero)
+                } else {
+                    Literal(Integer)
+                }
             } else {
                 TokenEnum::from_word(word)
             }

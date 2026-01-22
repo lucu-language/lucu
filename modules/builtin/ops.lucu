@@ -11,20 +11,36 @@ type RangeOpen = struct(
 	start usize,
 )
 
--- default[E, N usize          ] Index[ [N  ]E  , usize,  E  ]
--- default[E, N usize          ] Index[ [N:0]E  , usize,  E  ]
--- default[E, N usize, R region] Index[^[N  ]E@R, usize, ^E@R]
--- default[E, N usize, R region] Index[^[N:0]E@R, usize, ^E@R]
--- default[E,          R region] Index[^[   ]E@R, usize, ^E@R]
--- default[E,          R region] Index[^[ :0]E@R, usize, ^E@R]
+type RangeNullTerminated[T] = struct(
+	start usize,
+	end usize,
+)
 
--- default[E, N usize, R region] Index[^[N  ]E@R, Range,     ^[  ]E@R]
--- default[E, N usize, R region] Index[^[N  ]E@R, RangeOpen, ^[  ]E@R]
--- default[E, N usize, R region] Index[^[N:0]E@R, Range,     ^[  ]E@R]
--- default[E, N usize, R region] Index[^[N:0]E@R, RangeOpen, ^[:0]E@R]
--- default[E,          R region] Index[^[   ]E@R, Range,     ^[  ]E@R]
--- default[E,          R region] Index[^[   ]E@R, RangeOpen, ^[  ]E@R]
--- default[E,          R region] Index[^[ :0]E@R, Range,     ^[  ]E@R]
--- default[E,          R region] Index[^[ :0]E@R, RangeOpen, ^[:0]E@R]
+-- -- if we eventually allow dependent kinds:
+-- type RangeTerminated[T, SENTINEL T] = struct(start usize, end usize)
+-- type RangeNullTerminated[T]         = RangeTerminated[T, 0]
+
+-- default[E, N usize          ] Index[    [N  ]E, usize,     E]
+-- default[E, N usize          ] Index[    [N:0]E, usize,     E]
+-- default[E, N usize, R region] Index[^@R [N  ]E, usize, ^@R E]
+-- default[E, N usize, R region] Index[^@R [N:0]E, usize, ^@R E]
+-- default[E,          R region] Index[^@R [   ]E, usize, ^@R E]
+-- default[E,          R region] Index[^@R [ :0]E, usize, ^@R E]
+
+-- default[E, N usize, R region] Index[^@R [N  ]E, Range, ^@R[  ]]
+-- default[E, N usize, R region] Index[^@R [N:0]E, Range, ^@R[  ]]
+-- default[E,          R region] Index[^@R [   ]E, Range, ^@R[  ]]
+-- default[E,          R region] Index[^@R [ :0]E, Range, ^@R[  ]]
+
+-- default[E, N usize, R region] Index[^@R [N  ]E, RangeOpen, ^@R [  ]E]
+-- default[E, N usize, R region] Index[^@R [N:0]E, RangeOpen, ^@R [:0]E]
+-- default[E,          R region] Index[^@R [   ]E, RangeOpen, ^@R [  ]E]
+-- default[E,          R region] Index[^@R [ :0]E, RangeOpen, ^@R [:0]E]
+
+-- -- here we need Read[R] to check if the slice is indeed null-terminated
+-- default[E, N usize, R region] Index[^@R [N  ]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
+-- default[E, N usize, R region] Index[^@R [N:0]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
+-- default[E,          R region] Index[^@R [   ]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
+-- default[E,          R region] Index[^@R [ :0]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
 
 -- &var[2] should be parsed as (&var)[2]

@@ -21,7 +21,7 @@ impl Diagnostic for Expected {
             Expected::Definition => Some("expected a definition".into()),
             Expected::Type => Some("expected a type".into()),
             Expected::Kind => Some("expected a kind or type".into()),
-            Expected::Returns => Some("expected a type, '!', or 'with'".into()),
+            Expected::Returns => Some("expected a type or '!'".into()),
             Expected::FunctionParameter => Some("expected a function parameter".into()),
             Expected::GenericArgument => Some("expected a type or constant".into()),
         }

@@ -265,15 +265,15 @@ impl Ast for ast::Kind {
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
-            inner::Type::Pointer(inner, region) | inner::Type::PointerSlice(inner, region) => {
-                V::Output::combine([
-                    visitor.visit(&**inner),
-                    match region {
-                        Some(t) => visitor.visit_path(t),
-                        None => V::Output::default(),
-                    },
-                ])
-            }
+            inner::Type::Pointer(inner, region)
+            | inner::Type::PointerSlice(inner, region)
+            | inner::Type::PointerSliceNullTerminated(inner, region) => V::Output::combine([
+                visitor.visit(&**inner),
+                match region {
+                    Some(t) => visitor.visit_path(t),
+                    None => V::Output::default(),
+                },
+            ]),
             inner::Type::Path(path) => visitor.visit_path(path),
         }
     }

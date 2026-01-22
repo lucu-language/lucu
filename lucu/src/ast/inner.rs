@@ -92,6 +92,7 @@ pub enum Type {
     Path(ast::Path),
     Pointer(Box<ast::Type>, Option<ast::Path>),
     PointerSlice(Box<ast::Type>, Option<ast::Path>),
+    PointerSliceNullTerminated(Box<ast::Type>, Option<ast::Path>),
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Struct {

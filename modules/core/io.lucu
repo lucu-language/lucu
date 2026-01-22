@@ -3,13 +3,13 @@ effect Source = {
 }
 
 effect Sink = {
-	fun write[R region](bytes ^[]u8@R) usize with Read[R]
+	fun write[R region](bytes ^@R []u8) usize with Read[R]
 	fun flush()
 }
 
 effect Buffered[E effect] = {
 	fun buffered[R region](
-		buffer ^[]u8@R,
+		buffer ^@R []u8,
 		fun handled(fun body with E),
 		fun body with E,
 	) with Read[R] Write[R]

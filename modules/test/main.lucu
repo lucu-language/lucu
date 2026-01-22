@@ -16,7 +16,11 @@ effect Yield2 = Yield[u32] Yield[u64]
 effect Yield3 = Yield[u32] Yield[Test1] Yield[Test2]
 effect Yield4 = YieldABCD[u64, u64, u64, u64]
 
-effect Empty =
+effect Empty = ;
+
+type CString[R region] = ^@R [:0]u8
+
+type Slice[T, R region] = ^@R []T
 
 -- type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
 

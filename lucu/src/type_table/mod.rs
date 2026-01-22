@@ -67,6 +67,7 @@ pub enum TypeEnum {
     Unit,
     Pointer(Type, Region),
     PointerSlice(Type, Region),
+    PointerSliceNullTerminated(Type, Region),
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]

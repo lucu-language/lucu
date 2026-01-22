@@ -153,6 +153,12 @@ impl Substitute for Type {
             TypeEnum::PointerSlice(ty, region) => {
                 TypeEnum::PointerSlice(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
+            TypeEnum::PointerSliceNullTerminated(ty, region) => {
+                TypeEnum::PointerSliceNullTerminated(
+                    ty.subst(tt, start, args),
+                    region.subst(tt, start, args),
+                )
+            }
             TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };
         tt.insert_type(changed)
@@ -168,6 +174,12 @@ impl Substitute for Type {
             }
             TypeEnum::PointerSlice(ty, region) => {
                 TypeEnum::PointerSlice(ty.shift(tt, start, offset), region.shift(tt, start, offset))
+            }
+            TypeEnum::PointerSliceNullTerminated(ty, region) => {
+                TypeEnum::PointerSliceNullTerminated(
+                    ty.shift(tt, start, offset),
+                    region.shift(tt, start, offset),
+                )
             }
             TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };

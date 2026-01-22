@@ -96,7 +96,9 @@ impl<'a> Parser<'a> {
                 parser.effect_body().map(inner::EffectDefinition::Body)
             }
             _ => parser
-                .many_until(&[TokenEnum::Symbol(Symbol::Semicolon)], Parser::path)
+                .many_until(&[TokenEnum::Symbol(Symbol::Semicolon)], |parser| {
+                    parser.path(false)
+                })
                 .map(inner::EffectDefinition::Alias),
         })
     }
@@ -133,12 +135,26 @@ impl<'a> Parser<'a> {
             _ => parser.r#type().map(inner::TypeDefinition::Type),
         })
     }
-    pub fn path(&mut self) -> Result<ast::Path> {
+    fn starts_generic_arguments(&self, may_have_type_afterwards: bool) -> bool {
+        if self.is_next(TokenEnum::Open(Group::Bracket)) {
+            if may_have_type_afterwards {
+                let mut copy = *self;
+                copy.skip();
+                copy.skip_group(Group::Bracket);
+                !copy.starts_type()
+            } else {
+                true
+            }
+        } else {
+            false
+        }
+    }
+    pub fn path(&mut self, may_have_type_afterwards: bool) -> Result<ast::Path> {
         self.spanned(|parser| {
             m! {
                 first <- parser.ident();
                 second <- parser.consume_next(Symbol::Dot, Parser::ident);
-                generics <- parser.when_next(TokenEnum::Open(Group::Bracket), |parser| {
+                generics <- parser.when(|parser| parser.starts_generic_arguments(may_have_type_afterwards), |parser| {
                     parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
                 });
                 return match second {
@@ -150,7 +166,7 @@ impl<'a> Parser<'a> {
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
         self.spanned(|parser| match parser.next().token {
-            TokenEnum::Identifier => parser.path().map(inner::GenericArgument::Path),
+            TokenEnum::Identifier => parser.path(false).map(inner::GenericArgument::Path),
             _ if parser.starts_type() => parser.r#type().map(inner::GenericArgument::Type),
             _ if parser.starts_constant() => {
                 parser.constant().map(inner::GenericArgument::Constant)
@@ -168,40 +184,69 @@ impl<'a> Parser<'a> {
         matches!(
             self.next().token,
             TokenEnum::Identifier
-                | TokenEnum::Keyword(Keyword::Struct)
                 | TokenEnum::Symbol(Symbol::Caret)
                 | TokenEnum::Open(Group::Bracket)
+                // not really types, but we count them
+                | TokenEnum::Symbol(Symbol::Bang)
+                | TokenEnum::Keyword(Keyword::Struct)
         )
     }
     fn starts_slice(&self) -> bool {
         matches!(
-            self.skipped().next().token,
-            // slice
-            TokenEnum::Close(Group::Bracket) |
+            self.tokens.get(1).map(|t| t.token),
+            Some(
+                // slice
+                TokenEnum::Close(Group::Bracket) |
                 // null terminated slice
                 TokenEnum::Symbol(Symbol::Colon)
+            )
         )
     }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         self.spanned(|parser| match parser.next().token {
-            TokenEnum::Identifier => parser.path().map(inner::Type::Path),
+            TokenEnum::Identifier => parser.path(false).map(inner::Type::Path),
             TokenEnum::Symbol(Symbol::Caret) => {
+                // Pointer
                 parser.skip();
-                if parser.is_next(TokenEnum::Open(Group::Bracket)) && parser.starts_slice() {
-                    parser.skip();
-                    m! {
-                        _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
-                        inner <- parser.r#type();
-                        region <- parser.consume_next(Symbol::At, Parser::path);
-                        return inner::Type::PointerSlice(inner, region);
+                parser.consume_next(Symbol::At, |parser| parser.path(true)).and_then(|region| {
+                    if parser.is_next(TokenEnum::Open(Group::Bracket)) && parser.starts_slice() {
+                        // Pointer to some slice
+                        parser.skip();
+                        match parser.next().token {
+                            TokenEnum::Close(Group::Bracket) => {
+                                // Pointer to slice
+                                parser.skip();
+                                m! {
+                                    inner <- parser.r#type();
+                                    return inner::Type::PointerSlice(inner, region);
+                                }
+                            }
+                            TokenEnum::Symbol(Symbol::Colon) => {
+                                // Pointer to null-terminated slice
+                                parser.skip();
+                                m! {
+                                    _ <- parser.consume(Literal::Zero);
+                                    _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
+                                    inner <- parser.r#type();
+                                    return inner::Type::PointerSliceNullTerminated(inner, region);
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        // Pointer to non-slice
+                        m! {
+                            inner <- parser.r#type();
+                            return inner::Type::Pointer(inner, region);
+                        }
                     }
-                } else {
-                    m! {
-                        inner <- parser.r#type();
-                        region <- parser.consume_next(Symbol::At, Parser::path);
-                        return inner::Type::Pointer(inner, region);
-                    }
+                })
+            }
+            TokenEnum::Open(Group::Bracket) => {
+                if parser.starts_slice() {
+                    todo!("error: needs pointer syntax")
                 }
+                todo!("constant sized array")
             }
             _ => parser.error(Expected::Type),
         })
@@ -251,13 +296,6 @@ impl<'a> Parser<'a> {
         })
     }
     pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
-        const DECL_END: &[TokenEnum] = &[
-            TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
-            TokenEnum::Symbol(Symbol::Comma),
-            TokenEnum::Symbol(Symbol::Semicolon),
-            TokenEnum::Open(Group::Brace),
-            TokenEnum::Keyword(Keyword::With),
-        ];
         self.spanned(|parser| {
             m! {
                 _ <- parser.consume(Keyword::Fun);
@@ -267,12 +305,15 @@ impl<'a> Parser<'a> {
                     Symbol::Comma,
                     Parser::function_parameter,
                 ));
-                returns <- parser.unless_next(
-                    DECL_END,
-                    Parser::returns
-                );
+                returns <- parser.when(Parser::starts_type, Parser::returns);
                 effects <- parser.consume_next(TokenEnum::Keyword(Keyword::With), |parser| {
-                    parser.many_until(DECL_END, Parser::path)
+                    parser.many_until(&[
+                        TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
+                        TokenEnum::Symbol(Symbol::Semicolon),
+                        TokenEnum::Symbol(Symbol::Comma),
+                        // not a valid next token, but it improves the error
+                        TokenEnum::Open(Group::Brace),
+                    ], |parser| parser.path(false))
                 });
                 return inner::FunctionDeclaration { name, parameters, returns, effects };
             }
@@ -376,11 +417,6 @@ impl<'a> Parser<'a> {
         self.tokens = tokens;
         self.last_token_end = token.span.end;
     }
-    fn skipped(&self) -> Self {
-        let mut copy = *self;
-        copy.skip();
-        copy
-    }
     fn next(&self) -> Token {
         self.tokens
             .first()
@@ -390,30 +426,36 @@ impl<'a> Parser<'a> {
     fn is_next(&self, token: impl Into<TokenEnum>) -> bool {
         self.next().token == token.into()
     }
+    fn when<T>(
+        &mut self,
+        p: impl FnOnce(&Self) -> bool,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<Option<T>> {
+        if p(self) {
+            parse(self).map(Some)
+        } else {
+            Result::new(None)
+        }
+    }
     fn unless_next<T>(
         &mut self,
         tokens: &[TokenEnum],
         parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
-        let next = self.next().token;
-        if !tokens.contains(&next)
-            && !matches!(self.next().token, TokenEnum::Close(_) | TokenEnum::Eof)
-        {
-            parse(self).map(Some)
-        } else {
-            Result::new(None)
-        }
+        self.when(
+            |parser| {
+                let next = parser.next().token;
+                !tokens.contains(&next) && !matches!(next, TokenEnum::Close(_) | TokenEnum::Eof)
+            },
+            parse,
+        )
     }
     fn when_next<T>(
         &mut self,
         token: impl Into<TokenEnum>,
         parse: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<Option<T>> {
-        if self.is_next(token) {
-            parse(self).map(Some)
-        } else {
-            Result::new(None)
-        }
+        self.when(|parser| parser.is_next(token), parse)
     }
     fn consume_next<T>(
         &mut self,
@@ -498,8 +540,8 @@ impl<'a> Parser<'a> {
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         std::iter::from_fn(|| {
-            let has_next =
-                pred(self) && !matches!(self.next().token, TokenEnum::Close(_) | TokenEnum::Eof);
+            let next = self.next().token;
+            let has_next = pred(self) && !matches!(next, TokenEnum::Close(_) | TokenEnum::Eof);
             has_next.then(|| {
                 let parser = &mut *self;
                 m! {

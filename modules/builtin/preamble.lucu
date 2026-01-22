@@ -33,18 +33,26 @@ effect Write[R region]
 
 fun local[T, U](
 	val T,
-	fun body[R region](ptr ^T@R) U with Read[R] Write[R]
+	fun body[R region](ptr ^@R T) U with Read[R] Write[R]
 ) U = #intrinsic
 
 fun alloca[T, U](
 	len usize,
-	fun body[R region](slice ^[]T@R) U with Read[R] Write[R]
+	fun body[R region](slice ^@R []T) U with Read[R] Write[R]
 ) U = #intrinsic
 
 -- slices
 
-fun len[T, R region](slice ^[]T@R) usize
-	= #intrinsic
+effect Slice[T] = {
+	fun len(t T) usize
+}
+
+-- default[E,           N usize] Slice[    [N  ]E]
+-- default[E,           N usize] Slice[    [N:0]E]
+-- default[E, R region, N usize] Slice[^@R [N  ]E]
+-- default[E, R region, N usize] Slice[^@R [N:0]E]
+-- default[E, R region         ] Slice[^@R [   ]E]
+-- default[E, R region         ] Slice[^@R [ :0]E]
 
 -- printing
 
@@ -75,7 +83,7 @@ fun print_int(n int) = {
 	print_str(&buf[start..21])
 }
 
-fun print_str[R region](buf ^[]u8@R) with Read[R]
+fun print_str[R region](buf ^@R []u8) with Read[R]
 	= #intrinsic
 
 -- divergence

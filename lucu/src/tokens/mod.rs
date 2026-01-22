@@ -80,6 +80,7 @@ impl Display for TokenEnum {
                 Literal::String => write!(f, "string"),
                 Literal::Character => write!(f, "character"),
                 Literal::Integer => write!(f, "integer"),
+                Literal::Zero => write!(f, "'0'"),
             },
             TokenEnum::Open(g) => match g {
                 Group::Parenthesis => write!(f, "'('"),
@@ -249,6 +250,7 @@ pub enum Literal {
     String,
     Character,
     Integer,
+    Zero,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

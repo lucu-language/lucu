@@ -94,8 +94,8 @@ impl fmt::Display for Interned<'_, Type> {
             TypeEnum::Pointer(ty, region) => {
                 write!(f, "^{}@{}", ty.display(self.1), region.display(self.1))
             }
-            TypeEnum::Slice(ty, region) => {
-                write!(f, "[{}]@{}", ty.display(self.1), region.display(self.1))
+            TypeEnum::PointerSlice(ty, region) => {
+                write!(f, "^[]{}@{}", ty.display(self.1), region.display(self.1))
             }
         }
     }

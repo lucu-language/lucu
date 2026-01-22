@@ -574,10 +574,10 @@ impl Lower<'_> {
                 region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
                 return self.tt.insert_type(TypeEnum::Pointer(ty, region));
             },
-            inner::Type::Slice(ty, region) => m! {
+            inner::Type::PointerSlice(ty, region) => m! {
                 ty <- self.r#type(ty, generics);
                 region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
-                return self.tt.insert_type(TypeEnum::Slice(ty, region));
+                return self.tt.insert_type(TypeEnum::PointerSlice(ty, region));
             },
         }
     }

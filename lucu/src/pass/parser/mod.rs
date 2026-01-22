@@ -9,6 +9,7 @@ use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenE
 
 pub mod err;
 
+#[derive(Clone, Copy)]
 pub struct Parser<'a> {
     module: &'a Module,
     source: &'a str,
@@ -172,24 +173,34 @@ impl<'a> Parser<'a> {
                 | TokenEnum::Open(Group::Bracket)
         )
     }
+    fn starts_slice(&self) -> bool {
+        matches!(
+            self.skipped().next().token,
+            // slice
+            TokenEnum::Close(Group::Bracket) |
+                // null terminated slice
+                TokenEnum::Symbol(Symbol::Colon)
+        )
+    }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         self.spanned(|parser| match parser.next().token {
             TokenEnum::Identifier => parser.path().map(inner::Type::Path),
             TokenEnum::Symbol(Symbol::Caret) => {
                 parser.skip();
-                m! {
-                    inner <- parser.r#type();
-                    region <- parser.consume_next(Symbol::At, Parser::path);
-                    return inner::Type::Pointer(inner, region);
-                }
-            }
-            TokenEnum::Open(Group::Bracket) => {
-                parser.skip();
-                m! {
-                    _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
-                    inner <- parser.r#type();
-                    region <- parser.consume_next(Symbol::At, Parser::path);
-                    return inner::Type::Slice(inner, region);
+                if parser.is_next(TokenEnum::Open(Group::Bracket)) && parser.starts_slice() {
+                    parser.skip();
+                    m! {
+                        _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
+                        inner <- parser.r#type();
+                        region <- parser.consume_next(Symbol::At, Parser::path);
+                        return inner::Type::PointerSlice(inner, region);
+                    }
+                } else {
+                    m! {
+                        inner <- parser.r#type();
+                        region <- parser.consume_next(Symbol::At, Parser::path);
+                        return inner::Type::Pointer(inner, region);
+                    }
                 }
             }
             _ => parser.error(Expected::Type),
@@ -364,6 +375,11 @@ impl<'a> Parser<'a> {
         let (token, tokens) = self.tokens.split_first().expect("ICE: consumed EOF token");
         self.tokens = tokens;
         self.last_token_end = token.span.end;
+    }
+    fn skipped(&self) -> Self {
+        let mut copy = *self;
+        copy.skip();
+        copy
     }
     fn next(&self) -> Token {
         self.tokens

@@ -38,12 +38,12 @@ fun local[T, U](
 
 fun alloca[T, U](
 	len usize,
-	fun body[R region](slice []T@R) U with Read[R] Write[R]
+	fun body[R region](slice ^[]T@R) U with Read[R] Write[R]
 ) U = #intrinsic
 
 -- slices
 
-fun len[T, R region](slice []T@R) usize
+fun len[T, R region](slice ^[]T@R) usize
 	= #intrinsic
 
 -- printing
@@ -72,10 +72,10 @@ fun print_int(n int) = {
 		buf[start] = '-'
 	}
 
-	print_str(buf[start..21])
+	print_str(&buf[start..21])
 }
 
-fun print_str[R region](buf []u8@R) with Read[R]
+fun print_str[R region](buf ^[]u8@R) with Read[R]
 	= #intrinsic
 
 -- divergence

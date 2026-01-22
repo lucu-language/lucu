@@ -265,7 +265,7 @@ impl Ast for ast::Kind {
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match &self.0 {
-            inner::Type::Pointer(inner, region) | inner::Type::Slice(inner, region) => {
+            inner::Type::Pointer(inner, region) | inner::Type::PointerSlice(inner, region) => {
                 V::Output::combine([
                     visitor.visit(&**inner),
                     match region {

@@ -1,0 +1,45 @@
+-- taken almost directly from haskell
+
+effect Functor0[M[_]] = {
+	fun fmap[A, B](a M[A], fun body(a A) B) M[B]
+}
+
+effect Applicative0[M[_]] = {
+	fun pure[A](a A) M[A]
+	fun lift_a2[A, B, C](lhs M[A], rhs M[B], fun binop(a A, b B) C) M[C]
+}
+
+effect Monad0[M[_]] = {
+	fun return[A](a A) M[A]
+	fun bind[A, B](a M[A], fun body(a A) M[B]) M[B]
+}
+
+-- alright, now let's define them more *sensibly*
+
+type Pair[A, B] = struct(left A, right B)
+
+effect Wrap[M[_]] = {
+	fun wrap[A](a A) M[A]
+}
+
+effect Map[M[_]] = {
+	fun map[A, B](a M[A], fun body(a A) B) M[B]
+}
+
+effect Zip[M[_]] = {
+	fun zip_with[A, B, C](lhs M[A], rhs M[B], fun body(lhs A, rhs B) C) M[C]
+	fun zip     [A, B]   (lhs M[A], rhs M[B])                           M[Pair[A, B]]
+		-- = zip_with(lhs, rhs, { a, b -> (a, b) })
+		-- default impls not supported yet
+}
+
+effect FlatMap[M[_]] = {
+	fun flat_map[A, B](ma M[A], fun body(a A) M[B]) M[B]
+	fun flatten[A](mma M[M[A]]) M[A]
+		-- = flat_map(mma, { ma -> ma })
+		-- default impls not supported yet
+}
+
+effect Functor[M[_]]     = Map[M]
+effect Applicative[M[_]] = Wrap[M] Zip[M]
+effect Monad[M[_]]       = Wrap[M] FlatMap[M]

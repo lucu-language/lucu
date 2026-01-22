@@ -1,4 +1,5 @@
 import "core:io"
+import "core:control"
 import "builtin:ops"
 
 type Id[T] = T

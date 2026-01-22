@@ -4,12 +4,11 @@ use crate::ast::{self, inner};
 use crate::error::{ProblemKind, Result};
 use crate::module::Module;
 use crate::pass::parser::err::Expected;
-use crate::span::{HasSpan, Span, Spanned};
+use crate::span::{Span, Spanned};
 use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
 
 pub mod err;
 
-#[derive(Clone, Copy)]
 pub struct Parser<'a> {
     module: &'a Module,
     source: &'a str,
@@ -135,7 +134,7 @@ impl<'a> Parser<'a> {
             _ => parser.r#type().map(inner::TypeDefinition::Type),
         })
     }
-    pub fn path(&mut self, may_have_type_afterwards: bool) -> Result<ast::Path> {
+    pub fn path(&mut self, may_precede_type: bool) -> Result<ast::Path> {
         self.spanned(|parser| {
             m! {
                 first <- parser.ident();
@@ -152,7 +151,7 @@ impl<'a> Parser<'a> {
                             // adjacent to the region function, with no whitespace inbetween.
                             // Otherwise, we assume the pointee is some kind of array.
                             parser.is_next(TokenEnum::Open(Group::Bracket))
-                                && (!may_have_type_afterwards || parser.last_token_end == parser.next().span.start)
+                                && (!may_precede_type || parser.last_token_end == parser.next().span.start)
                         },
                         |parser| {
                             parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)

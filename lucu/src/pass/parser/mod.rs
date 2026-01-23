@@ -101,8 +101,17 @@ impl<'a> Parser<'a> {
         self.spanned(|parser| {
             m! {
                 effect <- parser.path(false);
+                with_effects <- parser.consume_next(TokenEnum::Keyword(Keyword::With), |parser| {
+                    parser.many_until(&[
+                        TokenEnum::Open(Group::Brace),
+                        TokenEnum::Symbol(Symbol::Semicolon),
+                        TokenEnum::Symbol(Symbol::Comma),
+                        // not a valid next token, but it improves the error
+                        TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
+                    ], |parser| parser.path(false))
+                });
                 definitions <- parser.many_grouped(Group::Brace, Symbol::Semicolon, Parser::definition);
-                return inner::Handler { effect, definitions };
+                return inner::Handler { effect, with_effects, definitions };
             }
         })
     }

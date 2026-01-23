@@ -25,16 +25,12 @@ handle[E, R region] Index[^@R []E, Range, ^@R []E] {
 		= #intrinsic
 }
 handle[E, R region] Index[^@R []E, RangeOpen, ^@R []E] {
-	fun index(slice ^@R []E, range RangeOpen) ^@R []E
-		=
-	{
+	fun index(slice ^@R []E, range RangeOpen) ^@R []E = {
 		-- slice[range.start..len(slice)]
 	}
 }
 handle[E, R region] Index[^@R []E, RangeNullTerminated[E], ^@R [:0]E] with Read[R] {
-	fun index(slice ^@R []E, range RangeNullTerminated[E]) ^@R [:0]E
-		=
-	{
+	fun index(slice ^@R []E, range RangeNullTerminated[E]) ^@R [:0]E = {
 		-- assert(slice[range.end]^ == 0, "slice is not null-terminated")
 		-- #cast slice[range.start..range.end]
 	}
@@ -45,23 +41,17 @@ handle[E, R region] Index[^@R [:0]E, usize, ^@R E] {
 		= #intrinsic
 }
 handle[E, R region] Index[^@R [:0]E, Range, ^@R []E] {
-	fun index(slice ^@R [:0]E, range Range) ^@R []E
-		=
-	{
+	fun index(slice ^@R [:0]E, range Range) ^@R []E = {
 		-- todo("slice null-terminated slice")
 	}
 }
 handle[E, R region] Index[^@R [:0]E, RangeOpen, ^@R [:0]E] {
-	fun index(slice ^@R [:0]E, range RangeOpen) ^@R [:0]E
-		=
-	{
+	fun index(slice ^@R [:0]E, range RangeOpen) ^@R [:0]E = {
 		-- todo("slice null-terminated slice")
 	}
 }
 handle[E, R region] Index[^@R [:0]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R] {
-	fun index(slice ^@R [:0]E, range RandeNullTerminated[E]) ^@R [:0]E
-		=
-	{
+	fun index(slice ^@R [:0]E, range RangeNullTerminated[E]) ^@R [:0]E = {
 		-- assert(slice[range.end]^ == 0, "slice is not null-terminated")
 		-- #cast slice[range.start..range.end]
 	}

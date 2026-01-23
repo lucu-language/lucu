@@ -30,6 +30,7 @@ pub enum Definition {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Handler {
     pub effect: ast::Path,
+    pub with_effects: Option<Vec<ast::Path>>,
     pub definitions: Vec<ast::Definition>,
 }
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]

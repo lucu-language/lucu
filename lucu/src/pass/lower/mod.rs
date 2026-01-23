@@ -206,7 +206,13 @@ impl Lower<'_> {
                 }
             }
             inner::Definition::Handle(params, handler) => {
-                let LoweredDef::Handler(HandlerDef { kind, effect, body }) = lower else {
+                let LoweredDef::Handler(HandlerDef {
+                    kind,
+                    effect,
+                    with_effect: _,
+                    body,
+                }) = lower
+                else {
                     return problems;
                 };
 
@@ -468,9 +474,23 @@ impl Lower<'_> {
                         &Generics::new(),
                     );
                     let effect = problems.append(self.effect(&handler.effect, &generics));
-                    if let Some(effect) = effect {
+                    let with_effects = problems.append(
+                        handler
+                            .with_effects
+                            .iter()
+                            .flatten()
+                            .map(|effect| self.effect(effect, &generics))
+                            .collect::<Result<Arc<_>>>(),
+                    );
+                    if let (Some(effect), Some(with_effects)) = (effect, with_effects) {
+                        let with_effect = Effect::row(with_effects.iter(), self.tt);
                         let body = self.ir.push_handler_body();
-                        let handler = HandlerDef { kind, effect, body };
+                        let handler = HandlerDef {
+                            kind,
+                            effect,
+                            with_effect,
+                            body,
+                        };
                         self.ir.insert_global_handler(handler);
                         return problems.with(LoweredDef::Handler(handler));
                     }

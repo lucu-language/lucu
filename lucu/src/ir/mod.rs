@@ -209,6 +209,7 @@ pub enum ItemDefinition<'a> {
 pub struct HandlerDef {
     pub kind: Kind, // should be a ... -> EFFECT kind
     pub effect: Effect,
+    pub with_effect: Effect,
     pub body: HandlerBody,
 }
 

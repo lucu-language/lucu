@@ -149,6 +149,12 @@ impl Ast for ast::Handler {
         V::Output::combine([
             visitor.visit_path(&self.effect),
             V::Output::combine(
+                self.with_effects
+                    .iter()
+                    .flatten()
+                    .map(|path| visitor.visit_path(path)),
+            ),
+            V::Output::combine(
                 self.definitions
                     .iter()
                     .map(|def| visitor.visit_definition(def)),

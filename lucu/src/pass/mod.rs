@@ -174,9 +174,9 @@ pub struct ModuleGraph {
 }
 
 impl IRQuery for ModuleGraph {
-    fn untyped_ir(&self, module: &Module, tt: &mut TypeTable) -> Option<&IR> {
+    fn untyped_ir(&self, module: &Module) -> Option<&IR> {
         self.stages(module)
-            .and_then(|stages| stages.untyped_ir(self, tt))
+            .and_then(|stages| stages.untyped_ir.get())
     }
 }
 

@@ -224,6 +224,14 @@ impl<T> Result<T> {
     pub fn value(&self) -> Option<&T> {
         self.value.as_ref()
     }
+    pub fn expect(self, msg: &str) -> T {
+        assert!(self.problems.is_empty(), "{}", msg);
+        self.value.unwrap()
+    }
+    pub fn unwrap(self) -> T {
+        assert!(self.problems.is_empty());
+        self.value.unwrap()
+    }
 }
 
 impl<T> HasProblems for Result<T> {

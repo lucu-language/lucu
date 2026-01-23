@@ -38,7 +38,7 @@ fn main() {
     loop {
         println!("{}", graph.dot());
 
-        for module in graph.modules() {
+        for module in graph.postorder().unwrap() {
             if let Some(stages) = graph.stages(module) {
                 let source = stages.source().unwrap();
                 let tokens = stages.tokens().unwrap();

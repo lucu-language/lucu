@@ -172,7 +172,7 @@ pub enum Keyword {
     Let,
     Const,
     Mut,
-    Default,
+    Handle,
     Effect,
     Type,
     Fun,
@@ -180,7 +180,7 @@ pub enum Keyword {
     Then,
     Else,
     Struct,
-    Do,
+    Discard,
     Break,
     Region,
     #[strum(serialize = "#cast")]

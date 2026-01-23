@@ -134,10 +134,29 @@ impl Ast for ast::Definition {
             inner::Definition::Effect(name, opt) => {
                 V::Output::combine([visitor.visit(name), visit_option(opt, visitor)])
             }
+            inner::Definition::Handle(generics, handler) => {
+                V::Output::combine([visit_option_vec(generics, visitor), visitor.visit(handler)])
+            }
         }
     }
     fn node_name(&self) -> &'static str {
         (&self.0).into()
+    }
+}
+
+impl Ast for ast::Handler {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        V::Output::combine([
+            visitor.visit_path(&self.effect),
+            V::Output::combine(
+                self.definitions
+                    .iter()
+                    .map(|def| visitor.visit_definition(def)),
+            ),
+        ])
+    }
+    fn node_name(&self) -> &'static str {
+        "Handler"
     }
 }
 

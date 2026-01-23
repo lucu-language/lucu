@@ -131,7 +131,7 @@ impl Definitions {
             .rev()
             .map(|idx| ast.definition_with_parent(idx, &self.defs))
     }
-    pub fn indices(&self) -> impl Iterator<Item = NodeIndex> {
+    pub fn indices(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
         self.graph.node_indices()
     }
     #[expect(clippy::implied_bounds_in_impls)]

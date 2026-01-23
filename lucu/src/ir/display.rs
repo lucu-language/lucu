@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ir::{EffectDefinition, FunctionDefinition, IR, ItemDef, Parent, TypeTable};
+use crate::ir::{EffectDefinition, FunctionBodyDefinition, IR, ItemDef, Parent, TypeTable};
 
 #[derive(Clone, Copy)]
 struct Interned<'a, T>(T, &'a TypeTable);
@@ -77,7 +77,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     };
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
 
-                    if let FunctionDefinition::Expression { captures, body } = &self.0[def] {
+                    if let FunctionBodyDefinition::Expression { captures, body } = &self.0[def] {
                         // TODO
                     }
                 }

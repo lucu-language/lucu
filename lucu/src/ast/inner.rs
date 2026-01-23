@@ -25,6 +25,12 @@ pub enum Definition {
     Function(ast::FunctionDeclaration, Option<ast::FunctionDefinition>),
     Type(ast::Name, Option<ast::TypeDefinition>),
     Effect(ast::Name, Option<ast::EffectDefinition>),
+    Handle(Option<Vec<ast::GenericParameter>>, ast::Handler),
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct Handler {
+    pub effect: ast::Path,
+    pub definitions: Vec<ast::Definition>,
 }
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "FunctionDefinition::")]
@@ -152,6 +158,7 @@ impl Definition {
             Definition::Function(fun, _) => Some(&fun.name),
             Definition::Type(name, _) => Some(name),
             Definition::Effect(name, _) => Some(name),
+            Definition::Handle(_, _) => None,
         }
     }
     pub fn generics(&self) -> &[ast::GenericParameter] {
@@ -159,6 +166,7 @@ impl Definition {
             Definition::Function(fun, _) => fun.name.generics.as_deref().unwrap_or_default(),
             Definition::Type(name, _) => name.generics.as_deref().unwrap_or_default(),
             Definition::Effect(name, _) => name.generics.as_deref().unwrap_or_default(),
+            Definition::Handle(params, _) => params.as_deref().unwrap_or_default(),
         }
     }
     pub fn children(&self) -> &[ast::Definition] {

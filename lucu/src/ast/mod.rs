@@ -25,3 +25,4 @@ pub type FunctionDefinition = Spanned<inner::FunctionDefinition>;
 pub type Returns = Spanned<inner::Returns>;
 pub type EffectDefinition = Spanned<inner::EffectDefinition>;
 pub type EffectBody = Spanned<inner::EffectBody>;
+pub type Handler = Spanned<inner::Handler>;

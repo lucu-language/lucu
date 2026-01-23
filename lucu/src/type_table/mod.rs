@@ -10,6 +10,7 @@ use crate::module::Module;
 
 pub mod display;
 pub mod substitute;
+pub mod unapply;
 
 #[derive(Default, Debug)]
 pub struct TypeTable {

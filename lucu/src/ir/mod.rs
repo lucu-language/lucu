@@ -132,6 +132,8 @@ pub enum IntrinsicFunction {
     Alloca,
     // slices
     Len,
+    // ops
+    Index,
     // Div-related functions
     Loop,
     Unfounded,
@@ -216,7 +218,7 @@ pub enum Parent<T> {
     Effect(Effect),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EffectMember {
     pub name: CompactString,
     pub signature: FunctionSignature,
@@ -224,7 +226,7 @@ pub struct EffectMember {
 
 #[derive(Debug)]
 pub struct HandlerMember {
-    pub function: FunctionBody,
+    pub body: FunctionBody,
 }
 
 #[derive(Debug)]

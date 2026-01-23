@@ -8,8 +8,9 @@ use crate::ast;
 use crate::ast::inner;
 use crate::error::{Problems, Result};
 use crate::ir::{
-    EffectDef, EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition, HandlerDef,
-    IR, IntrinsicFunction, ItemDef, ItemDefinition, Parent, StructDefinition, StructMember,
+    EffectDef, EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition,
+    HandlerBodyDefinition, HandlerDef, HandlerMember, IR, IntrinsicFunction, ItemDef,
+    ItemDefinition, Parent, StructDefinition, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -216,27 +217,81 @@ impl Lower<'_> {
                 );
 
                 let EffectEnum::Item(effect_item) = &self.tt[effect] else {
-                    todo!("error")
+                    todo!("error: effect is not a single item")
                 };
                 let effect_args = effect_item.apply.clone();
 
-                let ItemDefinition::Effect(effect_kind, effect_def) =
-                    self.resolve_item(effect_item)
-                else {
+                let ItemDefinition::Effect(_, effect_def) = self.resolve_item(effect_item) else {
                     unreachable!("ICE: effect item is not an effect")
                 };
 
                 match effect_def {
                     EffectDefinition::Body { members } => {
-                        for member in members {
-                            let sig = match effect_args {
-                                Some(args) => member.signature.subst(self.tt, 0, &args),
-                                None => member.signature,
-                            };
-                            todo!("check for existence of {}", sig.display(self.tt))
-                        }
+                        let members = members
+                            .clone()
+                            .iter()
+                            .map(|member| {
+                                let expected_sig = match &effect_args {
+                                    Some(args) => member.signature.subst(self.tt, 0, args),
+                                    None => member.signature,
+                                };
+
+                                let Some(matching) = handler.definitions.iter().find(|def| {
+                                    def.name().is_some_and(|name| name.as_str() == member.name)
+                                }) else {
+                                    todo!(
+                                        "error: no definition for '{}' inside handler",
+                                        member.name
+                                    )
+                                };
+
+                                let inner::Definition::Function(fun_decl, fun_def) = &matching.0
+                                else {
+                                    todo!("error: definition '{}' is not a function", member.name)
+                                };
+
+                                let sig = problems
+                                    .append(self.function_signature(fun_decl, &generics))?;
+                                if expected_sig != sig {
+                                    todo!(
+                                        "error: signature mismatch. Expected {}, got {}",
+                                        expected_sig.display(self.tt),
+                                        sig.display(self.tt)
+                                    );
+                                }
+
+                                let Some(fun_def) = fun_def else {
+                                    todo!("error")
+                                };
+
+                                match &fun_def.0 {
+                                    inner::FunctionDefinition::Expression(expr) => {
+                                        let body = self.ir.push_function_body();
+                                        self.ir.realize_function_body(
+                                            body,
+                                            FunctionBodyDefinition::Expression {
+                                                captures: 0,
+                                                body: (),
+                                            },
+                                        );
+                                        Some(HandlerMember { body })
+                                    }
+                                    inner::FunctionDefinition::Intrinsic => {
+                                        let body = problems
+                                            .append(self.intrinsic_function(&fun_decl.name))?;
+                                        Some(HandlerMember { body })
+                                    }
+                                }
+                            })
+                            .collect::<Vec<Option<HandlerMember>>>();
+
+                        // TODO: check for duplicates
+                        // TODO: check for unknown
+
+                        self.ir
+                            .realize_handler_body(body, HandlerBodyDefinition { members });
                     }
-                    EffectDefinition::Intrinsic => todo!("error"),
+                    EffectDefinition::Intrinsic => todo!("error: effect is intrinsic"),
                 }
             }
         }
@@ -746,6 +801,9 @@ impl Lower<'_> {
             ("builtin:preamble", "print_str") => IntrinsicFunction::PrintStr,
             ("builtin:preamble", "loop") => IntrinsicFunction::Loop,
             ("builtin:preamble", "unfounded") => IntrinsicFunction::Unfounded,
+
+            ("builtin:ops", "index") => IntrinsicFunction::Index,
+
             _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),

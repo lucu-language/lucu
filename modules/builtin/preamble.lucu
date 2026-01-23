@@ -44,15 +44,22 @@ fun alloca[T, U](
 -- slices
 
 effect Slice[T] = {
-	fun len(t T) usize
+	fun len(slice T) usize
 }
 
--- default[E,           N usize] Slice[    [N  ]E]
--- default[E,           N usize] Slice[    [N:0]E]
--- default[E, R region, N usize] Slice[^@R [N  ]E]
--- default[E, R region, N usize] Slice[^@R [N:0]E]
--- default[E, R region         ] Slice[^@R [   ]E]
--- default[E, R region         ] Slice[^@R [ :0]E]
+handle[E, R region] Slice[^@R []E] {
+	fun len(slice ^@R []E) usize
+		= #intrinsic
+}
+handle[E, R region] Slice[^@R [:0]E] {
+	fun len(slice ^@R [:0]E) usize
+		= #intrinsic
+}
+
+-- handle[E,           N usize] Slice[    [N  ]E]
+-- handle[E,           N usize] Slice[    [N:0]E]
+-- handle[E, R region, N usize] Slice[^@R [N  ]E]
+-- handle[E, R region, N usize] Slice[^@R [N:0]E]
 
 -- printing
 

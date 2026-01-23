@@ -51,7 +51,7 @@ handle[E, R region] Slice[^@R []E] {
 	fun len(slice ^@R []E) usize
 		= #intrinsic
 }
-handle[E, R region] Slice[^@R [:0]E] {
+handle[E, R region] Slice[^@R [:0]E] with Read[R] {
 	fun len(slice ^@R [:0]E) usize
 		= #intrinsic
 }

@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::ir::{EffectDefinition, FunctionBodyDefinition, IR, ItemDef, Parent, TypeTable};
+use crate::type_table::EffectEnum;
 
 #[derive(Clone, Copy)]
 struct Interned<'a, T>(T, &'a TypeTable);
@@ -77,9 +78,40 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     };
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
 
-                    if let FunctionBodyDefinition::Expression { captures, body } = &self.0[def] {
+                    if let FunctionBodyDefinition::Expression { captures: _, body } = &self.0[def] {
                         // TODO
                     }
+                }
+            }
+        }
+        for &handler in self.0.global_handlers.iter() {
+            writeln!(f)?;
+            write!(f, "instance ")?;
+            for _ in 0..self.1[handler.kind]
+                .params
+                .as_ref()
+                .map(|params| params.len())
+                .unwrap_or(0)
+            {
+                write!(f, "λ ")?;
+            }
+            if self.1[handler.with_effect] != EffectEnum::empty() {
+                write!(f, "⟨{}⟩ => ", handler.with_effect.display(self.1))?;
+            }
+            writeln!(f, "{} where", handler.effect.display(self.1))?;
+
+            let body = &self.0[handler.body];
+            for member in &body.members {
+                writeln!(
+                    f,
+                    "  {} :: {}",
+                    member.name,
+                    member.signature.display(self.1)
+                )?;
+                if let Some(FunctionBodyDefinition::Expression { captures: _, body }) =
+                    member.body.map(|body| &self.0[body])
+                {
+                    // TODO
                 }
             }
         }

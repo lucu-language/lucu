@@ -154,8 +154,8 @@ pub enum FunctionBodyDefinition {
 
 #[derive(Debug)]
 pub struct HandlerBodyDefinition {
-    /// Corresponds 1-1 with effect members, None if missing
-    pub members: Vec<Option<HandlerMember>>,
+    /// Corresponds 1-1 with effect members
+    pub members: Vec<HandlerMember>,
 }
 
 #[derive(Debug)]
@@ -181,7 +181,7 @@ pub enum ItemDef {
 }
 
 impl ItemDef {
-    pub fn resolve(self, ir: &IR) -> ItemDefinition {
+    pub fn resolve<'a>(self, ir: &'a IR) -> ItemDefinition<'a> {
         match self {
             ItemDef::Alias(kind, term) => ItemDefinition::Alias(kind, term),
             ItemDef::Struct(kind, struct_def) => ItemDefinition::Struct(kind, &ir[struct_def]),
@@ -227,7 +227,11 @@ pub struct EffectMember {
 
 #[derive(Debug)]
 pub struct HandlerMember {
-    pub body: FunctionBody,
+    // same as in EffectMember
+    pub name: CompactString,
+    pub signature: FunctionSignature,
+    // new shit!
+    pub body: Option<FunctionBody>,
 }
 
 #[derive(Debug)]

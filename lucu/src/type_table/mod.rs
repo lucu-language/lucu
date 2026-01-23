@@ -84,6 +84,12 @@ pub enum EffectEnum {
     Row(Arc<[Effect]>),
 }
 
+impl EffectEnum {
+    pub fn empty() -> Self {
+        Self::Row(Arc::new([]))
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum SimpleKind {
     Type,

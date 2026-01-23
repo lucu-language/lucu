@@ -36,6 +36,7 @@ handle[E, R region] Index[^@R []E, RangeNullTerminated[E], ^@R [:0]E] with Read[
 	}
 }
 
+-- the following are all "unsafe": there's no good way of checking for OOB
 handle[E, R region] Index[^@R [:0]E, usize, ^@R E] {
 	fun index(slice ^@R [:0]E, index usize) ^@R E
 		= #intrinsic

@@ -235,7 +235,7 @@ impl Lower<'_> {
                     EffectDefinition::Body { members } => {
                         let members = members
                             .clone()
-                            .iter()
+                            .into_iter()
                             .map(|member| {
                                 let expected_sig = match &effect_args {
                                     Some(args) => member.signature.subst(self.tt, 0, args),
@@ -256,13 +256,20 @@ impl Lower<'_> {
                                     todo!("error: definition '{}' is not a function", member.name)
                                 };
 
-                                let sig = problems
-                                    .append(self.function_signature(fun_decl, &generics))?;
-                                if expected_sig != sig {
+                                let Some(signature) =
+                                    problems.append(self.function_signature(fun_decl, &generics))
+                                else {
+                                    return HandlerMember {
+                                        name: member.name,
+                                        signature: expected_sig,
+                                        body: None,
+                                    };
+                                };
+                                if expected_sig != signature {
                                     todo!(
                                         "error: signature mismatch. Expected {}, got {}",
                                         expected_sig.display(self.tt),
-                                        sig.display(self.tt)
+                                        signature.display(self.tt)
                                     );
                                 }
 
@@ -280,16 +287,21 @@ impl Lower<'_> {
                                                 body: (),
                                             },
                                         );
-                                        Some(HandlerMember { body })
+                                        HandlerMember {
+                                            body: Some(body),
+                                            name: member.name,
+                                            signature,
+                                        }
                                     }
-                                    inner::FunctionDefinition::Intrinsic => {
-                                        let body = problems
-                                            .append(self.intrinsic_function(&fun_decl.name))?;
-                                        Some(HandlerMember { body })
-                                    }
+                                    inner::FunctionDefinition::Intrinsic => HandlerMember {
+                                        body: problems
+                                            .append(self.intrinsic_function(&fun_decl.name)),
+                                        name: member.name,
+                                        signature,
+                                    },
                                 }
                             })
-                            .collect::<Vec<Option<HandlerMember>>>();
+                            .collect::<Vec<HandlerMember>>();
 
                         // TODO: check for duplicates
                         // TODO: check for unknown

@@ -67,22 +67,43 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenEnum::Keyword(Keyword::Type) => {
+                parser.skip();
                 m! {
-                    _ <- parser.consume(Keyword::Type);
                     name <- parser.name();
                     definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
                     return inner::Definition::Type(name, definition);
                 }
             }
             TokenEnum::Keyword(Keyword::Effect) => {
+                parser.skip();
                 m! {
-                    _ <- parser.consume(Keyword::Effect);
                     name <- parser.name();
                     definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
                     return inner::Definition::Effect(name, definition);
                 }
-            },
+            }
+            TokenEnum::Keyword(Keyword::Handle) => {
+                parser.skip();
+                m! {
+                    generics <- parser.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
+                        Group::Bracket,
+                        Symbol::Comma,
+                        Parser::generic,
+                    ));
+                    handler <- parser.handler();
+                    return inner::Definition::Handle(generics, handler);
+                }
+            }
             _ => parser.error(Expected::Definition),
+        })
+    }
+    pub fn handler(&mut self) -> Result<ast::Handler> {
+        self.spanned(|parser| {
+            m! {
+                effect <- parser.path(false);
+                definitions <- parser.many_grouped(Group::Brace, Symbol::Semicolon, Parser::definition);
+                return inner::Handler { effect, definitions };
+            }
         })
     }
     pub fn effect_definition(&mut self) -> Result<ast::EffectDefinition> {
@@ -103,12 +124,9 @@ impl<'a> Parser<'a> {
     }
     pub fn effect_body(&mut self) -> Result<ast::EffectBody> {
         self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(TokenEnum::Open(Group::Brace));
-                definitions <- parser.many(Symbol::Semicolon, Parser::definition);
-                _ <- parser.consume(TokenEnum::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
-                return inner::EffectBody { definitions };
-            }
+            parser
+                .many_grouped(Group::Brace, Symbol::Semicolon, Parser::definition)
+                .map(|definitions| inner::EffectBody { definitions })
         })
     }
     pub fn function_definition(&mut self) -> Result<ast::FunctionDefinition> {
@@ -513,7 +531,7 @@ impl<'a> Parser<'a> {
         m! {
             _ <- self.consume(TokenEnum::Open(group));
             many <- self.many(separator, parse).tap_none(|| self.skip_group(group));
-            _ <- self.consume(TokenEnum::Close(group));
+            _ <- self.consume(TokenEnum::Close(group)).tap_none(|| self.skip_group(group));
             return many;
         }
     }

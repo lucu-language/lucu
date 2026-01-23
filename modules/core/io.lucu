@@ -15,5 +15,21 @@ effect Buffered[E effect] = {
 	) with Read[R] Write[R]
 }
 
--- default Buffered[Source]
--- default Buffered[Sink]
+handle Buffered[Source] {
+	fun buffered[R region](
+		buffer ^@R []u8,
+		fun handled(fun body with Source),
+		fun body with Source,
+	) with Read[R] Write[R] = {
+		
+	}
+}
+handle Buffered[Sink] {
+	fun buffered[R region](
+		buffer ^@R []u8,
+		fun handled(fun body with Sink),
+		fun body with Sink,
+	) with Read[R] Write[R] = {
+		
+	}
+}

@@ -232,6 +232,11 @@ impl<T> Result<T> {
         assert!(self.problems.is_empty());
         self.value.unwrap()
     }
+    pub fn has_error(&self) -> bool {
+        self.problems
+            .iter()
+            .any(|d| d.header().level == ProblemLevel::Error)
+    }
 }
 
 impl<T> HasProblems for Result<T> {

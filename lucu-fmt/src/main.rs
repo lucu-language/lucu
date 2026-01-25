@@ -390,22 +390,26 @@ impl Ast for ast::EffectDefinition {
                 body.push_nodes(source, nodes);
             }
             inner::EffectDefinition::Alias(paths) => {
-                nodes.push(Node::OpenGroup(false));
-                nodes.push(Node::OpenIndentOnWrap);
-                nodes.push(Node::LN_SPACE);
-                nodes.push(Node::text("= "));
+                if paths.is_empty() {
+                    nodes.push(Node::text(" = ;"));
+                } else {
+                    nodes.push(Node::OpenGroup(false));
+                    nodes.push(Node::OpenIndentOnWrap);
+                    nodes.push(Node::LN_SPACE);
+                    nodes.push(Node::text("= "));
 
-                nodes.push(Node::OpenNoWrap);
-                for (i, path) in paths.iter().enumerate() {
-                    if i > 0 {
-                        nodes.push(Node::text(" "));
+                    nodes.push(Node::OpenNoWrap);
+                    for (i, path) in paths.iter().enumerate() {
+                        if i > 0 {
+                            nodes.push(Node::text(" "));
+                        }
+                        path.push_nodes(source, nodes);
                     }
-                    path.push_nodes(source, nodes);
-                }
-                nodes.push(Node::CloseNoWrap);
+                    nodes.push(Node::CloseNoWrap);
 
-                nodes.push(Node::CloseIndentOnWrap);
-                nodes.push(Node::CloseGroup);
+                    nodes.push(Node::CloseIndentOnWrap);
+                    nodes.push(Node::CloseGroup);
+                }
             }
             inner::EffectDefinition::Intrinsic => {
                 nodes.push(Node::OpenGroup(false));

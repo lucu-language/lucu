@@ -1,10 +1,10 @@
+use compact_str::ToCompactString;
 use do_notation::m;
 
-use crate::ast::{self, inner};
+use crate::ast;
 use crate::error::{ProblemKind, Result};
 use crate::module::Module;
 use crate::pass::parser::err::Expected;
-use crate::span::{Span, Spanned};
 use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
 
 pub mod err;
@@ -27,179 +27,167 @@ impl<'a> Parser<'a> {
     }
 
     pub fn string(&mut self) -> Result<ast::String> {
-        self.consume(Literal::String).map(|tok| {
-            Spanned(
-                inner::String((&self.source[tok.span.inner()]).into()),
-                tok.span,
-            )
-        })
+        m! {
+            token <- self.consume(Literal::String);
+            return ast::String {
+                token,
+                value: (&self.source[token.0.inner()]).to_compact_string()
+            };
+        }
     }
     pub fn ident(&mut self) -> Result<ast::Ident> {
-        self.consume(TokenEnum::Identifier)
-            .map(|tok| Spanned(inner::Ident((&self.source[tok.span]).into()), tok.span))
+        m! {
+            token <- self.consume(TokenEnum::Identifier);
+            return ast::Ident {
+                token,
+                value: (&self.source[token.0]).to_compact_string()
+            };
+        }
     }
     pub fn import(&mut self) -> Result<ast::Import> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(Keyword::Import);
-                path <- parser.string();
-                ident <- parser.when_next(TokenEnum::Identifier, Parser::ident);
-                return inner::Import { path, ident };
-            }
-        })
+        m! {
+            import <- self.consume(Keyword::Import);
+            path <- self.string();
+            ident <- self.when_next(TokenEnum::Identifier, Parser::ident);
+            return ast::Import { import, path, ident };
+        }
     }
     pub fn module(&mut self) -> Result<ast::Module> {
-        self.spanned(|parser| {
-            m! {
-                imports <- parser.many_while_next(Symbol::Semicolon, Keyword::Import, Parser::import);
-                definitions <- parser.many(Symbol::Semicolon, Parser::definition);
-                return inner::Module { imports, definitions };
-            }
-        })
+        m! {
+            imports <- self.many_while_next(Symbol::Semicolon, Keyword::Import, Parser::import);
+            items <- self.many(Symbol::Semicolon, Parser::item);
+            return ast::Module { imports, items };
+        }
     }
-    pub fn definition(&mut self) -> Result<ast::Definition> {
-        self.spanned(|parser| match parser.next().token {
+    pub fn item(&mut self) -> Result<ast::Item> {
+        match self.next().token {
             TokenEnum::Keyword(Keyword::Fun) => {
                 m! {
-                    declaration <- parser.function_declaration();
-                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::function_definition);
-                    return inner::Definition::Function(declaration, definition);
+                    declaration <- self.function_declaration();
+                    definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::function_definition);
+                    return ast::Item::Function(declaration, definition);
                 }
             }
             TokenEnum::Keyword(Keyword::Type) => {
-                parser.skip();
                 m! {
-                    name <- parser.name();
-                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
-                    return inner::Definition::Type(name, definition);
+                    let token = self.skip();
+                    name <- self.name();
+                    definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
+                    return ast::Item::Type(token, name, definition);
                 }
             }
             TokenEnum::Keyword(Keyword::Effect) => {
-                parser.skip();
                 m! {
-                    name <- parser.name();
-                    definition <- parser.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
-                    return inner::Definition::Effect(name, definition);
+                    let token = self.skip();
+                    name <- self.name();
+                    definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
+                    return ast::Item::Effect(token, name, definition);
                 }
             }
             TokenEnum::Keyword(Keyword::Handle) => {
-                parser.skip();
                 m! {
-                    generics <- parser.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
+                    let token = self.skip();
+                    generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                         Group::Bracket,
                         Symbol::Comma,
                         Parser::generic,
                     ));
-                    handler <- parser.handler();
-                    return inner::Definition::Handle(generics, handler);
+                    handler <- self.handler();
+                    return ast::Item::Handle(token, generics, handler);
                 }
             }
-            _ => parser.error(Expected::Definition),
-        })
+            _ => self.error(Expected::Item),
+        }
+    }
+    pub fn with_effects(&mut self) -> Result<ast::WithEffects> {
+        m! {
+            with <- self.consume(Keyword::With);
+            effects <- self.many_until(&[
+                TokenEnum::Open(Group::Brace),
+                TokenEnum::Symbol(Symbol::Semicolon),
+                TokenEnum::Symbol(Symbol::Comma),
+                TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
+            ], |parser| parser.path(false));
+            return ast::WithEffects { with, effects };
+        }
     }
     pub fn handler(&mut self) -> Result<ast::Handler> {
-        self.spanned(|parser| {
-            m! {
-                effect <- parser.path(false);
-                with_effects <- parser.consume_next(TokenEnum::Keyword(Keyword::With), |parser| {
-                    parser.many_until(&[
-                        TokenEnum::Open(Group::Brace),
-                        TokenEnum::Symbol(Symbol::Semicolon),
-                        TokenEnum::Symbol(Symbol::Comma),
-                        // not a valid next token, but it improves the error
-                        TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
-                    ], |parser| parser.path(false))
-                });
-                definitions <- parser.many_grouped(Group::Brace, Symbol::Semicolon, Parser::definition);
-                return inner::Handler { effect, with_effects, definitions };
-            }
-        })
+        m! {
+            effect <- self.path(false);
+            with_effects <- self.when_next(Keyword::With, Parser::with_effects);
+            items <- self.many_grouped(Group::Brace, Symbol::Semicolon, Parser::item);
+            return ast::Handler { effect, with_effects, items };
+        }
     }
     pub fn effect_definition(&mut self) -> Result<ast::EffectDefinition> {
-        self.spanned(|parser| match parser.next().token {
+        match self.next().token {
             TokenEnum::Keyword(Keyword::Intrinsic) => {
-                parser.skip();
-                Result::new(inner::EffectDefinition::Intrinsic)
+                Result::new(ast::EffectDefinition::Intrinsic(self.skip()))
             }
-            TokenEnum::Open(Group::Brace) => {
-                parser.effect_body().map(inner::EffectDefinition::Body)
-            }
-            _ => parser
+            TokenEnum::Open(Group::Brace) => self.effect_body().map(ast::EffectDefinition::Body),
+            _ => self
                 .many_until(&[TokenEnum::Symbol(Symbol::Semicolon)], |parser| {
                     parser.path(false)
                 })
-                .map(inner::EffectDefinition::Alias),
-        })
+                .map(ast::EffectDefinition::Alias),
+        }
     }
     pub fn effect_body(&mut self) -> Result<ast::EffectBody> {
-        self.spanned(|parser| {
-            parser
-                .many_grouped(Group::Brace, Symbol::Semicolon, Parser::definition)
-                .map(|definitions| inner::EffectBody { definitions })
-        })
+        self.many_grouped(Group::Brace, Symbol::Semicolon, Parser::item)
+            .map(|items| ast::EffectBody { items })
     }
     pub fn function_definition(&mut self) -> Result<ast::FunctionDefinition> {
-        self.spanned(|parser| match parser.next().token {
+        match self.next().token {
             TokenEnum::Keyword(Keyword::Intrinsic) => {
-                parser.skip();
-                Result::new(inner::FunctionDefinition::Intrinsic)
+                Result::new(ast::FunctionDefinition::Intrinsic(self.skip()))
             }
-            _ => parser
-                .expression()
-                .map(inner::FunctionDefinition::Expression),
-        })
+            _ => self.expression().map(ast::FunctionDefinition::Expression),
+        }
     }
     pub fn type_definition(&mut self) -> Result<ast::TypeDefinition> {
-        self.spanned(|parser| match parser.next().token {
+        match self.next().token {
             TokenEnum::Keyword(Keyword::Intrinsic) => {
-                parser.skip();
-                Result::new(inner::TypeDefinition::Intrinsic)
+                Result::new(ast::TypeDefinition::Intrinsic(self.skip()))
             }
-            TokenEnum::Keyword(Keyword::Struct) => {
-                parser.r#struct().map(inner::TypeDefinition::Struct)
-            }
-            _ => parser.r#type().map(inner::TypeDefinition::Type),
-        })
+            TokenEnum::Keyword(Keyword::Struct) => self.r#struct().map(ast::TypeDefinition::Struct),
+            _ => self.r#type().map(ast::TypeDefinition::Type),
+        }
     }
     pub fn path(&mut self, may_precede_type: bool) -> Result<ast::Path> {
-        self.spanned(|parser| {
-            m! {
-                first <- parser.ident();
-                second <- parser.consume_next(Symbol::Dot, Parser::ident);
-                generics <-
-                    parser.when(
-                        |parser| {
-                            // There is an ambiguous statement in the language.
-                            // ^@R[..]T can be parsed as:
-                            //  - ^@(R[..]) T  where R is a region function
-                            //  - ^@R ([..]T)  where the pointee is an array
-                            // 
-                            // To fix this, we enforce that the generic arguments MUST be
-                            // adjacent to the region function, with no whitespace inbetween.
-                            // Otherwise, we assume the pointee is some kind of array.
-                            parser.is_next(TokenEnum::Open(Group::Bracket))
-                                && (!may_precede_type || parser.last_token_end == parser.next().span.start)
-                        },
-                        |parser| {
-                            parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
-                        },
-                    );
-                return match second {
-                    Some(name) => inner::Path { package: Some(first), name, generics },
-                    None => inner::Path { package: None, name: first, generics },
-                };
-            }
-        })
+        m! {
+            first <- self.ident();
+            second <- self.consume_next(Symbol::Dot, Parser::ident);
+            generics <-
+                self.when(
+                    |parser| {
+                        // There is an ambiguous statement in the language.
+                        // ^@R[..]T can be parsed as:
+                        //  - ^@(R[..]) T  where R is a region function
+                        //  - ^@R ([..]T)  where the pointee is an array
+                        //
+                        // To fix this, we enforce that the generic arguments MUST be
+                        // adjacent to the region function, with no whitespace inbetween.
+                        // Otherwise, we assume the pointee is some kind of array.
+                        parser.is_next(TokenEnum::Open(Group::Bracket))
+                            && (!may_precede_type || parser.last_token_end == parser.next().span.start)
+                    },
+                    |parser| {
+                        parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                    },
+                );
+            return match second {
+                Some((dot, name)) => ast::Path { package: Some((first, dot)), name, generics },
+                None => ast::Path { package: None, name: first, generics },
+            };
+        }
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
-        self.spanned(|parser| match parser.next().token {
-            TokenEnum::Identifier => parser.path(false).map(inner::GenericArgument::Path),
-            _ if parser.starts_type() => parser.r#type().map(inner::GenericArgument::Type),
-            _ if parser.starts_constant() => {
-                parser.constant().map(inner::GenericArgument::Constant)
-            }
-            _ => parser.error(Expected::GenericArgument),
-        })
+        match self.next().token {
+            TokenEnum::Identifier => self.path(false).map(ast::GenericArgument::Path),
+            _ if self.starts_type() => self.r#type().map(ast::GenericArgument::Type),
+            _ if self.starts_constant() => self.constant().map(ast::GenericArgument::Constant),
+            _ => self.error(Expected::GenericArgument),
+        }
     }
     fn starts_constant(&self) -> bool {
         false
@@ -229,33 +217,42 @@ impl<'a> Parser<'a> {
             )
         )
     }
+    pub fn pointer_region(&mut self) -> Result<ast::PointerRegion> {
+        m! {
+            at <- self.consume(Symbol::At);
+            region <- self.path(true);
+            return ast::PointerRegion { at, region };
+        }
+    }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
-        self.spanned(|parser| match parser.next().token {
-            TokenEnum::Identifier => parser.path(false).map(inner::Type::Path),
+        match self.next().token {
+            TokenEnum::Identifier => self.path(false).map(ast::Type::Path),
             TokenEnum::Symbol(Symbol::Caret) => {
                 // Pointer
-                parser.skip();
-                parser.consume_next(Symbol::At, |parser| parser.path(true)).and_then(|region| {
-                    if parser.is_next(TokenEnum::Open(Group::Bracket)) && parser.starts_slice() {
+                let pointer = self.skip();
+                self.when_next(Symbol::At, Parser::pointer_region).and_then(|region| {
+                    if self.is_next(TokenEnum::Open(Group::Bracket)) && self.starts_slice() {
                         // Pointer to some slice
-                        parser.skip();
-                        match parser.next().token {
+                        let open = self.skip();
+                        match self.next().token {
                             TokenEnum::Close(Group::Bracket) => {
                                 // Pointer to slice
-                                parser.skip();
                                 m! {
-                                    inner <- parser.r#type();
-                                    return inner::Type::PointerSlice(inner, region);
+                                    let close = self.skip();
+                                    let grouped = ast::Grouped { open, inner: (), close };
+                                    inner <- self.r#type();
+                                    return ast::Type::PointerSlice(pointer, grouped, region, inner);
                                 }
                             }
                             TokenEnum::Symbol(Symbol::Colon) => {
                                 // Pointer to null-terminated slice
-                                parser.skip();
                                 m! {
-                                    _ <- parser.consume(Literal::Zero);
-                                    _ <- parser.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| parser.skip_group(Group::Bracket));
-                                    inner <- parser.r#type();
-                                    return inner::Type::PointerSliceNullTerminated(inner, region);
+                                    let colon = self.skip();
+                                    zero <- self.consume(Literal::Zero).tap_none(|| self.skip_group(Group::Bracket));
+                                    close <- self.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| self.skip_group(Group::Bracket));
+                                    let grouped = ast::Grouped { open, inner: ast::NullTerminated { colon, zero }, close };
+                                    inner <- self.r#type();
+                                    return ast::Type::PointerSliceNullTerminated(pointer, grouped, region, inner);
                                 }
                             }
                             _ => unreachable!(),
@@ -263,167 +260,125 @@ impl<'a> Parser<'a> {
                     } else {
                         // Pointer to non-slice
                         m! {
-                            inner <- parser.r#type();
-                            return inner::Type::Pointer(inner, region);
+                            inner <- self.r#type();
+                            return ast::Type::Pointer(pointer, region, inner);
                         }
                     }
                 })
             }
             TokenEnum::Open(Group::Bracket) => {
-                if parser.starts_slice() {
+                if self.starts_slice() {
                     todo!("error: needs pointer syntax")
                 }
                 todo!("constant sized array")
             }
-            _ => parser.error(Expected::Type),
-        })
+            _ => self.error(Expected::Type),
+        }
         .map(Box::new)
     }
     pub fn r#struct(&mut self) -> Result<ast::Struct> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(Keyword::Struct);
-                members <- parser.many_grouped(Group::Parenthesis, Symbol::Comma, Parser::struct_member);
-                return inner::Struct { members };
-            }
-        })
+        m! {
+            r#struct <- self.consume(Keyword::Struct);
+            members <- self.many_grouped(Group::Parenthesis, Symbol::Comma, Parser::struct_member);
+            return ast::Struct { r#struct, members };
+        }
     }
     pub fn struct_member(&mut self) -> Result<ast::StructMember> {
-        self.spanned(|parser| {
-            m! {
-                name <- parser.ident();
-                ty <- parser.r#type();
-                return inner::StructMember::Data(name, ty);
-            }
-        })
+        m! {
+            name <- self.ident();
+            ty <- self.r#type();
+            return ast::StructMember::Data(name, ty);
+        }
     }
     pub fn expression(&mut self) -> Result<Box<ast::Expression>> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(TokenEnum::Open(Group::Brace));
-                _ <- parser.consume(TokenEnum::Close(Group::Brace)).tap_none(|| parser.skip_group(Group::Brace));
-                return inner::Expression::Block;
-            }
-        })
+        m! {
+            open <- self.consume(TokenEnum::Open(Group::Brace));
+            close <- self.consume(TokenEnum::Close(Group::Brace)).tap_none(|| self.skip_group(Group::Brace));
+            return ast::Expression::Block(ast::Grouped { open, inner: (), close });
+        }
         .map(Box::new)
     }
-    pub fn function_parameter(&mut self) -> Result<ast::FunctionParameter> {
-        self.spanned(|parser| match parser.next().token {
-            TokenEnum::Keyword(Keyword::Fun) => parser
-                .function_declaration()
-                .map(inner::FunctionParameter::Lambda),
+    pub fn parameter(&mut self) -> Result<ast::Parameter> {
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Fun) => {
+                self.function_declaration().map(ast::Parameter::Lambda)
+            }
             TokenEnum::Identifier => {
                 m! {
-                    name <- parser.ident();
-                    ty <- parser.r#type();
-                    return inner::FunctionParameter::Data(name, ty);
+                    name <- self.ident();
+                    ty <- self.r#type();
+                    return ast::Parameter::Data(name, ty);
                 }
             }
-            _ => parser.error(Expected::FunctionParameter),
-        })
+            _ => self.error(Expected::Parameter),
+        }
     }
     pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
-        self.spanned(|parser| {
-            m! {
-                _ <- parser.consume(Keyword::Fun);
-                name <- parser.name();
-                parameters <- parser.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
-                    Group::Parenthesis,
-                    Symbol::Comma,
-                    Parser::function_parameter,
-                ));
-                returns <- parser.when(Parser::starts_type, Parser::returns);
-                effects <- parser.consume_next(TokenEnum::Keyword(Keyword::With), |parser| {
-                    parser.many_until(&[
-                        TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals)),
-                        TokenEnum::Symbol(Symbol::Semicolon),
-                        TokenEnum::Symbol(Symbol::Comma),
-                        // not a valid next token, but it improves the error
-                        TokenEnum::Open(Group::Brace),
-                    ], |parser| parser.path(false))
-                });
-                return inner::FunctionDeclaration { name, parameters, returns, effects };
-            }
-        })
+        m! {
+            fun <- self.consume(Keyword::Fun);
+            name <- self.name();
+            parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
+                Group::Parenthesis,
+                Symbol::Comma,
+                Parser::parameter,
+            ));
+            returns <- self.when(Parser::starts_type, Parser::returns);
+            effects <- self.when_next(TokenEnum::Keyword(Keyword::With), Parser::with_effects);
+            return ast::FunctionDeclaration { fun, name, parameters, returns, effects };
+        }
     }
     pub fn returns(&mut self) -> Result<ast::Returns> {
-        self.spanned(|parser| match parser.next().token {
-            TokenEnum::Symbol(Symbol::Bang) => {
-                parser.skip();
-                Result::new(inner::Returns::Never)
-            }
+        match self.next().token {
+            TokenEnum::Symbol(Symbol::Bang) => Result::new(ast::Returns::Never(self.skip())),
             _ => {
-                if parser.starts_type() {
-                    parser.r#type().map(inner::Returns::Data)
+                if self.starts_type() {
+                    self.r#type().map(ast::Returns::Data)
                 } else {
-                    parser.error(Expected::Returns)
+                    self.error(Expected::Returns)
                 }
             }
-        })
+        }
     }
     pub fn name(&mut self) -> Result<ast::Name> {
-        self.spanned(|parser| {
-            m! {
-                ident <- parser.ident();
-                generics <- parser.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
-                    Group::Bracket,
-                    Symbol::Comma,
-                    Parser::generic,
-                ));
-                return inner::Name { ident, generics };
-            }
-        })
+        m! {
+            ident <- self.ident();
+            generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
+                Group::Bracket,
+                Symbol::Comma,
+                Parser::generic,
+            ));
+            return ast::Name { ident, generics };
+        }
     }
     pub fn generic(&mut self) -> Result<ast::GenericParameter> {
-        self.spanned(|parser| {
-            m! {
-                name <- parser.name();
-                kind <- parser.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
-                return inner::GenericParameter { name, kind };
-            }
-        })
+        m! {
+            name <- self.name();
+            kind <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
+            return ast::GenericParameter { name, kind };
+        }
     }
     pub fn kind(&mut self) -> Result<ast::Kind> {
-        self.spanned(|parser| match parser.next().token {
-            TokenEnum::Keyword(Keyword::Type) => {
-                parser.skip();
-                Result::new(inner::Kind::Type)
-            }
-            TokenEnum::Keyword(Keyword::Effect) => {
-                parser.skip();
-                Result::new(inner::Kind::Effect)
-            }
-            TokenEnum::Keyword(Keyword::Region) => {
-                parser.skip();
-                Result::new(inner::Kind::Region)
-            }
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Type) => Result::new(ast::Kind::Type(self.skip())),
+            TokenEnum::Keyword(Keyword::Effect) => Result::new(ast::Kind::Effect(self.skip())),
+            TokenEnum::Keyword(Keyword::Region) => Result::new(ast::Kind::Region(self.skip())),
             _ => {
-                if parser.starts_type() {
-                    parser.r#type().map(inner::Kind::Constant)
+                if self.starts_type() {
+                    self.r#type().map(ast::Kind::Constant)
                 } else {
-                    parser.error(Expected::Kind)
+                    self.error(Expected::Kind)
                 }
             }
-        })
+        }
     }
 
-    fn spanned<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T>) -> Result<Spanned<T>> {
-        self.with_span(|parser| parse(parser).map(|t| |span| Spanned(t, span)))
-    }
-    fn with_span<T, F>(&mut self, parse: impl FnOnce(&mut Self) -> Result<F>) -> Result<T>
-    where
-        F: FnOnce(Span) -> T,
-    {
-        let start = self.next().span.start;
-        parse(self).map(|t| t(Span::new(start, self.last_token_end)))
-    }
-    fn consume(&mut self, token: impl Into<TokenEnum>) -> Result<Token> {
+    fn consume(&mut self, token: impl Into<TokenEnum>) -> Result<ast::Token> {
         let token = token.into();
         match self.tokens.split_first().expect("ICE: consumed EOF token") {
             (next, rest) if next.token == token => {
                 self.tokens = rest;
                 self.last_token_end = next.span.end;
-                Result::new(*next)
+                Result::new(ast::Token(next.span))
             }
             _ => self.error(Expected::Token(token)),
         }
@@ -439,10 +394,11 @@ impl<'a> Parser<'a> {
         };
         Result::error(error.at(self.module, &next))
     }
-    fn skip(&mut self) {
+    fn skip(&mut self) -> ast::Token {
         let (token, tokens) = self.tokens.split_first().expect("ICE: consumed EOF token");
         self.tokens = tokens;
         self.last_token_end = token.span.end;
+        ast::Token(token.span)
     }
     fn next(&self) -> Token {
         self.tokens
@@ -488,10 +444,10 @@ impl<'a> Parser<'a> {
         &mut self,
         token: impl Into<TokenEnum>,
         parse: impl FnOnce(&mut Self) -> Result<T>,
-    ) -> Result<Option<T>> {
+    ) -> Result<Option<(ast::Token, T)>> {
         self.when_next(token, |parser| {
-            parser.skip();
-            parse(parser)
+            let token = parser.skip();
+            parse(parser).map(|t| (token, t))
         })
     }
     fn skip_group(&mut self, group: Group) {
@@ -508,7 +464,9 @@ impl<'a> Parser<'a> {
                     self.skip();
                     self.skip_group(group)
                 }
-                _ => self.skip(),
+                _ => {
+                    self.skip();
+                }
             }
         }
     }
@@ -527,7 +485,9 @@ impl<'a> Parser<'a> {
                     self.skip();
                     self.skip_group(group)
                 }
-                _ => self.skip(),
+                _ => {
+                    self.skip();
+                }
             }
         }
     }
@@ -536,19 +496,19 @@ impl<'a> Parser<'a> {
         group: Group,
         separator: Symbol,
         parse: impl Fn(&mut Self) -> Result<T>,
-    ) -> Result<Vec<T>> {
+    ) -> Result<ast::Grouped<ast::Separated<T>>> {
         m! {
-            _ <- self.consume(TokenEnum::Open(group));
-            many <- self.many(separator, parse).tap_none(|| self.skip_group(group));
-            _ <- self.consume(TokenEnum::Close(group)).tap_none(|| self.skip_group(group));
-            return many;
+            open <- self.consume(TokenEnum::Open(group));
+            inner <- self.many(separator, parse).tap_none(|| self.skip_group(group));
+            close <- self.consume(TokenEnum::Close(group)).tap_none(|| self.skip_group(group));
+            return ast::Grouped { open, inner, close };
         }
     }
     fn many<T>(
         &mut self,
         separator: Symbol,
         parse: impl Fn(&mut Self) -> Result<T>,
-    ) -> Result<Vec<T>> {
+    ) -> Result<ast::Separated<T>> {
         self.many_while(separator, |_| true, parse)
     }
     fn many_while_next<T>(
@@ -556,7 +516,7 @@ impl<'a> Parser<'a> {
         separator: Symbol,
         token: impl Into<TokenEnum>,
         parse: impl Fn(&mut Self) -> Result<T>,
-    ) -> Result<Vec<T>> {
+    ) -> Result<ast::Separated<T>> {
         let token = token.into();
         self.many_while(separator, |me| me.is_next(token), parse)
     }
@@ -565,7 +525,7 @@ impl<'a> Parser<'a> {
         separator: Symbol,
         pred: impl Fn(&Self) -> bool,
         parse: impl Fn(&mut Self) -> Result<T>,
-    ) -> Result<Vec<T>> {
+    ) -> Result<ast::Separated<T>> {
         std::iter::from_fn(|| {
             let next = self.next().token;
             let has_next = pred(self) && !matches!(next, TokenEnum::Close(_) | TokenEnum::Eof);
@@ -574,13 +534,14 @@ impl<'a> Parser<'a> {
                 m! {
                     t <- parse(parser)
                         .tap_none(|| parser.skip_to_recovery(separator, &[]));
-                    _ <- parser.unless_next(&[], |parser| parser.consume(separator)
+                    sep <- parser.unless_next(&[], |parser| parser.consume(separator)
                         .tap_none(|| parser.skip_to_recovery(separator, &[])).recover());
-                    return t;
+                    return (t, sep.flatten());
                 }
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .map(|elements| ast::Separated { elements })
     }
     fn many_until<T>(
         &mut self,

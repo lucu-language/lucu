@@ -58,50 +58,8 @@ where
     }
 }
 
-impl<T> HasSpan for Spanned<T> {
-    fn span(&self) -> Span {
-        self.1
-    }
-}
-
 impl HasSpan for Span {
     fn span(&self) -> Span {
         *self
-    }
-}
-
-#[derive(Clone, Copy, Eq)]
-pub struct Spanned<T>(pub T, pub Span);
-
-// equality if the inner value is equal
-impl<T: PartialEq> PartialEq for Spanned<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
-    }
-}
-
-impl<T> Debug for Spanned<T>
-where
-    T: Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Display for Spanned<T>
-where
-    T: Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T> Deref for Spanned<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }

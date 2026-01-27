@@ -5,7 +5,6 @@ use compact_str::ToCompactString;
 use do_notation::m;
 
 use crate::ast;
-use crate::ast::inner;
 use crate::error::{Problems, Result};
 use crate::ir::{
     EffectDef, EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition,
@@ -15,7 +14,6 @@ use crate::ir::{
 use crate::module::Module;
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
-use crate::span::Spanned;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
@@ -120,27 +118,27 @@ impl Lower<'_> {
     fn generics<'a>(
         &self,
         params: Option<&Arc<[Kind]>>,
-        name: Option<&'a Vec<ast::GenericParameter>>,
+        name: Option<&'a ast::GenericParameters>,
         base: &Generics<'a>,
     ) -> Generics<'a> {
         match (params, name) {
             (Some(params), Some(generics)) => {
-                assert_eq!(params.len(), generics.len());
+                assert_eq!(params.len(), generics.inner.elements.len());
                 base.pushed(
-                    Iterator::zip(generics.iter(), params.iter())
-                        .map(|(ast, &kind)| (ast.name.as_str(), kind)),
+                    Iterator::zip(generics.inner.iter(), params.iter())
+                        .map(|(ast, &kind)| (ast.name.ident.as_str(), kind)),
                 )
             }
             (None, None) => base.clone(),
             _ => unreachable!(),
         }
     }
-    fn definition(&mut self, def: &ast::Definition, lower: LoweredDef) -> Problems {
+    fn definition(&mut self, def: &ast::Item, lower: LoweredDef) -> Problems {
         let mut problems = Problems::ok();
 
-        match &def.0 {
-            inner::Definition::Type(name, def) => {
-                if let Some(Spanned(inner::TypeDefinition::Struct(struc), _)) = def {
+        match def {
+            ast::Item::Type(_, name, def) => {
+                if let Some((_, ast::TypeDefinition::Struct(struc))) = def {
                     let LoweredDef::Item(ItemDef::Struct(kind, idx)) = lower else {
                         return problems;
                     };
@@ -154,6 +152,7 @@ impl Lower<'_> {
                         .append(
                             struc
                                 .members
+                                .inner
                                 .iter()
                                 .map(|member| self.struct_member(member, &generics))
                                 .collect::<Result<_>>(),
@@ -163,8 +162,8 @@ impl Lower<'_> {
                     self.ir.realize_struct(idx, StructDefinition { members });
                 }
             }
-            inner::Definition::Function(decl, def) => {
-                if let Some(Spanned(inner::FunctionDefinition::Expression(body), _)) = def {
+            ast::Item::Function(_, def) => {
+                if let Some((_, ast::FunctionDefinition::Expression(body))) = def {
                     let LoweredDef::Item(ItemDef::Function(_, Parent::TopLevel(fun))) = lower
                     else {
                         return problems;
@@ -179,23 +178,25 @@ impl Lower<'_> {
                     );
                 }
             }
-            inner::Definition::Effect(name, defs) => {
-                if let Some(Spanned(inner::EffectDefinition::Body(body), _)) = defs {
+            ast::Item::Effect(_, _, defs) => {
+                if let Some((_, ast::EffectDefinition::Body(body))) = defs {
                     let LoweredDef::Item(ItemDef::Effect(_, eff)) = lower else {
                         return problems;
                     };
 
                     let members = body
-                        .definitions
+                        .items
+                        .inner
                         .iter()
                         .filter_map(|def| {
                             // TODO: is there a way to get this without looking it up again?
                             let name = def.name()?;
-                            let ItemDef::Function(sig, _) = self.ir.get(name.as_str())? else {
+                            let ItemDef::Function(sig, _) = self.ir.get(name.ident.as_str())?
+                            else {
                                 return None;
                             };
                             Some(EffectMember {
-                                name: name.as_str().to_compact_string(),
+                                name: name.ident.as_str().to_compact_string(),
                                 signature: sig,
                             })
                         })
@@ -205,7 +206,7 @@ impl Lower<'_> {
                         .realize_effect(eff, EffectDefinition::Body { members });
                 }
             }
-            inner::Definition::Handle(params, handler) => {
+            ast::Item::Handle(_, params, handler) => {
                 let LoweredDef::Handler(HandlerDef {
                     kind,
                     effect,
@@ -242,8 +243,9 @@ impl Lower<'_> {
                                     None => member.signature,
                                 };
 
-                                let Some(matching) = handler.definitions.iter().find(|def| {
-                                    def.name().is_some_and(|name| name.as_str() == member.name)
+                                let Some(matching) = handler.items.inner.iter().find(|def| {
+                                    def.name()
+                                        .is_some_and(|name| name.ident.as_str() == member.name)
                                 }) else {
                                     todo!(
                                         "error: no definition for '{}' inside handler",
@@ -251,8 +253,7 @@ impl Lower<'_> {
                                     )
                                 };
 
-                                let inner::Definition::Function(fun_decl, fun_def) = &matching.0
-                                else {
+                                let ast::Item::Function(fun_decl, fun_def) = matching else {
                                     todo!("error: definition '{}' is not a function", member.name)
                                 };
 
@@ -273,12 +274,12 @@ impl Lower<'_> {
                                     );
                                 }
 
-                                let Some(fun_def) = fun_def else {
+                                let Some((_, fun_def)) = fun_def else {
                                     todo!("error")
                                 };
 
-                                match &fun_def.0 {
-                                    inner::FunctionDefinition::Expression(expr) => {
+                                match fun_def {
+                                    ast::FunctionDefinition::Expression(expr) => {
                                         let body = self.ir.push_function_body();
                                         self.ir.realize_function_body(
                                             body,
@@ -293,7 +294,7 @@ impl Lower<'_> {
                                             signature,
                                         }
                                     }
-                                    inner::FunctionDefinition::Intrinsic => HandlerMember {
+                                    ast::FunctionDefinition::Intrinsic(_) => HandlerMember {
                                         body: problems
                                             .append(self.intrinsic_function(&fun_decl.name)),
                                         name: member.name,
@@ -316,15 +317,11 @@ impl Lower<'_> {
 
         problems
     }
-    fn declaration(
-        &mut self,
-        def: &ast::Definition,
-        parent: Option<&ast::Definition>,
-    ) -> Result<LoweredDef> {
+    fn declaration(&mut self, def: &ast::Item, parent: Option<&ast::Item>) -> Result<LoweredDef> {
         let mut problems = Problems::ok();
 
-        match &def.0 {
-            inner::Definition::Type(name, def) => {
+        match def {
+            ast::Item::Type(_, name, def) => {
                 if let Some(parent) = parent {
                     todo!("error")
                 }
@@ -332,47 +329,45 @@ impl Lower<'_> {
                 let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type));
 
                 match def {
-                    Some(def) => match &def.0 {
-                        inner::TypeDefinition::Type(spanned) => {
-                            if let Some(kind) = kind {
-                                let generics = self.generics(
-                                    self.tt[kind].params.as_ref(),
-                                    name.generics.as_ref(),
-                                    &Generics::new(),
-                                );
-                                let ty = problems.append(self.r#type(spanned, &generics));
-                                if let Some(ty) = ty {
-                                    let item = ItemDef::Alias(kind, Term::Type(ty));
-                                    self.ir.insert(name.as_str(), item);
-                                    return problems.with(LoweredDef::Item(item));
-                                }
-                            }
-                        }
-                        inner::TypeDefinition::Struct(_) => {
-                            if let Some(kind) = kind {
-                                let struc = self.ir.push_struct();
-                                let item = ItemDef::Struct(kind, struc);
-                                self.ir.insert(name.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
-                            }
-                        }
-                        inner::TypeDefinition::Intrinsic => {
-                            let ty = problems.append(self.intrinsic_type(name));
-                            if let (Some(kind), Some(ty)) = (kind, ty) {
+                    Some((_, ast::TypeDefinition::Type(ast))) => {
+                        if let Some(kind) = kind {
+                            let generics = self.generics(
+                                self.tt[kind].params.as_ref(),
+                                name.generics.as_ref(),
+                                &Generics::new(),
+                            );
+                            let ty = problems.append(self.r#type(ast, &generics));
+                            if let Some(ty) = ty {
                                 let item = ItemDef::Alias(kind, Term::Type(ty));
-                                self.ir.insert(name.as_str(), item);
+                                self.ir.insert(name.ident.as_str(), item);
                                 return problems.with(LoweredDef::Item(item));
                             }
                         }
-                    },
+                    }
+                    Some((_, ast::TypeDefinition::Struct(_))) => {
+                        if let Some(kind) = kind {
+                            let struc = self.ir.push_struct();
+                            let item = ItemDef::Struct(kind, struc);
+                            self.ir.insert(name.ident.as_str(), item);
+                            return problems.with(LoweredDef::Item(item));
+                        }
+                    }
+                    Some((_, ast::TypeDefinition::Intrinsic(_))) => {
+                        let ty = problems.append(self.intrinsic_type(name));
+                        if let (Some(kind), Some(ty)) = (kind, ty) {
+                            let item = ItemDef::Alias(kind, Term::Type(ty));
+                            self.ir.insert(name.ident.as_str(), item);
+                            return problems.with(LoweredDef::Item(item));
+                        }
+                    }
                     None => todo!("error"),
                 }
             }
-            inner::Definition::Function(decl, def) => match parent {
+            ast::Item::Function(decl, def) => match parent {
                 Some(parent) => {
                     // TODO: is there a way to get this without looking it up again?
                     let Some(name) = parent.name() else { todo!() };
-                    let Some(item) = self.ir.get(name.as_str()) else {
+                    let Some(item) = self.ir.get(name.ident.as_str()) else {
                         todo!()
                     };
                     let ItemDef::Effect(kind, _) = item else {
@@ -389,41 +384,39 @@ impl Lower<'_> {
                         let apply = self.dummy_args(kind);
                         let effect = self.tt.insert_effect(EffectEnum::Item(Item {
                             module: self.module.clone(),
-                            name: name.as_str().to_compact_string(),
+                            name: name.ident.as_str().to_compact_string(),
                             apply,
                         }));
 
                         let item = ItemDef::Function(sig, Parent::Effect(effect));
-                        self.ir.insert(decl.name.as_str(), item);
+                        self.ir.insert(decl.name.ident.as_str(), item);
                         return problems.with(LoweredDef::Item(item));
                     }
                 }
                 None => {
                     let sig = problems.append(self.function_signature(decl, &Generics::new()));
                     match def {
-                        Some(def) => match &def.0 {
-                            inner::FunctionDefinition::Expression(_) => {
-                                if let Some(sig) = sig {
-                                    let fun = self.ir.push_function_body();
-                                    let item = ItemDef::Function(sig, Parent::TopLevel(fun));
-                                    self.ir.insert(decl.name.as_str(), item);
-                                    return problems.with(LoweredDef::Item(item));
-                                }
+                        Some((_, ast::FunctionDefinition::Expression(_))) => {
+                            if let Some(sig) = sig {
+                                let fun = self.ir.push_function_body();
+                                let item = ItemDef::Function(sig, Parent::TopLevel(fun));
+                                self.ir.insert(decl.name.ident.as_str(), item);
+                                return problems.with(LoweredDef::Item(item));
                             }
-                            inner::FunctionDefinition::Intrinsic => {
-                                let fun = problems.append(self.intrinsic_function(&decl.name));
-                                if let (Some(sig), Some(fun)) = (sig, fun) {
-                                    let item = ItemDef::Function(sig, Parent::TopLevel(fun));
-                                    self.ir.insert(decl.name.as_str(), item);
-                                    return problems.with(LoweredDef::Item(item));
-                                }
+                        }
+                        Some((_, ast::FunctionDefinition::Intrinsic(_))) => {
+                            let fun = problems.append(self.intrinsic_function(&decl.name));
+                            if let (Some(sig), Some(fun)) = (sig, fun) {
+                                let item = ItemDef::Function(sig, Parent::TopLevel(fun));
+                                self.ir.insert(decl.name.ident.as_str(), item);
+                                return problems.with(LoweredDef::Item(item));
                             }
-                        },
+                        }
                         None => todo!("error"),
                     }
                 }
             },
-            inner::Definition::Effect(name, def) => {
+            ast::Item::Effect(_, name, def) => {
                 if let Some(parent) = parent {
                     todo!("error")
                 }
@@ -431,49 +424,47 @@ impl Lower<'_> {
                 let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Effect));
 
                 match def {
-                    Some(def) => match &def.0 {
-                        inner::EffectDefinition::Body(_) => {
-                            if let Some(kind) = kind {
-                                let effect = self.ir.push_effect();
-                                let item = ItemDef::Effect(kind, effect);
-                                self.ir.insert(name.as_str(), item);
+                    Some((_, ast::EffectDefinition::Body(_))) => {
+                        if let Some(kind) = kind {
+                            let effect = self.ir.push_effect();
+                            let item = ItemDef::Effect(kind, effect);
+                            self.ir.insert(name.ident.as_str(), item);
+                            return problems.with(LoweredDef::Item(item));
+                        }
+                    }
+                    Some((_, ast::EffectDefinition::Alias(effects))) => {
+                        if let Some(kind) = kind {
+                            let generics = self.generics(
+                                self.tt[kind].params.as_ref(),
+                                name.generics.as_ref(),
+                                &Generics::new(),
+                            );
+                            let effects = problems.append(
+                                effects
+                                    .iter()
+                                    .map(|path| self.effect(path, &generics))
+                                    .collect::<Result<Arc<_>>>(),
+                            );
+                            if let Some(effects) = effects {
+                                let effect = Effect::row(effects.iter(), self.tt);
+                                let item = ItemDef::Alias(kind, Term::Effect(effect));
+                                self.ir.insert(name.ident.as_str(), item);
                                 return problems.with(LoweredDef::Item(item));
                             }
                         }
-                        inner::EffectDefinition::Alias(effects) => {
-                            if let Some(kind) = kind {
-                                let generics = self.generics(
-                                    self.tt[kind].params.as_ref(),
-                                    name.generics.as_ref(),
-                                    &Generics::new(),
-                                );
-                                let effects = problems.append(
-                                    effects
-                                        .iter()
-                                        .map(|path| self.effect(path, &generics))
-                                        .collect::<Result<Arc<_>>>(),
-                                );
-                                if let Some(effects) = effects {
-                                    let effect = Effect::row(effects.iter(), self.tt);
-                                    let item = ItemDef::Alias(kind, Term::Effect(effect));
-                                    self.ir.insert(name.as_str(), item);
-                                    return problems.with(LoweredDef::Item(item));
-                                }
-                            }
+                    }
+                    Some((_, ast::EffectDefinition::Intrinsic(_))) => {
+                        let eff = problems.append(self.intrinsic_effect(name));
+                        if let (Some(kind), Some(eff)) = (kind, eff) {
+                            let item = ItemDef::Effect(kind, eff);
+                            self.ir.insert(name.ident.as_str(), item);
+                            return problems.with(LoweredDef::Item(item));
                         }
-                        inner::EffectDefinition::Intrinsic => {
-                            let eff = problems.append(self.intrinsic_effect(name));
-                            if let (Some(kind), Some(eff)) = (kind, eff) {
-                                let item = ItemDef::Effect(kind, eff);
-                                self.ir.insert(name.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
-                            }
-                        }
-                    },
+                    }
                     None => todo!("error"),
                 }
             }
-            inner::Definition::Handle(params, handler) => {
+            ast::Item::Handle(_, params, handler) => {
                 if let Some(parent) = parent {
                     todo!("error")
                 }
@@ -490,7 +481,7 @@ impl Lower<'_> {
                         handler
                             .with_effects
                             .iter()
-                            .flatten()
+                            .flat_map(|we| &we.effects)
                             .map(|effect| self.effect(effect, &generics))
                             .collect::<Result<Arc<_>>>(),
                     );
@@ -517,13 +508,11 @@ impl Lower<'_> {
         member: &ast::StructMember,
         generics: &Generics,
     ) -> Result<StructMember> {
-        match &member.0 {
-            inner::StructMember::Data(name, ty) => {
-                self.r#type(ty, generics).map(|ty| StructMember {
-                    name: name.as_str().to_compact_string(),
-                    ty,
-                })
-            }
+        match member {
+            ast::StructMember::Data(name, ty) => self.r#type(ty, generics).map(|ty| StructMember {
+                name: name.as_str().to_compact_string(),
+                ty,
+            }),
         }
     }
     fn resolve_item<'a>(&'a self, item: &Item) -> ItemDefinition<'a> {
@@ -540,7 +529,7 @@ impl Lower<'_> {
     }
     fn item(&self, path: &ast::Path) -> std::result::Result<(&Module, ItemDef), Problems> {
         let (module, preamble) = match &path.package {
-            Some(pkg) => match self.imports.get(pkg.as_str()) {
+            Some((pkg, _)) => match self.imports.get(pkg.as_str()) {
                 Some(module) => match self.query.untyped_ir(module) {
                     Some(ir) => ((module, ir), None),
                     None => todo!("recover"),
@@ -572,7 +561,7 @@ impl Lower<'_> {
         &mut self,
         kind: Kind,
         term: Term,
-        ast: Option<&[ast::GenericArgument]>,
+        ast: Option<&ast::GenericArguments>,
         generics: &Generics,
     ) -> Result<(Kind, Term)> {
         match ast {
@@ -581,7 +570,7 @@ impl Lower<'_> {
                 let Some(params) = kind.params else {
                     todo!("error");
                 };
-                if params.len() != ast.len() {
+                if params.len() != ast.inner.elements.len() {
                     todo!("error");
                 }
 
@@ -589,7 +578,7 @@ impl Lower<'_> {
                     params: None,
                     output: kind.output,
                 });
-                Iterator::zip(params.iter().copied(), ast.iter())
+                Iterator::zip(params.iter().copied(), ast.inner.iter())
                     .map(|(param, arg)| self.generic_argument(param, arg, generics))
                     .collect::<Result<Arc<_>>>()
                     .map(|args| (output, term.subst(self.tt, 0, &args)))
@@ -686,7 +675,7 @@ impl Lower<'_> {
             }
         };
 
-        self.apply(item_kind, term, path.generics.as_deref(), generics)
+        self.apply(item_kind, term, path.generics.as_ref(), generics)
             .and_then(|(applied_kind, path)| {
                 if applied_kind == kind {
                     Result::new(path)
@@ -703,16 +692,16 @@ impl Lower<'_> {
     ) -> Result<GenericArgument> {
         let arity = self.tt[param].params.as_ref().map(|params| params.len());
         let generics = generics.shifted(arity.unwrap_or(0));
-        match &arg.0 {
-            inner::GenericArgument::Path(path) => self.term_path(param, path, &generics),
-            inner::GenericArgument::Type(ty) => {
+        match arg {
+            ast::GenericArgument::Path(path) => self.term_path(param, path, &generics),
+            ast::GenericArgument::Type(ty) => {
                 if self.tt[param] == KindEnum::TYPE {
                     self.r#type(ty, &generics).map(Term::Type)
                 } else {
                     todo!("error")
                 }
             }
-            inner::GenericArgument::Constant(constant) => todo!(),
+            ast::GenericArgument::Constant(constant) => todo!(),
         }
         .map(|term| GenericArgument { term, arity })
     }
@@ -733,48 +722,47 @@ impl Lower<'_> {
             })
     }
     fn r#type(&mut self, ty: &ast::Type, generics: &Generics) -> Result<Type> {
-        match &ty.0 {
-            inner::Type::Path(path) => {
+        match ty {
+            ast::Type::Path(path) => {
                 let kind = self.tt.insert_kind(KindEnum::TYPE);
                 self.term_path(kind, path, generics).map(|path| match path {
                     Term::Type(ty) => ty,
                     _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
                 })
             }
-            inner::Type::Pointer(ty, region) => m! {
+            ast::Type::Pointer(_, region, ty) => m! {
                 ty <- self.r#type(ty, generics);
-                region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
+                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
                 return self.tt.insert_type(TypeEnum::Pointer(ty, region));
             },
-            inner::Type::PointerSlice(ty, region) => m! {
+            ast::Type::PointerSlice(_, _, region, ty) => m! {
                 ty <- self.r#type(ty, generics);
-                region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
+                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
                 return self.tt.insert_type(TypeEnum::PointerSlice(ty, region));
             },
-            inner::Type::PointerSliceNullTerminated(ty, region) => m! {
+            ast::Type::PointerSliceNullTerminated(_, _, region, ty) => m! {
                 ty <- self.r#type(ty, generics);
-                region <- self.region(region.as_ref().expect("TODO: implied region"), generics);
+                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
                 return self.tt.insert_type(TypeEnum::PointerSliceNullTerminated(ty, region));
             },
         }
     }
     fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {
-        match &kind.0 {
-            inner::Kind::Type => Result::new(SimpleKind::Type),
-            inner::Kind::Effect => Result::new(SimpleKind::Effect),
-            inner::Kind::Region => Result::new(SimpleKind::Region),
+        match kind {
+            ast::Kind::Type(_) => Result::new(SimpleKind::Type),
+            ast::Kind::Effect(_) => Result::new(SimpleKind::Effect),
+            ast::Kind::Region(_) => Result::new(SimpleKind::Region),
             // TODO: allow constant with generic type?
-            inner::Kind::Constant(ty) => {
-                self.r#type(ty, &Generics::new()).map(SimpleKind::Constant)
-            }
+            ast::Kind::Constant(ty) => self.r#type(ty, &Generics::new()).map(SimpleKind::Constant),
         }
     }
     fn kind_params(
         &mut self,
-        name: Option<&Vec<ast::GenericParameter>>,
+        name: Option<&ast::GenericParameters>,
     ) -> Result<Option<Arc<[Kind]>>> {
         match name {
             Some(params) => params
+                .inner
                 .iter()
                 .map(|param| {
                     match &param.kind {
@@ -788,18 +776,14 @@ impl Lower<'_> {
             None => Result::new(None),
         }
     }
-    fn kind(
-        &mut self,
-        name: Option<&Vec<ast::GenericParameter>>,
-        output: SimpleKind,
-    ) -> Result<Kind> {
+    fn kind(&mut self, name: Option<&ast::GenericParameters>, output: SimpleKind) -> Result<Kind> {
         self.kind_params(name)
             .map(|params| self.tt.insert_kind(KindEnum { params, output }))
     }
 
     fn intrinsic_type(&mut self, name: &ast::Name) -> Result<Type> {
         let module = self.module.to_compact_string();
-        let ty = match (module.as_str(), name.as_str()) {
+        let ty = match (module.as_str(), name.ident.as_str()) {
             ("builtin:preamble", "u8") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8))),
             ("builtin:preamble", "u16") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(16))),
             ("builtin:preamble", "u32") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32))),
@@ -819,14 +803,14 @@ impl Lower<'_> {
             _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),
-                name.as_str()
+                name.ident.as_str()
             ),
         };
         Result::new(self.tt.insert_type(ty))
     }
     fn intrinsic_function(&mut self, name: &ast::Name) -> Result<FunctionBody> {
         let module = self.module.to_compact_string();
-        let value = match (module.as_str(), name.as_str()) {
+        let value = match (module.as_str(), name.ident.as_str()) {
             ("builtin:preamble", "len") => IntrinsicFunction::Len,
             ("builtin:preamble", "local") => IntrinsicFunction::Local,
             ("builtin:preamble", "alloca") => IntrinsicFunction::Alloca,
@@ -839,7 +823,7 @@ impl Lower<'_> {
             _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),
-                name.as_str()
+                name.ident.as_str()
             ),
         };
         let fun = self.ir.push_function_body();
@@ -850,7 +834,7 @@ impl Lower<'_> {
     fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<EffectDef> {
         let module = self.module.to_compact_string();
         if !matches!(
-            (module.as_str(), name.as_str()),
+            (module.as_str(), name.ident.as_str()),
             ("builtin:preamble", "Div")
                 | ("builtin:preamble", "Read")
                 | ("builtin:preamble", "Write"),
@@ -858,7 +842,7 @@ impl Lower<'_> {
             todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),
-                name.as_str()
+                name.ident.as_str()
             )
         }
         let eff = self.ir.push_effect();
@@ -874,7 +858,7 @@ impl Lower<'_> {
             type_params <- self.kind_params(sig.name.generics.as_ref());
             let generics = self.generics(type_params.as_ref(), sig.name.generics.as_ref(), generics);
             params <- match &sig.parameters {
-                Some(params) => params
+                Some(params) => params.inner
                     .iter()
                     .map(|param| self.function_param(param, &generics))
                     .collect::<Result<_>>()
@@ -885,7 +869,7 @@ impl Lower<'_> {
             effects <- sig
                 .effects
                 .iter()
-                .flatten()
+                .flat_map(|we| &we.effects)
                 .map(|effect| self.effect(effect, &generics))
                 .collect::<Result<Arc<_>>>();
             let effect = Effect::row(effects.iter(), self.tt);
@@ -903,9 +887,9 @@ impl Lower<'_> {
         generics: &Generics,
     ) -> Result<FunctionReturns> {
         match returns {
-            Some(returns) => match &returns.0 {
-                inner::Returns::Never => Result::new(FunctionReturns::Never),
-                inner::Returns::Data(ty) => self.r#type(ty, generics).map(FunctionReturns::Data),
+            Some(returns) => match returns {
+                ast::Returns::Never(_) => Result::new(FunctionReturns::Never),
+                ast::Returns::Data(ty) => self.r#type(ty, generics).map(FunctionReturns::Data),
             },
             None => {
                 let unit = self.tt.insert_type(TypeEnum::Unit);
@@ -915,14 +899,12 @@ impl Lower<'_> {
     }
     fn function_param<'a>(
         &mut self,
-        param: &'a ast::FunctionParameter,
+        param: &'a ast::Parameter,
         generics: &Generics<'a>,
     ) -> Result<FunctionParameter> {
-        match &param.0 {
-            inner::FunctionParameter::Data(_, ty) => {
-                self.r#type(ty, generics).map(FunctionParameter::Data)
-            }
-            inner::FunctionParameter::Lambda(decl) => self
+        match param {
+            ast::Parameter::Data(_, ty) => self.r#type(ty, generics).map(FunctionParameter::Data),
+            ast::Parameter::Lambda(decl) => self
                 .function_signature(decl, generics)
                 .map(FunctionParameter::Lambda),
         }

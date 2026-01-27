@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use crate::ast::{self, inner};
+use crate::ast;
 use crate::span::HasSpan;
 
 pub trait Visitor: Copy {
@@ -8,7 +8,7 @@ pub trait Visitor: Copy {
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         self.visit(path)
     }
-    fn visit_definition(self, def: &ast::Definition) -> Self::Output<'_> {
+    fn visit_item(self, def: &ast::Item) -> Self::Output<'_> {
         self.visit(def)
     }
     fn visit_struct(self, struc: &ast::Struct) -> Self::Output<'_> {
@@ -25,25 +25,23 @@ pub trait Visitor: Copy {
     }
 }
 
-pub fn visit_option<V: Visitor>(ast: &Option<impl Ast>, visitor: V) -> V::Output<'_> {
-    match ast {
-        Some(t) => visitor.visit(t),
-        None => V::Output::default(),
-    }
-}
-
-pub fn visit_vec<V: Visitor>(
-    #[expect(clippy::ptr_arg)] ast: &Vec<impl Ast>,
+pub fn visit_option<'a, V: Visitor, A>(
+    ast: &'a Option<A>,
     visitor: V,
-) -> V::Output<'_> {
-    V::Output::combine(ast.iter().map(|inner| visitor.visit(inner)))
-}
-
-pub fn visit_option_vec<V: Visitor>(ast: &Option<Vec<impl Ast>>, visitor: V) -> V::Output<'_> {
+    f: impl FnOnce(V, &'a A) -> V::Output<'a>,
+) -> V::Output<'a> {
     match ast {
-        Some(ast) => V::Output::combine(ast.iter().map(|inner| visitor.visit(inner))),
+        Some(t) => f(visitor, t),
         None => V::Output::default(),
     }
+}
+
+pub fn visit_vec<'a, V: Visitor, A>(
+    #[expect(clippy::ptr_arg)] ast: &'a Vec<A>,
+    visitor: V,
+    f: impl Fn(V, &'a A) -> V::Output<'a>,
+) -> V::Output<'a> {
+    V::Output::combine(ast.iter().map(|elem| f(visitor, elem)))
 }
 
 pub trait Combine {
@@ -95,13 +93,8 @@ pub trait Ast: HasSpan {
 impl Ast for ast::Module {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visit_vec(&self.0.imports, visitor),
-            V::Output::combine(
-                self.0
-                    .definitions
-                    .iter()
-                    .map(|def| visitor.visit_definition(def)),
-            ),
+            visit_vec(&self.imports.elements, visitor, |v, (e, _)| v.visit(e)),
+            visit_vec(&self.items.elements, visitor, |v, (e, _)| v.visit_item(e)),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -118,29 +111,61 @@ impl Ast for ast::Import {
     }
 }
 
-impl Ast for ast::Definition {
+impl Ast for ast::Item {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::Definition::Function(fun, opt) => V::Output::combine([
+        match self {
+            ast::Item::Function(fun, opt) => V::Output::combine([
                 visitor.visit(fun),
                 match opt {
-                    Some(def) => visitor.visit_function_definition(def),
+                    Some((_, def)) => visitor.visit_function_definition(def),
                     None => V::Output::default(),
                 },
             ]),
-            inner::Definition::Type(name, opt) => {
-                V::Output::combine([visitor.visit(name), visit_option(opt, visitor)])
-            }
-            inner::Definition::Effect(name, opt) => {
-                V::Output::combine([visitor.visit(name), visit_option(opt, visitor)])
-            }
-            inner::Definition::Handle(generics, handler) => {
-                V::Output::combine([visit_option_vec(generics, visitor), visitor.visit(handler)])
-            }
+            ast::Item::Type(_, name, opt) => V::Output::combine([
+                visitor.visit(name),
+                visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
+            ]),
+            ast::Item::Effect(_, name, opt) => V::Output::combine([
+                visitor.visit(name),
+                visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
+            ]),
+            ast::Item::Handle(_, generics, handler) => V::Output::combine([
+                visit_option(generics, visitor, Visitor::visit),
+                visitor.visit(handler),
+            ]),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
+    }
+}
+
+impl Ast for ast::GenericParameters {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_vec(&self.inner.elements, visitor, |v, (param, _)| {
+            v.visit(param)
+        })
+    }
+    fn node_name(&self) -> &'static str {
+        "GenericParameters"
+    }
+}
+
+impl Ast for ast::GenericArguments {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_vec(&self.inner.elements, visitor, |v, (arg, _)| v.visit(arg))
+    }
+    fn node_name(&self) -> &'static str {
+        "GenericArguments"
+    }
+}
+
+impl Ast for ast::WithEffects {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_vec(&self.effects, visitor, Visitor::visit_path)
+    }
+    fn node_name(&self) -> &'static str {
+        "WithEffects"
     }
 }
 
@@ -148,17 +173,10 @@ impl Ast for ast::Handler {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
             visitor.visit_path(&self.effect),
-            V::Output::combine(
-                self.with_effects
-                    .iter()
-                    .flatten()
-                    .map(|path| visitor.visit_path(path)),
-            ),
-            V::Output::combine(
-                self.definitions
-                    .iter()
-                    .map(|def| visitor.visit_definition(def)),
-            ),
+            visit_option(&self.with_effects, visitor, Visitor::visit),
+            visit_vec(&self.items.inner.elements, visitor, |v, (e, _)| {
+                v.visit_item(e)
+            }),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -168,26 +186,22 @@ impl Ast for ast::Handler {
 
 impl Ast for ast::EffectDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::EffectDefinition::Body(body) => visitor.visit_effect_body(body),
-            inner::EffectDefinition::Alias(alias) => {
-                V::Output::combine(alias.iter().map(|inner| visitor.visit_path(inner)))
-            }
-            inner::EffectDefinition::Intrinsic => V::Output::default(),
+        match self {
+            ast::EffectDefinition::Body(body) => visitor.visit_effect_body(body),
+            ast::EffectDefinition::Alias(alias) => visit_vec(alias, visitor, Visitor::visit_path),
+            ast::EffectDefinition::Intrinsic(_) => V::Output::default(),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::EffectBody {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine(
-            self.definitions
-                .iter()
-                .map(|def| visitor.visit_definition(def)),
-        )
+        visit_vec(&self.items.inner.elements, visitor, |v, (e, _)| {
+            v.visit_item(e)
+        })
     }
     fn node_name(&self) -> &'static str {
         "EffectBody"
@@ -196,26 +210,34 @@ impl Ast for ast::EffectBody {
 
 impl Ast for ast::FunctionDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::FunctionDefinition::Expression(spanned) => visitor.visit(&**spanned),
-            inner::FunctionDefinition::Intrinsic => V::Output::default(),
+        match self {
+            ast::FunctionDefinition::Expression(spanned) => visitor.visit(&**spanned),
+            ast::FunctionDefinition::Intrinsic(_) => V::Output::default(),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
+    }
+}
+
+impl Ast for ast::Parameters {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_vec(&self.inner.elements, visitor, |v, (param, _)| {
+            v.visit(param)
+        })
+    }
+    fn node_name(&self) -> &'static str {
+        "Parameters"
     }
 }
 
 impl Ast for ast::FunctionDeclaration {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visitor.visit(&self.0.name),
-            visit_option_vec(&self.0.parameters, visitor),
-            visit_option(&self.0.returns, visitor),
-            match &self.0.effects {
-                Some(ast) => V::Output::combine(ast.iter().map(|inner| visitor.visit_path(inner))),
-                None => V::Output::default(),
-            },
+            visitor.visit(&self.name),
+            visit_option(&self.parameters, visitor, Visitor::visit),
+            visit_option(&self.returns, visitor, Visitor::visit),
+            visit_option(&self.effects, visitor, Visitor::visit),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -225,35 +247,35 @@ impl Ast for ast::FunctionDeclaration {
 
 impl Ast for ast::Returns {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::Returns::Never => V::Output::default(),
-            inner::Returns::Data(ty) => visitor.visit(&**ty),
+        match self {
+            ast::Returns::Never(_) => V::Output::default(),
+            ast::Returns::Data(ty) => visitor.visit(&**ty),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
-impl Ast for ast::FunctionParameter {
+impl Ast for ast::Parameter {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::FunctionParameter::Data(name, ty) => {
+        match self {
+            ast::Parameter::Data(name, ty) => {
                 V::Output::combine([visitor.visit(name), visitor.visit(&**ty)])
             }
-            inner::FunctionParameter::Lambda(decl) => visitor.visit(decl),
+            ast::Parameter::Lambda(decl) => visitor.visit(decl),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::Name {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visitor.visit(&self.0.ident),
-            visit_option_vec(&self.0.generics, visitor),
+            visitor.visit(&self.ident),
+            visit_option(&self.generics, visitor, Visitor::visit),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -264,8 +286,8 @@ impl Ast for ast::Name {
 impl Ast for ast::GenericParameter {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visitor.visit(&self.0.name),
-            visit_option(&self.0.kind, visitor),
+            visitor.visit(&self.name),
+            visit_option(&self.kind, visitor, Visitor::visit),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -275,68 +297,74 @@ impl Ast for ast::GenericParameter {
 
 impl Ast for ast::Kind {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::Kind::Type => V::Output::default(),
-            inner::Kind::Effect => V::Output::default(),
-            inner::Kind::Region => V::Output::default(),
-            inner::Kind::Constant(ty) => visitor.visit(&**ty),
+        match self {
+            ast::Kind::Type(_) => V::Output::default(),
+            ast::Kind::Effect(_) => V::Output::default(),
+            ast::Kind::Region(_) => V::Output::default(),
+            ast::Kind::Constant(ty) => visitor.visit(&**ty),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
+    }
+}
+
+impl Ast for ast::PointerRegion {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visitor.visit_path(&self.region)
+    }
+    fn node_name(&self) -> &'static str {
+        "PointerRegion"
     }
 }
 
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::Type::Pointer(inner, region)
-            | inner::Type::PointerSlice(inner, region)
-            | inner::Type::PointerSliceNullTerminated(inner, region) => V::Output::combine([
-                visitor.visit(&**inner),
-                match region {
-                    Some(t) => visitor.visit_path(t),
-                    None => V::Output::default(),
-                },
+        match self {
+            ast::Type::Pointer(_, region, ty)
+            | ast::Type::PointerSlice(_, _, region, ty)
+            | ast::Type::PointerSliceNullTerminated(_, _, region, ty) => V::Output::combine([
+                visit_option(region, visitor, Visitor::visit),
+                visitor.visit(&**ty),
             ]),
-            inner::Type::Path(path) => visitor.visit_path(path),
+            ast::Type::Path(path) => visitor.visit_path(path),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::Expression {
     fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::Expression::Block => V::Output::default(),
+        match self {
+            ast::Expression::Block(_) => V::Output::default(),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::TypeDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::TypeDefinition::Type(spanned) => visitor.visit(&**spanned),
-            inner::TypeDefinition::Intrinsic => V::Output::default(),
-            inner::TypeDefinition::Struct(struc) => visitor.visit_struct(struc),
+        match self {
+            ast::TypeDefinition::Type(ty) => visitor.visit(&**ty),
+            ast::TypeDefinition::Intrinsic(_) => V::Output::default(),
+            ast::TypeDefinition::Struct(struc) => visitor.visit_struct(struc),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::Path {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visit_option(&self.0.package, visitor),
-            visitor.visit(&self.0.name),
-            visit_option_vec(&self.0.generics, visitor),
+            visit_option(&self.package, visitor, |v, (pkg, _)| v.visit(pkg)),
+            visitor.visit(&self.name),
+            visit_option(&self.generics, visitor, Visitor::visit),
         ])
     }
     fn node_name(&self) -> &'static str {
@@ -346,29 +374,31 @@ impl Ast for ast::Path {
 
 impl Ast for ast::GenericArgument {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::GenericArgument::Path(path) => visitor.visit_path(path),
-            inner::GenericArgument::Type(ty) => visitor.visit(&**ty),
-            inner::GenericArgument::Constant(constant) => visitor.visit(&**constant),
+        match self {
+            ast::GenericArgument::Path(path) => visitor.visit_path(path),
+            ast::GenericArgument::Type(ty) => visitor.visit(&**ty),
+            ast::GenericArgument::Constant(constant) => visitor.visit(&**constant),
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::Constant {
     fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        match self.0 {}
+        match *self {}
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 
 impl Ast for ast::Struct {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        visit_vec(&self.0.members, visitor)
+        visit_vec(&self.members.inner.elements, visitor, |v, (member, _)| {
+            v.visit(member)
+        })
     }
     fn node_name(&self) -> &'static str {
         "Struct"
@@ -377,14 +407,14 @@ impl Ast for ast::Struct {
 
 impl Ast for ast::StructMember {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        match &self.0 {
-            inner::StructMember::Data(name, ty) => {
+        match self {
+            ast::StructMember::Data(name, ty) => {
                 V::Output::combine([visitor.visit(name), visitor.visit(&**ty)])
             }
         }
     }
     fn node_name(&self) -> &'static str {
-        (&self.0).into()
+        self.into()
     }
 }
 

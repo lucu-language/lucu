@@ -3,10 +3,10 @@ use std::fmt::Display;
 
 use compact_str::{CompactString, ToCompactString, format_compact};
 
-use crate::ast::{self, inner};
+use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
 use crate::module::{Module, ModuleResolver, UnknownModule};
-use crate::span::{HasSpan, Span, Spanned};
+use crate::span::{HasSpan, Span};
 use crate::tokens::is_valid_identifier;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
@@ -62,7 +62,7 @@ impl Imports {
             map.insert(Import::Implicit, module);
         }
 
-        for import in &ast.imports {
+        for import in ast.imports.iter() {
             let module = Module::from_import(parent, import.path.as_str());
 
             // get identifier and check if valid
@@ -74,7 +74,7 @@ impl Imports {
                         is_valid_identifier(ident.as_str()),
                         || ProblemKind::InvalidIdentifier(()).at(parent, &ident),
                     ));
-                    ident.0.0
+                    ident.value
                 }
             };
 
@@ -110,7 +110,10 @@ impl Imports {
             .unwrap_or(without_extension);
         let start = path.span().start + 1 + (without_extension.len() - ident.len()) as u32;
 
-        Spanned(inner::Ident(ident.into()), Span::new(start, end))
+        ast::Ident {
+            token: ast::Token(Span::new(start, end)),
+            value: ident.into(),
+        }
     }
     fn require_import_exists(
         resolver: &impl ModuleResolver,

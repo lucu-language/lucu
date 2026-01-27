@@ -9,7 +9,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
 use crate::ast;
-use crate::ast::visit::{Ast, Combine, Visitor, visit_option_vec};
+use crate::ast::visit::{Ast, Combine, Visitor, visit_option};
 use crate::error::{ProblemKind, Problems, Result};
 use crate::module::Module;
 use crate::pass::defs::err::MultipleDefinitions;
@@ -37,7 +37,7 @@ impl Visitor for DefinitionPaths {
             } else {
                 im::HashSet::new()
             },
-            visit_option_vec(&path.generics, self),
+            visit_option(&path.generics, self, Visitor::visit),
         ])
     }
     fn visit_struct(self, _struc: &ast::Struct) -> Self::Output<'_> {
@@ -53,17 +53,17 @@ impl Visitor for DefinitionPaths {
 
 #[derive(Debug, Default)]
 pub struct Definitions {
-    defs: Vec<Definition>,
+    defs: Vec<Item>,
     graph: Acyclic<DiGraph<CompactString, Edge>>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Definition {
+pub struct Item {
     parent: Option<NodeIndex>,
     index: usize,
 }
 
-impl Definition {
+impl Item {
     pub fn top(definition: usize) -> Self {
         Self {
             index: definition,
@@ -79,57 +79,56 @@ impl Definition {
 }
 
 impl ast::Module {
-    fn definition(&self, node: NodeIndex, defs: &[Definition]) -> &ast::Definition {
-        self.definition_with_parent(node, defs).0
+    fn item(&self, node: NodeIndex, defs: &[Item]) -> &ast::Item {
+        self.item_with_parent(node, defs).0
     }
-    fn definition_with_parent(
-        &self,
-        node: NodeIndex,
-        defs: &[Definition],
-    ) -> (&ast::Definition, Option<&ast::Definition>) {
+    fn item_with_parent(&self, node: NodeIndex, defs: &[Item]) -> (&ast::Item, Option<&ast::Item>) {
         let module_definition = defs[node.index()];
         match module_definition.parent {
             Some(parent_node) => {
-                let parent = self.definition(parent_node, defs);
-                (&parent.children()[module_definition.index], Some(parent))
+                let parent = self.item(parent_node, defs);
+                (
+                    &parent.children().elements[module_definition.index].0,
+                    Some(parent),
+                )
             }
-            None => (&self.definitions[module_definition.index], None),
+            None => (&self.items.elements[module_definition.index].0, None),
         }
     }
     fn remove_generics(
         &self,
         node: NodeIndex,
-        defs: &[Definition],
+        defs: &[Item],
         gens: &mut im::HashSet<&str>,
-    ) -> &ast::Definition {
+    ) -> &ast::Item {
         let module_definition = defs[node.index()];
         let ast = match module_definition.parent {
             Some(parent_node) => {
                 let parent = self.remove_generics(parent_node, defs, gens);
-                &parent.children()[module_definition.index]
+                &parent.children().elements[module_definition.index].0
             }
-            None => &self.definitions[module_definition.index],
+            None => &self.items.elements[module_definition.index].0,
         };
-        gens.retain(|&i| !ast.generics().iter().any(|g| g.name.as_str() == i));
+        gens.retain(|&i| !ast.generics().iter().any(|g| g.name.ident.as_str() == i));
         ast
     }
 }
 
 impl Definitions {
-    pub fn postorder<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Definition> {
+    pub fn postorder<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Item> {
         self.graph
             .nodes_iter()
             .rev()
-            .map(|idx| ast.definition(idx, &self.defs))
+            .map(|idx| ast.item(idx, &self.defs))
     }
     pub fn postorder_with_parent<'a>(
         &self,
         ast: &'a ast::Module,
-    ) -> impl Iterator<Item = (&'a ast::Definition, Option<&'a ast::Definition>)> {
+    ) -> impl Iterator<Item = (&'a ast::Item, Option<&'a ast::Item>)> {
         self.graph
             .nodes_iter()
             .rev()
-            .map(|idx| ast.definition_with_parent(idx, &self.defs))
+            .map(|idx| ast.item_with_parent(idx, &self.defs))
     }
     pub fn indices(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
         self.graph.node_indices()
@@ -154,8 +153,8 @@ impl Definitions {
         let mut scope = HashMap::new();
         let mut defs = Vec::new();
 
-        for (idx, def) in ast.definitions.iter().enumerate() {
-            Self::add_definition(&mut graph, &mut scope, &mut defs, def, Definition::top(idx));
+        for (idx, def) in ast.items.iter().enumerate() {
+            Self::add_item(&mut graph, &mut scope, &mut defs, def, Item::top(idx));
         }
 
         // gaze upon this majestic code
@@ -172,7 +171,7 @@ impl Definitions {
                                     redefined: rest
                                         .iter()
                                         .map(|&node| {
-                                            ast.definition(node, &defs)
+                                            ast.item(node, &defs)
                                                 .name()
                                                 .expect("ICE: named definition has no name")
                                                 .ident
@@ -182,7 +181,7 @@ impl Definitions {
                                 })
                                 .at(
                                     module,
-                                    &ast.definition(first, &defs)
+                                    &ast.item(first, &defs)
                                         .name()
                                         .expect("ICE: named definition has no name")
                                         .ident,
@@ -195,7 +194,7 @@ impl Definitions {
             .unwrap_or_default();
 
         for parent in (0..graph.node_count()).map(NodeIndex::new) {
-            let def = ast.definition(parent, &defs);
+            let def = ast.item(parent, &defs);
             let mut names = def.visit(DefinitionPaths);
             ast.remove_generics(parent, &defs, &mut names);
 
@@ -223,14 +222,14 @@ impl Definitions {
             problems.with(Self { defs, graph })
         }
     }
-    fn add_definition(
+    fn add_item(
         graph: &mut DiGraph<CompactString, Edge>,
         scope: &mut HashMap<CompactString, Vec<NodeIndex>>,
-        defs: &mut Vec<Definition>,
-        ast: &ast::Definition,
-        def: Definition,
+        defs: &mut Vec<Item>,
+        ast: &ast::Item,
+        def: Item,
     ) {
-        let name = ast.name().map(|name| name.as_str()).map(CompactString::new);
+        let name = ast.name().map(|name| name.ident.value.clone());
         let node = graph.add_node(name.clone().unwrap_or_default());
         defs.push(def);
 
@@ -241,7 +240,7 @@ impl Definitions {
             graph.update_edge(node, parent, Edge);
         }
         for (idx, child) in ast.children().iter().enumerate() {
-            Self::add_definition(graph, scope, defs, child, Definition::child(node, idx));
+            Self::add_item(graph, scope, defs, child, Item::child(node, idx));
         }
     }
 }

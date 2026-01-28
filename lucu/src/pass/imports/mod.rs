@@ -96,7 +96,7 @@ impl Imports {
 
         inner
     }
-    fn import_name(path: &ast::String) -> ast::Ident {
+    fn import_name(path: &ast::String) -> ast::Identifier {
         let without_extension = path
             .as_str()
             .rsplit_once('.')
@@ -110,7 +110,7 @@ impl Imports {
             .unwrap_or(without_extension);
         let start = path.span().start + 1 + (without_extension.len() - ident.len()) as u32;
 
-        ast::Ident {
+        ast::Identifier {
             token: ast::Token(Span::new(start, end)),
             value: ident.into(),
         }

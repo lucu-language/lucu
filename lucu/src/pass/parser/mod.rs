@@ -35,10 +35,35 @@ impl<'a> Parser<'a> {
             };
         }
     }
-    pub fn ident(&mut self) -> Result<ast::Ident> {
+    pub fn character(&mut self) -> Result<ast::Character> {
+        m! {
+            token <- self.consume(Literal::Character);
+            return ast::Character {
+                token,
+                value: (&self.source[token.0.inner()]).to_compact_string()
+            };
+        }
+    }
+    pub fn integer(&mut self) -> Result<ast::Integer> {
+        match self.next().token {
+            TokenEnum::Literal(Literal::Zero) => Result::new(ast::Integer {
+                token: self.skip(),
+                value: 0,
+            }),
+            TokenEnum::Literal(Literal::Integer) => {
+                let token = self.skip();
+                let value = self.source[token.0]
+                    .parse()
+                    .expect("ICE: could not parse lexed integer");
+                Result::new(ast::Integer { token, value })
+            }
+            _ => self.error(Expected::Token(TokenEnum::Literal(Literal::Integer))),
+        }
+    }
+    pub fn ident(&mut self) -> Result<ast::Identifier> {
         m! {
             token <- self.consume(TokenEnum::Identifier);
-            return ast::Ident {
+            return ast::Identifier {
                 token,
                 value: (&self.source[token.0]).to_compact_string()
             };
@@ -185,15 +210,17 @@ impl<'a> Parser<'a> {
         match self.next().token {
             TokenEnum::Identifier => self.path(false).map(ast::GenericArgument::Path),
             _ if self.starts_type() => self.r#type().map(ast::GenericArgument::Type),
-            _ if self.starts_constant() => self.constant().map(ast::GenericArgument::Constant),
+            _ if self.starts_constant() => self
+                .constant(Expected::Constant)
+                .map(ast::GenericArgument::Constant),
             _ => self.error(Expected::GenericArgument),
         }
     }
     fn starts_constant(&self) -> bool {
-        false
-    }
-    pub fn constant(&mut self) -> Result<Box<ast::Constant>> {
-        todo!()
+        matches!(
+            self.next().token,
+            TokenEnum::Identifier | TokenEnum::Literal(_)
+        )
     }
     fn starts_type(&self) -> bool {
         matches!(
@@ -206,17 +233,6 @@ impl<'a> Parser<'a> {
                 | TokenEnum::Keyword(Keyword::Struct)
         )
     }
-    fn starts_slice(&self) -> bool {
-        matches!(
-            self.tokens.get(1).map(|t| t.token),
-            Some(
-                // slice
-                TokenEnum::Close(Group::Bracket) |
-                // null terminated slice
-                TokenEnum::Symbol(Symbol::Colon)
-            )
-        )
-    }
     pub fn pointer_region(&mut self) -> Result<ast::PointerRegion> {
         m! {
             at <- self.consume(Symbol::At);
@@ -224,53 +240,52 @@ impl<'a> Parser<'a> {
             return ast::PointerRegion { at, region };
         }
     }
+    pub fn sentinel(&mut self) -> Result<ast::Sentinel> {
+        m! {
+            colon <- self.consume(Symbol::Colon);
+            zero <- self.consume(Literal::Zero);
+            return ast::Sentinel { colon, zero };
+        }
+    }
+    pub fn array_properties(&mut self) -> Result<ast::ArrayProperties> {
+        m! {
+            size <- self.unless_next(&[TokenEnum::Symbol(Symbol::Colon)], |parser| parser.constant(Expected::UsizeConstant));
+            sentinel <- self.when_next(Symbol::Colon, Parser::sentinel);
+            return ast::ArrayProperties { size, sentinel };
+        }
+    }
+    pub fn constant(&mut self, expected: Expected) -> Result<Box<ast::Constant>> {
+        match self.next().token {
+            TokenEnum::Identifier => self.path(false).map(ast::Constant::Path),
+            TokenEnum::Literal(l) => match l {
+                Literal::String => self.string().map(ast::Constant::String),
+                Literal::Character => self.character().map(ast::Constant::Character),
+                Literal::Integer => self.integer().map(ast::Constant::Integer),
+                Literal::Zero => Result::new(ast::Constant::Zero(self.skip())),
+            },
+            _ => self.error(expected),
+        }
+        .map(Box::new)
+    }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         match self.next().token {
             TokenEnum::Identifier => self.path(false).map(ast::Type::Path),
             TokenEnum::Symbol(Symbol::Caret) => {
                 // Pointer
-                let pointer = self.skip();
-                self.when_next(Symbol::At, Parser::pointer_region).and_then(|region| {
-                    if self.is_next(TokenEnum::Open(Group::Bracket)) && self.starts_slice() {
-                        // Pointer to some slice
-                        let open = self.skip();
-                        match self.next().token {
-                            TokenEnum::Close(Group::Bracket) => {
-                                // Pointer to slice
-                                m! {
-                                    let close = self.skip();
-                                    let grouped = ast::Grouped { open, inner: (), close };
-                                    inner <- self.r#type();
-                                    return ast::Type::PointerSlice(pointer, grouped, region, inner);
-                                }
-                            }
-                            TokenEnum::Symbol(Symbol::Colon) => {
-                                // Pointer to null-terminated slice
-                                m! {
-                                    let colon = self.skip();
-                                    zero <- self.consume(Literal::Zero).tap_none(|| self.skip_group(Group::Bracket));
-                                    close <- self.consume(TokenEnum::Close(Group::Bracket)).tap_none(|| self.skip_group(Group::Bracket));
-                                    let grouped = ast::Grouped { open, inner: ast::NullTerminated { colon, zero }, close };
-                                    inner <- self.r#type();
-                                    return ast::Type::PointerSliceNullTerminated(pointer, grouped, region, inner);
-                                }
-                            }
-                            _ => unreachable!(),
-                        }
-                    } else {
-                        // Pointer to non-slice
-                        m! {
-                            inner <- self.r#type();
-                            return ast::Type::Pointer(pointer, region, inner);
-                        }
-                    }
-                })
+                m! {
+                    let pointer = self.skip();
+                    region <- self.when_next(Symbol::At, Parser::pointer_region);
+                    inner <- self.r#type();
+                    return ast::Type::Pointer(pointer, region, inner);
+                }
             }
             TokenEnum::Open(Group::Bracket) => {
-                if self.starts_slice() {
-                    todo!("error: needs pointer syntax")
+                // Array
+                m! {
+                    properties <- self.grouped(Group::Bracket, Parser::array_properties);
+                    inner <- self.r#type();
+                    return ast::Type::Array(properties, inner);
                 }
-                todo!("constant sized array")
             }
             _ => self.error(Expected::Type),
         }
@@ -491,18 +506,25 @@ impl<'a> Parser<'a> {
             }
         }
     }
+    fn grouped<T>(
+        &mut self,
+        group: Group,
+        parse: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<ast::Grouped<T>> {
+        m! {
+            open <- self.consume(TokenEnum::Open(group));
+            inner <- parse(self).tap_none(|| self.skip_group(group));
+            close <- self.consume(TokenEnum::Close(group)).tap_none(|| self.skip_group(group));
+            return ast::Grouped { open, inner, close };
+        }
+    }
     fn many_grouped<T>(
         &mut self,
         group: Group,
         separator: Symbol,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Grouped<ast::Separated<T>>> {
-        m! {
-            open <- self.consume(TokenEnum::Open(group));
-            inner <- self.many(separator, parse).tap_none(|| self.skip_group(group));
-            close <- self.consume(TokenEnum::Close(group)).tap_none(|| self.skip_group(group));
-            return ast::Grouped { open, inner, close };
-        }
+        self.grouped(group, |parser| parser.many(separator, parse))
     }
     fn many<T>(
         &mut self,

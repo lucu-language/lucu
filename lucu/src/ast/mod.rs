@@ -29,15 +29,33 @@ impl String {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Ident {
+pub struct Character {
     pub token: Token,
     pub value: CompactString,
 }
 
-impl Ident {
+impl Character {
     pub fn as_str(&self) -> &str {
         &self.value
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Identifier {
+    pub token: Token,
+    pub value: CompactString,
+}
+
+impl Identifier {
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Integer {
+    pub token: Token,
+    pub value: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,7 +68,7 @@ pub struct Module {
 pub struct Import {
     pub import: Token,
     pub path: String,
-    pub ident: Option<Ident>,
+    pub ident: Option<Identifier>,
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -100,7 +118,7 @@ pub enum Kind {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Name {
-    pub ident: Ident,
+    pub ident: Identifier,
     pub generics: Option<GenericParameters>,
 }
 
@@ -120,15 +138,15 @@ pub enum GenericArgument {
 
 #[derive(PartialEq, Eq)]
 pub struct Path {
-    pub package: Option<(Ident, Token)>,
-    pub name: Ident,
+    pub package: Option<(Identifier, Token)>,
+    pub name: Identifier,
     pub generics: Option<GenericArguments>,
 }
 
 pub type GenericArguments = Grouped<Separated<GenericArgument>>;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct NullTerminated {
+pub struct Sentinel {
     pub colon: Token,
     pub zero: Token,
 }
@@ -139,24 +157,28 @@ pub struct PointerRegion {
     pub region: Path,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArrayProperties {
+    pub size: Option<Box<Constant>>,
+    pub sentinel: Option<Sentinel>,
+}
+
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Type::")]
 pub enum Type {
     Path(Path),
+    Array(Grouped<ArrayProperties>, Box<Type>),
     Pointer(Token, Option<PointerRegion>, Box<Type>),
-    PointerSlice(Token, Grouped<()>, Option<PointerRegion>, Box<Type>),
-    PointerSliceNullTerminated(
-        Token,
-        Grouped<NullTerminated>,
-        Option<PointerRegion>,
-        Box<Type>,
-    ),
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Constant::")]
 pub enum Constant {
-    // TODO
+    Path(Path),
+    Integer(Integer),
+    String(String),
+    Character(Character),
+    Zero(Token),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -186,7 +208,7 @@ pub enum Returns {
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "FunctionParameter::")]
 pub enum Parameter {
-    Data(Ident, Box<Type>),
+    Data(Identifier, Box<Type>),
     Lambda(FunctionDeclaration),
 }
 
@@ -199,7 +221,7 @@ pub struct Struct {
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "StructMember::")]
 pub enum StructMember {
-    Data(Ident, Box<Type>),
+    Data(Identifier, Box<Type>),
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -264,7 +286,7 @@ impl HasSpan for String {
     }
 }
 
-impl HasSpan for Ident {
+impl HasSpan for Identifier {
     fn span(&self) -> Span {
         self.token.0
     }
@@ -392,13 +414,36 @@ impl HasSpan for GenericParameter {
     }
 }
 
+impl HasSpan for ArrayProperties {
+    fn span(&self) -> Span {
+        let start = self
+            .size
+            .as_ref()
+            .map(HasSpan::span)
+            .or_else(|| self.sentinel.as_ref().map(HasSpan::span))
+            .expect("ICE: trying to get span of empty array properties")
+            .start;
+        let end = self
+            .sentinel
+            .as_ref()
+            .map(HasSpan::span)
+            .or_else(|| self.size.as_ref().map(HasSpan::span))
+            .unwrap()
+            .end;
+        Span { start, end }
+    }
+}
+
 impl HasSpan for Type {
     fn span(&self) -> Span {
         match self {
             Type::Path(path) => path.span(),
-            Type::Pointer(token, _, ty)
-            | Type::PointerSlice(token, _, _, ty)
-            | Type::PointerSliceNullTerminated(token, _, _, ty) => {
+            Type::Array(group, ty) => {
+                let start = group.span().start;
+                let end = ty.span().end;
+                Span { start, end }
+            }
+            Type::Pointer(token, _, ty) => {
                 let start = token.span().start;
                 let end = ty.span().end;
                 Span { start, end }
@@ -435,9 +480,27 @@ impl HasSpan for GenericArgument {
     }
 }
 
+impl HasSpan for Integer {
+    fn span(&self) -> Span {
+        self.token.span()
+    }
+}
+
+impl HasSpan for Character {
+    fn span(&self) -> Span {
+        self.token.span()
+    }
+}
+
 impl HasSpan for Constant {
     fn span(&self) -> Span {
-        match *self {}
+        match self {
+            Constant::Path(path) => path.span(),
+            Constant::Integer(integer) => integer.span(),
+            Constant::String(string) => string.span(),
+            Constant::Character(character) => character.span(),
+            Constant::Zero(token) => token.span(),
+        }
     }
 }
 
@@ -465,7 +528,7 @@ impl HasSpan for Name {
     }
 }
 
-impl HasSpan for NullTerminated {
+impl HasSpan for Sentinel {
     fn span(&self) -> Span {
         let start = self.colon.span().start;
         let end = self.zero.span().end;

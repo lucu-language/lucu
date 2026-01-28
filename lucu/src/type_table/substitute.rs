@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::type_table::unapply::Unapply;
 use crate::type_table::{
-    Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Term,
-    Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
+    FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region,
+    RegionEnum, Sentinel, Term, Type, TypeEnum, TypeTable,
 };
 
 pub trait Substitute {
@@ -186,6 +186,7 @@ impl Substitute for Term {
             Term::Type(ty) => Term::Type(ty.subst(tt, start, args)),
             Term::Region(region) => Term::Region(region.subst(tt, start, args)),
             Term::Effect(effect) => Term::Effect(effect.subst(tt, start, args)),
+            Term::Constant(constant) => Term::Constant(constant.subst(tt, start, args)),
         }
     }
     fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
@@ -193,6 +194,7 @@ impl Substitute for Term {
             Term::Type(ty) => Term::Type(ty.shift(tt, start, offset)),
             Term::Region(region) => Term::Region(region.shift(tt, start, offset)),
             Term::Effect(effect) => Term::Effect(effect.shift(tt, start, offset)),
+            Term::Constant(constant) => Term::Constant(constant.shift(tt, start, offset)),
         }
     }
     fn infer(
@@ -206,7 +208,98 @@ impl Substitute for Term {
             (Term::Type(a), Term::Type(b)) => a.infer(b, tt, start, args),
             (Term::Region(a), Term::Region(b)) => a.infer(b, tt, start, args),
             (Term::Effect(a), Term::Effect(b)) => a.infer(b, tt, start, args),
+            (Term::Constant(a), Term::Constant(b)) => a.infer(b, tt, start, args),
             _ => unreachable!(),
+        }
+    }
+}
+
+impl Substitute for Constant {
+    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        let changed = match tt[self] {
+            ConstantEnum::Generic(ref generic) => {
+                let index = generic.index.checked_sub(start);
+                let generic = generic.clone().subst(tt, start, args);
+                // generics have *reversed* indices
+                if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
+                    match generic.instantiate(tt, start, args[index]) {
+                        Term::Constant(ty) => return ty,
+                        _ => panic!("ICE: unexpected kind of generic argument"),
+                    }
+                } else {
+                    ConstantEnum::Generic(generic)
+                }
+            }
+            ConstantEnum::True
+            | ConstantEnum::False
+            | ConstantEnum::Integer(_)
+            | ConstantEnum::String(_)
+            | ConstantEnum::Character(_)
+            | ConstantEnum::Zero => return self,
+        };
+        tt.insert_constant(changed)
+    }
+    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+        let changed = match tt[self] {
+            ConstantEnum::Generic(ref generic) => {
+                ConstantEnum::Generic(generic.clone().shift(tt, start, offset))
+            }
+            ConstantEnum::True
+            | ConstantEnum::False
+            | ConstantEnum::Integer(_)
+            | ConstantEnum::String(_)
+            | ConstantEnum::Character(_)
+            | ConstantEnum::Zero => return self,
+        };
+        tt.insert_constant(changed)
+    }
+    fn infer(
+        self,
+        from: Self,
+        tt: &mut TypeTable,
+        start: usize,
+        args: &mut Vec<Option<GenericArgument>>,
+    ) -> Option<()> {
+        match (&tt[self], &tt[from]) {
+            (ConstantEnum::Generic(param), _) if param.index >= start => {
+                let param = param.clone();
+                let arity = param.apply.as_deref().map(<[_]>::len);
+                let inner = match param.apply {
+                    Some(self_args) => {
+                        // FIXME: unapply might fail while we can still infer
+                        // like `0 u32` and `u32` should infer the generic '0' to be `lambda u32`
+                        let (dummy, from_args) = from.unapply(tt)?;
+                        self_args.infer(from_args, tt, start, args);
+                        dummy
+                    }
+                    None => from,
+                };
+                let arg = GenericArgument {
+                    term: Term::Constant(inner),
+                    arity,
+                };
+                (*args[param.index - start].get_or_insert(arg) == arg).then_some(())
+            }
+
+            (ConstantEnum::Generic(a), ConstantEnum::Generic(b)) => {
+                a.clone().infer(b.clone(), tt, start, args)
+            }
+            (ConstantEnum::True, ConstantEnum::True) => Some(()),
+            (ConstantEnum::False, ConstantEnum::False) => Some(()),
+            (ConstantEnum::Integer(a), ConstantEnum::Integer(b)) => (a == b).then_some(()),
+            (ConstantEnum::String(a), ConstantEnum::String(b)) => (a == b).then_some(()),
+            (ConstantEnum::Character(a), ConstantEnum::Character(b)) => (a == b).then_some(()),
+            (ConstantEnum::Integer(a), ConstantEnum::Zero)
+            | (ConstantEnum::Zero, ConstantEnum::Integer(a)) => (a == &0).then_some(()),
+            (ConstantEnum::Zero, ConstantEnum::Zero) => Some(()),
+
+            (ConstantEnum::Generic(_), _) => None,
+            (ConstantEnum::True, _) => None,
+            (ConstantEnum::False, _) => None,
+            (ConstantEnum::Integer(_), _) => None,
+            (ConstantEnum::String(_), _) => None,
+            (ConstantEnum::Character(_), _) => None,
+            (ConstantEnum::Zero, _) => None,
         }
     }
 }
@@ -231,15 +324,18 @@ impl Substitute for Type {
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
-            TypeEnum::PointerSlice(ty, region) => {
-                TypeEnum::PointerSlice(ty.subst(tt, start, args), region.subst(tt, start, args))
-            }
-            TypeEnum::PointerSliceNullTerminated(ty, region) => {
-                TypeEnum::PointerSliceNullTerminated(
-                    ty.subst(tt, start, args),
-                    region.subst(tt, start, args),
-                )
-            }
+            TypeEnum::PointerSlice(ty, region, sentinel) => TypeEnum::PointerSlice(
+                ty.subst(tt, start, args),
+                region.subst(tt, start, args),
+                // TODO: substitute when we allow more sentinels
+                sentinel,
+            ),
+            TypeEnum::Array(ty, size, sentinel) => TypeEnum::Array(
+                ty.subst(tt, start, args),
+                size.subst(tt, start, args),
+                // TODO: substitute when we allow more sentinels
+                sentinel,
+            ),
             TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };
         tt.insert_type(changed)
@@ -253,15 +349,18 @@ impl Substitute for Type {
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.shift(tt, start, offset), region.shift(tt, start, offset))
             }
-            TypeEnum::PointerSlice(ty, region) => {
-                TypeEnum::PointerSlice(ty.shift(tt, start, offset), region.shift(tt, start, offset))
-            }
-            TypeEnum::PointerSliceNullTerminated(ty, region) => {
-                TypeEnum::PointerSliceNullTerminated(
-                    ty.shift(tt, start, offset),
-                    region.shift(tt, start, offset),
-                )
-            }
+            TypeEnum::PointerSlice(ty, region, sentinel) => TypeEnum::PointerSlice(
+                ty.shift(tt, start, offset),
+                region.shift(tt, start, offset),
+                // TODO: shift when we allow more sentinels
+                sentinel,
+            ),
+            TypeEnum::Array(ty, size, sentinel) => TypeEnum::Array(
+                ty.shift(tt, start, offset),
+                size.shift(tt, start, offset),
+                // TODO: shift when we allow more sentinels
+                sentinel,
+            ),
             TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
         };
         tt.insert_type(changed)
@@ -302,13 +401,22 @@ impl Substitute for Type {
             (TypeEnum::Boolean, TypeEnum::Boolean) => Some(()),
             (TypeEnum::Unit, TypeEnum::Unit) => Some(()),
             (&TypeEnum::Pointer(ta, ra), &TypeEnum::Pointer(tb, rb))
-            | (&TypeEnum::PointerSlice(ta, ra), &TypeEnum::PointerSlice(tb, rb))
+            | (&TypeEnum::PointerSlice(ta, ra, None), &TypeEnum::PointerSlice(tb, rb, None))
             | (
-                &TypeEnum::PointerSliceNullTerminated(ta, ra),
-                &TypeEnum::PointerSliceNullTerminated(tb, rb),
+                &TypeEnum::PointerSlice(ta, ra, Some(Sentinel)),
+                &TypeEnum::PointerSlice(tb, rb, Some(Sentinel)),
             ) => {
                 ta.infer(tb, tt, start, args)?;
                 ra.infer(rb, tt, start, args)?;
+                Some(())
+            }
+            (&TypeEnum::Array(ta, sa, None), &TypeEnum::Array(tb, sb, None))
+            | (
+                &TypeEnum::Array(ta, sa, Some(Sentinel)),
+                &TypeEnum::Array(tb, sb, Some(Sentinel)),
+            ) => {
+                ta.infer(tb, tt, start, args)?;
+                sa.infer(sb, tt, start, args)?;
                 Some(())
             }
 
@@ -318,8 +426,8 @@ impl Substitute for Type {
             (TypeEnum::Boolean, _) => None,
             (TypeEnum::Unit, _) => None,
             (TypeEnum::Pointer(_, _), _) => None,
-            (TypeEnum::PointerSlice(_, _), _) => None,
-            (TypeEnum::PointerSliceNullTerminated(_, _), _) => None,
+            (TypeEnum::PointerSlice(_, _, _), _) => None,
+            (TypeEnum::Array(_, _, _), _) => None,
         }
     }
 }

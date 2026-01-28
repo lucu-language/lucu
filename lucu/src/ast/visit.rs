@@ -318,16 +318,38 @@ impl Ast for ast::PointerRegion {
     }
 }
 
+impl Ast for ast::Sentinel {
+    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
+        V::Output::default()
+    }
+    fn node_name(&self) -> &'static str {
+        "Sentinel"
+    }
+}
+
+impl Ast for ast::ArrayProperties {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        V::Output::combine([
+            visit_option(&self.size, visitor, |v, c| v.visit(&**c)),
+            visit_option(&self.sentinel, visitor, Visitor::visit),
+        ])
+    }
+    fn node_name(&self) -> &'static str {
+        "ArrayProperties"
+    }
+}
+
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::Type::Pointer(_, region, ty)
-            | ast::Type::PointerSlice(_, _, region, ty)
-            | ast::Type::PointerSliceNullTerminated(_, _, region, ty) => V::Output::combine([
+            ast::Type::Pointer(_, region, ty) => V::Output::combine([
                 visit_option(region, visitor, Visitor::visit),
                 visitor.visit(&**ty),
             ]),
             ast::Type::Path(path) => visitor.visit_path(path),
+            ast::Type::Array(grouped, ty) => {
+                V::Output::combine([visitor.visit(&grouped.inner), visitor.visit(&**ty)])
+            }
         }
     }
     fn node_name(&self) -> &'static str {
@@ -386,8 +408,14 @@ impl Ast for ast::GenericArgument {
 }
 
 impl Ast for ast::Constant {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        match *self {}
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        match self {
+            ast::Constant::Path(path) => visitor.visit_path(path),
+            ast::Constant::Integer(integer) => visitor.visit(integer),
+            ast::Constant::String(string) => visitor.visit(string),
+            ast::Constant::Character(character) => visitor.visit(character),
+            ast::Constant::Zero(_) => V::Output::default(),
+        }
     }
     fn node_name(&self) -> &'static str {
         self.into()
@@ -427,11 +455,29 @@ impl Ast for ast::String {
     }
 }
 
-impl Ast for ast::Ident {
+impl Ast for ast::Identifier {
     fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
         V::Output::default()
     }
     fn node_name(&self) -> &'static str {
-        "Ident"
+        "Identifier"
+    }
+}
+
+impl Ast for ast::Integer {
+    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
+        V::Output::default()
+    }
+    fn node_name(&self) -> &'static str {
+        "Integer"
+    }
+}
+
+impl Ast for ast::Character {
+    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
+        V::Output::default()
+    }
+    fn node_name(&self) -> &'static str {
+        "Character"
     }
 }

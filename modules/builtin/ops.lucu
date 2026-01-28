@@ -16,6 +16,8 @@ type RangeNullTerminated[T] = struct(
 	end usize,
 )
 
+-- POINTER TO SLICE
+
 handle[E, R region] Index[^@R []E, usize, ^@R E] {
 	fun index(slice ^@R []E, index usize) ^@R E
 		= #intrinsic
@@ -25,9 +27,8 @@ handle[E, R region] Index[^@R []E, Range, ^@R []E] {
 		= #intrinsic
 }
 handle[E, R region] Index[^@R []E, RangeOpen, ^@R []E] {
-	fun index(slice ^@R []E, range RangeOpen) ^@R []E = {
-		-- slice[range.start..len(slice)]
-	}
+	fun index(slice ^@R []E, range RangeOpen) ^@R []E
+		= #intrinsic
 }
 handle[E, R region] Index[^@R []E, RangeNullTerminated[E], ^@R [:0]E] with Read[R] {
 	fun index(slice ^@R []E, range RangeNullTerminated[E]) ^@R [:0]E = {
@@ -36,7 +37,9 @@ handle[E, R region] Index[^@R []E, RangeNullTerminated[E], ^@R [:0]E] with Read[
 	}
 }
 
+-- POINTER TO SLICE WITH SENTINEL
 -- the following are all "unsafe": there's no good way of checking for OOB
+
 handle[E, R region] Index[^@R [:0]E, usize, ^@R E] {
 	fun index(slice ^@R [:0]E, index usize) ^@R E
 		= #intrinsic
@@ -56,23 +59,64 @@ handle[E, R region] Index[^@R [:0]E, RangeNullTerminated[E], ^@R [:0]E] with Rea
 	}
 }
 
+-- ARRAY
+
+handle[E, N usize] Index[[N]E, usize, E] {
+	fun index(array [N]E, index usize) E
+		= #intrinsic
+}
+
+-- ARRAY WITH SENTINEL
+
+handle[E, N usize] Index[[N:0]E, usize, E] {
+	fun index(array [N:0]E, index usize) E
+		= #intrinsic
+}
+
+-- POINTER TO ARRAY
+
+handle[E, N usize, R region] Index[^@R [N]E, usize, ^@R E] {
+	fun index(array_ptr ^@R [N]E, index usize) ^@R E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N]E, Range, ^@R []E] {
+	fun index(array_ptr ^@R [N]E, range Range) ^@R []E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N]E, RangeOpen, ^@R []E] {
+	fun index(array_ptr ^@R [N]E, range RangeOpen) ^@R []E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R] {
+	fun index(array_ptr ^@R [N]E, range RangeNullTerminated[E]) ^@R [:0]E = {
+		-- assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
+		-- #cast array_ptr[range.start..range.end]
+	}
+}
+
+-- POINTER TO ARRAY WITH SENTINEL
+
+handle[E, N usize, R region] Index[^@R [N:0]E, usize, ^@R E] {
+	fun index(array_ptr ^@R [N:0]E, index usize) ^@R E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N:0]E, Range, ^@R []E] {
+	fun index(array_ptr ^@R [N:0]E, range Range) ^@R []E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N:0]E, RangeOpen, ^@R [:0]E] {
+	fun index(array_ptr ^@R [N:0]E, range RangeOpen) ^@R [:0]E
+		= #intrinsic
+}
+handle[E, N usize, R region] Index[^@R [N:0]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R] {
+	fun index(array_ptr ^@R [N:0]E, range RangeNullTerminated[E]) ^@R [:0]E = {
+		-- assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
+		-- #cast array_ptr[range.start..range.end]
+	}
+}
+
 -- -- if we eventually allow dependent kinds:
 -- type RangeTerminated[T, SENTINEL T] = struct(start usize, end usize)
 -- type RangeNullTerminated[T]         = RangeTerminated[T, 0]
-
--- handle[E, N usize          ] Index[    [N  ]E, usize,     E]
--- handle[E, N usize          ] Index[    [N:0]E, usize,     E]
--- handle[E, N usize, R region] Index[^@R [N  ]E, usize, ^@R E]
--- handle[E, N usize, R region] Index[^@R [N:0]E, usize, ^@R E]
-
--- handle[E, N usize, R region] Index[^@R [N  ]E, Range, ^@R []E]
--- handle[E, N usize, R region] Index[^@R [N:0]E, Range, ^@R []E]
-
--- handle[E, N usize, R region] Index[^@R [N  ]E, RangeOpen, ^@R [  ]E]
--- handle[E, N usize, R region] Index[^@R [N:0]E, RangeOpen, ^@R [:0]E]
-
--- -- here we need Read[R] to check if the slice is indeed null-terminated
--- handle[E, N usize, R region] Index[^@R [N  ]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
--- handle[E, N usize, R region] Index[^@R [N:0]E, RangeNullTerminated[E], ^@R [:0]E] with Read[R]
 
 -- &var[2] should be parsed as (&var)[2]

@@ -55,11 +55,26 @@ handle[E, R region] Slice[^@R [:0]E] with Read[R] {
 	fun len(slice ^@R [:0]E) usize
 		= #intrinsic
 }
-
--- handle[E,           N usize] Slice[    [N  ]E]
--- handle[E,           N usize] Slice[    [N:0]E]
--- handle[E, R region, N usize] Slice[^@R [N  ]E]
--- handle[E, R region, N usize] Slice[^@R [N:0]E]
+handle[E, N usize] Slice[[N]E] {
+	fun len(array [N]E) usize
+		= {}
+		-- = N
+}
+handle[E, N usize] Slice[[N:0]E] {
+	fun len(array [N:0]E) usize
+		= {}
+		-- = N
+}
+handle[E, R region, N usize] Slice[^@R [N]E] {
+	fun len(array_ptr ^@R [N]E) usize
+		= {}
+		-- = N
+}
+handle[E, R region, N usize] Slice[^@R [N:0]E] {
+	fun len(array_ptr ^@R [N:0]E) usize
+		= {}
+		-- = N
+}
 
 -- printing
 

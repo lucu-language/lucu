@@ -19,6 +19,7 @@ pub struct TypeTable {
     regions: IndexSet<RegionEnum>,
     effects: IndexSet<EffectEnum>,
     function_signatures: IndexSet<FunctionSignatureValue>,
+    constants: IndexSet<ConstantEnum>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -61,6 +62,10 @@ pub struct Item {
     pub apply: Option<Arc<[GenericArgument]>>,
 }
 
+/// Currently only Null-Terminated
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
+pub struct Sentinel;
+
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum TypeEnum {
     Generic(GenericParameter),
@@ -69,8 +74,12 @@ pub enum TypeEnum {
     Boolean,
     Unit,
     Pointer(Type, Region),
-    PointerSlice(Type, Region),
-    PointerSliceNullTerminated(Type, Region),
+    PointerSlice(Type, Region, Option<Sentinel>),
+    Array(Type, Constant, Option<Sentinel>),
+}
+
+impl TypeEnum {
+    pub const USIZE: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Index));
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -138,6 +147,23 @@ impl KindEnum {
         params: None,
         output: SimpleKind::Region,
     };
+    pub const fn constant(ty: Type) -> Self {
+        KindEnum {
+            params: None,
+            output: SimpleKind::Constant(ty),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum ConstantEnum {
+    Generic(GenericParameter),
+    True,
+    False,
+    Integer(u64),
+    String(CompactString),
+    Character(CompactString),
+    Zero,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -153,6 +179,9 @@ pub struct Effect(usize);
 pub struct Kind(usize);
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
+pub struct Constant(usize);
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
 pub struct FunctionSignature(usize);
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -160,6 +189,7 @@ pub enum Term {
     Type(Type),
     Region(Region),
     Effect(Effect),
+    Constant(Constant),
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -218,6 +248,14 @@ impl Index<Kind> for TypeTable {
     }
 }
 
+impl Index<Constant> for TypeTable {
+    type Output = ConstantEnum;
+
+    fn index(&self, index: Constant) -> &Self::Output {
+        &self.constants[index.0]
+    }
+}
+
 impl Index<FunctionSignature> for TypeTable {
     type Output = FunctionSignatureValue;
 
@@ -241,6 +279,9 @@ impl TypeTable {
     }
     pub fn insert_kind(&mut self, value: KindEnum) -> Kind {
         Kind(self.kinds.insert_full(value).0)
+    }
+    pub fn insert_constant(&mut self, value: ConstantEnum) -> Constant {
+        Constant(self.constants.insert_full(value).0)
     }
     pub fn insert_function_signature(
         &mut self,

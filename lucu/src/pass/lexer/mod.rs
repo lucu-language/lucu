@@ -224,18 +224,17 @@ fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) 
             }
 
             let word = &src[..len];
-            if !word.starts_with('_')
+            if word == "0" {
+                Literal(Zero)
+            } else if !word.starts_with('_')
+                && !word.ends_with('_')
                 && word
                     .as_bytes()
                     .iter()
                     .copied()
                     .all(|c| c.is_ascii_digit() || c == b'_')
             {
-                if word == "0" {
-                    Literal(Zero)
-                } else {
-                    Literal(Integer)
-                }
+                Literal(Integer)
             } else {
                 TokenEnum::from_word(word)
             }

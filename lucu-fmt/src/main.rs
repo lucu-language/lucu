@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 use std::io::{self, Read};
 
+use asta_pretty::{Node, Text};
 use lucu::ast;
 use lucu::module::Module;
 use lucu::pass::lexer::Lexer;
 use lucu::pass::parser::Parser;
 use lucu::span::{HasSpan, Span};
-use asta_pretty::{Node, Text};
 
 fn main() -> Result<(), io::Error> {
     // get source
@@ -604,7 +604,7 @@ impl Ast for ast::PointerRegion {
     }
 }
 
-impl Ast for ast::NullTerminated {
+impl Ast for ast::Sentinel {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         nodes.token(self.colon);
         nodes.token(self.zero);
@@ -624,7 +624,18 @@ impl Ast for ast::Grouped<()> {
     }
 }
 
-impl Ast for ast::Grouped<ast::NullTerminated> {
+impl Ast for ast::ArrayProperties {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if let Some(constant) = &self.size {
+            constant.push_nodes(nodes);
+        }
+        if let Some(sentinel) = &self.sentinel {
+            sentinel.push_nodes(nodes);
+        }
+    }
+}
+
+impl Ast for ast::Grouped<ast::ArrayProperties> {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         nodes.token(self.open);
         self.inner.push_nodes(nodes);
@@ -644,22 +655,8 @@ impl Ast for ast::Type {
                 }
                 ty.push_nodes(nodes);
             }
-            ast::Type::PointerSlice(pointer, group, region, ty) => {
-                nodes.token(*pointer);
-                if let Some(region) = region {
-                    region.push_nodes(nodes);
-                    nodes.space();
-                }
-                group.push_nodes(nodes);
-                ty.push_nodes(nodes);
-            }
-            ast::Type::PointerSliceNullTerminated(pointer, group, region, ty) => {
-                nodes.token(*pointer);
-                if let Some(region) = region {
-                    region.push_nodes(nodes);
-                    nodes.space();
-                }
-                group.push_nodes(nodes);
+            ast::Type::Array(props, ty) => {
+                props.push_nodes(nodes);
                 ty.push_nodes(nodes);
             }
         }
@@ -756,8 +753,14 @@ impl Ast for ast::GenericArgument {
 }
 
 impl Ast for ast::Constant {
-    fn push_nodes<'a>(&'a self, _nodes: &mut Nodes<'a>) {
-        match *self {}
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Constant::Path(path) => path.push_nodes(nodes),
+            ast::Constant::Integer(integer) => nodes.token(integer.token),
+            ast::Constant::String(string) => nodes.token(string.token),
+            ast::Constant::Character(character) => nodes.token(character.token),
+            ast::Constant::Zero(token) => nodes.token(*token),
+        }
     }
 }
 

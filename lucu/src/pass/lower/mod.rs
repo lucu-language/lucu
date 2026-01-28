@@ -16,9 +16,10 @@ use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
-    Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind,
-    KindEnum, Region, RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
+    FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer,
+    Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Type, TypeEnum,
+    TypeTable,
 };
 
 struct Lower<'a> {
@@ -639,7 +640,9 @@ impl Lower<'_> {
                     SimpleKind::Region => {
                         Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                     }
-                    SimpleKind::Constant(_) => todo!(),
+                    SimpleKind::Constant(_) => {
+                        Term::Constant(self.tt.insert_constant(ConstantEnum::Generic(param)))
+                    }
                 };
                 (kind, term)
             } else {
@@ -730,21 +733,71 @@ impl Lower<'_> {
                     _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
                 })
             }
-            ast::Type::Pointer(_, region, ty) => m! {
-                ty <- self.r#type(ty, generics);
-                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
-                return self.tt.insert_type(TypeEnum::Pointer(ty, region));
-            },
-            ast::Type::PointerSlice(_, _, region, ty) => m! {
-                ty <- self.r#type(ty, generics);
-                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
-                return self.tt.insert_type(TypeEnum::PointerSlice(ty, region));
-            },
-            ast::Type::PointerSliceNullTerminated(_, _, region, ty) => m! {
-                ty <- self.r#type(ty, generics);
-                region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
-                return self.tt.insert_type(TypeEnum::PointerSliceNullTerminated(ty, region));
-            },
+            ast::Type::Pointer(_, region, ty) => {
+                if let ast::Type::Array(props, inner) = &**ty
+                    && props.inner.size.is_none()
+                {
+                    // pointer to slice
+                    m! {
+                        let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
+                        region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
+                        ty <- self.r#type(inner, generics);
+                        return self.tt.insert_type(TypeEnum::PointerSlice(ty, region, sentinel));
+                    }
+                } else {
+                    // regular pointer
+                    m! {
+                        region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
+                        ty <- self.r#type(ty, generics);
+                        return self.tt.insert_type(TypeEnum::Pointer(ty, region));
+                    }
+                }
+            }
+            ast::Type::Array(props, ty) => {
+                let Some(size) = &props.inner.size else {
+                    todo!("error: naked slice")
+                };
+
+                let usize_ty = self.tt.insert_type(TypeEnum::USIZE);
+                m! {
+                    size <- self.constant(size, generics, usize_ty);
+                    let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
+                    ty <- self.r#type(ty, generics);
+                    return self.tt.insert_type(TypeEnum::Array(ty, size, sentinel));
+                }
+            }
+        }
+    }
+    fn constant(
+        &mut self,
+        constant: &ast::Constant,
+        generics: &Generics,
+        ty: Type,
+    ) -> Result<Constant> {
+        match constant {
+            ast::Constant::Path(path) => {
+                let kind = self.tt.insert_kind(KindEnum::constant(ty));
+                self.term_path(kind, path, generics).map(|path| match path {
+                    Term::Constant(ty) => ty,
+                    _ => {
+                        panic!("ICE: generic argument of kind Constant is not actually a Constant")
+                    }
+                })
+            }
+            // TODO: mark somewhere that the type must be able to be created from these literals
+            ast::Constant::Integer(integer) => Result::new(
+                self.tt
+                    .insert_constant(ConstantEnum::Integer(integer.value)),
+            ),
+            ast::Constant::String(string) => Result::new(
+                self.tt
+                    .insert_constant(ConstantEnum::String(string.value.clone())),
+            ),
+            ast::Constant::Character(character) => Result::new(
+                self.tt
+                    .insert_constant(ConstantEnum::Character(character.value.clone())),
+            ),
+            ast::Constant::Zero(_) => Result::new(self.tt.insert_constant(ConstantEnum::Zero)),
         }
     }
     fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {

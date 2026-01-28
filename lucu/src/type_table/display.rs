@@ -1,9 +1,9 @@
 use std::fmt;
 
 use crate::type_table::{
-    Effect, EffectEnum, FunctionParameter, FunctionReturns, FunctionSignature, GenericArgument,
-    GenericParameter, IntSize, Integer, Item, Kind, KindEnum, Region, RegionEnum, SimpleKind, Term,
-    Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
+    FunctionSignature, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind, KindEnum,
+    Region, RegionEnum, Sentinel, SimpleKind, Term, Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy)]
@@ -94,16 +94,21 @@ impl fmt::Display for Interned<'_, Type> {
             TypeEnum::Pointer(ty, region) => {
                 write!(f, "^(@{}){}", region.display(self.1), ty.display(self.1))
             }
-            TypeEnum::PointerSlice(ty, region) => {
-                write!(f, "^(@{})[]{}", region.display(self.1), ty.display(self.1))
+            TypeEnum::PointerSlice(ty, region, sentinel) => {
+                write!(f, "^(@{})[", region.display(self.1))?;
+                if let Some(Sentinel) = sentinel {
+                    write!(f, ":0")?;
+                }
+                write!(f, "]{}", ty.display(self.1))?;
+                Ok(())
             }
-            TypeEnum::PointerSliceNullTerminated(ty, region) => {
-                write!(
-                    f,
-                    "^(@{})[:0]{}",
-                    region.display(self.1),
-                    ty.display(self.1),
-                )
+            TypeEnum::Array(ty, size, sentinel) => {
+                write!(f, "[{}", size.display(self.1))?;
+                if let Some(Sentinel) = sentinel {
+                    write!(f, ":0")?;
+                }
+                write!(f, "]{}", ty.display(self.1))?;
+                Ok(())
             }
         }
     }
@@ -135,12 +140,29 @@ impl fmt::Display for Interned<'_, Effect> {
     }
 }
 
+impl fmt::Display for Interned<'_, Constant> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.1[self.0] {
+            ConstantEnum::Generic(ref param) => write!(f, "{}", param.display(self.1)),
+            ConstantEnum::True => write!(f, "True"),
+            ConstantEnum::False => write!(f, "False"),
+            ConstantEnum::Integer(integer) => write!(f, "{}", integer),
+            // TODO: unescaping
+            ConstantEnum::String(ref string) => write!(f, "\"{}\"", string),
+            // TODO: unescaping
+            ConstantEnum::Character(ref character) => write!(f, "'{}'", character),
+            ConstantEnum::Zero => write!(f, "0"),
+        }
+    }
+}
+
 impl fmt::Display for Interned<'_, Term> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             Term::Type(ty) => write!(f, "{}", ty.display(self.1)),
             Term::Region(region) => write!(f, "{}", region.display(self.1)),
             Term::Effect(effect) => write!(f, "{}", effect.display(self.1)),
+            Term::Constant(constant) => write!(f, "{}", constant.display(self.1)),
         }
     }
 }
@@ -244,6 +266,17 @@ impl Effect {
         }
     }
 }
+impl Constant {
+    pub fn display(self, tt: &TypeTable) -> impl fmt::Display {
+        Interned(self, tt)
+    }
+    fn enclosed(self, tt: &TypeTable) -> bool {
+        match &tt[self] {
+            ConstantEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
+            _ => false,
+        }
+    }
+}
 impl Term {
     pub fn display(self, tt: &TypeTable) -> impl fmt::Display {
         Interned(self, tt)
@@ -253,6 +286,7 @@ impl Term {
             Term::Type(ty) => ty.enclosed(tt),
             Term::Region(region) => region.enclosed(tt),
             Term::Effect(effect) => effect.enclosed(tt),
+            Term::Constant(constant) => constant.enclosed(tt),
         }
     }
 }

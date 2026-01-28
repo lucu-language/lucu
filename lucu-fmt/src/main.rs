@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
 use std::io::{self, Read};
 
-use lucu::ast::{self, inner};
+use lucu::ast;
 use lucu::module::Module;
 use lucu::pass::lexer::Lexer;
 use lucu::pass::parser::Parser;
+use lucu::span::{HasSpan, Span};
 use lucu_pretty::{Node, Text};
 
 fn main() -> Result<(), io::Error> {
@@ -13,9 +15,11 @@ fn main() -> Result<(), io::Error> {
     let mut handle = stdin.lock();
     handle.read_to_string(&mut source)?;
 
-    let tokens = Lexer::new(&source).collect::<Box<_>>();
+    let mut comments = VecDeque::new();
+    let tokens = Lexer::new(&source)
+        .with_comments(&mut comments)
+        .collect::<Box<_>>();
     let ast = Parser::new(&Module::MAIN, &source, &tokens).module();
-    // TODO: get comments
 
     if ast.has_error() {
         print!("{}", source);
@@ -23,11 +27,16 @@ fn main() -> Result<(), io::Error> {
     }
 
     // format source
-    let mut nodes = Vec::new();
+    let mut nodes = Nodes {
+        source: &source,
+        nodes: Vec::new(),
+        comments,
+        last_token: 0,
+    };
     let ast = ast.value().unwrap();
-    ast.push_nodes(&source, &mut nodes);
+    ast.push_nodes(&mut nodes);
     let text = Text {
-        nodes: &nodes,
+        nodes: &nodes.nodes,
         indent_size: 3,
         maximum_width: 100,
     };
@@ -45,482 +54,717 @@ fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-trait Ast {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>);
+struct Nodes<'a> {
+    source: &'a str,
+    nodes: Vec<Node<'a>>,
+
+    comments: VecDeque<Span>,
+    last_token: u32,
+}
+
+impl<'a> Nodes<'a> {
+    fn push(&mut self, node: Node<'a>) {
+        self.nodes.push(node);
+    }
+    fn space(&mut self) {
+        self.nodes.push(Node::text(" "));
+    }
+    fn line(&mut self) {
+        self.nodes.push(Node::Line)
+    }
+    fn line_on_wrap(&mut self) {
+        self.nodes.push(Node::LN);
+    }
+    fn line_or_space(&mut self) {
+        self.nodes.push(Node::LN_SPACE)
+    }
+    fn comma(&mut self) {
+        self.nodes.push(Node::LN_COMMA_SPACE);
+    }
+    fn trailing_comma(&mut self) {
+        self.nodes.push(Node::LN_TRAILING_COMMA);
+    }
+    fn group(&mut self, force: bool, f: impl FnOnce(&mut Self)) {
+        let idx = self.nodes.len();
+        self.nodes.push(Node::OpenGroup(force));
+        f(self);
+        if self.nodes[idx] == Node::OpenWrap {
+            self.nodes.push(Node::CloseWrap)
+        } else {
+            self.nodes.push(Node::CloseGroup)
+        }
+    }
+    fn group_nowrap(&mut self, f: impl FnOnce(&mut Self)) {
+        let idx = self.nodes.len();
+        self.nodes.push(Node::OpenNoWrap);
+        f(self);
+        if self.nodes[idx] == Node::OpenWrap {
+            self.nodes.push(Node::CloseWrap)
+        } else {
+            self.nodes.push(Node::CloseNoWrap)
+        }
+    }
+    fn indent_on_wrap(&mut self, f: impl FnOnce(&mut Self)) {
+        self.nodes.push(Node::OpenIndentOnWrap);
+        f(self);
+        self.nodes.push(Node::CloseIndentOnWrap);
+    }
+    fn no_wrap(&mut self, f: impl FnOnce(&mut Self)) {
+        self.nodes.push(Node::OpenFlat);
+        f(self);
+        self.nodes.push(Node::CloseFlat);
+    }
+    fn indent(&mut self, f: impl FnOnce(&mut Self)) {
+        self.nodes.push(Node::OpenIndent);
+        f(self);
+        self.nodes.push(Node::CloseIndent);
+    }
+    fn end_with_space(&mut self) {
+        for node in self.nodes.iter_mut().rev() {
+            match node {
+                Node::Text(chunk) if !chunk.contents.is_empty() => {
+                    if !chunk.contents.ends_with(' ') {
+                        self.space();
+                    }
+                    return;
+                }
+                Node::Line => return,
+                Node::LineOr(_, _) => {
+                    if *node == Node::LN_TRAILING_COMMA {
+                        *node = Node::LN_COMMA_SPACE;
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+    fn open_group(&mut self) {
+        let mut nesting: usize = 0;
+        let mut done = false;
+        for node in self.nodes.iter_mut().rev() {
+            match node {
+                Node::OpenFlat if nesting == 0 => {
+                    return;
+                }
+                Node::OpenGroup(force) => {
+                    if (!done || *force) && nesting == 0 {
+                        *node = Node::OpenWrap;
+                        done = true;
+                    }
+                    nesting = nesting.saturating_sub(1);
+                }
+                Node::OpenNoWrap => {
+                    if !done && nesting == 0 {
+                        *node = Node::OpenWrap;
+                        done = true;
+                    }
+                    nesting = nesting.saturating_sub(1);
+                }
+                Node::CloseGroup | Node::CloseNoWrap => {
+                    nesting += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    fn check_comments(&mut self, start: u32, open_group: bool, max_lines: usize) -> bool {
+        let len = self.comments.len();
+
+        let mut first = true;
+        while let Some(comment) = self
+            .comments
+            .pop_front_if(|s| s.start >= self.last_token && s.end <= start)
+        {
+            if open_group && first {
+                self.open_group();
+            } else {
+                let count = self.source[self.last_token as usize..comment.start as usize]
+                    .matches('\n')
+                    .count()
+                    .min(if first { max_lines } else { 2 });
+                for _ in 0..count {
+                    self.line();
+                }
+            }
+
+            self.end_with_space();
+            self.nodes.push(Node::text("-- "));
+            self.nodes.push(Node::text(
+                self.source[comment.start as usize + 2..comment.end as usize].trim(),
+            ));
+
+            self.last_token = comment.end;
+            first = false;
+        }
+
+        self.comments.len() < len
+    }
+    fn token(&mut self, token: ast::Token) {
+        if self.check_comments(token.0.start, true, 0) {
+            self.line();
+        }
+        self.nodes.push(Node::text(&self.source[token.0]));
+        self.last_token = token.0.end;
+    }
+}
+
+trait Ast: HasSpan {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>);
+}
+
+fn is_heavy(def: &ast::Item) -> bool {
+    match def {
+        ast::Item::Function(_, def) => def.is_some(),
+        ast::Item::Type(_, _, _) => false,
+        ast::Item::Effect(_, _, def) => def.as_ref().is_some_and(|(_, def)| match def {
+            ast::EffectDefinition::Body(_) => true,
+            ast::EffectDefinition::Alias(_) => false,
+            ast::EffectDefinition::Intrinsic(_) => true,
+        }),
+        ast::Item::Handle(_, _, _) => true,
+    }
 }
 
 impl Ast for ast::Module {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        for import in &self.imports {
-            import.push_nodes(source, nodes);
-        }
-        nodes.push(Node::Line);
-        for (i, def) in self.definitions.iter().enumerate() {
-            if i > 0 {
-                nodes.push(Node::Line);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        for (i, import) in self.imports.iter().enumerate() {
+            let this_span = import.span();
+            if i == 0 {
+                let had_comments = nodes.check_comments(this_span.start, false, 0);
+                if had_comments {
+                    if nodes.source[nodes.last_token as usize..this_span.start as usize]
+                        .matches('\n')
+                        .count()
+                        > 1
+                    {
+                        nodes.line();
+                    }
+                    nodes.line();
+                }
+            } else if i > 0 {
+                nodes.check_comments(this_span.start, false, 2);
+                if nodes.source[nodes.last_token as usize..this_span.start as usize]
+                    .matches('\n')
+                    .count()
+                    > 1
+                {
+                    nodes.line();
+                }
+                nodes.line();
             }
-            def.push_nodes(source, nodes);
+            import.push_nodes(nodes);
         }
+
+        if !self.imports.elements.is_empty() {
+            nodes.line();
+            nodes.line();
+        }
+
+        let mut last_heavy = false;
+        for (i, def) in self.items.iter().enumerate() {
+            let this_heavy = is_heavy(def);
+            let this_span = def.span();
+            if i == 0 {
+                let had_comments = nodes.check_comments(this_span.start, false, 0);
+                if had_comments {
+                    if nodes.source[nodes.last_token as usize..this_span.start as usize]
+                        .matches('\n')
+                        .count()
+                        > 1
+                    {
+                        nodes.line();
+                    }
+                    nodes.line();
+                }
+            } else {
+                let had_comments = if last_heavy {
+                    nodes.line();
+                    nodes.check_comments(this_span.start, false, 1)
+                } else {
+                    nodes.check_comments(this_span.start, false, 2)
+                };
+                if (!last_heavy || had_comments)
+                    && (this_heavy
+                        || nodes.source[nodes.last_token as usize..this_span.start as usize]
+                            .matches('\n')
+                            .count()
+                            > 1)
+                {
+                    nodes.line();
+                }
+                nodes.line();
+            }
+            last_heavy = this_heavy;
+            def.push_nodes(nodes);
+        }
+
+        nodes.check_comments(u32::MAX, false, 2);
+        nodes.line();
     }
 }
 
 impl Ast for ast::Import {
-    fn push_nodes<'a>(&'a self, _source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::text("import \""));
-        nodes.push(Node::text(self.path.as_str()));
-        nodes.push(Node::text("\""));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.import);
+        nodes.space();
+        nodes.token(self.path.token);
         if let Some(ident) = &self.ident {
-            nodes.push(Node::text(" "));
-            nodes.push(Node::text(ident.as_str()));
+            nodes.space();
+            nodes.token(ident.token);
         }
-        nodes.push(Node::Line);
     }
 }
 
-impl Ast for ast::Definition {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::Definition::Function(decl, def) => {
-                decl.push_nodes(source, nodes);
-
-                if let Some(def) = def {
-                    def.push_nodes(source, nodes);
-                }
-            }
-            inner::Definition::Type(name, def) => {
-                nodes.push(Node::text("type "));
-                name.push_nodes(source, nodes);
-
-                if let Some(def) = def {
-                    def.push_nodes(source, nodes);
-                }
-            }
-            inner::Definition::Effect(name, def) => {
-                nodes.push(Node::text("effect "));
-                name.push_nodes(source, nodes);
-
-                if let Some(def) = def {
-                    def.push_nodes(source, nodes);
-                }
-            }
-            inner::Definition::Handle(generics, def) => {
-                nodes.push(Node::text("handle"));
-                if let Some(generics) = generics {
-                    if let [param] = generics.as_slice() {
-                        nodes.push(Node::text("["));
-                        param.push_nodes(source, nodes);
-                        nodes.push(Node::text("]"));
+impl<T: Ast> Ast for ast::Grouped<ast::Separated<T>> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if &nodes.source[self.open.0] == "{" {
+            nodes.token(self.open);
+            nodes.indent(|nodes| {
+                for (i, param) in self.inner.iter().enumerate() {
+                    if i == 0 {
+                        nodes.check_comments(param.span().start, false, 1);
                     } else {
-                        nodes.push(Node::OpenGroup(true));
-                        nodes.push(Node::text("["));
-                        nodes.push(Node::OpenIndentOnWrap);
-                        nodes.push(Node::LN);
-                        for (i, param) in generics.iter().enumerate() {
-                            if i > 0 {
-                                nodes.push(Node::LN_COMMA_SPACE);
-                            }
-                            param.push_nodes(source, nodes);
-                        }
-                        nodes.push(Node::CloseIndentOnWrap);
-                        nodes.push(Node::LN_TRAILING_COMMA);
-                        nodes.push(Node::text("]"));
-                        nodes.push(Node::CloseGroup);
+                        nodes.check_comments(param.span().start, false, 2);
                     }
+                    nodes.line();
+                    param.push_nodes(nodes);
                 }
-                nodes.push(Node::text(" "));
-                def.push_nodes(source, nodes);
+                nodes.check_comments(self.close.0.start, false, 2);
+            });
+            nodes.line();
+            nodes.token(self.close);
+        } else if self.inner.elements.len() < 2 {
+            nodes.group_nowrap(|nodes| {
+                nodes.token(self.open);
+                nodes.indent_on_wrap(|nodes| {
+                    nodes.line_on_wrap();
+                    for (i, param) in self.inner.iter().enumerate() {
+                        if i > 0 {
+                            nodes.comma();
+                        }
+                        param.push_nodes(nodes);
+                    }
+                });
+                nodes.trailing_comma();
+                nodes.token(self.close);
+            });
+        } else {
+            nodes.group(true, |nodes| {
+                nodes.token(self.open);
+                nodes.indent_on_wrap(|nodes| {
+                    nodes.line_on_wrap();
+                    for (i, param) in self.inner.iter().enumerate() {
+                        if i > 0 {
+                            nodes.comma();
+                        }
+                        param.push_nodes(nodes);
+                    }
+                });
+                nodes.trailing_comma();
+                nodes.token(self.close);
+            });
+        }
+    }
+}
+
+enum Placement {
+    Newline,
+    Inline,
+    Choose,
+}
+
+trait Definition: Ast {
+    fn placement(&self) -> Placement;
+    fn push_definition<'a>(&'a self, nodes: &mut Nodes<'a>, equals: ast::Token) {
+        match self.placement() {
+            Placement::Newline => {
+                nodes.indent(|nodes| {
+                    nodes.line();
+                    nodes.token(equals);
+                    nodes.space();
+                    self.push_nodes(nodes);
+                });
+            }
+            Placement::Inline => {
+                nodes.space();
+                nodes.token(equals);
+                nodes.space();
+                self.push_nodes(nodes);
+            }
+            Placement::Choose => {
+                nodes.group(false, |nodes| {
+                    nodes.indent_on_wrap(|nodes| {
+                        nodes.line_or_space();
+                        nodes.token(equals);
+                        nodes.space();
+                        self.push_nodes(nodes);
+                    });
+                });
             }
         }
+    }
+}
+
+impl Ast for ast::Item {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Item::Function(decl, def) => {
+                decl.push_nodes(nodes);
+
+                if let Some((equals, def)) = def {
+                    def.push_definition(nodes, *equals);
+                }
+            }
+            ast::Item::Type(token, name, def) => {
+                nodes.token(*token);
+                nodes.space();
+                name.push_nodes(nodes);
+
+                if let Some((equals, def)) = def {
+                    def.push_definition(nodes, *equals);
+                }
+            }
+            ast::Item::Effect(token, name, def) => {
+                nodes.token(*token);
+                nodes.space();
+                name.push_nodes(nodes);
+
+                if let Some((equals, def)) = def {
+                    def.push_definition(nodes, *equals);
+                }
+            }
+            ast::Item::Handle(token, generics, def) => {
+                nodes.token(*token);
+                if let Some(generics) = generics {
+                    generics.push_nodes(nodes);
+                }
+                nodes.space();
+                def.push_nodes(nodes);
+            }
+        }
+    }
+}
+
+impl Ast for ast::WithEffects {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.with);
+        nodes.space();
+        nodes.no_wrap(|nodes| {
+            for (i, path) in self.effects.iter().enumerate() {
+                if i > 0 {
+                    nodes.space();
+                }
+                path.push_nodes(nodes);
+            }
+        });
     }
 }
 
 impl Ast for ast::Handler {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        self.effect.push_nodes(source, nodes);
-        if let Some(paths) = &self.with_effects {
-            nodes.push(Node::text(" with "));
-
-            nodes.push(Node::OpenNoWrap);
-            for (i, path) in paths.iter().enumerate() {
-                if i > 0 {
-                    nodes.push(Node::text(" "));
-                }
-                path.push_nodes(source, nodes);
-            }
-            nodes.push(Node::CloseNoWrap);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        self.effect.push_nodes(nodes);
+        if let Some(effects) = &self.with_effects {
+            nodes.space();
+            effects.push_nodes(nodes);
         }
-
-        nodes.push(Node::text(" {"));
-        nodes.push(Node::OpenIndent);
-        nodes.push(Node::Line);
-
-        for (i, def) in self.definitions.iter().enumerate() {
-            if i > 0 {
-                nodes.push(Node::Line);
-            }
-            def.push_nodes(source, nodes);
-        }
-
-        nodes.push(Node::CloseIndent);
-        nodes.push(Node::Line);
-        nodes.push(Node::text("}"));
+        nodes.space();
+        self.items.push_nodes(nodes);
     }
 }
 
 impl Ast for ast::FunctionDeclaration {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::text("fun "));
-        self.name.push_nodes(source, nodes);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.fun);
+        nodes.space();
+        self.name.push_nodes(nodes);
 
         if let Some(params) = &self.parameters {
-            if let [param] = params.as_slice() {
-                nodes.push(Node::text("("));
-                param.push_nodes(source, nodes);
-                nodes.push(Node::text(")"));
-            } else {
-                nodes.push(Node::OpenGroup(true));
-                nodes.push(Node::text("("));
-                nodes.push(Node::OpenIndentOnWrap);
-                nodes.push(Node::LN);
-                for (i, param) in params.iter().enumerate() {
-                    if i > 0 {
-                        nodes.push(Node::LN_COMMA_SPACE);
-                    }
-                    param.push_nodes(source, nodes);
-                }
-                nodes.push(Node::CloseIndentOnWrap);
-                nodes.push(Node::LN_TRAILING_COMMA);
-                nodes.push(Node::text(")"));
-                nodes.push(Node::CloseGroup);
-            }
+            params.push_nodes(nodes);
         }
 
         if let Some(returns) = &self.returns {
-            nodes.push(Node::text(" "));
-            returns.push_nodes(source, nodes);
+            nodes.space();
+            returns.push_nodes(nodes);
         }
 
-        if let Some(paths) = &self.effects {
-            nodes.push(Node::text(" with "));
-            nodes.push(Node::OpenNoWrap);
-            for (i, path) in paths.iter().enumerate() {
-                if i > 0 {
-                    nodes.push(Node::text(" "));
-                }
-                path.push_nodes(source, nodes);
-            }
-            nodes.push(Node::CloseNoWrap);
+        if let Some(effects) = &self.effects {
+            nodes.space();
+            effects.push_nodes(nodes);
         }
     }
 }
 
 impl Ast for ast::Returns {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::Returns::Never => nodes.push(Node::text("!")),
-            inner::Returns::Data(ty) => ty.push_nodes(source, nodes),
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Returns::Never(token) => nodes.token(*token),
+            ast::Returns::Data(ty) => ty.push_nodes(nodes),
         }
     }
 }
 
-impl Ast for ast::FunctionParameter {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::FunctionParameter::Data(name, ty) => {
-                nodes.push(Node::text(name.as_str()));
-                nodes.push(Node::text(" "));
-                ty.push_nodes(source, nodes);
+impl Ast for ast::Parameter {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Parameter::Data(name, ty) => {
+                nodes.token(name.token);
+                nodes.space();
+                ty.push_nodes(nodes);
             }
-            inner::FunctionParameter::Lambda(decl) => {
-                decl.push_nodes(source, nodes);
+            ast::Parameter::Lambda(decl) => {
+                decl.push_nodes(nodes);
             }
+        }
+    }
+}
+
+impl Definition for ast::FunctionDefinition {
+    fn placement(&self) -> Placement {
+        match self {
+            ast::FunctionDefinition::Expression(expression)
+                if matches!(**expression, ast::Expression::Block(_)) =>
+            {
+                Placement::Inline
+            }
+            ast::FunctionDefinition::Expression(_) => Placement::Choose,
+            ast::FunctionDefinition::Intrinsic(_) => Placement::Newline,
         }
     }
 }
 
 impl Ast for ast::FunctionDefinition {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::FunctionDefinition::Expression(expr) => {
-                if matches!(expr.0, inner::Expression::Block) {
-                    nodes.push(Node::text(" = "));
-                    expr.push_nodes(source, nodes);
-                } else {
-                    nodes.push(Node::OpenGroup(false));
-                    nodes.push(Node::OpenIndentOnWrap);
-                    nodes.push(Node::LN_SPACE);
-                    nodes.push(Node::text("= "));
-
-                    expr.push_nodes(source, nodes);
-
-                    nodes.push(Node::CloseIndentOnWrap);
-                    nodes.push(Node::CloseGroup);
-                }
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::FunctionDefinition::Expression(expr) => {
+                expr.push_nodes(nodes);
             }
-            inner::FunctionDefinition::Intrinsic => {
-                nodes.push(Node::OpenIndent);
-                nodes.push(Node::Line);
-                nodes.push(Node::text("= #intrinsic"));
-                nodes.push(Node::CloseIndent);
+            ast::FunctionDefinition::Intrinsic(token) => {
+                nodes.token(*token);
             }
         }
     }
 }
 
 impl Ast for ast::Expression {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::Expression::Block => {
-                nodes.push(Node::text("{"));
-                nodes.push(Node::Line);
-                nodes.push(Node::text("}"));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Expression::Block(group) => {
+                group.push_nodes(nodes);
             }
         }
     }
 }
 
 impl Ast for ast::Name {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::text(self.ident.as_str()));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.ident.token);
 
         if let Some(generics) = &self.generics {
-            if let [param] = generics.as_slice() {
-                nodes.push(Node::text("["));
-                param.push_nodes(source, nodes);
-                nodes.push(Node::text("]"));
-            } else {
-                nodes.push(Node::OpenGroup(true));
-                nodes.push(Node::text("["));
-                nodes.push(Node::OpenIndentOnWrap);
-                nodes.push(Node::LN);
-                for (i, param) in generics.iter().enumerate() {
-                    if i > 0 {
-                        nodes.push(Node::LN_COMMA_SPACE);
-                    }
-                    param.push_nodes(source, nodes);
-                }
-                nodes.push(Node::CloseIndentOnWrap);
-                nodes.push(Node::LN_TRAILING_COMMA);
-                nodes.push(Node::text("]"));
-                nodes.push(Node::CloseGroup);
-            }
+            generics.push_nodes(nodes);
         }
     }
 }
 
 impl Ast for ast::GenericParameter {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        self.name.push_nodes(source, nodes);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        self.name.push_nodes(nodes);
         if let Some(kind) = &self.kind {
-            nodes.push(Node::text(" "));
-            kind.push_nodes(source, nodes);
+            nodes.space();
+            kind.push_nodes(nodes);
         }
     }
 }
 
 impl Ast for ast::Kind {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::Kind::Type => nodes.push(Node::text("type")),
-            inner::Kind::Effect => nodes.push(Node::text("effect")),
-            inner::Kind::Region => nodes.push(Node::text("region")),
-            inner::Kind::Constant(ty) => ty.push_nodes(source, nodes),
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Kind::Type(token) | ast::Kind::Effect(token) | ast::Kind::Region(token) => {
+                nodes.token(*token)
+            }
+            ast::Kind::Constant(ty) => ty.push_nodes(nodes),
         }
     }
 }
 
+impl Ast for ast::PointerRegion {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.at);
+        self.region.push_nodes(nodes);
+    }
+}
+
+impl Ast for ast::NullTerminated {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.colon);
+        nodes.token(self.zero);
+    }
+}
+
+impl Ast for ast::Grouped<()> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.open);
+        if &nodes.source[self.open.0] == "{" {
+            nodes.indent(|nodes| {
+                nodes.check_comments(self.close.0.start, false, 1);
+            });
+            nodes.line();
+        }
+        nodes.token(self.close);
+    }
+}
+
+impl Ast for ast::Grouped<ast::NullTerminated> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.open);
+        self.inner.push_nodes(nodes);
+        nodes.token(self.close);
+    }
+}
+
 impl Ast for ast::Type {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::Type::Path(path) => path.push_nodes(source, nodes),
-            inner::Type::Pointer(ty, region) => {
-                nodes.push(Node::text("^"));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Type::Path(path) => path.push_nodes(nodes),
+            ast::Type::Pointer(pointer, region, ty) => {
+                nodes.token(*pointer);
                 if let Some(region) = region {
-                    nodes.push(Node::text("@"));
-                    region.push_nodes(source, nodes);
-                    nodes.push(Node::text(" "));
+                    region.push_nodes(nodes);
+                    nodes.space();
                 }
-                ty.push_nodes(source, nodes);
+                ty.push_nodes(nodes);
             }
-            inner::Type::PointerSlice(ty, region) => {
-                nodes.push(Node::text("^"));
+            ast::Type::PointerSlice(pointer, group, region, ty) => {
+                nodes.token(*pointer);
                 if let Some(region) = region {
-                    nodes.push(Node::text("@"));
-                    region.push_nodes(source, nodes);
-                    nodes.push(Node::text(" "));
+                    region.push_nodes(nodes);
+                    nodes.space();
                 }
-                nodes.push(Node::text("[]"));
-                ty.push_nodes(source, nodes);
+                group.push_nodes(nodes);
+                ty.push_nodes(nodes);
             }
-            inner::Type::PointerSliceNullTerminated(ty, region) => {
-                nodes.push(Node::text("^"));
+            ast::Type::PointerSliceNullTerminated(pointer, group, region, ty) => {
+                nodes.token(*pointer);
                 if let Some(region) = region {
-                    nodes.push(Node::text("@"));
-                    region.push_nodes(source, nodes);
-                    nodes.push(Node::text(" "));
+                    region.push_nodes(nodes);
+                    nodes.space();
                 }
-                nodes.push(Node::text("[:0]"));
-                ty.push_nodes(source, nodes);
+                group.push_nodes(nodes);
+                ty.push_nodes(nodes);
             }
         }
     }
 }
 
 impl Ast for ast::TypeDefinition {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::OpenGroup(false));
-        nodes.push(Node::OpenIndentOnWrap);
-        nodes.push(Node::LN_SPACE);
-        nodes.push(Node::text("= "));
-        match &self.0 {
-            inner::TypeDefinition::Type(ty) => ty.push_nodes(source, nodes),
-            inner::TypeDefinition::Struct(struc) => struc.push_nodes(source, nodes),
-            inner::TypeDefinition::Intrinsic => nodes.push(Node::text("#intrinsic")),
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::TypeDefinition::Type(ty) => ty.push_nodes(nodes),
+            ast::TypeDefinition::Struct(struc) => struc.push_nodes(nodes),
+            ast::TypeDefinition::Intrinsic(token) => nodes.token(*token),
         }
-        nodes.push(Node::CloseIndentOnWrap);
-        nodes.push(Node::CloseGroup);
+    }
+}
+
+impl Definition for ast::TypeDefinition {
+    fn placement(&self) -> Placement {
+        match self {
+            ast::TypeDefinition::Type(_) => Placement::Choose,
+            ast::TypeDefinition::Struct(_) => Placement::Inline,
+            ast::TypeDefinition::Intrinsic(_) => {
+                // normally we do Newline for intrinsics,
+                // but these type definitions are very short anyway
+                Placement::Inline
+            }
+        }
     }
 }
 
 impl Ast for ast::EffectDefinition {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::EffectDefinition::Body(body) => {
-                nodes.push(Node::text(" = "));
-                body.push_nodes(source, nodes);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::EffectDefinition::Body(body) => {
+                body.push_nodes(nodes);
             }
-            inner::EffectDefinition::Alias(paths) => {
+            ast::EffectDefinition::Alias(paths) => {
                 if paths.is_empty() {
-                    nodes.push(Node::text(" = ;"));
+                    nodes.push(Node::text(";"));
                 } else {
-                    nodes.push(Node::OpenGroup(false));
-                    nodes.push(Node::OpenIndentOnWrap);
-                    nodes.push(Node::LN_SPACE);
-                    nodes.push(Node::text("= "));
-
-                    nodes.push(Node::OpenNoWrap);
-                    for (i, path) in paths.iter().enumerate() {
-                        if i > 0 {
-                            nodes.push(Node::text(" "));
+                    nodes.no_wrap(|nodes| {
+                        for (i, path) in paths.iter().enumerate() {
+                            if i > 0 {
+                                nodes.space();
+                            }
+                            path.push_nodes(nodes);
                         }
-                        path.push_nodes(source, nodes);
-                    }
-                    nodes.push(Node::CloseNoWrap);
-
-                    nodes.push(Node::CloseIndentOnWrap);
-                    nodes.push(Node::CloseGroup);
+                    });
                 }
             }
-            inner::EffectDefinition::Intrinsic => {
-                nodes.push(Node::OpenGroup(false));
-                nodes.push(Node::OpenIndentOnWrap);
-                nodes.push(Node::LN_SPACE);
-                nodes.push(Node::text("= "));
+            ast::EffectDefinition::Intrinsic(token) => nodes.token(*token),
+        }
+    }
+}
 
-                nodes.push(Node::text("#intrinsic"));
-
-                nodes.push(Node::CloseIndentOnWrap);
-                nodes.push(Node::CloseGroup);
-            }
+impl Definition for ast::EffectDefinition {
+    fn placement(&self) -> Placement {
+        match self {
+            ast::EffectDefinition::Body(_) => Placement::Inline,
+            ast::EffectDefinition::Alias(_) => Placement::Choose,
+            ast::EffectDefinition::Intrinsic(_) => Placement::Newline,
         }
     }
 }
 
 impl Ast for ast::EffectBody {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::text("{"));
-        nodes.push(Node::OpenIndent);
-        nodes.push(Node::Line);
-
-        for (i, def) in self.definitions.iter().enumerate() {
-            if i > 0 {
-                nodes.push(Node::Line);
-            }
-            def.push_nodes(source, nodes);
-        }
-
-        nodes.push(Node::CloseIndent);
-        nodes.push(Node::Line);
-        nodes.push(Node::text("}"));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        self.items.push_nodes(nodes);
     }
 }
 
 impl Ast for ast::Path {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        if let Some(module) = &self.package {
-            nodes.push(Node::text(module.as_str()));
-            nodes.push(Node::text("."));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if let Some((pkg, dot)) = &self.package {
+            nodes.token(pkg.token);
+            nodes.token(*dot);
         }
-        nodes.push(Node::text(self.name.as_str()));
+        nodes.token(self.name.token);
 
         if let Some(generics) = &self.generics {
-            if let [param] = generics.as_slice() {
-                nodes.push(Node::text("["));
-                param.push_nodes(source, nodes);
-                nodes.push(Node::text("]"));
-            } else {
-                nodes.push(Node::OpenGroup(true));
-                nodes.push(Node::text("["));
-                nodes.push(Node::OpenIndentOnWrap);
-                nodes.push(Node::LN);
-                for (i, param) in generics.iter().enumerate() {
-                    if i > 0 {
-                        nodes.push(Node::LN_COMMA_SPACE);
-                    }
-                    param.push_nodes(source, nodes);
-                }
-                nodes.push(Node::CloseIndentOnWrap);
-                nodes.push(Node::LN_TRAILING_COMMA);
-                nodes.push(Node::text("]"));
-                nodes.push(Node::CloseGroup);
-            }
+            generics.push_nodes(nodes);
         }
     }
 }
 
 impl Ast for ast::GenericArgument {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::GenericArgument::Path(path) => path.push_nodes(source, nodes),
-            inner::GenericArgument::Type(ty) => ty.push_nodes(source, nodes),
-            inner::GenericArgument::Constant(constant) => constant.push_nodes(source, nodes),
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::GenericArgument::Path(path) => path.push_nodes(nodes),
+            ast::GenericArgument::Type(ty) => ty.push_nodes(nodes),
+            ast::GenericArgument::Constant(constant) => constant.push_nodes(nodes),
         }
     }
 }
 
 impl Ast for ast::Constant {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match self.0 {}
+    fn push_nodes<'a>(&'a self, _nodes: &mut Nodes<'a>) {
+        match *self {}
     }
 }
 
 impl Ast for ast::Struct {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        nodes.push(Node::text("struct("));
-        if !self.members.is_empty() {
-            nodes.push(Node::OpenIndent);
-            nodes.push(Node::Line);
-            for (i, member) in self.members.iter().enumerate() {
-                if i > 0 {
-                    nodes.push(Node::Line);
-                }
-                member.push_nodes(source, nodes);
-                nodes.push(Node::text(","));
-            }
-            nodes.push(Node::CloseIndent);
-            nodes.push(Node::Line);
-        }
-        nodes.push(Node::text(")"));
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        nodes.token(self.r#struct);
+        self.members.push_nodes(nodes);
     }
 }
 
 impl Ast for ast::StructMember {
-    fn push_nodes<'a>(&'a self, source: &'a str, nodes: &mut Vec<Node<'a>>) {
-        match &self.0 {
-            inner::StructMember::Data(name, ty) => {
-                nodes.push(Node::text(name.as_str()));
-                nodes.push(Node::text(" "));
-                ty.push_nodes(source, nodes);
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::StructMember::Data(name, ty) => {
+                nodes.token(name.token);
+                nodes.space();
+                ty.push_nodes(nodes);
             }
         }
     }

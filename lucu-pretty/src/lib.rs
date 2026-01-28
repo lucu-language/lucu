@@ -2,13 +2,13 @@
 
 use core::fmt::{self, Display};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Chunk<'text> {
     pub contents: &'text str,
     pub size: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Node<'text> {
     /// A choice between "wrapping" and "not wrapping".
     /// If the bool is set to true, and the group is "not wrapping",
@@ -16,9 +16,17 @@ pub enum Node<'text> {
     OpenGroup(bool),
     CloseGroup,
 
-    /// All inner nodes will be forced on "not wrapping".
+    /// A group that always wraps
+    OpenWrap,
+    CloseWrap,
+
+    /// A group that never wraps
     OpenNoWrap,
     CloseNoWrap,
+
+    /// All inner nodes will be forced on "not wrapping".
+    OpenFlat,
+    CloseFlat,
 
     /// All inner nodes will be indented.
     OpenIndent,
@@ -90,13 +98,22 @@ impl<'text> Node<'text> {
                 Node::OpenGroup(_) => {
                     nesting += 1;
                 }
-                Node::OpenNoWrap => {
+                Node::OpenWrap | Node::OpenNoWrap => {
+                    nesting += 1;
+                }
+                Node::OpenFlat => {
                     nesting += 1;
                     if nowrap.is_none() {
                         nowrap = Some(nesting);
                     }
                 }
-                Node::CloseNoWrap => {
+                Node::CloseWrap | Node::CloseNoWrap => {
+                    if nesting == nesting_min {
+                        nesting_min -= 1;
+                    }
+                    nesting -= 1;
+                }
+                Node::CloseFlat => {
                     if nowrap.is_some_and(|n| n == nesting) {
                         nowrap = None;
                     }
@@ -178,7 +195,17 @@ impl<'text> Node<'text> {
                         nesting -= 1;
                     }
                 }
-                Node::OpenNoWrap => {
+                Node::OpenWrap | Node::OpenNoWrap => {
+                    nesting += 1;
+                }
+                Node::CloseWrap | Node::CloseNoWrap => {
+                    if nesting == 0 {
+                        return Ok(());
+                    } else {
+                        nesting -= 1;
+                    }
+                }
+                Node::OpenFlat => {
                     nesting += 1;
                     if wrap {
                         *nodes = rest;
@@ -186,7 +213,7 @@ impl<'text> Node<'text> {
                         continue;
                     }
                 }
-                Node::CloseNoWrap => {
+                Node::CloseFlat => {
                     if nesting == 0 {
                         return Ok(());
                     } else {
@@ -260,6 +287,52 @@ impl Display for Text<'_, '_> {
 
         while let Some((&next, rest)) = nodes.split_first() {
             match next {
+                Node::OpenWrap => {
+                    nesting += 1;
+                    if nesting >= 64 {
+                        // too much nesting to keep track of
+                        // we just wrap everything at this point
+                        nodes = rest;
+                        Node::display(
+                            f,
+                            &mut nodes,
+                            &mut current,
+                            self.indent_size,
+                            current_indent,
+                            true,
+                        )?;
+                        continue;
+                    }
+                    // push wrap
+                    set_bit(&mut wrap, nesting, true);
+                }
+                Node::CloseWrap => {
+                    assert!(nesting > 0);
+                    nesting -= 1;
+                }
+                Node::OpenNoWrap => {
+                    nesting += 1;
+                    if nesting >= 64 {
+                        // too much nesting to keep track of
+                        // we just wrap everything at this point
+                        nodes = rest;
+                        Node::display(
+                            f,
+                            &mut nodes,
+                            &mut current,
+                            self.indent_size,
+                            current_indent,
+                            true,
+                        )?;
+                        continue;
+                    }
+                    // push nonwrap
+                    set_bit(&mut wrap, nesting, false);
+                }
+                Node::CloseNoWrap => {
+                    assert!(nesting > 0);
+                    nesting -= 1;
+                }
                 Node::OpenGroup(force) => {
                     nesting += 1;
                     if nesting >= 64 {
@@ -312,7 +385,7 @@ impl Display for Text<'_, '_> {
                     assert!(nesting > 0);
                     nesting -= 1;
                 }
-                Node::OpenNoWrap => {
+                Node::OpenFlat => {
                     nesting += 1;
 
                     // display all inner nodes without wrapping
@@ -327,7 +400,7 @@ impl Display for Text<'_, '_> {
                     )?;
                     continue;
                 }
-                Node::CloseNoWrap => {
+                Node::CloseFlat => {
                     assert!(nesting > 0);
                     nesting -= 1;
                 }

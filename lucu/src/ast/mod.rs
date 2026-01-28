@@ -6,19 +6,9 @@ use compact_str::CompactString;
 use strum::IntoStaticStr;
 
 use crate::span::{HasSpan, Span};
-use crate::tokens;
 
 #[derive(Debug, Eq, Clone, Copy)]
 pub struct Token(pub Span);
-
-impl Token {
-    pub fn with(self, token: impl Into<tokens::TokenEnum>) -> tokens::Token {
-        tokens::Token {
-            token: token.into(),
-            span: self.0,
-        }
-    }
-}
 
 impl PartialEq for Token {
     fn eq(&self, _other: &Self) -> bool {
@@ -79,7 +69,7 @@ pub struct Grouped<T> {
     pub close: Token,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq)]
 pub struct Separated<T> {
     pub elements: Vec<(T, Option<Token>)>,
 }
@@ -87,6 +77,13 @@ pub struct Separated<T> {
 impl<T> Separated<T> {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &T> + DoubleEndedIterator {
         self.elements.iter().map(|(t, _)| t)
+    }
+}
+
+impl<T: PartialEq> PartialEq for Separated<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // ignore trailing comma or not
+        self.iter().eq(other.iter())
     }
 }
 

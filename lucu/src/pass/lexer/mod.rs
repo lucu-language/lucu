@@ -1,18 +1,24 @@
+use std::collections::VecDeque;
 use std::ops::Range;
 
 use crate::span::Span;
 use crate::tokens::{Group, Symbol, Token, TokenEnum};
 
-fn skip_whitespace(src: &mut &str) -> usize {
+fn skip_whitespace(src: &mut &str, pos: usize, mut comments: Option<&mut VecDeque<Span>>) -> usize {
     let mut skipped = 0;
     while !src.is_empty()
         && (src.as_bytes()[0].is_ascii_whitespace()
             || (src.starts_with("--") && !src.starts_with("---")))
     {
         if src.starts_with("--") && !src.starts_with("---") {
+            let start = pos + skipped;
             while !src.is_empty() && src.as_bytes()[0] != b'\n' {
                 *src = &src[1..];
                 skipped += 1;
+            }
+            if let Some(comments) = comments.as_mut() {
+                let end = pos + skipped;
+                comments.push_back(Span::new(start as u32, end as u32));
             }
         }
         *src = &src[1..];
@@ -27,6 +33,7 @@ pub struct Lexer<'a> {
     groups: Vec<Group>,
     saved: Option<Token>,
     no_insertion: bool,
+    comments: Option<&'a mut VecDeque<Span>>,
 }
 
 impl Lexer<'_> {
@@ -44,7 +51,7 @@ impl Iterator for Lexer<'_> {
             return Some(next);
         }
 
-        let next = next_token(self.src, self.pos as usize);
+        let next = next_token(self.src, self.pos as usize, self.comments.as_deref_mut());
         if let Some(next) = next {
             let has_newline = self.src[Span::new(self.pos, next.span.start)]
                 .find('\n')
@@ -94,13 +101,18 @@ impl<'a> Lexer<'a> {
             groups: Vec::new(),
             saved: None,
             no_insertion: true,
+            comments: None,
         }
+    }
+    pub fn with_comments(mut self, comments: &'a mut VecDeque<Span>) -> Self {
+        self.comments = Some(comments);
+        self
     }
 }
 
-fn next_token(mut src: &str, pos: usize) -> Option<Token> {
+fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) -> Option<Token> {
     src = src.get(pos..)?;
-    let start = pos + skip_whitespace(&mut src);
+    let start = pos + skip_whitespace(&mut src, pos, comments);
     if src.is_empty() {
         return None;
     }

@@ -207,6 +207,7 @@ impl Lower<'_> {
                         .realize_effect(eff, EffectDefinition::Body { members });
                 }
             }
+            ast::Item::Constant(_, _, _, _) => {}
             ast::Item::Handle(_, params, handler) => {
                 let LoweredDef::Handler(HandlerDef {
                     kind,
@@ -458,6 +459,44 @@ impl Lower<'_> {
                         let eff = problems.append(self.intrinsic_effect(name));
                         if let (Some(kind), Some(eff)) = (kind, eff) {
                             let item = ItemDef::Effect(kind, eff);
+                            self.ir.insert(name.ident.as_str(), item);
+                            return problems.with(LoweredDef::Item(item));
+                        }
+                    }
+                    None => todo!("error"),
+                }
+            }
+            ast::Item::Constant(_, name, ty, def) => {
+                if let Some(parent) = parent {
+                    todo!("error")
+                }
+
+                // NOTE: if we eventually have dependent kinds this this might fail
+                let ty = problems.append(self.r#type(ty, &Generics::new()));
+                let kind = ty.and_then(|ty| {
+                    problems.append(self.kind(name.generics.as_ref(), SimpleKind::Constant(ty)))
+                });
+
+                match def {
+                    Some((_, ast::ConstantDefinition::Constant(constant))) => {
+                        if let (Some(ty), Some(kind)) = (ty, kind) {
+                            let generics = self.generics(
+                                self.tt[kind].params.as_ref(),
+                                name.generics.as_ref(),
+                                &Generics::new(),
+                            );
+                            let constant = problems.append(self.constant(constant, &generics, ty));
+                            if let Some(constant) = constant {
+                                let item = ItemDef::Alias(kind, Term::Constant(constant));
+                                self.ir.insert(name.ident.as_str(), item);
+                                return problems.with(LoweredDef::Item(item));
+                            }
+                        }
+                    }
+                    Some((_, ast::ConstantDefinition::Intrinsic(_))) => {
+                        let constant = problems.append(self.intrinsic_constant(name));
+                        if let (Some(kind), Some(constant)) = (kind, constant) {
+                            let item = ItemDef::Alias(kind, Term::Constant(constant));
                             self.ir.insert(name.ident.as_str(), item);
                             return problems.with(LoweredDef::Item(item));
                         }
@@ -902,6 +941,20 @@ impl Lower<'_> {
         self.ir.realize_effect(eff, EffectDefinition::Intrinsic);
         Result::new(eff)
     }
+    fn intrinsic_constant(&mut self, name: &ast::Name) -> Result<Constant> {
+        let module = self.module.to_compact_string();
+        let constant = match (module.as_str(), name.ident.as_str()) {
+            ("builtin:preamble", "true") => ConstantEnum::True,
+            ("builtin:preamble", "false") => ConstantEnum::False,
+            _ => todo!(
+                "error: unknown intrinsic {}.{}",
+                module.as_str(),
+                name.ident.as_str()
+            ),
+        };
+        Result::new(self.tt.insert_constant(constant))
+    }
+
     fn function_signature<'a>(
         &mut self,
         sig: &'a ast::FunctionDeclaration,

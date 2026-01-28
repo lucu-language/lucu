@@ -109,6 +109,15 @@ impl<'a> Parser<'a> {
                     return ast::Item::Effect(token, name, definition);
                 }
             }
+            TokenEnum::Keyword(Keyword::Const) => {
+                m! {
+                    let token = self.skip();
+                    name <- self.name();
+                    ty <- self.r#type();
+                    definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::constant_definition);
+                    return ast::Item::Constant(token, name, ty, definition);
+                }
+            }
             TokenEnum::Keyword(Keyword::Handle) => {
                 m! {
                     let token = self.skip();
@@ -155,6 +164,16 @@ impl<'a> Parser<'a> {
                     parser.path(false)
                 })
                 .map(ast::EffectDefinition::Alias),
+        }
+    }
+    pub fn constant_definition(&mut self) -> Result<ast::ConstantDefinition> {
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Intrinsic) => {
+                Result::new(ast::ConstantDefinition::Intrinsic(self.skip()))
+            }
+            _ => self
+                .constant(Expected::Constant)
+                .map(ast::ConstantDefinition::Constant),
         }
     }
     pub fn effect_body(&mut self) -> Result<ast::EffectBody> {

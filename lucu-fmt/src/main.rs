@@ -232,6 +232,7 @@ fn is_heavy(def: &ast::Item) -> bool {
             ast::EffectDefinition::Alias(_) => false,
             ast::EffectDefinition::Intrinsic(_) => true,
         }),
+        ast::Item::Constant(_, _, _, _) => false,
         ast::Item::Handle(_, _, _) => true,
     }
 }
@@ -416,6 +417,24 @@ trait Definition: Ast {
     }
 }
 
+impl Ast for ast::ConstantDefinition {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::ConstantDefinition::Constant(constant) => constant.push_nodes(nodes),
+            ast::ConstantDefinition::Intrinsic(token) => nodes.token(*token),
+        }
+    }
+}
+
+impl Definition for ast::ConstantDefinition {
+    fn placement(&self) -> Placement {
+        match self {
+            ast::ConstantDefinition::Constant(_) => Placement::Choose,
+            ast::ConstantDefinition::Intrinsic(_) => Placement::Inline,
+        }
+    }
+}
+
 impl Ast for ast::Item {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
@@ -439,6 +458,17 @@ impl Ast for ast::Item {
                 nodes.token(*token);
                 nodes.space();
                 name.push_nodes(nodes);
+
+                if let Some((equals, def)) = def {
+                    def.push_definition(nodes, *equals);
+                }
+            }
+            ast::Item::Constant(token, name, ty, def) => {
+                nodes.token(*token);
+                nodes.space();
+                name.push_nodes(nodes);
+                nodes.space();
+                ty.push_nodes(nodes);
 
                 if let Some((equals, def)) = def {
                     def.push_definition(nodes, *equals);
@@ -678,11 +708,7 @@ impl Definition for ast::TypeDefinition {
         match self {
             ast::TypeDefinition::Type(_) => Placement::Choose,
             ast::TypeDefinition::Struct(_) => Placement::Inline,
-            ast::TypeDefinition::Intrinsic(_) => {
-                // normally we do Newline for intrinsics,
-                // but these type definitions are very short anyway
-                Placement::Inline
-            }
+            ast::TypeDefinition::Intrinsic(_) => Placement::Inline,
         }
     }
 }

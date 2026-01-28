@@ -23,6 +23,9 @@ type isize = #intrinsic
 type bool = #intrinsic
 type unit = #intrinsic
 
+const true bool = #intrinsic
+const false bool = #intrinsic
+
 -- regions
 
 effect Read[R region]

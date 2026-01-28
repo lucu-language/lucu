@@ -21,6 +21,9 @@ type isize = builtin.isize
 type bool = builtin.bool
 type unit = builtin.unit
 
+const true bool = builtin.true
+const false bool = builtin.false
+
 effect Yield[T] = {
 	fun yield(t T)
 }

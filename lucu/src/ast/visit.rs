@@ -111,6 +111,18 @@ impl Ast for ast::Import {
     }
 }
 
+impl Ast for ast::ConstantDefinition {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        match self {
+            ast::ConstantDefinition::Constant(constant) => visitor.visit(&**constant),
+            ast::ConstantDefinition::Intrinsic(_) => V::Output::default(),
+        }
+    }
+    fn node_name(&self) -> &'static str {
+        self.into()
+    }
+}
+
 impl Ast for ast::Item {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
@@ -127,6 +139,11 @@ impl Ast for ast::Item {
             ]),
             ast::Item::Effect(_, name, opt) => V::Output::combine([
                 visitor.visit(name),
+                visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
+            ]),
+            ast::Item::Constant(_, name, ty, opt) => V::Output::combine([
+                visitor.visit(name),
+                visitor.visit(&**ty),
                 visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
             ]),
             ast::Item::Handle(_, generics, handler) => V::Output::combine([

@@ -30,7 +30,7 @@ fn main() -> Result<(), io::Error> {
     let mut nodes = Nodes {
         source: &source,
         nodes: Vec::new(),
-        comments,
+        comments: comments.clone(),
         last_token: 0,
     };
     let ast = ast.value().unwrap();
@@ -43,9 +43,20 @@ fn main() -> Result<(), io::Error> {
     let formatted = format!("{}", text);
 
     // check if ast is the same
-    let formatted_tokens = Lexer::new(&formatted).collect::<Box<_>>();
+    let mut formatted_comments = VecDeque::new();
+    let formatted_tokens = Lexer::new(&formatted)
+        .with_comments(&mut formatted_comments)
+        .collect::<Box<_>>();
     let formatted_ast = Parser::new(&Module::MAIN, &formatted, &formatted_tokens).module();
-    if formatted_ast.has_error() || formatted_ast.value().unwrap() != ast {
+    if formatted_ast.has_error()
+        || formatted_ast.value().unwrap() != ast
+        || !comments
+            .into_iter()
+            .map(|s| source.as_str()[s][2..].trim())
+            .eq(formatted_comments
+                .into_iter()
+                .map(|s| formatted.as_str()[s][2..].trim()))
+    {
         eprint!("{}", formatted);
         panic!("generated different ast!");
     }
@@ -190,9 +201,8 @@ impl<'a> Nodes<'a> {
 
             self.end_with_space();
             self.nodes.push(Node::text("-- "));
-            self.nodes.push(Node::text(
-                self.source[comment.start as usize + 2..comment.end as usize].trim(),
-            ));
+            self.nodes
+                .push(Node::text(self.source[comment][2..].trim()));
 
             self.last_token = comment.end;
             first = false;

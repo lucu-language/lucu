@@ -1,5 +1,5 @@
 [package]
-name = "lucu-pretty"
+name = "asta-pretty"
 version = "0.1.0"
 edition = "2024"
 

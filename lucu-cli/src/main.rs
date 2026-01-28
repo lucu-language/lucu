@@ -8,7 +8,7 @@ use lucu::module::watcher::{FileWatcher, WatchedLibrary};
 use lucu::module::{Library, Module};
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
-use lucu_annotate::Annotate;
+use asta_annotate::Annotate;
 
 fn main() {
     let mut dirs = HashMap::new();

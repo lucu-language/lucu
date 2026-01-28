@@ -6,7 +6,7 @@ use lucu::module::Module;
 use lucu::pass::lexer::Lexer;
 use lucu::pass::parser::Parser;
 use lucu::span::{HasSpan, Span};
-use lucu_pretty::{Node, Text};
+use asta_pretty::{Node, Text};
 
 fn main() -> Result<(), io::Error> {
     // get source

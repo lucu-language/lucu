@@ -18,7 +18,7 @@ include_dir = { workspace = true, optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
 notify-debouncer-full = { version = "0.6.0", features = ["crossbeam-channel"], optional = true }
 
-lucu-annotate = { path = "../lucu-annotate", optional = true }
+asta-annotate = { path = "../asta-annotate", optional = true }
 anstyle = { workspace = true, optional = true }
 
 anstream = { version = "0.6.21", optional = true }
@@ -26,5 +26,5 @@ line-column = { version = "0.2.0", optional = true }
 
 [features]
 watcher = ["dep:include_dir", "dep:crossbeam-channel", "dep:notify-debouncer-full"]
-annotate = ["dep:lucu-annotate", "lucu-annotate/anstyle", "dep:anstyle"]
+annotate = ["dep:asta-annotate", "asta-annotate/anstyle", "dep:anstyle"]
 print = ["annotate", "dep:anstream", "dep:line-column"]

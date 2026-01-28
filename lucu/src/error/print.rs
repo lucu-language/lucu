@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use anstyle::{AnsiColor, Color, Style};
 use line_column::line_column;
-use lucu_annotate::ansi::MarkStyle;
-use lucu_annotate::{Annotate, Mark};
+use asta_annotate::ansi::MarkStyle;
+use asta_annotate::{Annotate, Mark};
 
 use crate::annotate::AnnotateExt;
 pub use crate::annotate::LINE_STYLE;

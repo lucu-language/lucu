@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use asta_annotate::Annotate;
 use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
 use lucu::error::print::PrintProblems;
@@ -8,7 +9,6 @@ use lucu::module::watcher::{FileWatcher, WatchedLibrary};
 use lucu::module::{Library, Module};
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
-use asta_annotate::Annotate;
 
 fn main() {
     let mut dirs = HashMap::new();
@@ -16,7 +16,11 @@ fn main() {
         Library::BUILTIN,
         WatchedLibrary::new("./modules/builtin")
             .with_modules(include_dir!("modules/builtin"))
-            .with_preamble(Module::BUILTIN_PREAMBLE),
+            .with_preamble(Module::BUILTIN_TYPES),
+    );
+    dirs.insert(
+        Library::LIBC,
+        WatchedLibrary::new("./modules/libc").with_preamble(Module::LIBC_TYPES),
     );
     dirs.insert(
         Library::CORE,
@@ -40,20 +44,22 @@ fn main() {
 
         for module in graph.postorder().unwrap() {
             if let Some(stages) = graph.stages(module) {
-                let source = stages.source().unwrap();
-                let tokens = stages.tokens().unwrap();
-                let ast = stages.ast().unwrap();
+                if stages.source().is_some() {
+                    let source = stages.source().unwrap();
+                    let tokens = stages.tokens().unwrap();
+                    let ast = stages.ast().unwrap();
 
-                let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
+                    let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
 
-                if let Some(definitions) = stages.definitions() {
-                    anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
-                } else {
-                    anstream::println!("{}", annotated);
-                }
+                    if let Some(definitions) = stages.definitions() {
+                        anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
+                    } else {
+                        anstream::println!("{}", annotated);
+                    }
 
-                if let Some(untyped) = stages.untyped_ir(&graph, &mut tt) {
-                    println!("{}", untyped.display(&tt));
+                    if let Some(untyped) = stages.untyped_ir(&graph, &mut tt) {
+                        println!("{}", untyped.display(&tt));
+                    }
                 }
 
                 stages.print_problems(&watcher, true);

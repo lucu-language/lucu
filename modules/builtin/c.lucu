@@ -1,0 +1,27 @@
+type char = #intrinsic
+type schar = #intrinsic
+type uchar = #intrinsic
+
+type short = #intrinsic
+type ushort = #intrinsic
+
+type int = #intrinsic
+type uint = #intrinsic
+
+type long = #intrinsic
+type ulong = #intrinsic
+
+type longlong = #intrinsic
+type ulonglong = #intrinsic
+
+-- type float = #intrinsic
+-- type double = #intrinsic
+-- type longdouble = #intrinsic
+
+-- type float_Complex = struct(real float, imaginary float_Imaginary)
+-- type double_Complex = struct(real double, imaginary double_Imaginary)
+-- type longdouble_Complex = struct(real longdouble, imaginary longdouble_Imaginary)
+
+-- type float_Imaginary = struct(magnitude float)
+-- type double_Imaginary = struct(magnitude double)
+-- type longdouble_Imaginary = struct(magnitude longdouble)

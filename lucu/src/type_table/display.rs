@@ -33,13 +33,26 @@ impl fmt::Display for Interned<'_, Kind> {
 
 impl fmt::Display for Integer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefix = if self.signed { 'I' } else { 'U' };
-        match (self.signed, self.size) {
-            (true, IntSize::Register) => write!(f, "Int"),
-            (false, IntSize::Register) => write!(f, "UInt"),
-            (_, IntSize::Exact(size)) => write!(f, "{prefix}{size}"),
-            (_, IntSize::Address) => write!(f, "{prefix}Ptr"),
-            (_, IntSize::Index) => write!(f, "{prefix}Size"),
+        match *self {
+            Integer::Integer(signed, size) => {
+                let prefix = if signed { "I" } else { "U" };
+                let c_prefix = if signed { "" } else { "U" };
+                match (signed, size) {
+                    (_, IntSize::Exact(size)) => write!(f, "{prefix}{size}"),
+
+                    (_, IntSize::Index) => write!(f, "{prefix}Size"),
+                    (_, IntSize::Address) => write!(f, "{prefix}Ptr"),
+                    (_, IntSize::Register) => write!(f, "{c_prefix}Int"),
+
+                    (true, IntSize::CChar) => write!(f, "c.SChar"),
+                    (false, IntSize::CChar) => write!(f, "c.UChar"),
+                    (_, IntSize::CShort) => write!(f, "c.{c_prefix}Short"),
+                    (_, IntSize::CInt) => write!(f, "c.{c_prefix}Int"),
+                    (_, IntSize::CLong) => write!(f, "c.{c_prefix}Long"),
+                    (_, IntSize::CLongLong) => write!(f, "c.{c_prefix}LongLong"),
+                }
+            }
+            Integer::CChar => write!(f, "c.Char"),
         }
     }
 }

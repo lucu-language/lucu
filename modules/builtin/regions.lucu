@@ -1,0 +1,15 @@
+effect Read[R region]
+	= #intrinsic
+
+effect Write[R region]
+	= #intrinsic
+
+fun local[T, U](
+	val T,
+	fun body[R region](ptr ^@R T) U with Read[R] Write[R]
+) U = #intrinsic
+
+fun alloca[T, U](
+	len usize,
+	fun body[R region](slice ^@R []T) U with Read[R] Write[R]
+) U = #intrinsic

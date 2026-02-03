@@ -876,22 +876,33 @@ impl Lower<'_> {
     fn intrinsic_type(&mut self, name: &ast::Name) -> Result<Type> {
         let module = self.module.to_compact_string();
         let ty = match (module.as_str(), name.ident.as_str()) {
-            ("builtin:preamble", "u8") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8))),
-            ("builtin:preamble", "u16") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(16))),
-            ("builtin:preamble", "u32") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32))),
-            ("builtin:preamble", "u64") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(64))),
-            ("builtin:preamble", "uint") => TypeEnum::Integer(Integer::unsigned(IntSize::Register)),
-            ("builtin:preamble", "uptr") => TypeEnum::Integer(Integer::unsigned(IntSize::Address)),
-            ("builtin:preamble", "usize") => TypeEnum::Integer(Integer::unsigned(IntSize::Index)),
-            ("builtin:preamble", "i8") => TypeEnum::Integer(Integer::signed(IntSize::Exact(8))),
-            ("builtin:preamble", "i16") => TypeEnum::Integer(Integer::signed(IntSize::Exact(16))),
-            ("builtin:preamble", "i32") => TypeEnum::Integer(Integer::signed(IntSize::Exact(32))),
-            ("builtin:preamble", "i64") => TypeEnum::Integer(Integer::signed(IntSize::Exact(64))),
-            ("builtin:preamble", "int") => TypeEnum::Integer(Integer::signed(IntSize::Register)),
-            ("builtin:preamble", "iptr") => TypeEnum::Integer(Integer::signed(IntSize::Address)),
-            ("builtin:preamble", "isize") => TypeEnum::Integer(Integer::signed(IntSize::Index)),
-            ("builtin:preamble", "bool") => TypeEnum::Boolean,
-            ("builtin:preamble", "unit") => TypeEnum::Unit,
+            ("builtin:types", "u8") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8))),
+            ("builtin:types", "u16") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(16))),
+            ("builtin:types", "u32") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32))),
+            ("builtin:types", "u64") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(64))),
+            ("builtin:types", "uint") => TypeEnum::Integer(Integer::unsigned(IntSize::Register)),
+            ("builtin:types", "uptr") => TypeEnum::Integer(Integer::unsigned(IntSize::Address)),
+            ("builtin:types", "usize") => TypeEnum::Integer(Integer::unsigned(IntSize::Index)),
+            ("builtin:types", "i8") => TypeEnum::Integer(Integer::signed(IntSize::Exact(8))),
+            ("builtin:types", "i16") => TypeEnum::Integer(Integer::signed(IntSize::Exact(16))),
+            ("builtin:types", "i32") => TypeEnum::Integer(Integer::signed(IntSize::Exact(32))),
+            ("builtin:types", "i64") => TypeEnum::Integer(Integer::signed(IntSize::Exact(64))),
+            ("builtin:types", "int") => TypeEnum::Integer(Integer::signed(IntSize::Register)),
+            ("builtin:types", "iptr") => TypeEnum::Integer(Integer::signed(IntSize::Address)),
+            ("builtin:types", "isize") => TypeEnum::Integer(Integer::signed(IntSize::Index)),
+            ("builtin:types", "bool") => TypeEnum::Boolean,
+            ("builtin:types", "unit") => TypeEnum::Unit,
+            ("builtin:c", "char") => TypeEnum::Integer(Integer::CChar),
+            ("builtin:c", "schar") => TypeEnum::Integer(Integer::signed(IntSize::CChar)),
+            ("builtin:c", "uchar") => TypeEnum::Integer(Integer::unsigned(IntSize::CChar)),
+            ("builtin:c", "short") => TypeEnum::Integer(Integer::signed(IntSize::CShort)),
+            ("builtin:c", "ushort") => TypeEnum::Integer(Integer::unsigned(IntSize::CShort)),
+            ("builtin:c", "int") => TypeEnum::Integer(Integer::signed(IntSize::CInt)),
+            ("builtin:c", "uint") => TypeEnum::Integer(Integer::unsigned(IntSize::CInt)),
+            ("builtin:c", "long") => TypeEnum::Integer(Integer::signed(IntSize::CLong)),
+            ("builtin:c", "ulong") => TypeEnum::Integer(Integer::unsigned(IntSize::CLong)),
+            ("builtin:c", "longlong") => TypeEnum::Integer(Integer::signed(IntSize::CLongLong)),
+            ("builtin:c", "ulonglong") => TypeEnum::Integer(Integer::unsigned(IntSize::CLongLong)),
             _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),
@@ -903,9 +914,9 @@ impl Lower<'_> {
     fn intrinsic_function(&mut self, name: &ast::Name) -> Result<FunctionBody> {
         let module = self.module.to_compact_string();
         let value = match (module.as_str(), name.ident.as_str()) {
-            ("builtin:preamble", "len") => IntrinsicFunction::Len,
-            ("builtin:preamble", "local") => IntrinsicFunction::Local,
-            ("builtin:preamble", "alloca") => IntrinsicFunction::Alloca,
+            ("builtin:ops", "len") => IntrinsicFunction::Len,
+            ("builtin:regions", "local") => IntrinsicFunction::Local,
+            ("builtin:regions", "alloca") => IntrinsicFunction::Alloca,
             ("builtin:preamble", "print_str") => IntrinsicFunction::PrintStr,
             ("builtin:preamble", "loop") => IntrinsicFunction::Loop,
             ("builtin:preamble", "unfounded") => IntrinsicFunction::Unfounded,
@@ -928,8 +939,8 @@ impl Lower<'_> {
         if !matches!(
             (module.as_str(), name.ident.as_str()),
             ("builtin:preamble", "Div")
-                | ("builtin:preamble", "Read")
-                | ("builtin:preamble", "Write"),
+                | ("builtin:regions", "Read")
+                | ("builtin:regions", "Write"),
         ) {
             todo!(
                 "error: unknown intrinsic {}.{}",
@@ -944,8 +955,8 @@ impl Lower<'_> {
     fn intrinsic_constant(&mut self, name: &ast::Name) -> Result<Constant> {
         let module = self.module.to_compact_string();
         let constant = match (module.as_str(), name.ident.as_str()) {
-            ("builtin:preamble", "true") => ConstantEnum::True,
-            ("builtin:preamble", "false") => ConstantEnum::False,
+            ("builtin:types", "true") => ConstantEnum::True,
+            ("builtin:types", "false") => ConstantEnum::False,
             _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),

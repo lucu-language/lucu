@@ -1,0 +1,75 @@
+import "builtin:types"
+import "builtin:c"
+
+-- ARITHMETIC TYPES --
+
+type char = c.char
+type schar = c.schar
+type uchar = c.uchar
+
+type short = c.short
+type ushort = c.ushort
+
+type int = c.int
+type uint = c.uint
+
+type long = c.long
+type ulong = c.ulong
+
+type longlong = c.longlong
+type ulonglong = c.ulonglong
+
+-- ADDITIONAL BASIC TYPES --
+
+type size_t = types.usize
+type ptrdiff_t = types.isize
+
+-- type nullptr_t = ?^types.void
+-- const NULL nullptr_t = ...
+
+-- type max_align_t = ...
+
+type bool = types.bool
+const true bool = types.true
+const false bool = types.false
+
+type errno_t = int
+type rsize_t = size_t
+
+-- FIXED WIDTH INTEGER TYPES --
+
+type int8_t = types.i8
+type int16_t = types.i16
+type int32_t = types.i32
+type int64_t = types.i64
+
+-- type int_fast8_t = ...
+-- type int_fast16_t = ...
+-- type int_fast32_t = ...
+-- type int_fast64_t = ...
+
+-- type int_least8_t = ...
+-- type int_least16_t = ...
+-- type int_least32_t = ...
+-- type int_least64_t = ...
+
+-- type intmax_t = ...
+type intptr_t = types.iptr
+
+type uint8_t = types.u8
+type uint16_t = types.u16
+type uint32_t = types.u32
+type uint64_t = types.u64
+
+-- type uint_fast8_t = ...
+-- type uint_fast16_t = ...
+-- type uint_fast32_t = ...
+-- type uint_fast64_t = ...
+
+-- type uint_least8_t = ...
+-- type uint_least16_t = ...
+-- type uint_least32_t = ...
+-- type uint_least64_t = ...
+
+-- type uintmax_t = ...
+type uintptr_t = types.uptr

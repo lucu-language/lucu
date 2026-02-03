@@ -1,83 +1,34 @@
--- integer types
+import "types"
+import "regions"
 
-type u8 = #intrinsic
-type u16 = #intrinsic
-type u32 = #intrinsic
-type u64 = #intrinsic
+type u8 = types.u8
+type u16 = types.u16
+type u32 = types.u32
+type u64 = types.u64
 
-type uint = #intrinsic
-type uptr = #intrinsic
-type usize = #intrinsic
+type uint = types.uint
+type uptr = types.uptr
+type usize = types.usize
 
-type i8 = #intrinsic
-type i16 = #intrinsic
-type i32 = #intrinsic
-type i64 = #intrinsic
+type i8 = types.i8
+type i16 = types.i16
+type i32 = types.i32
+type i64 = types.i64
 
-type int = #intrinsic
-type iptr = #intrinsic
-type isize = #intrinsic
+type int = types.int
+type iptr = types.iptr
+type isize = types.isize
 
--- other types
+type bool = types.bool
+type unit = types.unit
 
-type bool = #intrinsic
-type unit = #intrinsic
-
-const true bool = #intrinsic
-const false bool = #intrinsic
+const true bool = types.true
+const false bool = types.false
 
 -- regions
 
-effect Read[R region]
-	= #intrinsic
-
-effect Write[R region]
-	= #intrinsic
-
-fun local[T, U](
-	val T,
-	fun body[R region](ptr ^@R T) U with Read[R] Write[R]
-) U = #intrinsic
-
-fun alloca[T, U](
-	len usize,
-	fun body[R region](slice ^@R []T) U with Read[R] Write[R]
-) U = #intrinsic
-
--- slices
-
-effect Slice[T] = {
-	fun len(slice T) usize
-}
-
-handle[E, R region] Slice[^@R []E] {
-	fun len(slice ^@R []E) usize
-		= #intrinsic
-}
-handle[E, R region] Slice[^@R [:0]E] with Read[R] {
-	fun len(slice ^@R [:0]E) usize
-		= #intrinsic
-}
-handle[E, N usize] Slice[[N]E] {
-	fun len(array [N]E) usize
-		= {}
-		-- = N
-}
-handle[E, N usize] Slice[[N:0]E] {
-	fun len(array [N:0]E) usize
-		= {}
-		-- = N
-}
-handle[E, R region, N usize] Slice[^@R [N]E] {
-	fun len(array_ptr ^@R [N]E) usize
-		= {}
-		-- = N
-}
-handle[E, R region, N usize] Slice[^@R [N:0]E] {
-	fun len(array_ptr ^@R [N:0]E) usize
-		= {}
-		-- = N
-}
+effect Read[R region] = regions.Read[R]
+effect Write[R region] = regions.Write[R]
 
 -- printing
 

@@ -97,6 +97,7 @@ impl Imports {
         inner
     }
     fn import_name(path: &ast::String) -> ast::Identifier {
+        // FIXME: first get the filename, THEN remove the extension
         let without_extension = path
             .as_str()
             .rsplit_once('.')

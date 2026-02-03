@@ -1,0 +1,27 @@
+-- integer types
+
+type u8 = #intrinsic
+type u16 = #intrinsic
+type u32 = #intrinsic
+type u64 = #intrinsic
+
+type uint = #intrinsic
+type uptr = #intrinsic
+type usize = #intrinsic
+
+type i8 = #intrinsic
+type i16 = #intrinsic
+type i32 = #intrinsic
+type i64 = #intrinsic
+
+type int = #intrinsic
+type iptr = #intrinsic
+type isize = #intrinsic
+
+-- other types
+
+type bool = #intrinsic
+type unit = #intrinsic
+
+const true bool = #intrinsic
+const false bool = #intrinsic

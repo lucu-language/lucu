@@ -1,6 +1,8 @@
 import "core:io"
 import "core:control"
 import "builtin:ops"
+import "libc:types" c
+import "libc:program"
 
 type Id[T] = T
 
@@ -19,7 +21,7 @@ effect Yield4 = YieldABCD[u64, u64, u64, u64]
 
 effect Empty = ;
 
-type CString[R region] = ^@R [:0]u8
+type CString[R region] = ^@R [:0]c.char
 
 type Slice[T, R region] = ^@R []T
 

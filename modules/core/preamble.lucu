@@ -1,28 +1,28 @@
-import "builtin:preamble" builtin
+import "builtin:types"
 
-type u8 = builtin.u8
-type u16 = builtin.u16
-type u32 = builtin.u32
-type u64 = builtin.u64
+type u8 = types.u8
+type u16 = types.u16
+type u32 = types.u32
+type u64 = types.u64
 
-type uint = builtin.uint
-type uptr = builtin.uptr
-type usize = builtin.usize
+type uint = types.uint
+type uptr = types.uptr
+type usize = types.usize
 
-type i8 = builtin.i8
-type i16 = builtin.i16
-type i32 = builtin.i32
-type i64 = builtin.i64
+type i8 = types.i8
+type i16 = types.i16
+type i32 = types.i32
+type i64 = types.i64
 
-type int = builtin.int
-type iptr = builtin.iptr
-type isize = builtin.isize
+type int = types.int
+type iptr = types.iptr
+type isize = types.isize
 
-type bool = builtin.bool
-type unit = builtin.unit
+type bool = types.bool
+type unit = types.unit
 
-const true bool = builtin.true
-const false bool = builtin.false
+const true bool = types.true
+const false bool = types.false
 
 effect Yield[T] = {
 	fun yield(t T)

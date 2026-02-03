@@ -7,6 +7,15 @@ effect Sink = {
 	fun flush()
 }
 
+fun read_line with Source Sink = {
+}
+
+effect StdIo = {
+	fun stdin(fun body with Source)
+	fun stdout(fun body with Sink)
+	fun stderr(fun body with Sink)
+}
+
 effect Buffered[E effect] = {
 	fun buffered[R region](
 		buffer ^@R []u8,

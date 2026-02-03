@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use compact_str::{CompactString, format_compact};
+use compact_str::{CompactString, ToCompactString, format_compact};
 use path_clean::clean;
 
 #[cfg(feature = "watcher")]
@@ -14,6 +14,7 @@ impl Library {
     pub const MAIN: Library = Library::const_new("main");
     pub const BUILTIN: Library = Library::const_new("builtin");
     pub const CORE: Library = Library::const_new("core");
+    pub const LIBC: Library = Library::const_new("libc");
 
     pub const fn const_new(name: &'static str) -> Self {
         Self(CompactString::const_new(name))
@@ -67,9 +68,21 @@ impl Module {
         library: Library::MAIN,
         relative_path: CompactString::const_new("main"),
     };
+    pub const BUILTIN_C: Module = Self {
+        library: Library::BUILTIN,
+        relative_path: CompactString::const_new("c"),
+    };
+    pub const BUILTIN_TYPES: Module = Self {
+        library: Library::BUILTIN,
+        relative_path: CompactString::const_new("types"),
+    };
     pub const BUILTIN_PREAMBLE: Module = Self {
         library: Library::BUILTIN,
         relative_path: CompactString::const_new("preamble"),
+    };
+    pub const LIBC_TYPES: Module = Self {
+        library: Library::LIBC,
+        relative_path: CompactString::const_new("types"),
     };
     pub const CORE_PREAMBLE: Module = Self {
         library: Library::CORE,
@@ -90,12 +103,12 @@ impl Module {
         }
     }
     pub fn name(&self) -> &str {
-        let relative = self.relative_path.as_str();
-        let without_extension = relative.rsplit_once('.').map(|t| t.0).unwrap_or(relative);
-        without_extension
+        let filename = self
+            .relative_path
             .rsplit_once(['/', '\\'])
             .map(|t| t.1)
-            .unwrap_or(without_extension)
+            .unwrap_or(&self.relative_path);
+        filename.rsplit_once('.').map(|t| t.0).unwrap_or(filename)
     }
     pub fn from_import(parent: &Module, import: &str) -> Self {
         match import.split_once(':') {
@@ -117,8 +130,13 @@ impl Module {
         }
     }
     pub fn path_with_extension(&self) -> CompactString {
-        if self.relative_path.contains('.') {
-            self.relative_path.clone()
+        let filename = self
+            .relative_path
+            .rsplit_once(['/', '\\'])
+            .map(|t| t.1)
+            .unwrap_or(&self.relative_path);
+        if filename.contains('.') {
+            filename.to_compact_string()
         } else {
             format_compact!("{}.lucu", self.relative_path)
         }

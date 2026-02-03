@@ -24,10 +24,48 @@ pub struct TypeTable {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum IntSize {
+    /// Exact number of bits
     Exact(usize),
-    Register,
-    Address,
+
+    /// The size of a continuous block of memory
+    /// At least 16 bits
+    /// At most IntSize::Address
     Index,
+    /// The size of a memory address
+    /// At least 16 bits
+    Address,
+    /// The size of the largest general purpose integer register
+    /// At least 16 bits
+    Register,
+
+    /// Equivalent of a C char
+    /// Smallest addressable unit of the machine
+    /// At least 8 bits
+    /// At most IntSize::CShort
+    CChar,
+    /// Equivalent of a C short int
+    /// At least 16 bits
+    /// At most IntSize::CInt
+    CShort,
+    /// Equivalent of a C int
+    /// At least 16 bits
+    /// At most IntSize::CLong
+    CInt,
+    /// Equivalent of a C long int
+    /// At least 32 bits
+    /// At most IntSize::CLongLong
+    CLong,
+    /// Equivalent of a C long long int
+    /// At least 64 bits
+    CLongLong,
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub enum Integer {
+    Integer(bool, IntSize),
+    /// Integer of the same size as a C char
+    /// Unknown sign
+    CChar,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -37,20 +75,74 @@ pub struct GenericParameter {
     pub apply: Option<Arc<[GenericArgument]>>,
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
-pub struct Integer {
-    pub signed: bool,
-    pub size: IntSize,
+impl IntSize {
+    pub const fn smaller_than(self, other: IntSize) -> bool {
+        match (self, other) {
+            (IntSize::Exact(a), IntSize::Exact(b)) => a < b,
+            (IntSize::Exact(n), IntSize::Index | IntSize::Address | IntSize::Register) => n < 16,
+
+            (IntSize::Exact(n), IntSize::CChar) => n < 8,
+            (IntSize::Exact(n), IntSize::CShort | IntSize::CInt) => n < 16,
+            (IntSize::Exact(n), IntSize::CLong) => n < 32,
+            (IntSize::Exact(n), IntSize::CLongLong) => n < 64,
+
+            _ => false,
+        }
+    }
+    #[rustfmt::skip]
+    pub const fn fits_inside(self, other: IntSize) -> bool {
+        match (self, other) {
+            (IntSize::Exact(a), IntSize::Exact(b)) => a <= b,
+            (IntSize::Exact(n), IntSize::Index | IntSize::Address | IntSize::Register) => n <= 16,
+
+            (IntSize::Index, IntSize::Index | IntSize::Address) => true,
+            (IntSize::Address, IntSize::Address) => true,
+            (IntSize::Register, IntSize::Register) => true,
+
+            (IntSize::Exact(n), IntSize::CChar) => n <= 8,
+            (IntSize::Exact(n), IntSize::CShort | IntSize::CInt) => n <= 16,
+            (IntSize::Exact(n), IntSize::CLong) => n <= 32,
+            (IntSize::Exact(n), IntSize::CLongLong) => n <= 64,
+
+            (IntSize::CChar, IntSize::CChar | IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
+            (IntSize::CShort, IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
+            (IntSize::CInt, IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
+            (IntSize::CLong, IntSize::CLong | IntSize::CLongLong) => true,
+            (IntSize::CLongLong, IntSize::CLongLong) => true,
+            
+            _ => false,
+        }
+    }
 }
 
 impl Integer {
     pub const fn signed(size: IntSize) -> Self {
-        Self { signed: true, size }
+        Self::Integer(true, size)
     }
     pub const fn unsigned(size: IntSize) -> Self {
-        Self {
-            signed: false,
-            size,
+        Self::Integer(false, size)
+    }
+    pub const fn fits_inside(self, other: Integer) -> bool {
+        // an unsigned type fits inside an unside type, if its size is smaller (or equal)
+        // an unsigned type fits inside a signed type, if its size is *strictly* smaller
+        // a signed type fits inside a signed type, if its size is smaller (or equal)
+        // a signed type *never* fits inside an unsigned type
+        match (self, other) {
+            (Integer::Integer(sign_a, int_size_a), Integer::Integer(sign_b, int_size_b)) => {
+                if sign_a == sign_b {
+                    int_size_a.fits_inside(int_size_b)
+                } else {
+                    sign_b && int_size_a.smaller_than(int_size_b)
+                }
+            }
+
+            (Integer::Integer(sign, int_size), Integer::CChar) => {
+                !sign && int_size.smaller_than(IntSize::CChar)
+            }
+            (Integer::CChar, Integer::Integer(sign, int_size)) => {
+                sign && IntSize::CChar.smaller_than(int_size)
+            }
+            (Integer::CChar, Integer::CChar) => true,
         }
     }
 }
@@ -79,6 +171,8 @@ pub enum TypeEnum {
 }
 
 impl TypeEnum {
+    pub const U8: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8)));
+    pub const INT: Self = TypeEnum::Integer(Integer::signed(IntSize::Register));
     pub const USIZE: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Index));
 }
 

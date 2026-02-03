@@ -21,7 +21,7 @@ type ulonglong = c.ulonglong
 
 -- POINTER TYPES --
 
-type string[R region] = c.string[R]
+type string[r] = c.string[r]
 
 -- ADDITIONAL BASIC TYPES --
 

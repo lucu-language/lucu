@@ -149,6 +149,9 @@ impl fmt::Display for Interned<'_, Effect> {
                 }
                 Ok(())
             }
+            EffectEnum::Read(region) => write!(f, "read {}", region.display(self.1)),
+            EffectEnum::Write(region) => write!(f, "write {}", region.display(self.1)),
+            EffectEnum::Divergent => write!(f, "div"),
         }
     }
 }
@@ -276,6 +279,9 @@ impl Effect {
             EffectEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
             EffectEnum::Item(item) => item.apply.is_some(),
             EffectEnum::Row(_) => true,
+            EffectEnum::Read(_) => true,
+            EffectEnum::Write(_) => true,
+            EffectEnum::Divergent => false,
         }
     }
 }

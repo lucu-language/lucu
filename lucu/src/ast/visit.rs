@@ -302,13 +302,16 @@ impl Ast for ast::Name {
 
 impl Ast for ast::GenericParameter {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visitor.visit(&self.name),
-            visit_option(&self.kind, visitor, Visitor::visit),
-        ])
+        match self {
+            ast::GenericParameter::Type(name) => visitor.visit(name),
+            ast::GenericParameter::Region(_, identifier) => visitor.visit(identifier),
+            ast::GenericParameter::Other(name, kind) => {
+                V::Output::combine([visitor.visit(name), visitor.visit(kind)])
+            }
+        }
     }
     fn node_name(&self) -> &'static str {
-        "GenericParameter"
+        self.into()
     }
 }
 

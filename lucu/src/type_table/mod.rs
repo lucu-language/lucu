@@ -186,6 +186,9 @@ pub enum EffectEnum {
     Generic(GenericParameter),
     Item(Item),
     Row(Arc<[Effect]>),
+    Read(Region),
+    Write(Region),
+    Divergent,
 }
 
 impl EffectEnum {

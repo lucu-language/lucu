@@ -7,9 +7,9 @@ use do_notation::m;
 use crate::ast;
 use crate::error::{Problems, Result};
 use crate::ir::{
-    EffectDef, EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition,
-    HandlerBodyDefinition, HandlerDef, HandlerMember, IR, IntrinsicFunction, ItemDef,
-    ItemDefinition, Parent, StructDefinition, StructMember,
+    EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition, HandlerBodyDefinition,
+    HandlerDef, HandlerMember, IR, IntrinsicFunction, ItemDef, ItemDefinition, Parent,
+    StructDefinition, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -127,7 +127,7 @@ impl Lower<'_> {
                 assert_eq!(params.len(), generics.inner.elements.len());
                 base.pushed(
                     Iterator::zip(generics.inner.iter(), params.iter())
-                        .map(|(ast, &kind)| (ast.name.ident.as_str(), kind)),
+                        .map(|(ast, &kind)| (ast.ident().as_str(), kind)),
                 )
             }
             (None, None) => base.clone(),
@@ -203,8 +203,7 @@ impl Lower<'_> {
                         })
                         .collect();
 
-                    self.ir
-                        .realize_effect(eff, EffectDefinition::Body { members });
+                    self.ir.realize_effect(eff, EffectDefinition { members });
                 }
             }
             ast::Item::Constant(_, _, _, _) => {}
@@ -234,86 +233,78 @@ impl Lower<'_> {
                     unreachable!("ICE: effect item is not an effect")
                 };
 
-                match effect_def {
-                    EffectDefinition::Body { members } => {
-                        let members = members
-                            .clone()
-                            .into_iter()
-                            .map(|member| {
-                                let expected_sig = match &effect_args {
-                                    Some(args) => member.signature.subst(self.tt, 0, args),
-                                    None => member.signature,
-                                };
+                let members = effect_def
+                    .members
+                    .clone()
+                    .into_iter()
+                    .map(|member| {
+                        let expected_sig = match &effect_args {
+                            Some(args) => member.signature.subst(self.tt, 0, args),
+                            None => member.signature,
+                        };
 
-                                let Some(matching) = handler.items.inner.iter().find(|def| {
-                                    def.name()
-                                        .is_some_and(|name| name.ident.as_str() == member.name)
-                                }) else {
-                                    todo!(
-                                        "error: no definition for '{}' inside handler",
-                                        member.name
-                                    )
-                                };
+                        let Some(matching) = handler.items.inner.iter().find(|def| {
+                            def.name()
+                                .is_some_and(|name| name.ident.as_str() == member.name)
+                        }) else {
+                            todo!("error: no definition for '{}' inside handler", member.name)
+                        };
 
-                                let ast::Item::Function(fun_decl, fun_def) = matching else {
-                                    todo!("error: definition '{}' is not a function", member.name)
-                                };
+                        let ast::Item::Function(fun_decl, fun_def) = matching else {
+                            todo!("error: definition '{}' is not a function", member.name)
+                        };
 
-                                let Some(signature) =
-                                    problems.append(self.function_signature(fun_decl, &generics))
-                                else {
-                                    return HandlerMember {
-                                        name: member.name,
-                                        signature: expected_sig,
-                                        body: None,
-                                    };
-                                };
-                                if expected_sig != signature {
-                                    todo!(
-                                        "error: signature mismatch. Expected {}, got {}",
-                                        expected_sig.display(self.tt),
-                                        signature.display(self.tt)
-                                    );
-                                }
+                        let Some(signature) =
+                            problems.append(self.function_signature(fun_decl, &generics))
+                        else {
+                            return HandlerMember {
+                                name: member.name,
+                                signature: expected_sig,
+                                body: None,
+                            };
+                        };
+                        if expected_sig != signature {
+                            todo!(
+                                "error: signature mismatch. Expected {}, got {}",
+                                expected_sig.display(self.tt),
+                                signature.display(self.tt)
+                            );
+                        }
 
-                                let Some((_, fun_def)) = fun_def else {
-                                    todo!("error")
-                                };
+                        let Some((_, fun_def)) = fun_def else {
+                            todo!("error")
+                        };
 
-                                match fun_def {
-                                    ast::FunctionDefinition::Expression(expr) => {
-                                        let body = self.ir.push_function_body();
-                                        self.ir.realize_function_body(
-                                            body,
-                                            FunctionBodyDefinition::Expression {
-                                                captures: 0,
-                                                body: (),
-                                            },
-                                        );
-                                        HandlerMember {
-                                            body: Some(body),
-                                            name: member.name,
-                                            signature,
-                                        }
-                                    }
-                                    ast::FunctionDefinition::Intrinsic(_) => HandlerMember {
-                                        body: problems
-                                            .append(self.intrinsic_function(&fun_decl.name)),
-                                        name: member.name,
-                                        signature,
+                        match fun_def {
+                            ast::FunctionDefinition::Expression(expr) => {
+                                let body = self.ir.push_function_body();
+                                self.ir.realize_function_body(
+                                    body,
+                                    FunctionBodyDefinition::Expression {
+                                        captures: 0,
+                                        body: (),
                                     },
+                                );
+                                HandlerMember {
+                                    body: Some(body),
+                                    name: member.name,
+                                    signature,
                                 }
-                            })
-                            .collect::<Vec<HandlerMember>>();
+                            }
+                            ast::FunctionDefinition::Intrinsic(_) => HandlerMember {
+                                body: problems.append(self.intrinsic_function(&fun_decl.name)),
+                                name: member.name,
+                                signature,
+                            },
+                        }
+                    })
+                    .collect::<Vec<HandlerMember>>();
 
-                        // TODO: check for duplicates
-                        // TODO: check for unknown
+                // TODO: check for duplicates
+                // TODO: check for unknown
 
-                        self.ir
-                            .realize_handler_body(body, HandlerBodyDefinition { members });
-                    }
-                    EffectDefinition::Intrinsic => todo!("error: effect is intrinsic"),
-                }
+                self.ir
+                    .realize_handler_body(body, HandlerBodyDefinition { members });
             }
         }
 
@@ -328,7 +319,8 @@ impl Lower<'_> {
                     todo!("error")
                 }
 
-                let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type));
+                let kind =
+                    problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type, None));
 
                 match def {
                     Some((_, ast::TypeDefinition::Type(ast))) => {
@@ -423,7 +415,8 @@ impl Lower<'_> {
                     todo!("error")
                 }
 
-                let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Effect));
+                let kind =
+                    problems.append(self.kind(name.generics.as_ref(), SimpleKind::Effect, None));
 
                 match def {
                     Some((_, ast::EffectDefinition::Body(_))) => {
@@ -458,9 +451,9 @@ impl Lower<'_> {
                     Some((_, ast::EffectDefinition::Intrinsic(_))) => {
                         let eff = problems.append(self.intrinsic_effect(name));
                         if let (Some(kind), Some(eff)) = (kind, eff) {
-                            let item = ItemDef::Effect(kind, eff);
+                            let item = ItemDef::Alias(kind, Term::Effect(eff));
                             self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            return problems.with(LoweredDef::None);
                         }
                     }
                     None => todo!("error"),
@@ -474,7 +467,11 @@ impl Lower<'_> {
                 // NOTE: if we eventually have dependent kinds this this might fail
                 let ty = problems.append(self.r#type(ty, &Generics::new()));
                 let kind = ty.and_then(|ty| {
-                    problems.append(self.kind(name.generics.as_ref(), SimpleKind::Constant(ty)))
+                    problems.append(self.kind(
+                        name.generics.as_ref(),
+                        SimpleKind::Constant(ty),
+                        None,
+                    ))
                 });
 
                 match def {
@@ -509,7 +506,12 @@ impl Lower<'_> {
                     todo!("error")
                 }
 
-                let kind = problems.append(self.kind(params.as_ref(), SimpleKind::Effect));
+                let mut implicit_effects = Vec::new();
+                let kind = problems.append(self.kind(
+                    params.as_ref(),
+                    SimpleKind::Effect,
+                    Some(&mut implicit_effects),
+                ));
                 if let Some(kind) = kind {
                     let generics = self.generics(
                         self.tt[kind].params.as_ref(),
@@ -523,6 +525,7 @@ impl Lower<'_> {
                             .iter()
                             .flat_map(|we| &we.effects)
                             .map(|effect| self.effect(effect, &generics))
+                            .chain(implicit_effects.into_iter().map(Result::new))
                             .collect::<Result<Arc<_>>>(),
                     );
                     if let (Some(effect), Some(with_effects)) = (effect, with_effects) {
@@ -851,25 +854,53 @@ impl Lower<'_> {
     fn kind_params(
         &mut self,
         name: Option<&ast::GenericParameters>,
+        mut effects: Option<&mut Vec<Effect>>,
     ) -> Result<Option<Arc<[Kind]>>> {
         match name {
             Some(params) => params
                 .inner
                 .iter()
-                .map(|param| {
-                    match &param.kind {
-                        Some(kind) => self.simple_kind(kind),
-                        None => Result::new(SimpleKind::Type),
+                .rev()
+                .enumerate()
+                .rev()
+                .map(|(index, param)| {
+                    match param {
+                        ast::GenericParameter::Type(_) => Result::new(SimpleKind::Type),
+                        ast::GenericParameter::Region(token, _) => {
+                            if let Some(effects) = effects.as_deref_mut() {
+                                let region =
+                                    self.tt.insert_region(RegionEnum::Generic(GenericParameter {
+                                        index,
+                                        apply: None,
+                                    }));
+                                effects.push(self.tt.insert_effect(EffectEnum::Read(region)));
+                                if token.is_some() {
+                                    effects.push(self.tt.insert_effect(EffectEnum::Write(region)));
+                                }
+                            } else {
+                                assert!(
+                                    token.is_none(),
+                                    "ICE: mut region generic in a location without effects"
+                                );
+                            }
+                            Result::new(SimpleKind::Region)
+                        }
+                        ast::GenericParameter::Other(_, kind) => self.simple_kind(kind),
                     }
-                    .and_then(|output| self.kind(param.name.generics.as_ref(), output))
+                    .and_then(|output| self.kind(param.generics(), output, None))
                 })
                 .collect::<Result<_>>()
                 .map(Some),
             None => Result::new(None),
         }
     }
-    fn kind(&mut self, name: Option<&ast::GenericParameters>, output: SimpleKind) -> Result<Kind> {
-        self.kind_params(name)
+    fn kind(
+        &mut self,
+        name: Option<&ast::GenericParameters>,
+        output: SimpleKind,
+        effects: Option<&mut Vec<Effect>>,
+    ) -> Result<Kind> {
+        self.kind_params(name, effects)
             .map(|params| self.tt.insert_kind(KindEnum { params, output }))
     }
 
@@ -934,23 +965,31 @@ impl Lower<'_> {
             .realize_function_body(fun, FunctionBodyDefinition::Intrinsic(value));
         Result::new(fun)
     }
-    fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<EffectDef> {
+    fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<Effect> {
         let module = self.module.to_compact_string();
-        if !matches!(
-            (module.as_str(), name.ident.as_str()),
-            ("builtin:preamble", "Div")
-                | ("builtin:regions", "Read")
-                | ("builtin:regions", "Write"),
-        ) {
-            todo!(
+        let effect = match (module.as_str(), name.ident.as_str()) {
+            ("builtin:preamble", "Div") => EffectEnum::Divergent,
+            ("builtin:regions", "Read") => {
+                let region = self.tt.insert_region(RegionEnum::Generic(GenericParameter {
+                    index: 0,
+                    apply: None,
+                }));
+                EffectEnum::Read(region)
+            }
+            ("builtin:regions", "Write") => {
+                let region = self.tt.insert_region(RegionEnum::Generic(GenericParameter {
+                    index: 0,
+                    apply: None,
+                }));
+                EffectEnum::Write(region)
+            }
+            _ => todo!(
                 "error: unknown intrinsic {}.{}",
                 module.as_str(),
                 name.ident.as_str()
-            )
-        }
-        let eff = self.ir.push_effect();
-        self.ir.realize_effect(eff, EffectDefinition::Intrinsic);
-        Result::new(eff)
+            ),
+        };
+        Result::new(self.tt.insert_effect(effect))
     }
     fn intrinsic_constant(&mut self, name: &ast::Name) -> Result<Constant> {
         let module = self.module.to_compact_string();
@@ -972,7 +1011,8 @@ impl Lower<'_> {
         generics: &Generics<'a>,
     ) -> Result<FunctionSignature> {
         m! {
-            type_params <- self.kind_params(sig.name.generics.as_ref());
+            let mut implicit_effects = Vec::new();
+            type_params <- self.kind_params(sig.name.generics.as_ref(), Some(&mut implicit_effects));
             let generics = self.generics(type_params.as_ref(), sig.name.generics.as_ref(), generics);
             params <- match &sig.parameters {
                 Some(params) => params.inner
@@ -988,6 +1028,7 @@ impl Lower<'_> {
                 .iter()
                 .flat_map(|we| &we.effects)
                 .map(|effect| self.effect(effect, &generics))
+                .chain(implicit_effects.into_iter().map(Result::new))
                 .collect::<Result<Arc<_>>>();
             let effect = Effect::row(effects.iter(), self.tt);
             return self.tt.insert_function_signature(FunctionSignatureValue {

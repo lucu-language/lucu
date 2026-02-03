@@ -21,9 +21,9 @@ effect Yield4 = YieldABCD[u64, u64, u64, u64]
 
 effect Empty = ;
 
-type CString[R region] = c.string[R]
+type CString[r] = c.string[r]
 
-type Slice[T, R region] = ^@R []T
+type Slice[T, r] = ^@r []T
 
 -- type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
 

@@ -123,10 +123,29 @@ pub struct Name {
     pub generics: Option<GenericParameters>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct GenericParameter {
-    pub name: Name,
-    pub kind: Option<Kind>,
+#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[strum(prefix = "GenericParameter::")]
+pub enum GenericParameter {
+    Type(Name),
+    Region(Option<Token>, Identifier),
+    Other(Name, Kind),
+}
+
+impl GenericParameter {
+    pub fn ident(&self) -> &Identifier {
+        match self {
+            GenericParameter::Type(name) => &name.ident,
+            GenericParameter::Region(_, ident) => ident,
+            GenericParameter::Other(name, _) => &name.ident,
+        }
+    }
+    pub fn generics(&self) -> Option<&GenericParameters> {
+        match self {
+            GenericParameter::Type(name) => name.generics.as_ref(),
+            GenericParameter::Region(_, _) => None,
+            GenericParameter::Other(name, _) => name.generics.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -429,14 +448,23 @@ impl<T: HasSpan> HasSpan for Separated<T> {
 
 impl HasSpan for GenericParameter {
     fn span(&self) -> Span {
-        let start = self.name.span().start;
-        let end = self
-            .kind
-            .as_ref()
-            .map(HasSpan::span)
-            .unwrap_or_else(|| self.name.span())
-            .end;
-        Span { start, end }
+        match self {
+            GenericParameter::Type(name) => name.span(),
+            GenericParameter::Region(token, identifier) => {
+                let start = token
+                    .as_ref()
+                    .map(HasSpan::span)
+                    .unwrap_or_else(|| identifier.span())
+                    .start;
+                let end = identifier.span().end;
+                Span { start, end }
+            }
+            GenericParameter::Other(name, kind) => {
+                let start = name.span().start;
+                let end = kind.span().end;
+                Span { start, end }
+            }
+        }
     }
 }
 
@@ -708,6 +736,7 @@ impl Item {
             Item::Handle(_, _, _) => None,
         }
     }
+    // TODO: just make this return Option<&GenericParameters> please
     pub fn generics(&self) -> &Separated<GenericParameter> {
         match self {
             Item::Function(fun, _) => fun.name.generics.as_ref(),

@@ -27,8 +27,8 @@ const false bool = types.false
 
 -- regions
 
-effect Read[R region] = regions.Read[R]
-effect Write[R region] = regions.Write[R]
+effect Read[r] = regions.Read[r]
+effect Write[r] = regions.Write[r]
 
 -- printing
 
@@ -59,7 +59,7 @@ fun print_int(n int) = {
 	print_str(&buf[start..21])
 }
 
-fun print_str[R region](buf ^@R []u8) with Read[R]
+fun print_str[r](buf ^@r []u8)
 	= #intrinsic
 
 -- divergence

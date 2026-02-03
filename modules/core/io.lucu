@@ -3,7 +3,7 @@ effect Source = {
 }
 
 effect Sink = {
-	fun write[R region](bytes ^@R []u8) usize with Read[R]
+	fun write[r](bytes ^@r []u8) usize
 	fun flush()
 }
 
@@ -17,28 +17,28 @@ effect StdIo = {
 }
 
 effect Buffered[E effect] = {
-	fun buffered[R region](
-		buffer ^@R []u8,
+	fun buffered[mut r](
+		buffer ^@r []u8,
 		fun handled(fun body with E),
 		fun body with E,
-	) with Read[R] Write[R]
+	)
 }
 
 handle Buffered[Source] {
-	fun buffered[R region](
-		buffer ^@R []u8,
+	fun buffered[mut r](
+		buffer ^@r []u8,
 		fun handled(fun body with Source),
 		fun body with Source,
-	) with Read[R] Write[R] = {
+	) = {
 		
 	}
 }
 handle Buffered[Sink] {
-	fun buffered[R region](
-		buffer ^@R []u8,
+	fun buffered[mut r](
+		buffer ^@r []u8,
 		fun handled(fun body with Sink),
 		fun body with Sink,
-	) with Read[R] Write[R] = {
+	) = {
 		
 	}
 }

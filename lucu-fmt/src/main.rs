@@ -608,10 +608,20 @@ impl Ast for ast::Name {
 
 impl Ast for ast::GenericParameter {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        self.name.push_nodes(nodes);
-        if let Some(kind) = &self.kind {
-            nodes.space();
-            kind.push_nodes(nodes);
+        match self {
+            ast::GenericParameter::Type(name) => name.push_nodes(nodes),
+            ast::GenericParameter::Region(token, identifier) => {
+                if let &Some(token) = token {
+                    nodes.token(token);
+                    nodes.space();
+                }
+                nodes.token(identifier.token);
+            }
+            ast::GenericParameter::Other(name, kind) => {
+                name.push_nodes(nodes);
+                nodes.space();
+                kind.push_nodes(nodes);
+            }
         }
     }
 }

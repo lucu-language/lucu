@@ -96,7 +96,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Type) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
                     return ast::Item::Type(token, name, definition);
                 }
@@ -104,7 +104,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Effect) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
                     return ast::Item::Effect(token, name, definition);
                 }
@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Const) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     ty <- self.r#type();
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::constant_definition);
                     return ast::Item::Constant(token, name, ty, definition);
@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
                     generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                         Group::Bracket,
                         Symbol::Comma,
-                        Parser::generic,
+                        |parser| parser.generic(true),
                     ));
                     handler <- self.handler();
                     return ast::Item::Handle(token, generics, handler);
@@ -350,7 +350,7 @@ impl<'a> Parser<'a> {
     pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
         m! {
             fun <- self.consume(Keyword::Fun);
-            name <- self.name();
+            name <- self.name(true);
             parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
                 Symbol::Comma,
@@ -373,22 +373,52 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    pub fn name(&mut self) -> Result<ast::Name> {
+    pub fn name(&mut self, allow_special_region: bool) -> Result<ast::Name> {
         m! {
             ident <- self.ident();
             generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                 Group::Bracket,
                 Symbol::Comma,
-                Parser::generic,
+                |parser| parser.generic(allow_special_region),
             ));
             return ast::Name { ident, generics };
         }
     }
-    pub fn generic(&mut self) -> Result<ast::GenericParameter> {
-        m! {
-            name <- self.name();
-            kind <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
-            return ast::GenericParameter { name, kind };
+    pub fn generic(&mut self, allow_special_region: bool) -> Result<ast::GenericParameter> {
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Mut) => {
+                if allow_special_region {
+                    m! {
+                        let token = self.skip();
+                        ident <- self.ident();
+                        return ast::GenericParameter::Region(Some(token), ident);
+                    }
+                } else {
+                    todo!("error")
+                }
+            }
+            TokenEnum::Identifier
+                // if identifier starts with lowercase letter
+                if self.source.as_bytes()[self.next().span.start as usize].is_ascii_lowercase() =>
+            {
+                m! {
+                    ident <- self.ident();
+                    return ast::GenericParameter::Region(None, ident);
+                }
+            }
+            TokenEnum::Identifier => {
+                m! {
+                    name <- self.name(false);
+                    kind <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
+                    return match kind {
+                        Some(kind) => ast::GenericParameter::Other(name, kind),
+                        None => ast::GenericParameter::Type(name),
+                    };
+                }
+            }
+            _ => {
+                todo!("error")
+            }
         }
     }
     pub fn kind(&mut self) -> Result<ast::Kind> {

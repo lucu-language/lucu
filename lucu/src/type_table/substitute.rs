@@ -514,6 +514,9 @@ impl Substitute for Effect {
             EffectEnum::Row(ref row) => {
                 return Effect::row(row.clone().subst(tt, start, args).iter(), tt);
             }
+            EffectEnum::Read(region) => EffectEnum::Read(region.subst(tt, start, args)),
+            EffectEnum::Write(region) => EffectEnum::Write(region.subst(tt, start, args)),
+            EffectEnum::Divergent => return self,
         };
         tt.insert_effect(changed)
     }
@@ -524,6 +527,9 @@ impl Substitute for Effect {
             }
             EffectEnum::Item(ref item) => EffectEnum::Item(item.clone().shift(tt, start, offset)),
             EffectEnum::Row(ref row) => EffectEnum::Row(row.clone().shift(tt, start, offset)),
+            EffectEnum::Read(region) => EffectEnum::Read(region.shift(tt, start, offset)),
+            EffectEnum::Write(region) => EffectEnum::Write(region.shift(tt, start, offset)),
+            EffectEnum::Divergent => return self,
         };
         tt.insert_effect(changed)
     }
@@ -562,10 +568,16 @@ impl Substitute for Effect {
                 a.clone().infer(b.clone(), tt, start, args)
             }
             (EffectEnum::Row(a), EffectEnum::Row(b)) if a.is_empty() && b.is_empty() => Some(()),
+            (&EffectEnum::Read(a), &EffectEnum::Read(b)) => a.infer(b, tt, start, args),
+            (&EffectEnum::Write(a), &EffectEnum::Write(b)) => a.infer(b, tt, start, args),
+            (EffectEnum::Divergent, EffectEnum::Divergent) => Some(()),
 
             (EffectEnum::Generic(_), _) => None,
             (EffectEnum::Item(_), _) => None,
             (EffectEnum::Row(a), _) if a.is_empty() => None,
+            (EffectEnum::Read(_), _) => None,
+            (EffectEnum::Write(_), _) => None,
+            (EffectEnum::Divergent, _) => None,
 
             (EffectEnum::Row(_), _) => {
                 // This is the one reason why we can't completely accept or deny a generics inference...

@@ -30,4 +30,4 @@ type ulonglong = #intrinsic
 
 -- POINTER TYPES --
 
-type string[R region] = ^@R [:0]char
+type string[r] = ^@r [:0]char

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ir::{EffectDefinition, FunctionBodyDefinition, IR, ItemDef, Parent, TypeTable};
+use crate::ir::{FunctionBodyDefinition, IR, ItemDef, Parent, TypeTable};
 use crate::type_table::EffectEnum;
 
 #[derive(Clone, Copy)]
@@ -48,29 +48,26 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                 }
                 ItemDef::Effect(kind, def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
-
-                    if let EffectDefinition::Body { members } = &self.0[def] {
-                        write!(f, "{name} = ")?;
-                        for _ in 0..self.1[kind]
-                            .params
-                            .as_ref()
-                            .map(|params| params.len())
-                            .unwrap_or(0)
-                        {
-                            write!(f, "λ ")?;
-                        }
-
-                        writeln!(f, "{name} {{")?;
-                        for member in members {
-                            writeln!(
-                                f,
-                                "  {} :: {},",
-                                member.name,
-                                member.signature.display(self.1)
-                            )?;
-                        }
-                        writeln!(f, "}}")?;
+                    write!(f, "{name} = ")?;
+                    for _ in 0..self.1[kind]
+                        .params
+                        .as_ref()
+                        .map(|params| params.len())
+                        .unwrap_or(0)
+                    {
+                        write!(f, "λ ")?;
                     }
+
+                    writeln!(f, "{name} {{")?;
+                    for member in &self.0[def].members {
+                        writeln!(
+                            f,
+                            "  {} :: {},",
+                            member.name,
+                            member.signature.display(self.1)
+                        )?;
+                    }
+                    writeln!(f, "}}")?;
                 }
                 ItemDef::Function(sign, def) => {
                     let Parent::TopLevel(def) = def else {

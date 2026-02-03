@@ -164,12 +164,8 @@ pub struct StructDefinition {
 }
 
 #[derive(Debug)]
-pub enum EffectDefinition {
-    Body {
-        members: Vec<EffectMember>,
-    },
-    /// Does not allow user-defined handlers
-    Intrinsic,
+pub struct EffectDefinition {
+    pub members: Vec<EffectMember>,
 }
 
 #[derive(Debug, Clone, Copy)]

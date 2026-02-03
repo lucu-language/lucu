@@ -1,3 +1,5 @@
+-- ARITHMETIC TYPES --
+
 type char = #intrinsic
 type schar = #intrinsic
 type uchar = #intrinsic
@@ -25,3 +27,7 @@ type ulonglong = #intrinsic
 -- type float_Imaginary = struct(magnitude float)
 -- type double_Imaginary = struct(magnitude double)
 -- type longdouble_Imaginary = struct(magnitude longdouble)
+
+-- POINTER TYPES --
+
+type string[R region] = ^@R [:0]char

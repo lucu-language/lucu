@@ -19,6 +19,10 @@ type ulong = c.ulong
 type longlong = c.longlong
 type ulonglong = c.ulonglong
 
+-- POINTER TYPES --
+
+type string[R region] = c.string[R]
+
 -- ADDITIONAL BASIC TYPES --
 
 type size_t = types.usize

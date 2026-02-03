@@ -21,7 +21,7 @@ effect Yield4 = YieldABCD[u64, u64, u64, u64]
 
 effect Empty = ;
 
-type CString[R region] = ^@R [:0]c.char
+type CString[R region] = c.string[R]
 
 type Slice[T, R region] = ^@R []T
 

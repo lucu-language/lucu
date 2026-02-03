@@ -21,9 +21,9 @@ fun unreachable ! = {
 -- effect Environment = {
 -- 	region ENV
 -- 	handle regions.Read[ENV]
--- 	fun system(command ?^[:0]char) int
--- 	fun getenv(name ^[:0]char) ?^@ENV [:0]char
--- 	fun getenv_s(len ^#write size_t, value ^#write []char, name ^[:0]char) errno_t
+-- 	fun system(command ?string) int
+-- 	fun getenv(name string) ?string[ENV]
+-- 	fun getenv_s(len ^#write size_t, value ^#write []char, name string) errno_t
 -- }
 
 -- fun memalignment(p ?^#noread types.unit) size_t = {

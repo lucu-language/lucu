@@ -1,6 +1,7 @@
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ops::Index;
+use std::sync::Arc;
 
 use compact_str::{CompactString, ToCompactString};
 
@@ -201,9 +202,11 @@ pub enum ItemDefinition<'a> {
     Function(FunctionSignature, Parent<&'a FunctionBodyDefinition>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct HandlerDef {
-    pub kind: Kind, // should be a ... -> EFFECT kind
+    pub type_params: Option<Arc<[Kind]>>,
+    pub implicit_regions: usize,
+
     pub effect: Effect,
     pub with_effect: Effect,
     pub body: HandlerBody,

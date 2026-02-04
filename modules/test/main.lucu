@@ -25,6 +25,8 @@ type CString[r] = c.string[r]
 
 type Slice[T, r] = ^@r []T
 
+fun test(param ^u8) = {}
+
 -- type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
 
 -- type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]

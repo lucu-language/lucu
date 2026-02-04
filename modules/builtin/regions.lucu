@@ -6,10 +6,10 @@ effect Write[r]
 
 fun local[T, U](
 	val T,
-	fun body[mut r](ptr ^@r T) U
+	fun body(ptr ^mut T) U
 ) U = #intrinsic
 
 fun alloca[T, U](
 	len usize,
-	fun body[mut r](slice ^@r []T) U
+	fun body(slice ^mut []T) U
 ) U = #intrinsic

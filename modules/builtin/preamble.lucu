@@ -59,7 +59,7 @@ fun print_int(n int) = {
 	print_str(&buf[start..21])
 }
 
-fun print_str[r](buf ^@r []u8)
+fun print_str(buf ^[]u8)
 	= #intrinsic
 
 -- divergence

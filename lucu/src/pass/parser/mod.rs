@@ -96,7 +96,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Type) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name(false);
+                    name <- self.name();
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
                     return ast::Item::Type(token, name, definition);
                 }
@@ -104,7 +104,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Effect) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name(false);
+                    name <- self.name();
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
                     return ast::Item::Effect(token, name, definition);
                 }
@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Const) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name(false);
+                    name <- self.name();
                     ty <- self.r#type();
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::constant_definition);
                     return ast::Item::Constant(token, name, ty, definition);
@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
                     generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                         Group::Bracket,
                         Symbol::Comma,
-                        |parser| parser.generic(true),
+                        Parser::generic,
                     ));
                     handler <- self.handler();
                     return ast::Item::Handle(token, generics, handler);
@@ -252,11 +252,34 @@ impl<'a> Parser<'a> {
                 | TokenEnum::Keyword(Keyword::Struct)
         )
     }
+    fn starts_region_kind(&self) -> bool {
+        matches!(
+            self.next().token,
+            TokenEnum::Keyword(Keyword::Mut)
+                // not really, but we count them
+                | TokenEnum::Symbol(Symbol::At)
+        )
+    }
+    fn starts_pointer_region(&self) -> bool {
+        matches!(self.next().token, TokenEnum::Symbol(Symbol::At)) || self.starts_region_kind()
+    }
+    pub fn region_kind(&mut self) -> Result<ast::RegionKind> {
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Mut) => Result::new(ast::RegionKind::Mutable(self.skip())),
+            _ => todo!("error"),
+        }
+    }
     pub fn pointer_region(&mut self) -> Result<ast::PointerRegion> {
-        m! {
-            at <- self.consume(Symbol::At);
-            region <- self.path(true);
-            return ast::PointerRegion { at, region };
+        match self.next().token {
+            TokenEnum::Symbol(Symbol::At) => {
+                m! {
+                    let at = self.skip();
+                    region <- self.path(true);
+                    return ast::PointerRegion::At(at, region);
+                }
+            }
+            _ if self.starts_region_kind() => self.region_kind().map(ast::PointerRegion::Kind),
+            _ => todo!("error"),
         }
     }
     pub fn sentinel(&mut self) -> Result<ast::Sentinel> {
@@ -293,7 +316,7 @@ impl<'a> Parser<'a> {
                 // Pointer
                 m! {
                     let pointer = self.skip();
-                    region <- self.when_next(Symbol::At, Parser::pointer_region);
+                    region <- self.when(Parser::starts_pointer_region, Parser::pointer_region);
                     inner <- self.r#type();
                     return ast::Type::Pointer(pointer, region, inner);
                 }
@@ -350,7 +373,7 @@ impl<'a> Parser<'a> {
     pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
         m! {
             fun <- self.consume(Keyword::Fun);
-            name <- self.name(true);
+            name <- self.name();
             parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
                 Symbol::Comma,
@@ -373,28 +396,24 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    pub fn name(&mut self, allow_special_region: bool) -> Result<ast::Name> {
+    pub fn name(&mut self) -> Result<ast::Name> {
         m! {
             ident <- self.ident();
             generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                 Group::Bracket,
                 Symbol::Comma,
-                |parser| parser.generic(allow_special_region),
+                Parser::generic,
             ));
             return ast::Name { ident, generics };
         }
     }
-    pub fn generic(&mut self, allow_special_region: bool) -> Result<ast::GenericParameter> {
+    pub fn generic(&mut self) -> Result<ast::GenericParameter> {
         match self.next().token {
-            TokenEnum::Keyword(Keyword::Mut) => {
-                if allow_special_region {
-                    m! {
-                        let token = self.skip();
-                        ident <- self.ident();
-                        return ast::GenericParameter::Region(Some(token), ident);
-                    }
-                } else {
-                    todo!("error")
+            _ if self.starts_region_kind() => {
+                m! {
+                    kind <- self.region_kind();
+                    ident <- self.ident();
+                    return ast::GenericParameter::Region(Some(kind), ident);
                 }
             }
             TokenEnum::Identifier
@@ -408,7 +427,7 @@ impl<'a> Parser<'a> {
             }
             TokenEnum::Identifier => {
                 m! {
-                    name <- self.name(false);
+                    name <- self.name();
                     kind <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
                     return match kind {
                         Some(kind) => ast::GenericParameter::Other(name, kind),

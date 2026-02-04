@@ -606,13 +606,21 @@ impl Ast for ast::Name {
     }
 }
 
+impl Ast for ast::RegionKind {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::RegionKind::Mutable(token) => nodes.token(*token),
+        }
+    }
+}
+
 impl Ast for ast::GenericParameter {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
             ast::GenericParameter::Type(name) => name.push_nodes(nodes),
             ast::GenericParameter::Region(token, identifier) => {
-                if let &Some(token) = token {
-                    nodes.token(token);
+                if let Some(kind) = token {
+                    kind.push_nodes(nodes);
                     nodes.space();
                 }
                 nodes.token(identifier.token);
@@ -639,8 +647,13 @@ impl Ast for ast::Kind {
 
 impl Ast for ast::PointerRegion {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        nodes.token(self.at);
-        self.region.push_nodes(nodes);
+        match self {
+            ast::PointerRegion::At(at, region) => {
+                nodes.token(*at);
+                region.push_nodes(nodes);
+            }
+            ast::PointerRegion::Kind(region_kind) => region_kind.push_nodes(nodes),
+        }
     }
 }
 

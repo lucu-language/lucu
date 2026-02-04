@@ -5,6 +5,7 @@ use compact_str::ToCompactString;
 use do_notation::m;
 
 use crate::ast;
+use crate::ast::visit::{Ast, Visitor};
 use crate::error::{Problems, Result};
 use crate::ir::{
     EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition, HandlerBodyDefinition,
@@ -70,6 +71,21 @@ impl<'a> Generics<'a> {
     }
     pub fn get(&self, ident: &str) -> Option<(usize, Kind)> {
         self.0.get(ident).copied()
+    }
+}
+
+#[derive(Default)]
+struct Implicit {
+    generics: usize,
+    effects: Vec<Effect>,
+}
+
+impl Implicit {
+    const fn new(generics: usize) -> Self {
+        Self {
+            generics,
+            effects: Vec::new(),
+        }
     }
 }
 
@@ -209,7 +225,8 @@ impl Lower<'_> {
             ast::Item::Constant(_, _, _, _) => {}
             ast::Item::Handle(_, params, handler) => {
                 let LoweredDef::Handler(HandlerDef {
-                    kind,
+                    type_params,
+                    implicit_regions,
                     effect,
                     with_effect: _,
                     body,
@@ -218,11 +235,9 @@ impl Lower<'_> {
                     return problems;
                 };
 
-                let generics = self.generics(
-                    self.tt[kind].params.as_ref(),
-                    params.as_ref(),
-                    &Generics::new(),
-                );
+                let generics = self
+                    .generics(type_params.as_ref(), params.as_ref(), &Generics::new())
+                    .shifted(implicit_regions);
 
                 let EffectEnum::Item(effect_item) = &self.tt[effect] else {
                     todo!("error: effect is not a single item")
@@ -330,7 +345,7 @@ impl Lower<'_> {
                                 name.generics.as_ref(),
                                 &Generics::new(),
                             );
-                            let ty = problems.append(self.r#type(ast, &generics));
+                            let ty = problems.append(self.r#type(ast, &generics, None));
                             if let Some(ty) = ty {
                                 let item = ItemDef::Alias(kind, Term::Type(ty));
                                 self.ir.insert(name.ident.as_str(), item);
@@ -437,7 +452,7 @@ impl Lower<'_> {
                             let effects = problems.append(
                                 effects
                                     .iter()
-                                    .map(|path| self.effect(path, &generics))
+                                    .map(|path| self.effect(path, &generics, None))
                                     .collect::<Result<Arc<_>>>(),
                             );
                             if let Some(effects) = effects {
@@ -453,7 +468,7 @@ impl Lower<'_> {
                         if let (Some(kind), Some(eff)) = (kind, eff) {
                             let item = ItemDef::Alias(kind, Term::Effect(eff));
                             self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::None);
+                            return problems.with(LoweredDef::Item(item));
                         }
                     }
                     None => todo!("error"),
@@ -465,7 +480,7 @@ impl Lower<'_> {
                 }
 
                 // NOTE: if we eventually have dependent kinds this this might fail
-                let ty = problems.append(self.r#type(ty, &Generics::new()));
+                let ty = problems.append(self.r#type(ty, &Generics::new(), None));
                 let kind = ty.and_then(|ty| {
                     problems.append(self.kind(
                         name.generics.as_ref(),
@@ -482,7 +497,8 @@ impl Lower<'_> {
                                 name.generics.as_ref(),
                                 &Generics::new(),
                             );
-                            let constant = problems.append(self.constant(constant, &generics, ty));
+                            let constant =
+                                problems.append(self.constant(constant, &generics, ty, None));
                             if let Some(constant) = constant {
                                 let item = ItemDef::Alias(kind, Term::Constant(constant));
                                 self.ir.insert(name.ident.as_str(), item);
@@ -506,38 +522,46 @@ impl Lower<'_> {
                     todo!("error")
                 }
 
-                let mut implicit_effects = Vec::new();
-                let kind = problems.append(self.kind(
-                    params.as_ref(),
-                    SimpleKind::Effect,
-                    Some(&mut implicit_effects),
-                ));
-                if let Some(kind) = kind {
-                    let generics = self.generics(
-                        self.tt[kind].params.as_ref(),
-                        params.as_ref(),
-                        &Generics::new(),
-                    );
-                    let effect = problems.append(self.effect(&handler.effect, &generics));
+                let implicit_regions = self.implicit_regions(&handler.effect)
+                    + handler
+                        .with_effects
+                        .as_ref()
+                        .map(|es| self.implicit_regions(es))
+                        .unwrap_or(0);
+                let mut implicit = Implicit::new(implicit_regions);
+                let type_params =
+                    problems.append(self.kind_params(params.as_ref(), Some(&mut implicit)));
+                if let Some(type_params) = type_params {
+                    let generics = self
+                        .generics(type_params.as_ref(), params.as_ref(), &Generics::new())
+                        .shifted(implicit_regions);
+                    let effect = problems.append(self.effect(
+                        &handler.effect,
+                        &generics,
+                        Some(&mut implicit),
+                    ));
                     let with_effects = problems.append(
                         handler
                             .with_effects
                             .iter()
                             .flat_map(|we| &we.effects)
-                            .map(|effect| self.effect(effect, &generics))
-                            .chain(implicit_effects.into_iter().map(Result::new))
-                            .collect::<Result<Arc<_>>>(),
+                            .map(|effect| self.effect(effect, &generics, Some(&mut implicit)))
+                            .collect::<Result<Box<_>>>(),
                     );
                     if let (Some(effect), Some(with_effects)) = (effect, with_effects) {
-                        let with_effect = Effect::row(with_effects.iter(), self.tt);
+                        let with_effect = Effect::row(
+                            with_effects.iter().chain(implicit.effects.iter()),
+                            self.tt,
+                        );
                         let body = self.ir.push_handler_body();
                         let handler = HandlerDef {
-                            kind,
+                            type_params,
+                            implicit_regions,
                             effect,
                             with_effect,
                             body,
                         };
-                        self.ir.insert_global_handler(handler);
+                        self.ir.insert_global_handler(handler.clone());
                         return problems.with(LoweredDef::Handler(handler));
                     }
                 }
@@ -552,10 +576,12 @@ impl Lower<'_> {
         generics: &Generics,
     ) -> Result<StructMember> {
         match member {
-            ast::StructMember::Data(name, ty) => self.r#type(ty, generics).map(|ty| StructMember {
-                name: name.as_str().to_compact_string(),
-                ty,
-            }),
+            ast::StructMember::Data(name, ty) => {
+                self.r#type(ty, generics, None).map(|ty| StructMember {
+                    name: name.as_str().to_compact_string(),
+                    ty,
+                })
+            }
         }
     }
     fn resolve_item<'a>(&'a self, item: &Item) -> ItemDefinition<'a> {
@@ -606,6 +632,7 @@ impl Lower<'_> {
         term: Term,
         ast: Option<&ast::GenericArguments>,
         generics: &Generics,
+        mut implicit: Option<&mut Implicit>,
     ) -> Result<(Kind, Term)> {
         match ast {
             Some(ast) => {
@@ -622,7 +649,9 @@ impl Lower<'_> {
                     output: kind.output,
                 });
                 Iterator::zip(params.iter().copied(), ast.inner.iter())
-                    .map(|(param, arg)| self.generic_argument(param, arg, generics))
+                    .map(|(param, arg)| {
+                        self.generic_argument(param, arg, generics, implicit.as_deref_mut())
+                    })
                     .collect::<Result<Arc<_>>>()
                     .map(|args| (output, term.subst(self.tt, 0, &args)))
             }
@@ -662,7 +691,13 @@ impl Lower<'_> {
                 .collect()
         })
     }
-    fn term_path(&mut self, kind: Kind, path: &ast::Path, generics: &Generics) -> Result<Term> {
+    fn term_path(
+        &mut self,
+        kind: Kind,
+        path: &ast::Path,
+        generics: &Generics,
+        implicit: Option<&mut Implicit>,
+    ) -> Result<Term> {
         let (item_kind, term) = {
             if path.package.is_none()
                 && let Some((index, kind)) = generics.get(path.name.as_str())
@@ -720,7 +755,7 @@ impl Lower<'_> {
             }
         };
 
-        self.apply(item_kind, term, path.generics.as_ref(), generics)
+        self.apply(item_kind, term, path.generics.as_ref(), generics, implicit)
             .and_then(|(applied_kind, path)| {
                 if applied_kind == kind {
                     Result::new(path)
@@ -734,14 +769,15 @@ impl Lower<'_> {
         param: Kind,
         arg: &ast::GenericArgument,
         generics: &Generics,
+        implicit: Option<&mut Implicit>,
     ) -> Result<GenericArgument> {
         let arity = self.tt[param].params.as_ref().map(|params| params.len());
         let generics = generics.shifted(arity.unwrap_or(0));
         match arg {
-            ast::GenericArgument::Path(path) => self.term_path(param, path, &generics),
+            ast::GenericArgument::Path(path) => self.term_path(param, path, &generics, implicit),
             ast::GenericArgument::Type(ty) => {
                 if self.tt[param] == KindEnum::TYPE {
-                    self.r#type(ty, &generics).map(Term::Type)
+                    self.r#type(ty, &generics, implicit).map(Term::Type)
                 } else {
                     todo!("error")
                 }
@@ -750,30 +786,111 @@ impl Lower<'_> {
         }
         .map(|term| GenericArgument { term, arity })
     }
-    fn region(&mut self, region: &ast::Path, generics: &Generics) -> Result<Region> {
+    fn region(
+        &mut self,
+        region: &ast::Path,
+        generics: &Generics,
+        implicit: Option<&mut Implicit>,
+    ) -> Result<Region> {
         let kind = self.tt.insert_kind(KindEnum::REGION);
-        self.term_path(kind, region, generics)
+        self.term_path(kind, region, generics, implicit)
             .map(|path| match path {
                 Term::Region(region) => region,
                 _ => panic!("ICE: generic argument of kind Region is not actually a Region"),
             })
     }
-    fn effect(&mut self, effect: &ast::Path, generics: &Generics) -> Result<Effect> {
+    fn effect(
+        &mut self,
+        effect: &ast::Path,
+        generics: &Generics,
+        implicit: Option<&mut Implicit>,
+    ) -> Result<Effect> {
         let kind = self.tt.insert_kind(KindEnum::EFFECT);
-        self.term_path(kind, effect, generics)
+        self.term_path(kind, effect, generics, implicit)
             .map(|path| match path {
                 Term::Effect(effect) => effect,
                 _ => panic!("ICE: generic argument of kind Effect is not actually a Effect"),
             })
     }
-    fn r#type(&mut self, ty: &ast::Type, generics: &Generics) -> Result<Type> {
+    fn implicit_regions(&mut self, ast: &impl Ast) -> usize {
+        #[derive(Clone, Copy)]
+        struct ImplicitRegions;
+        impl Visitor for ImplicitRegions {
+            type Output<'a> = usize;
+            fn visit_type(self, ty: &ast::Type) -> Self::Output<'_> {
+                (match ty {
+                    ast::Type::Pointer(_, None, _)
+                    | ast::Type::Pointer(_, Some(ast::PointerRegion::Kind(_)), _) => 1,
+                    _ => 0,
+                }) + self.visit(ty)
+            }
+            fn visit_kind(self, _: &ast::Kind) -> Self::Output<'_> {
+                // do not go inside kinds
+                0
+            }
+            fn visit_function_declaration(self, _: &ast::FunctionDeclaration) -> Self::Output<'_> {
+                // do not go inside function declarations
+                0
+            }
+        }
+        ast.visit(ImplicitRegions)
+    }
+    fn pointer_region(
+        &mut self,
+        ty: Option<&ast::PointerRegion>,
+        generics: &Generics,
+        implicit: Option<&mut Implicit>,
+    ) -> Result<Region> {
+        let kind = match ty {
+            Some(ast::PointerRegion::At(_, path)) => return self.region(path, generics, implicit),
+            Some(ast::PointerRegion::Kind(kind)) => Some(kind),
+            None => None,
+        };
+
+        let Some(implicit) = implicit else {
+            todo!("error")
+        };
+
+        implicit.generics = implicit
+            .generics
+            .checked_sub(1)
+            .expect("ICE: no implicit region generic left!");
+        Result::new(self.implicit_region(kind, implicit.generics, &mut implicit.effects))
+    }
+    fn implicit_region(
+        &mut self,
+        kind: Option<&ast::RegionKind>,
+        index: usize,
+        effects: &mut Vec<Effect>,
+    ) -> Region {
+        let region = self
+            .tt
+            .insert_region(RegionEnum::Generic(GenericParameter { index, apply: None }));
+        match kind {
+            Some(ast::RegionKind::Mutable(_)) => {
+                effects.push(self.tt.insert_effect(EffectEnum::Read(region)));
+                effects.push(self.tt.insert_effect(EffectEnum::Write(region)));
+            }
+            None => {
+                effects.push(self.tt.insert_effect(EffectEnum::Read(region)));
+            }
+        }
+        region
+    }
+    fn r#type(
+        &mut self,
+        ty: &ast::Type,
+        generics: &Generics,
+        mut implicit: Option<&mut Implicit>,
+    ) -> Result<Type> {
         match ty {
             ast::Type::Path(path) => {
                 let kind = self.tt.insert_kind(KindEnum::TYPE);
-                self.term_path(kind, path, generics).map(|path| match path {
-                    Term::Type(ty) => ty,
-                    _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
-                })
+                self.term_path(kind, path, generics, implicit)
+                    .map(|path| match path {
+                        Term::Type(ty) => ty,
+                        _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
+                    })
             }
             ast::Type::Pointer(_, region, ty) => {
                 if let ast::Type::Array(props, inner) = &**ty
@@ -782,15 +899,15 @@ impl Lower<'_> {
                     // pointer to slice
                     m! {
                         let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
-                        region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
-                        ty <- self.r#type(inner, generics);
+                        region <- self.pointer_region(region.as_ref(), generics, implicit.as_deref_mut());
+                        ty <- self.r#type(inner, generics, implicit);
                         return self.tt.insert_type(TypeEnum::PointerSlice(ty, region, sentinel));
                     }
                 } else {
                     // regular pointer
                     m! {
-                        region <- self.region(&region.as_ref().expect("TODO: implied region").region, generics);
-                        ty <- self.r#type(ty, generics);
+                        region <- self.pointer_region(region.as_ref(), generics, implicit.as_deref_mut());
+                        ty <- self.r#type(ty, generics, implicit);
                         return self.tt.insert_type(TypeEnum::Pointer(ty, region));
                     }
                 }
@@ -802,9 +919,9 @@ impl Lower<'_> {
 
                 let usize_ty = self.tt.insert_type(TypeEnum::USIZE);
                 m! {
-                    size <- self.constant(size, generics, usize_ty);
+                    size <- self.constant(size, generics, usize_ty, implicit.as_deref_mut());
                     let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
-                    ty <- self.r#type(ty, generics);
+                    ty <- self.r#type(ty, generics, implicit);
                     return self.tt.insert_type(TypeEnum::Array(ty, size, sentinel));
                 }
             }
@@ -815,16 +932,20 @@ impl Lower<'_> {
         constant: &ast::Constant,
         generics: &Generics,
         ty: Type,
+        implicit: Option<&mut Implicit>,
     ) -> Result<Constant> {
         match constant {
             ast::Constant::Path(path) => {
                 let kind = self.tt.insert_kind(KindEnum::constant(ty));
-                self.term_path(kind, path, generics).map(|path| match path {
-                    Term::Constant(ty) => ty,
-                    _ => {
-                        panic!("ICE: generic argument of kind Constant is not actually a Constant")
-                    }
-                })
+                self.term_path(kind, path, generics, implicit)
+                    .map(|path| match path {
+                        Term::Constant(ty) => ty,
+                        _ => {
+                            panic!(
+                                "ICE: generic argument of kind Constant is not actually a Constant"
+                            )
+                        }
+                    })
             }
             // TODO: mark somewhere that the type must be able to be created from these literals
             ast::Constant::Integer(integer) => Result::new(
@@ -848,13 +969,15 @@ impl Lower<'_> {
             ast::Kind::Effect(_) => Result::new(SimpleKind::Effect),
             ast::Kind::Region(_) => Result::new(SimpleKind::Region),
             // TODO: allow constant with generic type?
-            ast::Kind::Constant(ty) => self.r#type(ty, &Generics::new()).map(SimpleKind::Constant),
+            ast::Kind::Constant(ty) => self
+                .r#type(ty, &Generics::new(), None)
+                .map(SimpleKind::Constant),
         }
     }
     fn kind_params(
         &mut self,
         name: Option<&ast::GenericParameters>,
-        mut effects: Option<&mut Vec<Effect>>,
+        mut implicit: Option<&mut Implicit>,
     ) -> Result<Option<Arc<[Kind]>>> {
         match name {
             Some(params) => params
@@ -866,22 +989,15 @@ impl Lower<'_> {
                 .map(|(index, param)| {
                     match param {
                         ast::GenericParameter::Type(_) => Result::new(SimpleKind::Type),
-                        ast::GenericParameter::Region(token, _) => {
-                            if let Some(effects) = effects.as_deref_mut() {
-                                let region =
-                                    self.tt.insert_region(RegionEnum::Generic(GenericParameter {
-                                        index,
-                                        apply: None,
-                                    }));
-                                effects.push(self.tt.insert_effect(EffectEnum::Read(region)));
-                                if token.is_some() {
-                                    effects.push(self.tt.insert_effect(EffectEnum::Write(region)));
-                                }
-                            } else {
-                                assert!(
-                                    token.is_none(),
-                                    "ICE: mut region generic in a location without effects"
+                        ast::GenericParameter::Region(kind, _) => {
+                            if let Some(implicit) = implicit.as_deref_mut() {
+                                self.implicit_region(
+                                    kind.as_ref(),
+                                    index + implicit.generics,
+                                    &mut implicit.effects,
                                 );
+                            } else if let Some(kind) = kind {
+                                todo!("error")
                             }
                             Result::new(SimpleKind::Region)
                         }
@@ -898,9 +1014,9 @@ impl Lower<'_> {
         &mut self,
         name: Option<&ast::GenericParameters>,
         output: SimpleKind,
-        effects: Option<&mut Vec<Effect>>,
+        implicit: Option<&mut Implicit>,
     ) -> Result<Kind> {
-        self.kind_params(name, effects)
+        self.kind_params(name, implicit)
             .map(|params| self.tt.insert_kind(KindEnum { params, output }))
     }
 
@@ -1011,28 +1127,29 @@ impl Lower<'_> {
         generics: &Generics<'a>,
     ) -> Result<FunctionSignature> {
         m! {
-            let mut implicit_effects = Vec::new();
-            type_params <- self.kind_params(sig.name.generics.as_ref(), Some(&mut implicit_effects));
-            let generics = self.generics(type_params.as_ref(), sig.name.generics.as_ref(), generics);
+            let implicit_regions = self.implicit_regions(sig);
+            let mut implicit = Implicit::new(implicit_regions);
+            type_params <- self.kind_params(sig.name.generics.as_ref(), Some(&mut implicit));
+            let generics = self.generics(type_params.as_ref(), sig.name.generics.as_ref(), generics).shifted(implicit_regions);
             params <- match &sig.parameters {
                 Some(params) => params.inner
                     .iter()
-                    .map(|param| self.function_param(param, &generics))
+                    .map(|param| self.function_param(param, &generics, Some(&mut implicit)))
                     .collect::<Result<_>>()
                     .map(Some),
                 None => Result::new(None),
             };
-            returns <- self.returns(sig.returns.as_ref(), &generics);
+            returns <- self.returns(sig.returns.as_ref(), &generics, Some(&mut implicit));
             effects <- sig
                 .effects
                 .iter()
                 .flat_map(|we| &we.effects)
-                .map(|effect| self.effect(effect, &generics))
-                .chain(implicit_effects.into_iter().map(Result::new))
-                .collect::<Result<Arc<_>>>();
-            let effect = Effect::row(effects.iter(), self.tt);
+                .map(|effect| self.effect(effect, &generics, Some(&mut implicit)))
+                .collect::<Result<Box<_>>>();
+            let effect = Effect::row(effects.iter().chain(implicit.effects.iter()), self.tt);
             return self.tt.insert_function_signature(FunctionSignatureValue {
                 type_params,
+                implicit_regions,
                 params,
                 returns,
                 effect,
@@ -1043,11 +1160,14 @@ impl Lower<'_> {
         &mut self,
         returns: Option<&ast::Returns>,
         generics: &Generics,
+        implicit: Option<&mut Implicit>,
     ) -> Result<FunctionReturns> {
         match returns {
             Some(returns) => match returns {
                 ast::Returns::Never(_) => Result::new(FunctionReturns::Never),
-                ast::Returns::Data(ty) => self.r#type(ty, generics).map(FunctionReturns::Data),
+                ast::Returns::Data(ty) => self
+                    .r#type(ty, generics, implicit)
+                    .map(FunctionReturns::Data),
             },
             None => {
                 let unit = self.tt.insert_type(TypeEnum::Unit);
@@ -1059,9 +1179,12 @@ impl Lower<'_> {
         &mut self,
         param: &'a ast::Parameter,
         generics: &Generics<'a>,
+        implicit: Option<&mut Implicit>,
     ) -> Result<FunctionParameter> {
         match param {
-            ast::Parameter::Data(_, ty) => self.r#type(ty, generics).map(FunctionParameter::Data),
+            ast::Parameter::Data(_, ty) => self
+                .r#type(ty, generics, implicit)
+                .map(FunctionParameter::Data),
             ast::Parameter::Lambda(decl) => self
                 .function_signature(decl, generics)
                 .map(FunctionParameter::Lambda),

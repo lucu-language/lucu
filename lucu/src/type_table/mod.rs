@@ -214,6 +214,8 @@ pub struct KindEnum {
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct FunctionSignatureValue {
     pub type_params: Option<Arc<[Kind]>>,
+    pub implicit_regions: usize,
+
     pub params: Option<Arc<[FunctionParameter]>>,
     pub returns: FunctionReturns,
     pub effect: Effect, // a singular (row) effect

@@ -81,14 +81,15 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                 }
             }
         }
-        for &handler in self.0.global_handlers.iter() {
+        for handler in self.0.global_handlers.iter() {
             writeln!(f)?;
             write!(f, "instance ")?;
-            for _ in 0..self.1[handler.kind]
-                .params
+            for _ in 0..handler
+                .type_params
                 .as_ref()
                 .map(|params| params.len())
                 .unwrap_or(0)
+                + handler.implicit_regions
             {
                 write!(f, "λ ")?;
             }

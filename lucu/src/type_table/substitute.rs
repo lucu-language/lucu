@@ -655,12 +655,15 @@ impl Substitute for FunctionSignature {
     fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let sig = tt[self].clone();
         let type_params = sig.type_params;
-        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0);
+        let implicit_regions = sig.implicit_regions;
+        let arity =
+            type_params.as_ref().map(|params| params.len()).unwrap_or(0) + sig.implicit_regions;
         let params = sig.params.subst(tt, start + arity, args);
         let returns = sig.returns.subst(tt, start + arity, args);
         let effect = sig.effect.subst(tt, start + arity, args);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
+            implicit_regions,
             params,
             returns,
             effect,
@@ -670,12 +673,15 @@ impl Substitute for FunctionSignature {
         let sig = tt[self].clone();
         // NOTE: if we eventually have dependent kinds we need to substitute here too
         let type_params = sig.type_params;
-        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0);
+        let implicit_regions = sig.implicit_regions;
+        let arity =
+            type_params.as_ref().map(|params| params.len()).unwrap_or(0) + sig.implicit_regions;
         let params = sig.params.shift(tt, start + arity, offset);
         let returns = sig.returns.shift(tt, start + arity, offset);
         let effect = sig.effect.shift(tt, start + arity, offset);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
+            implicit_regions,
             params,
             returns,
             effect,
@@ -693,11 +699,13 @@ impl Substitute for FunctionSignature {
 
         // NOTE: if we eventually have dependent kinds this might fail
         assert_eq!(a.type_params, b.type_params);
+        assert_eq!(a.implicit_regions, b.implicit_regions);
         let arity = a
             .type_params
             .as_ref()
             .map(|params| params.len())
-            .unwrap_or(0);
+            .unwrap_or(0)
+            + a.implicit_regions;
 
         a.params.infer(b.params, tt, start + arity, args)?;
         a.returns.infer(b.returns, tt, start + arity, args)?;
@@ -743,6 +751,7 @@ mod tests {
         let effect = table.insert_effect(EffectEnum::empty());
         let sig = table.insert_function_signature(FunctionSignatureValue {
             type_params: Some(Arc::new([typ_kind])),
+            implicit_regions: 0,
             params: Some(Arc::new([FunctionParameter::Data(typ)])),
             returns: FunctionReturns::Data(typ),
             effect,
@@ -751,6 +760,7 @@ mod tests {
         let inserted = table.insert_type(TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32))));
         let inserted_sig = table.insert_function_signature(FunctionSignatureValue {
             type_params: Some(Arc::new([typ_kind])),
+            implicit_regions: 0,
             params: Some(Arc::new([FunctionParameter::Data(inserted)])),
             returns: FunctionReturns::Data(inserted),
             effect,

@@ -124,10 +124,16 @@ pub struct Name {
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[strum(prefix = "RegionKind::")]
+pub enum RegionKind {
+    Mutable(Token),
+}
+
+#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "GenericParameter::")]
 pub enum GenericParameter {
     Type(Name),
-    Region(Option<Token>, Identifier),
+    Region(Option<RegionKind>, Identifier),
     Other(Name, Kind),
 }
 
@@ -171,10 +177,11 @@ pub struct Sentinel {
     pub zero: Token,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct PointerRegion {
-    pub at: Token,
-    pub region: Path,
+#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[strum(prefix = "PointerRegion::")]
+pub enum PointerRegion {
+    At(Token, Path),
+    Kind(RegionKind),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -446,6 +453,14 @@ impl<T: HasSpan> HasSpan for Separated<T> {
     }
 }
 
+impl HasSpan for RegionKind {
+    fn span(&self) -> Span {
+        match self {
+            RegionKind::Mutable(token) => token.span(),
+        }
+    }
+}
+
 impl HasSpan for GenericParameter {
     fn span(&self) -> Span {
         match self {
@@ -592,9 +607,14 @@ impl HasSpan for Sentinel {
 
 impl HasSpan for PointerRegion {
     fn span(&self) -> Span {
-        let start = self.at.span().start;
-        let end = self.region.span().end;
-        Span { start, end }
+        match self {
+            PointerRegion::At(at, region) => {
+                let start = at.span().start;
+                let end = region.span().end;
+                Span { start, end }
+            }
+            PointerRegion::Kind(region_kind) => region_kind.span(),
+        }
     }
 }
 

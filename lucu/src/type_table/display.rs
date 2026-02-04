@@ -212,6 +212,9 @@ impl fmt::Display for Interned<'_, FunctionSignature> {
                 write!(f, " ")?;
             }
         }
+        for _ in 0..sig.implicit_regions {
+            write!(f, "∀:REGION ")?;
+        }
 
         if let Some(params) = &sig.params {
             for ty in params.iter().copied() {
@@ -322,7 +325,7 @@ impl FunctionSignature {
         Interned(self, tt)
     }
     fn enclosed(self, tt: &TypeTable) -> bool {
-        tt[self].type_params.is_some() || tt[self].params.is_some()
+        tt[self].type_params.is_some() || tt[self].implicit_regions > 0 || tt[self].params.is_some()
     }
 }
 impl GenericParameter {

@@ -12,7 +12,7 @@ fn main() {
     let mut dirs = LibraryDir::stdlib("./modules");
     dirs.insert(
         Library::MAIN,
-        LibraryDir::new("./modules/test").with_preamble(Module::CORE),
+        LibraryDir::new("./test").with_preamble(Module::CORE),
     );
 
     let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));

@@ -76,7 +76,7 @@ struct Workspace {
 impl Workspace {
     fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
-        let stdlib_path = "./modules";
+        let stdlib_path = "../modules";
 
         let mut libraries = LibraryDir::stdlib(stdlib_path);
         libraries.insert(
@@ -145,9 +145,10 @@ impl Backend {
     }
     async fn workspace<'a>(&self, uri: &'a Uri) -> Option<(Uri, &'a str)> {
         self.workspaces.read().await.keys().find_map(|root| {
-            uri.as_str()
-                .starts_with(root.as_str())
-                .then_some((root.clone(), &uri.as_str()[root.as_str().len() + 1..]))
+            uri.as_str().starts_with(root.as_str()).then_some((
+                root.clone(),
+                &uri.path().as_str()[root.path().as_str().len() + 1..],
+            ))
         })
     }
     async fn update(&self, uri: &Uri) {
@@ -238,7 +239,17 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.log("server initialized!").await;
+        self.log(&format!(
+            "server initialized with workspaces {:?}",
+            self.workspaces
+                .read()
+                .await
+                .keys()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .await;
     }
 
     async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {

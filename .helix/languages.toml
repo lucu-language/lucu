@@ -7,6 +7,7 @@ comment-tokens = "--"
 indent = { tab-width = 3, unit = "   " }
 formatter = { command = "cargo", args = ["run", "--bin", "lucu-fmt"] }
 language-servers = ["lucu-lsp"]
+roots = ["main.lucu"]
 
 [language-server.lucu-lsp]
 command = "cargo"

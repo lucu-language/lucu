@@ -1,7 +1,6 @@
-use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ops::Index;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use compact_str::{CompactString, ToCompactString};
 
@@ -11,10 +10,10 @@ pub mod display;
 
 #[derive(Default, Debug)]
 pub struct IR {
-    functions: Vec<OnceCell<FunctionBodyDefinition>>,
-    handlers: Vec<OnceCell<HandlerBodyDefinition>>,
-    structs: Vec<OnceCell<StructDefinition>>,
-    effects: Vec<OnceCell<EffectDefinition>>,
+    functions: Vec<OnceLock<FunctionBodyDefinition>>,
+    handlers: Vec<OnceLock<HandlerBodyDefinition>>,
+    structs: Vec<OnceLock<StructDefinition>>,
+    effects: Vec<OnceLock<EffectDefinition>>,
     items: HashMap<CompactString, ItemDef>,
     global_handlers: Vec<HandlerDef>,
 }
@@ -31,22 +30,22 @@ impl IR {
     }
     pub fn push_function_body(&mut self) -> FunctionBody {
         let idx = self.functions.len();
-        self.functions.push(OnceCell::new());
+        self.functions.push(OnceLock::new());
         FunctionBody(idx)
     }
     pub fn push_handler_body(&mut self) -> HandlerBody {
         let idx = self.handlers.len();
-        self.handlers.push(OnceCell::new());
+        self.handlers.push(OnceLock::new());
         HandlerBody(idx)
     }
     pub fn push_struct(&mut self) -> StructDef {
         let idx = self.structs.len();
-        self.structs.push(OnceCell::new());
+        self.structs.push(OnceLock::new());
         StructDef(idx)
     }
     pub fn push_effect(&mut self) -> EffectDef {
         let idx = self.effects.len();
-        self.effects.push(OnceCell::new());
+        self.effects.push(OnceLock::new());
         EffectDef(idx)
     }
     pub fn realize_function_body(&self, fun: FunctionBody, value: FunctionBodyDefinition) {

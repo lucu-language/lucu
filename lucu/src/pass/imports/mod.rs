@@ -124,8 +124,11 @@ impl Imports {
                     .into()
             }
             Err(UnknownModule::UnknownFile) => ProblemKind::UnknownFile(format_compact!(
-                "path resolved to {}",
-                resolver.path(module).expect("ICE: unknown path").display()
+                "path resolved to '{}'",
+                resolver
+                    .relative_path(module)
+                    .unwrap_or_else(|| resolver.path(module).expect("ICE: unknown path"))
+                    .display()
             ))
             .at(parent, &import.path)
             .into(),

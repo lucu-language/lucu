@@ -199,21 +199,37 @@ pub trait Libraries {
     fn preamble(&self, library: &Library) -> Option<Module>;
 }
 
-#[derive(Clone)]
-pub struct LibraryDefinition {
+#[derive(Clone, Debug)]
+pub struct LibraryDir {
     pub location: PathBuf,
     pub preamble: Option<Module>,
     pub modules_override: Option<Dir<'static>>,
 }
 
-impl LibraryDefinition {
-    pub const fn builtin(location: PathBuf) -> Self {
-        Self {
-            location,
-            preamble: Some(Module::BUILTIN_TYPES),
-            modules_override: Some(include_dir!("$CARGO_MANIFEST_DIR/../modules/builtin")),
-        }
+impl LibraryDir {
+    pub fn builtin<P: Into<PathBuf>>(location: P) -> Self {
+        Self::new(location)
+            .with_preamble(Module::BUILTIN_TYPES)
+            .with_modules(include_dir!("$CARGO_MANIFEST_DIR/../modules/builtin"))
     }
+    pub fn stdlib<P: AsRef<Path>>(location: P) -> HashMap<Library, Self> {
+        let location = location.as_ref();
+        let mut dirs = HashMap::new();
+        dirs.insert(
+            Library::BUILTIN,
+            LibraryDir::builtin(location.join("builtin")),
+        );
+        dirs.insert(
+            Library::LIBC,
+            LibraryDir::new(location.join("libc")).with_preamble(Module::LIBC_TYPES),
+        );
+        dirs.insert(
+            Library::CORE,
+            LibraryDir::new(location.join("core")).with_preamble(Module::BUILTIN),
+        );
+        dirs
+    }
+
     pub fn new<P: Into<PathBuf>>(location: P) -> Self {
         let path: PathBuf = location.into();
         let absolute_path = if path.is_absolute() {
@@ -241,7 +257,7 @@ impl LibraryDefinition {
     }
 }
 
-impl Libraries for HashMap<Library, LibraryDefinition> {
+impl Libraries for HashMap<Library, LibraryDir> {
     fn path(&self, library: &Library) -> Result<PathBuf, UnknownModule> {
         self.get(library)
             .map(|e| e.location.clone())
@@ -252,7 +268,7 @@ impl Libraries for HashMap<Library, LibraryDefinition> {
     }
 }
 
-impl Modules for HashMap<Library, LibraryDefinition> {
+impl Modules for HashMap<Library, LibraryDir> {
     fn libraries(&self) -> &impl Libraries {
         self
     }

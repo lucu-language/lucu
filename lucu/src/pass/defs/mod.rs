@@ -54,7 +54,8 @@ impl Visitor for DefinitionPaths {
 #[derive(Debug, Default)]
 pub struct Definitions {
     defs: Vec<Item>,
-    graph: Acyclic<DiGraph<CompactString, Edge>>,
+    graph: DiGraph<CompactString, Edge>,
+    postorder: Box<[NodeIndex]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,18 +117,18 @@ impl ast::Module {
 
 impl Definitions {
     pub fn postorder<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Item> {
-        self.graph
-            .nodes_iter()
-            .rev()
+        self.postorder
+            .iter()
+            .copied()
             .map(|idx| ast.item(idx, &self.defs))
     }
     pub fn postorder_with_parent<'a>(
         &self,
         ast: &'a ast::Module,
     ) -> impl Iterator<Item = (&'a ast::Item, Option<&'a ast::Item>)> {
-        self.graph
-            .nodes_iter()
-            .rev()
+        self.postorder
+            .iter()
+            .copied()
             .map(|idx| ast.item_with_parent(idx, &self.defs))
     }
     pub fn indices(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
@@ -219,7 +220,11 @@ impl Definitions {
             problems.error()
         } else {
             let graph = Acyclic::try_from_graph(graph).expect("ICE: cyclic graph passed ssc test");
-            problems.with(Self { defs, graph })
+            problems.with(Self {
+                defs,
+                postorder: graph.nodes_iter().rev().collect(),
+                graph: graph.into_inner(),
+            })
         }
     }
     fn add_item(

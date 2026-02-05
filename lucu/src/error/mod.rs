@@ -30,6 +30,16 @@ pub struct Problems {
     problems: im::Vector<Problem>,
 }
 
+impl IntoIterator for Problems {
+    type Item = Problem;
+
+    type IntoIter = im::vector::ConsumingIter<Problem>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.problems.into_iter()
+    }
+}
+
 impl Add for Problems {
     type Output = Problems;
 
@@ -96,19 +106,40 @@ impl Problems {
         self.problems.append(rhs.problems);
         rhs.value
     }
+    pub fn extend(&mut self, rhs: impl IntoIterator<Item = Problem>) {
+        self.problems.extend(rhs);
+    }
     pub fn has_error(&self) -> bool {
         self.problems
             .iter()
             .any(|d| d.header().level == ProblemLevel::Error)
     }
+    pub fn iter(&self) -> impl Iterator<Item = &Problem> {
+        self.problems.iter()
+    }
     pub fn and_then<T>(self, f: impl FnOnce(()) -> Result<T>) -> Result<T> {
         self.with(()).and_then(f)
+    }
+    pub fn for_module(&self, module: &Module) -> Problems {
+        self.problems
+            .iter()
+            .filter(|p| &p.module == module)
+            .cloned()
+            .collect()
     }
 }
 
 impl HasProblems for Problems {
     fn problems(&self) -> impl Iterator<Item = &Problem> {
         self.problems.iter()
+    }
+}
+
+impl FromIterator<Problem> for Problems {
+    fn from_iter<T: IntoIterator<Item = Problem>>(iter: T) -> Self {
+        Self {
+            problems: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -221,6 +252,12 @@ impl<T> Result<T> {
             problems: self.problems,
         }
     }
+    pub fn as_ref(&self) -> Result<&T> {
+        Result {
+            value: self.value(),
+            problems: self.problems.clone(),
+        }
+    }
     pub fn value(&self) -> Option<&T> {
         self.value.as_ref()
     }
@@ -290,9 +327,9 @@ pub enum ProblemLevel {
 
 #[derive(Clone, Debug)]
 pub struct Problem {
-    module: Module,
-    span: Span,
-    kind: ProblemKind,
+    pub module: Module,
+    pub span: Span,
+    pub kind: ProblemKind,
 }
 
 impl Problem {

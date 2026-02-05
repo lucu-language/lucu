@@ -1,0 +1,13 @@
+[[language]]
+name = "lucu"
+scope = "source.lucu"
+injection-regex = "lucu"
+file-types = ["lucu"]
+comment-tokens = "--"
+indent = { tab-width = 3, unit = "   " }
+formatter = { command = "cargo", args = ["run", "--bin", "lucu-fmt"] }
+language-servers = ["lucu-lsp"]
+
+[language-server.lucu-lsp]
+command = "cargo"
+args = ["run", "--bin", "lucu-lsp"]

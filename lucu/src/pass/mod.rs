@@ -4,10 +4,10 @@ pub mod lexer;
 pub mod lower;
 pub mod parser;
 
-use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::sync::OnceLock;
 
 use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
 use petgraph::dot::Dot;
@@ -50,8 +50,14 @@ impl HasProblems for Stages {
     }
 }
 
+impl HasProblems for ModuleGraph {
+    fn problems(&self) -> impl Iterator<Item = &Problem> {
+        self.cache.0.values().flat_map(HasProblems::problems)
+    }
+}
+
 #[derive(Debug)]
-struct Lazy<T>(OnceCell<Result<T>>);
+struct Lazy<T>(OnceLock<Result<T>>);
 
 impl<T> Default for Lazy<T> {
     fn default() -> Self {
@@ -67,7 +73,7 @@ impl<T> HasProblems for Lazy<T> {
 
 impl<T> Lazy<T> {
     const fn new() -> Self {
-        Self(OnceCell::new())
+        Self(OnceLock::new())
     }
     fn get_or_init(&self, f: impl FnOnce() -> Option<Result<T>>) -> Option<&T> {
         match self.0.get() {

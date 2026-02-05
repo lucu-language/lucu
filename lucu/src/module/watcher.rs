@@ -5,10 +5,10 @@ use crossbeam_channel::{Receiver, unbounded};
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
-use crate::module::{Library, LibraryDefinition, Module, Modules};
+use crate::module::{Library, LibraryDir, Module, Modules};
 
 pub struct FileWatcher {
-    libraries: HashMap<Library, LibraryDefinition>,
+    libraries: HashMap<Library, LibraryDir>,
 
     rx: Receiver<DebounceEventResult>,
     #[expect(unused)]
@@ -16,7 +16,7 @@ pub struct FileWatcher {
 }
 
 impl FileWatcher {
-    pub fn new(libraries: HashMap<Library, LibraryDefinition>, timeout: Duration) -> Self {
+    pub fn new(libraries: HashMap<Library, LibraryDir>, timeout: Duration) -> Self {
         let (tx, rx) = unbounded();
         let mut file_watcher = new_debouncer(timeout, None, tx).unwrap();
         for lib in libraries.values() {

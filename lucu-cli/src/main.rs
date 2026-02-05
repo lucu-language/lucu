@@ -1,31 +1,18 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use asta_annotate::Annotate;
 use lucu::annotate::AnnotateExt;
 use lucu::error::print::PrintProblems;
 use lucu::module::watcher::FileWatcher;
-use lucu::module::{Library, LibraryDefinition, Module};
+use lucu::module::{Library, LibraryDir, Module};
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
 
 fn main() {
-    let mut dirs = HashMap::new();
-    dirs.insert(
-        Library::BUILTIN,
-        LibraryDefinition::builtin("./modules/builtin".into()),
-    );
-    dirs.insert(
-        Library::LIBC,
-        LibraryDefinition::new("./modules/libc").with_preamble(Module::LIBC_TYPES),
-    );
-    dirs.insert(
-        Library::CORE,
-        LibraryDefinition::new("./modules/core").with_preamble(Module::BUILTIN),
-    );
+    let mut dirs = LibraryDir::stdlib("./modules");
     dirs.insert(
         Library::MAIN,
-        LibraryDefinition::new("./modules/test").with_preamble(Module::CORE),
+        LibraryDir::new("./modules/test").with_preamble(Module::CORE),
     );
 
     let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));

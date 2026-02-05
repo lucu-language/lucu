@@ -79,11 +79,16 @@ impl Problem {
         }
 
         // Context locations
-        self.kind.context(&mut |ctx| {
+        for ctx in self.kind.context() {
             let (contents, path) = if let Some(module) = ctx.module {
                 (
                     resolver.contents(&module).map(Cow::Owned),
-                    Some(resolver.relative_path(&module).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| self.module.to_string())),
+                    Some(
+                        resolver
+                            .relative_path(&module)
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| self.module.to_string()),
+                    ),
                 )
             } else {
                 (contents.as_deref().map(Cow::Borrowed), None)
@@ -97,14 +102,16 @@ impl Problem {
                 let context_kind_style = CONTEXT_STYLE.fg_color(Some(color));
 
                 if let Some(label) = ctx.label {
-                    anstream::println!("{context_kind_style}{name}{context_kind_style:#}{CONTEXT_STYLE}: {label}{CONTEXT_STYLE:#}");
+                    anstream::println!(
+                        "{context_kind_style}{name}{context_kind_style:#}{CONTEXT_STYLE}: {label}{CONTEXT_STYLE:#}"
+                    );
                 } else if path.is_none() {
                     anstream::println!("{LINE_STYLE} ...  {LINE_STYLE:#}");
                 }
 
-                print_highlight(highlight, ctx.span, path.as_deref(), contents,compact);
+                print_highlight(highlight, ctx.span, path.as_deref(), contents, compact);
             }
-        });
+        }
     }
 }
 

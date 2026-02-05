@@ -4,19 +4,19 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use lucu::error::{HasProblems, ProblemLevel, Problems};
+use lucu::error::{Diagnostic as _, HasProblems, ProblemLevel, Problems};
 use lucu::module::{Libraries, Library, LibraryDir, Module, Modules, UnknownModule};
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::{
-    Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DocumentDiagnosticParams, DocumentDiagnosticReport,
-    DocumentDiagnosticReportResult, FullDocumentDiagnosticReport, InitializeParams,
-    InitializeResult, InitializedParams, MessageType, NumberOrString, Position,
-    PositionEncodingKind, Range, RelatedFullDocumentDiagnosticReport, ServerCapabilities,
+    Diagnostic, DiagnosticOptions, DiagnosticRelatedInformation, DiagnosticServerCapabilities,
+    DiagnosticSeverity, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
+    DocumentDiagnosticReport, DocumentDiagnosticReportResult, FullDocumentDiagnosticReport,
+    InitializeParams, InitializeResult, InitializedParams, Location, MessageType, NumberOrString,
+    Position, PositionEncodingKind, Range, RelatedFullDocumentDiagnosticReport, ServerCapabilities,
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
 };
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
@@ -161,13 +161,13 @@ impl Backend {
         let workspace = &self.workspaces.read().await[uri];
         for (module, src) in workspace.files.open.iter() {
             let problems = workspace.problems(module);
-            let diagnostics = diagnostics(src, problems);
             let module_uri = Uri::from_str(&format!(
                 "{}/{}",
                 uri.as_str(),
                 module.path_with_extension()
             ))
             .unwrap();
+            let diagnostics = diagnostics(&module_uri, src, problems);
 
             self.log(&format!(
                 "publishing diagnostics for {}",
@@ -351,7 +351,7 @@ impl LanguageServer for Backend {
                     related_documents: None,
                     full_document_diagnostic_report: FullDocumentDiagnosticReport {
                         result_id: None,
-                        items: diagnostics(&source, problems),
+                        items: diagnostics(&params.text_document.uri, &source, problems),
                     },
                 }),
             ))
@@ -367,7 +367,7 @@ impl LanguageServer for Backend {
     }
 }
 
-fn diagnostics(source: &str, problems: Problems) -> Vec<Diagnostic> {
+fn diagnostics(uri: &Uri, source: &str, problems: Problems) -> Vec<Diagnostic> {
     problems
         .into_iter()
         .map(|p| {
@@ -385,15 +385,34 @@ fn diagnostics(source: &str, problems: Problems) -> Vec<Diagnostic> {
                 code: Some(NumberOrString::Number(header.id as i32)),
                 // TODO
                 code_description: None,
-                source: None,
+                source: Some("lucu".to_owned()),
                 message: match label {
                     Some(label) => format!("{}: {}", header.title, label),
                     None => header.title.to_owned(),
                 },
-                // TODO
-                related_information: None,
-                // TODO
-                tags: None,
+                related_information: Some(
+                    p.kind
+                        .context()
+                        .flat_map(|c| {
+                            c.module.is_none().then_some(())?;
+                            Some(DiagnosticRelatedInformation {
+                                location: Location {
+                                    uri: uri.clone(),
+                                    range: Range {
+                                        start: position(source, c.span.start),
+                                        end: position(source, c.span.end),
+                                    },
+                                },
+                                message: c.label?.into_owned(),
+                            })
+                        })
+                        .collect(),
+                ),
+                tags: match p.kind {
+                    // TODO: unnecessary
+                    // TODO: deprecated
+                    _ => None,
+                },
                 data: None,
             }
         })

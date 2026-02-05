@@ -15,9 +15,12 @@ impl Diagnostic for MultipleDefinitions {
     fn label(&self) -> Option<Label<'_>> {
         None
     }
-    fn context(&self, f: &mut dyn FnMut(Context<'_>)) {
-        for (i, span) in self.redefined.iter().copied().enumerate() {
-            f(Context {
+    fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
+        self.redefined
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(i, span)| Context {
                 module: None,
                 span,
                 label: Some(if i == 0 {
@@ -27,6 +30,5 @@ impl Diagnostic for MultipleDefinitions {
                 }),
                 level: ContextLevel::Info,
             })
-        }
     }
 }

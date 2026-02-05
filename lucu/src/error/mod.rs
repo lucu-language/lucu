@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::iter;
 use std::ops::Add;
 
 use compact_str::CompactString;
@@ -305,8 +306,9 @@ pub enum ContextLevel {
 
 pub trait Diagnostic {
     fn label(&self) -> Option<Label<'_>>;
-    #[expect(unused_variables)]
-    fn context(&self, f: &mut dyn FnMut(Context<'_>)) {}
+    fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
+        iter::empty()
+    }
 }
 impl Diagnostic for () {
     fn label(&self) -> Option<Label<'_>> {
@@ -378,9 +380,9 @@ macro_rules! diagnostics {
                     $(Self::$variant(v) => Diagnostic::label(v)),*
                 }
             }
-            fn context(&self, f: &mut dyn FnMut(Context<'_>)) {
+            fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
                 match self {
-                    $(Self::$variant(v) => Diagnostic::context(v, f)),*
+                    $(Self::$variant(v) => Box::new(Diagnostic::context(v)) as Box<dyn Iterator<Item = Context>>),*
                 }
             }
         }

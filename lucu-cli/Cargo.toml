@@ -8,5 +8,3 @@ lucu = { path = "../lucu", features = ["watcher", "print"] }
 asta-annotate = { path = "../asta-annotate" }
 
 anstream = "0.6.21"
-
-include_dir.workspace = true

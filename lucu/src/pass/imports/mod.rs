@@ -5,7 +5,7 @@ use compact_str::{CompactString, ToCompactString, format_compact};
 
 use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
-use crate::module::{Module, ModuleResolver, UnknownModule};
+use crate::module::{Module, Modules, UnknownModule};
 use crate::span::{HasSpan, Span};
 use crate::tokens::is_valid_identifier;
 
@@ -47,18 +47,12 @@ impl Imports {
     pub fn iter(&self) -> impl Iterator<Item = (&Import, &Module)> {
         self.0.iter()
     }
-    pub fn from(
-        resolver: &impl ModuleResolver,
-        parent: &Module,
-        ast: &ast::Module,
-    ) -> Result<Self> {
+    pub fn from(resolver: &impl Modules, parent: &Module, ast: &ast::Module) -> Result<Self> {
         let mut problems = Problems::ok();
 
         let mut map = HashMap::new();
 
-        if let Some(module) = resolver.preamble(parent)
-            && &module != parent
-        {
+        if let Some(module) = resolver.preamble(parent) {
             map.insert(Import::Implicit, module);
         }
 
@@ -117,23 +111,24 @@ impl Imports {
         }
     }
     fn require_import_exists(
-        resolver: &impl ModuleResolver,
+        resolver: &impl Modules,
         import: &ast::Import,
         module: &Module,
         parent: &Module,
     ) -> Problems {
         match resolver.exists(module) {
             Ok(()) => Problems::ok(),
-            Err(UnknownModule::UnknownLibrary(lib)) => {
-                ProblemKind::UnknownLibrary(format_compact!("'{}'", lib))
+            Err(UnknownModule::UnknownLibrary) => {
+                ProblemKind::UnknownLibrary(format_compact!("'{}'", module.library))
                     .at(parent, &Self::library_span(&import.path))
                     .into()
             }
-            Err(UnknownModule::UnknownFile(file)) => {
-                ProblemKind::UnknownFile(format_compact!("path resolved to {}", file.display()))
-                    .at(parent, &import.path)
-                    .into()
-            }
+            Err(UnknownModule::UnknownFile) => ProblemKind::UnknownFile(format_compact!(
+                "path resolved to {}",
+                resolver.path(module).expect("ICE: unknown path").display()
+            ))
+            .at(parent, &import.path)
+            .into(),
         }
     }
 }

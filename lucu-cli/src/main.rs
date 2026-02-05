@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use asta_annotate::Annotate;
-use include_dir::include_dir;
 use lucu::annotate::AnnotateExt;
 use lucu::error::print::PrintProblems;
-use lucu::module::watcher::{FileWatcher, WatchedLibrary};
-use lucu::module::{Library, Module};
+use lucu::module::watcher::FileWatcher;
+use lucu::module::{Library, LibraryDefinition, Module};
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
 
@@ -14,28 +13,25 @@ fn main() {
     let mut dirs = HashMap::new();
     dirs.insert(
         Library::BUILTIN,
-        WatchedLibrary::new("./modules/builtin")
-            .with_modules(include_dir!("modules/builtin"))
-            .with_preamble(Module::BUILTIN_TYPES),
+        LibraryDefinition::builtin("./modules/builtin".into()),
     );
     dirs.insert(
         Library::LIBC,
-        WatchedLibrary::new("./modules/libc").with_preamble(Module::LIBC_TYPES),
+        LibraryDefinition::new("./modules/libc").with_preamble(Module::LIBC_TYPES),
     );
     dirs.insert(
         Library::CORE,
-        WatchedLibrary::new("./modules/core").with_preamble(Module::BUILTIN_PREAMBLE),
+        LibraryDefinition::new("./modules/core").with_preamble(Module::BUILTIN),
     );
     dirs.insert(
         Library::MAIN,
-        WatchedLibrary::new("./modules/test").with_preamble(Module::CORE_PREAMBLE),
+        LibraryDefinition::new("./modules/test").with_preamble(Module::CORE),
     );
 
-    let main = Module::new(Library::MAIN, "main");
-    let mut watcher = FileWatcher::new(main.clone(), dirs, Duration::from_secs_f32(0.1));
+    let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));
 
     let mut graph = ModuleGraph::new();
-    graph.insert_or_update(&watcher, main.clone());
+    graph.insert_or_update(watcher.modules(), Module::MAIN);
 
     let mut tt = TypeTable::new();
 
@@ -62,7 +58,7 @@ fn main() {
                     }
                 }
 
-                stages.print_problems(&watcher, true);
+                stages.print_problems(watcher.modules(), true);
                 println!();
             }
         }
@@ -71,9 +67,9 @@ fn main() {
         let changes = watcher.await_change();
         for changed in changes {
             if graph.contains(&changed) {
-                graph.insert_or_update(&watcher, changed);
+                graph.insert_or_update(watcher.modules(), changed);
             }
         }
-        // graph.retain_connected(&main);
+        // graph.retain_connected(&Module::MAIN);
     }
 }

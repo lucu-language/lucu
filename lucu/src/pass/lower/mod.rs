@@ -1064,9 +1064,9 @@ impl Lower<'_> {
             ("builtin:ops", "len") => IntrinsicFunction::Len,
             ("builtin:regions", "local") => IntrinsicFunction::Local,
             ("builtin:regions", "alloca") => IntrinsicFunction::Alloca,
-            ("builtin:preamble", "print_str") => IntrinsicFunction::PrintStr,
-            ("builtin:preamble", "loop") => IntrinsicFunction::Loop,
-            ("builtin:preamble", "unfounded") => IntrinsicFunction::Unfounded,
+            ("builtin:builtin", "print_str") => IntrinsicFunction::PrintStr,
+            ("builtin:builtin", "loop") => IntrinsicFunction::Loop,
+            ("builtin:builtin", "unfounded") => IntrinsicFunction::Unfounded,
 
             ("builtin:ops", "index") => IntrinsicFunction::Index,
 
@@ -1084,7 +1084,7 @@ impl Lower<'_> {
     fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<Effect> {
         let module = self.module.to_compact_string();
         let effect = match (module.as_str(), name.ident.as_str()) {
-            ("builtin:preamble", "Div") => EffectEnum::Divergent,
+            ("builtin:builtin", "Div") => EffectEnum::Divergent,
             ("builtin:regions", "Read") => {
                 let region = self.tt.insert_region(RegionEnum::Generic(GenericParameter {
                     index: 0,

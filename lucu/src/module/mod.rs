@@ -1,8 +1,10 @@
-use std::fmt;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::{env, fmt, fs};
 
 use compact_str::{CompactString, ToCompactString, format_compact};
-use path_clean::clean;
+use include_dir::{Dir, File, include_dir};
+use path_clean::{PathClean, clean};
 
 #[cfg(feature = "watcher")]
 pub mod watcher;
@@ -76,17 +78,17 @@ impl Module {
         library: Library::BUILTIN,
         relative_path: CompactString::const_new("types"),
     };
-    pub const BUILTIN_PREAMBLE: Module = Self {
+    pub const BUILTIN: Module = Self {
         library: Library::BUILTIN,
-        relative_path: CompactString::const_new("preamble"),
+        relative_path: CompactString::const_new("builtin"),
     };
     pub const LIBC_TYPES: Module = Self {
         library: Library::LIBC,
         relative_path: CompactString::const_new("types"),
     };
-    pub const CORE_PREAMBLE: Module = Self {
+    pub const CORE: Module = Self {
         library: Library::CORE,
-        relative_path: CompactString::const_new("preamble"),
+        relative_path: CompactString::const_new("core"),
     };
     pub fn new(library: Library, path: impl AsRef<Path>) -> Self {
         let relative_path = clean(path)
@@ -159,18 +161,131 @@ impl fmt::Debug for Module {
     }
 }
 
-pub trait ModuleResolver {
-    fn main(&self) -> Module;
+pub trait Modules {
+    fn libraries(&self) -> &impl Libraries;
+
+    fn path(&self, module: &Module) -> Result<PathBuf, UnknownModule> {
+        Ok(self
+            .libraries()
+            .path(&module.library)?
+            .join(module.path_with_extension())
+            .clean())
+    }
+    fn relative_path(&self, module: &Module) -> Option<PathBuf> {
+        self.libraries()
+            .relative_path(&module.library)
+            .map(|dir| dir.join(module.path_with_extension()).clean())
+    }
+
+    fn preamble(&self, module: &Module) -> Option<Module> {
+        self.libraries()
+            .preamble(&module.library)
+            .filter(|preamble| preamble != module)
+    }
 
     fn exists(&self, module: &Module) -> Result<(), UnknownModule>;
-
-    fn preamble(&self, module: &Module) -> Option<Module>;
     fn contents(&self, module: &Module) -> Option<String>;
-    fn readable_path(&self, module: &Module) -> String;
 }
 
-#[derive(Debug)]
+pub trait Libraries {
+    fn path(&self, library: &Library) -> Result<PathBuf, UnknownModule>;
+    fn relative_path(&self, library: &Library) -> Option<PathBuf> {
+        let current_dir = env::current_dir().ok();
+        let library_dir = self.path(library).ok();
+        Option::zip(current_dir, library_dir)
+            .and_then(|(cur, lib)| lib.strip_prefix(cur).ok().map(Path::to_path_buf))
+    }
+
+    fn preamble(&self, library: &Library) -> Option<Module>;
+}
+
+#[derive(Clone)]
+pub struct LibraryDefinition {
+    pub location: PathBuf,
+    pub preamble: Option<Module>,
+    pub modules_override: Option<Dir<'static>>,
+}
+
+impl LibraryDefinition {
+    pub const fn builtin(location: PathBuf) -> Self {
+        Self {
+            location,
+            preamble: Some(Module::BUILTIN_TYPES),
+            modules_override: Some(include_dir!("$CARGO_MANIFEST_DIR/../modules/builtin")),
+        }
+    }
+    pub fn new<P: Into<PathBuf>>(location: P) -> Self {
+        let path: PathBuf = location.into();
+        let absolute_path = if path.is_absolute() {
+            path.clean()
+        } else {
+            std::env::current_dir()
+                .expect("ICE: library path is relative but cannot access current dir")
+                .join(path)
+                .clean()
+        };
+
+        Self {
+            location: absolute_path,
+            preamble: None,
+            modules_override: None,
+        }
+    }
+    pub fn with_preamble(mut self, module: Module) -> Self {
+        self.preamble = Some(module);
+        self
+    }
+    pub fn with_modules(mut self, modules: Dir<'static>) -> Self {
+        self.modules_override = Some(modules);
+        self
+    }
+}
+
+impl Libraries for HashMap<Library, LibraryDefinition> {
+    fn path(&self, library: &Library) -> Result<PathBuf, UnknownModule> {
+        self.get(library)
+            .map(|e| e.location.clone())
+            .ok_or(UnknownModule::UnknownLibrary)
+    }
+    fn preamble(&self, library: &Library) -> Option<Module> {
+        self.get(library).and_then(|e| e.preamble.clone())
+    }
+}
+
+impl Modules for HashMap<Library, LibraryDefinition> {
+    fn libraries(&self) -> &impl Libraries {
+        self
+    }
+    fn exists(&self, module: &Module) -> Result<(), UnknownModule> {
+        match &self
+            .get(&module.library)
+            .ok_or(UnknownModule::UnknownLibrary)?
+            .modules_override
+        {
+            Some(dir) => dir
+                .get_file(module.path_with_extension())
+                .map(|_| ())
+                .ok_or(UnknownModule::UnknownFile),
+            None => <Self as Modules>::path(self, module)
+                .and_then(|p| p.is_file().then_some(()).ok_or(UnknownModule::UnknownFile)),
+        }
+    }
+    fn contents(&self, module: &Module) -> Option<String> {
+        match &self.get(&module.library)?.modules_override {
+            Some(dir) => dir
+                .get_file(module.path_with_extension())
+                .and_then(File::contents_utf8)
+                .map(String::from),
+            None => <Self as Modules>::path(self, module)
+                .ok()
+                .map(fs::read_to_string)
+                .and_then(Result::ok),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum UnknownModule {
-    UnknownLibrary(Library),
-    UnknownFile(PathBuf),
+    UnknownLibrary,
+    UnknownFile,
 }

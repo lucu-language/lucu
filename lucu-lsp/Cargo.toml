@@ -1,0 +1,9 @@
+[package]
+name = "lucu-lsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lucu = { path = "../lucu" }
+tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros", "io-std"] }
+tower-lsp-server = "0.23.0"

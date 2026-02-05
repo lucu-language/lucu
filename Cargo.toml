@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["lucu", "lucu-cli", "asta-annotate", "asta-pretty", "lucu-fmt"]
+members = ["lucu", "lucu-cli", "asta-annotate", "asta-pretty", "lucu-fmt", "lucu-lsp"]
 
 [workspace.dependencies]
 anstyle = { version = "1.0.13", default-features = false }

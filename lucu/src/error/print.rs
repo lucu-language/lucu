@@ -1,14 +1,14 @@
 use std::borrow::Cow;
 
 use anstyle::{AnsiColor, Color, Style};
-use line_column::line_column;
 use asta_annotate::ansi::MarkStyle;
 use asta_annotate::{Annotate, Mark};
+use line_column::line_column;
 
 use crate::annotate::AnnotateExt;
 pub use crate::annotate::LINE_STYLE;
 use crate::error::{ContextLevel, Diagnostic, HasProblems, Problem, ProblemLevel};
-use crate::module::ModuleResolver;
+use crate::module::Modules;
 use crate::pass::lexer::Lexer;
 use crate::span::Span;
 
@@ -35,7 +35,7 @@ pub const LABEL_STYLE: Style = Style::new();
 pub const PATH_STYLE: Style = LINE_STYLE;
 
 pub trait PrintProblems: HasProblems {
-    fn print_problems(&self, resolver: &impl ModuleResolver, compact: bool) {
+    fn print_problems(&self, resolver: &impl Modules, compact: bool) {
         for (i, problem) in self.problems().enumerate() {
             if i > 0 && compact {
                 println!();
@@ -48,7 +48,7 @@ pub trait PrintProblems: HasProblems {
 impl<T> PrintProblems for T where T: HasProblems {}
 
 impl Problem {
-    pub fn print(&self, resolver: &impl ModuleResolver, compact: bool) {
+    pub fn print(&self, resolver: &impl Modules, compact: bool) {
         let header = self.header();
         let title = header.title;
         let id = header.id;
@@ -69,7 +69,10 @@ impl Problem {
 
         // Problem location
         let contents = resolver.contents(&self.module);
-        let path = resolver.readable_path(&self.module);
+        let path = resolver
+            .relative_path(&self.module)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.module.to_string());
 
         if let Some(contents) = contents.as_deref() {
             print_highlight(highlight, self.span, Some(&path), contents, compact);
@@ -80,7 +83,7 @@ impl Problem {
             let (contents, path) = if let Some(module) = ctx.module {
                 (
                     resolver.contents(&module).map(Cow::Owned),
-                    Some(resolver.readable_path(&module)),
+                    Some(resolver.relative_path(&module).map(|path| path.to_string_lossy().into_owned()).unwrap_or_else(|| self.module.to_string())),
                 )
             } else {
                 (contents.as_deref().map(Cow::Borrowed), None)

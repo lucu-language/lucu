@@ -18,7 +18,7 @@ use petgraph::visit::{
 
 use crate::error::{HasProblems, Problem, Result};
 use crate::ir::IR;
-use crate::module::{Module, ModuleResolver};
+use crate::module::{Module, Modules};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::{Import, Imports};
 use crate::pass::lexer::Lexer;
@@ -84,14 +84,14 @@ impl<T> Lazy<T> {
 }
 
 impl Stages {
-    pub fn new(module: Module, resolver: &impl ModuleResolver) -> Self {
+    pub fn new(module: Module, resolver: &impl Modules) -> Self {
         Self {
             source: resolver.contents(&module),
             module,
             ..Self::default()
         }
     }
-    fn reset(&mut self, resolver: &impl ModuleResolver) {
+    fn reset(&mut self, resolver: &impl Modules) {
         // reset everything
         *self = Self::new(std::mem::take(&mut self.module), resolver);
     }
@@ -100,7 +100,7 @@ impl Stages {
         self.imports = Lazy::new();
         self.untyped_ir = Lazy::new();
     }
-    fn resolve_imports(&self, resolver: &impl ModuleResolver) -> Option<&Imports> {
+    fn resolve_imports(&self, resolver: &impl Modules) -> Option<&Imports> {
         self.imports.get_or_init(|| {
             let ast = self.ast()?;
             Some(Imports::from(resolver, &self.module, ast))
@@ -148,7 +148,7 @@ impl Stages {
 struct ModuleCache(HashMap<Module, Stages>);
 
 impl ModuleCache {
-    fn get_or_insert(&mut self, resolver: &impl ModuleResolver, module: &Module) -> &mut Stages {
+    fn get_or_insert(&mut self, resolver: &impl Modules, module: &Module) -> &mut Stages {
         self.0
             .entry(module.clone())
             .or_insert_with(|| Stages::new(module.clone(), resolver))
@@ -243,7 +243,7 @@ impl ModuleGraph {
             self.cache.0.remove(&module);
         }
     }
-    pub fn insert_or_update(&mut self, resolver: &impl ModuleResolver, module: Module) {
+    pub fn insert_or_update(&mut self, resolver: &impl Modules, module: Module) {
         let mut reimport_nodes = Vec::new();
 
         let exists = resolver.exists(&module).is_ok();

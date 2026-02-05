@@ -36,7 +36,7 @@ impl Display for TokenEnum {
                 "'{}'",
                 match s {
                     Symbol::At => "@",
-                    Symbol::Semicolon => return write!(f, "newline, ';'"),
+                    Symbol::Semicolon => return write!(f, "a newline or ';'"),
                     Symbol::Colon => ":",
                     Symbol::Tilde => "~",
                     Symbol::Comma => ",",
@@ -77,9 +77,9 @@ impl Display for TokenEnum {
                 }
             ),
             TokenEnum::Literal(l) => match l {
-                Literal::String => write!(f, "string"),
-                Literal::Character => write!(f, "character"),
-                Literal::Integer => write!(f, "integer"),
+                Literal::String => write!(f, "a string"),
+                Literal::Character => write!(f, "a character"),
+                Literal::Integer => write!(f, "an integer"),
                 Literal::Zero => write!(f, "'0'"),
             },
             TokenEnum::Open(g) => match g {
@@ -92,7 +92,7 @@ impl Display for TokenEnum {
                 Group::Brace => write!(f, "'}}'"),
                 Group::Bracket => write!(f, "']'"),
             },
-            TokenEnum::Identifier => write!(f, "identifier"),
+            TokenEnum::Identifier => write!(f, "an identifier"),
             TokenEnum::Eof => write!(f, "end of file"),
             TokenEnum::Unknown => write!(f, "unknown symbol"),
         }

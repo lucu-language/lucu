@@ -266,7 +266,7 @@ impl<'a> Parser<'a> {
     pub fn region_kind(&mut self) -> Result<ast::RegionKind> {
         match self.next().token {
             TokenEnum::Keyword(Keyword::Mut) => Result::new(ast::RegionKind::Mutable(self.skip())),
-            _ => todo!("error"),
+            _ => self.error(Expected::RegionKind),
         }
     }
     pub fn pointer_region(&mut self) -> Result<ast::PointerRegion> {
@@ -279,7 +279,7 @@ impl<'a> Parser<'a> {
                 }
             }
             _ if self.starts_region_kind() => self.region_kind().map(ast::PointerRegion::Kind),
-            _ => todo!("error"),
+            _ => self.error(Expected::PointerRegion),
         }
     }
     pub fn sentinel(&mut self) -> Result<ast::Sentinel> {

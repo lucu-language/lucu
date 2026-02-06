@@ -9,7 +9,7 @@ use crate::xar::Xar;
 pub mod xar;
 
 pub struct HandleMap<T, S = RandomState> {
-    indices: RwLock<HashTable<usize>>,
+    indices: RwLock<HashTable<u32>>,
     entries: Xar<T>,
     hash_builder: S,
 }
@@ -47,7 +47,7 @@ impl<T, S> HandleMap<T, S> {
             hash_builder,
         }
     }
-    pub fn insert(&self, value: T) -> usize
+    pub fn insert(&self, value: T) -> u32
     where
         T: Hash + Equivalent<T>,
         S: BuildHasher,
@@ -58,7 +58,7 @@ impl<T, S> HandleMap<T, S> {
                 let hash = self.hash_builder.hash_one(&value);
 
                 let mut indices = self.indices.write().unwrap();
-                let index = indices.len();
+                let index = indices.len() as u32;
                 unsafe { self.entries.push(value, index) };
                 indices.insert_unique(hash, index, |&i| {
                     self.hash_builder.hash_one(unsafe { self.entries.get(i) })
@@ -68,7 +68,7 @@ impl<T, S> HandleMap<T, S> {
             }
         }
     }
-    pub fn get_index_of<Q>(&self, key: &Q) -> Option<usize>
+    pub fn get_index_of<Q>(&self, key: &Q) -> Option<u32>
     where
         Q: ?Sized + Hash + Equivalent<T>,
         S: BuildHasher,
@@ -84,16 +84,16 @@ impl<T, S> HandleMap<T, S> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    pub fn len(&self) -> usize {
-        self.indices.read().unwrap().len()
+    pub fn len(&self) -> u32 {
+        self.indices.read().unwrap().len() as u32
     }
-    pub fn get(&self, index: usize) -> Option<&T> {
+    pub fn get(&self, index: u32) -> Option<&T> {
         (index < self.len()).then(|| unsafe { self.get_unchecked(index) })
     }
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         (0..self.len()).map(|idx| unsafe { self.get_unchecked(idx) })
     }
-    pub unsafe fn get_unchecked(&self, index: usize) -> &T {
+    pub unsafe fn get_unchecked(&self, index: u32) -> &T {
         unsafe { self.entries.get(index) }
     }
 }

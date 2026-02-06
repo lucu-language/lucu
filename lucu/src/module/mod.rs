@@ -65,6 +65,21 @@ impl From<&Module> for Module {
     }
 }
 
+pub fn import_name(import: &str) -> &str {
+    let relative_path = import
+        .split_once(':')
+        .map(|(_, path)| path)
+        .unwrap_or(import);
+    let basename = relative_path
+        .rsplit_once(['/', '\\'])
+        .map(|(_, base)| base)
+        .unwrap_or(relative_path);
+    basename
+        .rsplit_once('.')
+        .map(|(name, _)| name)
+        .unwrap_or(basename)
+}
+
 impl Module {
     pub const MAIN: Module = Self {
         library: Library::MAIN,
@@ -105,12 +120,7 @@ impl Module {
         }
     }
     pub fn name(&self) -> &str {
-        let filename = self
-            .relative_path
-            .rsplit_once(['/', '\\'])
-            .map(|t| t.1)
-            .unwrap_or(&self.relative_path);
-        filename.rsplit_once('.').map(|t| t.0).unwrap_or(filename)
+        import_name(&self.relative_path)
     }
     pub fn from_import(parent: &Module, import: &str) -> Self {
         match import.split_once(':') {

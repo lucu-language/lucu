@@ -5,8 +5,10 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use lucu::error::{Diagnostic as _, HasProblems, ProblemLevel, Problems};
-use lucu::module::{Libraries, Library, LibraryDir, Module, Modules, UnknownModule};
+use lucu::module::{Libraries, Library, LibraryDir, Module, Modules, UnknownModule, import_name};
 use lucu::pass::ModuleGraph;
+use lucu::span::HasSpan;
+use lucu::tokens::is_valid_identifier;
 use lucu::type_table::TypeTable;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
@@ -15,9 +17,10 @@ use tower_lsp_server::ls_types::{
     DiagnosticSeverity, DidChangeTextDocumentParams, DidChangeWorkspaceFoldersParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentDiagnosticParams,
     DocumentDiagnosticReport, DocumentDiagnosticReportResult, FullDocumentDiagnosticReport,
-    InitializeParams, InitializeResult, InitializedParams, Location, MessageType, NumberOrString,
-    Position, PositionEncodingKind, Range, RelatedFullDocumentDiagnosticReport, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
+    InitializeParams, InitializeResult, InitializedParams, InlayHint, InlayHintLabel,
+    InlayHintParams, Location, MessageType, NumberOrString, OneOf, Position, PositionEncodingKind,
+    Range, RelatedFullDocumentDiagnosticReport, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
 };
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
@@ -230,6 +233,7 @@ impl LanguageServer for Backend {
                         },
                     },
                 )),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: None,
@@ -368,6 +372,50 @@ impl LanguageServer for Backend {
             Ok(DocumentDiagnosticReportResult::Report(
                 DocumentDiagnosticReport::Full(Default::default()),
             ))
+        }
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        self.log("got inlay hint request!").await;
+        if let Some((workspace_uri, relative)) = self.workspace(&params.text_document.uri).await {
+            let module = Module::new(Library::MAIN, relative);
+            let workspace = &self.workspaces.read().await[&workspace_uri];
+            let stages = workspace.graph.stages(&module);
+
+            if let Some((Some(source), Some(ast))) = stages.map(|s| (s.source(), s.ast())) {
+                Ok(Some(
+                    ast.imports
+                        .elements
+                        .iter()
+                        .filter_map(|(import, _)| {
+                            if import.ident.is_some() {
+                                return None;
+                            }
+
+                            let name = import_name(import.path.as_str());
+                            eprintln!("{name}");
+                            if !is_valid_identifier(name) {
+                                return None;
+                            }
+
+                            Some(InlayHint {
+                                position: position(source, import.path.span().end),
+                                label: InlayHintLabel::String(name.to_owned()),
+                                kind: None,
+                                text_edits: None,
+                                tooltip: None,
+                                padding_left: Some(true),
+                                padding_right: None,
+                                data: None,
+                            })
+                        })
+                        .collect(),
+                ))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
         }
     }
 

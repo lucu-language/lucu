@@ -5,7 +5,7 @@ use compact_str::{CompactString, ToCompactString, format_compact};
 
 use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
-use crate::module::{Module, Modules, UnknownModule};
+use crate::module::{Module, Modules, UnknownModule, import_name};
 use crate::span::{HasSpan, Span};
 use crate::tokens::is_valid_identifier;
 
@@ -91,23 +91,16 @@ impl Imports {
         inner
     }
     fn import_name(path: &ast::String) -> ast::Identifier {
-        // FIXME: first get the filename, THEN remove the extension
-        let without_extension = path
-            .as_str()
-            .rsplit_once('.')
-            .map(|t| t.0)
-            .unwrap_or(path.as_str());
-        let end = path.span().end - 1 - (path.as_str().len() - without_extension.len()) as u32;
-
-        let ident = without_extension
-            .rsplit_once(['/', '\\', ':'])
-            .map(|t| t.1)
-            .unwrap_or(without_extension);
-        let start = path.span().start + 1 + (without_extension.len() - ident.len()) as u32;
+        let name = import_name(path.as_str());
+        // SAFETY: 'name' is a substring of 'path'
+        let start = path.span().start
+            + 1
+            + unsafe { name.as_ptr().offset_from(path.as_str().as_ptr()) } as u32;
+        let end = start + name.len() as u32;
 
         ast::Identifier {
             token: ast::Token(Span::new(start, end)),
-            value: ident.into(),
+            value: name.into(),
         }
     }
     fn require_import_exists(

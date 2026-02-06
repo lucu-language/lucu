@@ -102,7 +102,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
         {
             let ptr = *chunk.get_mut();
 
-            let chunk_cap = 1 << (Self::shift() as usize + chunk_idx - 1);
+            let chunk_cap = 1 << (Self::shift() as usize + chunk_idx.max(1) - 1);
             let chunk_len = if chunk_idx as u32 == meta.chunk_idx {
                 meta.elem_idx + 1
             } else {

@@ -110,7 +110,12 @@ impl ast::Module {
             }
             None => &self.items.elements[module_definition.index].0,
         };
-        gens.retain(|&i| !ast.generics().iter().any(|g| g.ident().as_str() == i));
+        gens.retain(|&i| {
+            !ast.generics()
+                .into_iter()
+                .flat_map(|grouped| grouped.inner.iter())
+                .any(|g| g.ident().as_str() == i)
+        });
         ast
     }
 }

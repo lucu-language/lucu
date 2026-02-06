@@ -756,8 +756,7 @@ impl Item {
             Item::Handle(_, _, _) => None,
         }
     }
-    // TODO: just make this return Option<&GenericParameters> please
-    pub fn generics(&self) -> &Separated<GenericParameter> {
+    pub fn generics(&self) -> Option<&GenericParameters> {
         match self {
             Item::Function(fun, _) => fun.name.generics.as_ref(),
             Item::Type(_, name, _) => name.generics.as_ref(),
@@ -765,14 +764,6 @@ impl Item {
             Item::Constant(_, name, _, _) => name.generics.as_ref(),
             Item::Handle(_, params, _) => params.as_ref(),
         }
-        .map(|g| &g.inner)
-        .unwrap_or(
-            const {
-                &Separated {
-                    elements: Vec::new(),
-                }
-            },
-        )
     }
     pub fn children(&self) -> &Separated<Item> {
         match self {

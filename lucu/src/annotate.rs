@@ -2,9 +2,9 @@ use std::fmt;
 use std::ops::Range;
 
 use anstyle::{AnsiColor, Style};
-use itertools::Itertools;
 use asta_annotate::ansi::MarkStyle;
 use asta_annotate::{Annotate, Annotated, Annotation, Mark};
+use itertools::Itertools;
 
 use crate::ast;
 use crate::ast::visit::{Ast, Combine, Visitor};
@@ -100,6 +100,12 @@ where
         struct Nodes;
         impl Visitor for Nodes {
             type Output<'a> = im::Vector<Annotation<Node>>;
+            fn visit_name(self, name: &ast::Name) -> Self::Output<'_> {
+                name.visit(self)
+            }
+            fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
+                path.visit(self)
+            }
             fn visit(self, ast: &impl ast::visit::Ast) -> Self::Output<'_> {
                 Self::Output::combine([
                     im::Vector::unit(Node(ast.node_name()).at(ast.span())),
@@ -160,6 +166,9 @@ impl Mark for InsertedSemicolon {
 #[derive(Clone, Copy)]
 struct Node(&'static str);
 impl Mark for Node {
+    fn style(&self) -> MarkStyle {
+        MarkStyle::surround(INLINE_STYLE)
+    }
     fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}(", self.0)
     }

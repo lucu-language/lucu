@@ -28,6 +28,13 @@ impl MarkStyle {
             ..Default::default()
         }
     }
+    pub fn surround(value: anstyle::Style) -> Self {
+        Self {
+            before: Some(value),
+            after: Some(value),
+            ..Default::default()
+        }
+    }
 }
 
 pub fn apply(

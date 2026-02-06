@@ -40,6 +40,16 @@ fn main() {
                         anstream::println!("{}", annotated);
                     }
 
+                    anstream::println!(
+                        "{}",
+                        source
+                            .snippet()
+                            .mark_ast(ast)
+                            // .debug()
+                            .mark_line_numbers()
+                            .mark_syntax(tokens)
+                    );
+
                     if let Some(untyped) = stages.untyped_ir(&graph, &tt) {
                         println!("{}", untyped.display(&tt));
                     }

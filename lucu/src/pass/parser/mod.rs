@@ -2,7 +2,7 @@ use compact_str::ToCompactString;
 use do_notation::m;
 
 use crate::ast;
-use crate::error::{ProblemKind, Result};
+use crate::error::{Problem, ProblemKind, Result};
 use crate::module::Module;
 use crate::pass::parser::err::Expected;
 use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
@@ -163,6 +163,7 @@ impl<'a> Parser<'a> {
                 .many_until(&[TokenEnum::Symbol(Symbol::Semicolon)], |parser| {
                     parser.path(false)
                 })
+                .require(|v| !v.is_empty(), |_| self.problem(Expected::Effect))
                 .map(ast::EffectDefinition::Alias),
         }
     }
@@ -293,7 +294,8 @@ impl<'a> Parser<'a> {
         m! {
             size <- self.unless_next(&[TokenEnum::Symbol(Symbol::Colon)], |parser| parser.constant(Expected::UsizeConstant));
             sentinel <- self.when_next(Symbol::Colon, Parser::sentinel);
-            return ast::ArrayProperties { size, sentinel };
+            let end = self.last_token_end;
+            return ast::ArrayProperties { size, sentinel, end };
         }
     }
     pub fn constant(&mut self, expected: Expected) -> Result<Box<ast::Constant>> {
@@ -467,6 +469,9 @@ impl<'a> Parser<'a> {
         }
     }
     fn error<T>(&self, expected: Expected) -> Result<T> {
+        Result::error(self.problem(expected))
+    }
+    fn problem(&self, expected: Expected) -> Problem {
         let next = self.next();
         let error = if next.is_eof() {
             ProblemKind::UnexpectedEOF(expected)
@@ -475,7 +480,7 @@ impl<'a> Parser<'a> {
         } else {
             ProblemKind::UnexpectedToken(expected)
         };
-        Result::error(error.at(self.module, &next))
+        error.at(self.module, &next)
     }
     fn skip(&mut self) -> ast::Token {
         let (token, tokens) = self.tokens.split_first().expect("ICE: consumed EOF token");
@@ -631,7 +636,10 @@ impl<'a> Parser<'a> {
             })
         })
         .collect::<Result<Vec<_>>>()
-        .map(|elements| ast::Separated { elements })
+        .map(|elements| {
+            let end = self.last_token_end;
+            ast::Separated { elements, end }
+        })
     }
     fn many_until<T>(
         &mut self,

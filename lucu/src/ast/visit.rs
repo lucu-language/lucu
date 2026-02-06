@@ -5,6 +5,9 @@ use crate::span::HasSpan;
 
 pub trait Visitor: Copy {
     type Output<'a>: Default + Combine;
+    fn visit_name(self, name: &ast::Name) -> Self::Output<'_> {
+        self.visit(name)
+    }
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         self.visit(path)
     }
@@ -149,46 +152,28 @@ impl Ast for ast::Item {
                 },
             ]),
             ast::Item::Type(_, name, opt) => V::Output::combine([
-                visitor.visit(name),
+                visitor.visit_name(name),
                 visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
             ]),
             ast::Item::Effect(_, name, opt) => V::Output::combine([
-                visitor.visit(name),
+                visitor.visit_name(name),
                 visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
             ]),
             ast::Item::Constant(_, name, ty, opt) => V::Output::combine([
-                visitor.visit(name),
+                visitor.visit_name(name),
                 visitor.visit_type(ty),
                 visit_option(opt, visitor, |v, (_, def)| v.visit(def)),
             ]),
             ast::Item::Handle(_, generics, handler) => V::Output::combine([
-                visit_option(generics, visitor, Visitor::visit),
+                visit_option(generics, visitor, |v, g| {
+                    visit_vec(&g.inner.elements, v, |v, (t, _)| v.visit(t))
+                }),
                 visitor.visit(handler),
             ]),
         }
     }
     fn node_name(&self) -> &'static str {
         self.into()
-    }
-}
-
-impl Ast for ast::GenericParameters {
-    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        visit_vec(&self.inner.elements, visitor, |v, (param, _)| {
-            v.visit(param)
-        })
-    }
-    fn node_name(&self) -> &'static str {
-        "GenericParameters"
-    }
-}
-
-impl Ast for ast::GenericArguments {
-    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        visit_vec(&self.inner.elements, visitor, |v, (arg, _)| v.visit(arg))
-    }
-    fn node_name(&self) -> &'static str {
-        "GenericArguments"
     }
 }
 
@@ -266,7 +251,7 @@ impl Ast for ast::Parameters {
 impl Ast for ast::FunctionDeclaration {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         V::Output::combine([
-            visitor.visit(&self.name),
+            visitor.visit_name(&self.name),
             visit_option(&self.parameters, visitor, Visitor::visit),
             visit_option(&self.returns, visitor, Visitor::visit),
             visit_option(&self.effects, visitor, Visitor::visit),
@@ -292,9 +277,7 @@ impl Ast for ast::Returns {
 impl Ast for ast::Parameter {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::Parameter::Data(name, ty) => {
-                V::Output::combine([visitor.visit(name), visitor.visit_type(ty)])
-            }
+            ast::Parameter::Data(_, ty) => visitor.visit_type(ty),
             ast::Parameter::Lambda(decl) => visitor.visit_function_declaration(decl),
         }
     }
@@ -305,10 +288,9 @@ impl Ast for ast::Parameter {
 
 impl Ast for ast::Name {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visitor.visit(&self.ident),
-            visit_option(&self.generics, visitor, Visitor::visit),
-        ])
+        visit_option(&self.generics, visitor, |v, g| {
+            visit_vec(&g.inner.elements, v, |v, (t, _)| v.visit(t))
+        })
     }
     fn node_name(&self) -> &'static str {
         "Name"
@@ -318,10 +300,10 @@ impl Ast for ast::Name {
 impl Ast for ast::GenericParameter {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::GenericParameter::Type(name) => visitor.visit(name),
-            ast::GenericParameter::Region(_, identifier) => visitor.visit(identifier),
+            ast::GenericParameter::Type(name) => visitor.visit_name(name),
+            ast::GenericParameter::Region(_, _) => V::Output::default(),
             ast::GenericParameter::Other(name, kind) => {
-                V::Output::combine([visitor.visit(name), visitor.visit_kind(kind)])
+                V::Output::combine([visitor.visit_name(name), visitor.visit_kind(kind)])
             }
         }
     }
@@ -432,11 +414,9 @@ impl Ast for ast::TypeDefinition {
 
 impl Ast for ast::Path {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
-        V::Output::combine([
-            visit_option(&self.package, visitor, |v, (pkg, _)| v.visit(pkg)),
-            visitor.visit(&self.name),
-            visit_option(&self.generics, visitor, Visitor::visit),
-        ])
+        visit_option(&self.generics, visitor, |v, g| {
+            visit_vec(&g.inner.elements, v, |v, (t, _)| v.visit(t))
+        })
     }
     fn node_name(&self) -> &'static str {
         "Path"
@@ -460,9 +440,9 @@ impl Ast for ast::Constant {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
             ast::Constant::Path(path) => visitor.visit_path(path),
-            ast::Constant::Integer(integer) => visitor.visit(integer),
-            ast::Constant::String(string) => visitor.visit(string),
-            ast::Constant::Character(character) => visitor.visit(character),
+            ast::Constant::Integer(_) => V::Output::default(),
+            ast::Constant::String(_) => V::Output::default(),
+            ast::Constant::Character(_) => V::Output::default(),
             ast::Constant::Zero(_) => V::Output::default(),
         }
     }
@@ -485,48 +465,10 @@ impl Ast for ast::Struct {
 impl Ast for ast::StructMember {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::StructMember::Data(name, ty) => {
-                V::Output::combine([visitor.visit(name), visitor.visit_type(ty)])
-            }
+            ast::StructMember::Data(_, ty) => visitor.visit_type(ty),
         }
     }
     fn node_name(&self) -> &'static str {
         self.into()
-    }
-}
-
-impl Ast for ast::String {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        V::Output::default()
-    }
-    fn node_name(&self) -> &'static str {
-        "String"
-    }
-}
-
-impl Ast for ast::Identifier {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        V::Output::default()
-    }
-    fn node_name(&self) -> &'static str {
-        "Identifier"
-    }
-}
-
-impl Ast for ast::Integer {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        V::Output::default()
-    }
-    fn node_name(&self) -> &'static str {
-        "Integer"
-    }
-}
-
-impl Ast for ast::Character {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        V::Output::default()
-    }
-    fn node_name(&self) -> &'static str {
-        "Character"
     }
 }

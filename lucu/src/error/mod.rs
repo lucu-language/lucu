@@ -247,6 +247,15 @@ impl<T> Result<T> {
             },
         }
     }
+    pub fn require(self, p: impl FnOnce(&T) -> bool, f: impl FnOnce(T) -> Problem) -> Self {
+        self.and_then(|t| {
+            if p(&t) {
+                Self::new(t)
+            } else {
+                Self::error(f(t))
+            }
+        })
+    }
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Result<U> {
         Result {
             value: self.value.map(f),

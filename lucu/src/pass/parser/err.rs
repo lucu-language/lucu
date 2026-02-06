@@ -16,6 +16,7 @@ pub enum Expected {
     UsizeConstant,
     RegionKind,
     PointerRegion,
+    Effect,
 }
 
 impl Diagnostic for Expected {
@@ -32,6 +33,7 @@ impl Diagnostic for Expected {
             Expected::UsizeConstant => Some("expected a constant of type usize".into()),
             Expected::RegionKind => Some("expected an identifier or 'mut'".into()),
             Expected::PointerRegion => Some("expected '@', 'mut', or a type".into()),
+            Expected::Effect => Some("expected an effect".into()),
         }
     }
 }

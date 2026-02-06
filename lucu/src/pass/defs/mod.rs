@@ -9,7 +9,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::{Data, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable};
 
 use crate::ast;
-use crate::ast::visit::{Ast, Combine, Visitor, visit_option};
+use crate::ast::visit::{Ast, Combine, Visitor, visit_option, visit_vec};
 use crate::error::{ProblemKind, Problems, Result};
 use crate::module::Module;
 use crate::pass::defs::err::MultipleDefinitions;
@@ -37,7 +37,9 @@ impl Visitor for DefinitionPaths {
             } else {
                 im::HashSet::new()
             },
-            visit_option(&path.generics, self, Visitor::visit),
+            visit_option(&path.generics, self, |v, g| {
+                visit_vec(&g.inner.elements, v, |v, (t, _)| v.visit(t))
+            }),
         ])
     }
     fn visit_struct(self, _struc: &ast::Struct) -> Self::Output<'_> {
@@ -89,7 +91,7 @@ impl ast::Module {
             Some(parent_node) => {
                 let parent = self.item(parent_node, defs);
                 (
-                    &parent.children().elements[module_definition.index].0,
+                    &parent.children().unwrap().elements[module_definition.index].0,
                     Some(parent),
                 )
             }
@@ -106,7 +108,7 @@ impl ast::Module {
         let ast = match module_definition.parent {
             Some(parent_node) => {
                 let parent = self.remove_generics(parent_node, defs, gens);
-                &parent.children().elements[module_definition.index].0
+                &parent.children().unwrap().elements[module_definition.index].0
             }
             None => &self.items.elements[module_definition.index].0,
         };
@@ -249,7 +251,12 @@ impl Definitions {
         if let Some(parent) = def.parent {
             graph.update_edge(node, parent, Edge);
         }
-        for (idx, child) in ast.children().iter().enumerate() {
+        for (idx, child) in ast
+            .children()
+            .into_iter()
+            .flat_map(|s| s.iter())
+            .enumerate()
+        {
             Self::add_item(graph, scope, defs, child, Item::child(node, idx));
         }
     }

@@ -91,6 +91,7 @@ pub struct Grouped<T> {
 #[derive(Debug, Eq)]
 pub struct Separated<T> {
     pub elements: Vec<(T, Option<Token>)>,
+    pub end: u32,
 }
 
 impl<T> Separated<T> {
@@ -184,10 +185,17 @@ pub enum PointerRegion {
     Kind(RegionKind),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq)]
 pub struct ArrayProperties {
     pub size: Option<Box<Constant>>,
     pub sentinel: Option<Sentinel>,
+    pub end: u32,
+}
+
+impl PartialEq for ArrayProperties {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.sentinel == other.sentinel
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -396,13 +404,7 @@ impl HasSpan for Item {
                 let start = token.span().start;
                 let end = def
                     .as_ref()
-                    .map(|(equals, def)| {
-                        if matches!(def, EffectDefinition::Alias(a) if a.is_empty()) {
-                            equals.span()
-                        } else {
-                            def.span()
-                        }
-                    })
+                    .map(|(_, def)| def.span())
                     .unwrap_or_else(|| name.span())
                     .end;
                 Span { start, end }
@@ -439,16 +441,9 @@ impl<T: HasSpan> HasSpan for Separated<T> {
         let start = self
             .elements
             .first()
-            .expect("ICE: trying to get span of empty separated")
-            .0
-            .span()
-            .start;
-        let (t, sep) = self.elements.last().unwrap();
-        let end = sep
-            .as_ref()
-            .map(HasSpan::span)
-            .unwrap_or_else(|| t.span())
-            .end;
+            .map(|(t, _)| t.span().end)
+            .unwrap_or(self.end);
+        let end = self.end;
         Span { start, end }
     }
 }
@@ -488,17 +483,10 @@ impl HasSpan for ArrayProperties {
         let start = self
             .size
             .as_ref()
-            .map(HasSpan::span)
-            .or_else(|| self.sentinel.as_ref().map(HasSpan::span))
-            .expect("ICE: trying to get span of empty array properties")
-            .start;
-        let end = self
-            .sentinel
-            .as_ref()
-            .map(HasSpan::span)
-            .or_else(|| self.size.as_ref().map(HasSpan::span))
-            .unwrap()
-            .end;
+            .map(|c| c.span().start)
+            .or_else(|| self.sentinel.as_ref().map(|s| s.span().start))
+            .unwrap_or(self.end);
+        let end = self.end;
         Span { start, end }
     }
 }
@@ -655,22 +643,15 @@ impl HasSpan for Returns {
     }
 }
 
-impl<T: HasSpan> HasSpan for Vec<T> {
-    fn span(&self) -> Span {
-        let start = self
-            .first()
-            .expect("ICE: trying to get span of empty vec")
-            .span()
-            .start;
-        let end = self.last().unwrap().span().end;
-        Span { start, end }
-    }
-}
-
 impl HasSpan for WithEffects {
     fn span(&self) -> Span {
         let start = self.with.span().start;
-        let end = self.effects.span().end;
+        let end = self
+            .effects
+            .last()
+            .map(HasSpan::span)
+            .unwrap_or_else(|| self.with.span())
+            .end;
         Span { start, end }
     }
 }
@@ -732,7 +713,11 @@ impl HasSpan for EffectDefinition {
     fn span(&self) -> Span {
         match self {
             EffectDefinition::Body(effect_body) => effect_body.span(),
-            EffectDefinition::Alias(paths) => paths.span(),
+            EffectDefinition::Alias(paths) => {
+                let start = paths.first().expect("ICE: empty effect alias").span().start;
+                let end = paths.last().unwrap().span().end;
+                Span { start, end }
+            }
             EffectDefinition::Intrinsic(token) => token.span(),
         }
     }
@@ -765,16 +750,10 @@ impl Item {
             Item::Handle(_, params, _) => params.as_ref(),
         }
     }
-    pub fn children(&self) -> &Separated<Item> {
+    pub fn children(&self) -> Option<&Separated<Item>> {
         match self {
-            Item::Effect(_, _, Some((_, EffectDefinition::Body(body)))) => &body.items.inner,
-            _ => {
-                const {
-                    &Separated {
-                        elements: Vec::new(),
-                    }
-                }
-            }
+            Item::Effect(_, _, Some((_, EffectDefinition::Body(body)))) => Some(&body.items.inner),
+            _ => None,
         }
     }
 }

@@ -3,7 +3,7 @@ use std::array;
 use std::cell::UnsafeCell;
 use std::ptr::{self, NonNull};
 
-pub struct Xar<T, const BITS: u32, const CHUNKS: usize> {
+pub(crate) struct Xar<T, const BITS: u32, const CHUNKS: usize> {
     chunks: [UnsafeCell<*mut T>; CHUNKS],
 }
 
@@ -46,12 +46,12 @@ impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
             }
         }
     }
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             chunks: array::from_fn(|_| UnsafeCell::new(ptr::null_mut())),
         }
     }
-    pub fn capacity(&self) -> u32 {
+    pub(crate) fn capacity(&self) -> u32 {
         let first = self
             .chunks
             .iter()
@@ -61,7 +61,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
             None => 0,
         }
     }
-    pub unsafe fn get(&self, index: u32) -> &T {
+    pub(crate) unsafe fn get(&self, index: u32) -> &T {
         let meta = self.meta(index);
         unsafe {
             NonNull::new_unchecked(self.chunks[meta.chunk_idx as usize].get().read())
@@ -69,7 +69,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
                 .as_ref()
         }
     }
-    pub unsafe fn push(&self, value: T, len: u32) {
+    pub(crate) unsafe fn push(&self, value: T, len: u32) {
         let meta = self.meta(len);
 
         let chunk_ptr = self.chunks[meta.chunk_idx as usize].get();
@@ -88,7 +88,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
 
         unsafe { ptr.offset(meta.elem_idx as isize).write(value) };
     }
-    pub unsafe fn drop(&mut self, len: u32) {
+    pub(crate) unsafe fn drop(&mut self, len: u32) {
         if len == 0 {
             return;
         }

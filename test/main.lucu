@@ -20,8 +20,6 @@ effect Yield2 = Yield[u32] Yield[u64]
 effect Yield3 = Yield[u32] Yield[Test1] Yield[Test2]
 effect Yield4 = YieldABCD[u64, u64, u64, u64]
 
-effect Empty = ;
-
 type CString[r] = c.string[r]
 
 type Slice[T, r] = ^@r []T

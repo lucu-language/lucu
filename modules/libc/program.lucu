@@ -2,17 +2,17 @@ import "builtin:regions"
 import "builtin:types"
 
 effect Termination = {
-	fun abort !
-	fun exit(exit_code int) !
-	fun quick_exit(exit_code int) !
-	fun _Exit(exit_code int) !
-
-	-- const EXIT_SUCCESS int
-	-- const EXIT_FAILURE int
-
-	-- effect World
-	-- fun atexit(func ^fun with World)
-	-- fun at_quick_exit(func ^fun with World)
+   fun abort !
+   fun exit(exit_code int) !
+   fun quick_exit(exit_code int) !
+   fun _Exit(exit_code int) !
+   
+   -- const EXIT_SUCCESS int
+   -- const EXIT_FAILURE int
+   
+   -- effect World
+   -- fun atexit(func ^fun with World)
+   -- fun at_quick_exit(func ^fun with World)
 }
 
 fun unreachable ! = {

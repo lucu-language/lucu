@@ -201,8 +201,10 @@ impl<'a> Nodes<'a> {
 
             self.end_with_space();
             self.nodes.push(Node::text("-- "));
-            self.nodes
-                .push(Node::text(self.source[comment][2..].trim()));
+            let comment_str = &self.source[comment][2..];
+            self.nodes.push(Node::text(
+                comment_str.strip_prefix(' ').unwrap_or(comment_str),
+            ));
 
             self.last_token = comment.end;
             first = false;

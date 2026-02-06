@@ -1,44 +1,31 @@
 effect Source = {
-	fun read() usize with Sink
+   fun read() usize with Sink
 }
 
 effect Sink = {
-	fun write(bytes ^[]u8) usize
-	fun flush()
+   fun write(bytes ^[]u8) usize
+   fun flush()
 }
 
 fun read_line with Source Sink = {
 }
 
 effect StdIo = {
-	fun stdin(fun body with Source)
-	fun stdout(fun body with Sink)
-	fun stderr(fun body with Sink)
+   fun stdin(fun body with Source)
+   fun stdout(fun body with Sink)
+   fun stderr(fun body with Sink)
 }
 
 effect Buffered[E effect] = {
-	fun buffered(
-		buffer ^mut []u8,
-		fun handled(fun body with E),
-		fun body with E,
-	)
+   fun buffered(buffer ^mut []u8, fun handled(fun body with E), fun body with E)
 }
 
 handle Buffered[Source] {
-	fun buffered(
-		buffer ^mut []u8,
-		fun handled(fun body with Source),
-		fun body with Source,
-	) = {
-		
-	}
+   fun buffered(buffer ^mut []u8, fun handled(fun body with Source), fun body with Source) = {
+   }
 }
+
 handle Buffered[Sink] {
-	fun buffered(
-		buffer ^mut []u8,
-		fun handled(fun body with Sink),
-		fun body with Sink,
-	) = {
-		
-	}
+   fun buffered(buffer ^mut []u8, fun handled(fun body with Sink), fun body with Sink) = {
+   }
 }

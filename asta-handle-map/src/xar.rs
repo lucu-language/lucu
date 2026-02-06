@@ -3,13 +3,12 @@ use std::array;
 use std::cell::UnsafeCell;
 use std::ptr::{self, NonNull};
 
-/// CHUNKS must be one more than a power of 2
-pub struct Xar<T, const CHUNKS: usize = 9> {
+pub struct Xar<T, const BITS: u32, const CHUNKS: usize> {
     chunks: [UnsafeCell<*mut T>; CHUNKS],
 }
 
-unsafe impl<T, const CHUNKS: usize> Send for Xar<T, CHUNKS> where T: Sync {}
-unsafe impl<T, const CHUNKS: usize> Sync for Xar<T, CHUNKS> where T: Sync {}
+unsafe impl<T, const BITS: u32, const CHUNKS: usize> Send for Xar<T, BITS, CHUNKS> where T: Sync {}
+unsafe impl<T, const BITS: u32, const CHUNKS: usize> Sync for Xar<T, BITS, CHUNKS> where T: Sync {}
 
 struct ChunkMeta {
     chunk_idx: u32,
@@ -17,26 +16,20 @@ struct ChunkMeta {
     elem_idx: u32,
 }
 
-impl<T, const CHUNKS: usize> Default for Xar<T, CHUNKS> {
+impl<T, const BITS: u32, const CHUNKS: usize> Default for Xar<T, BITS, CHUNKS> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, const CHUNKS: usize> Xar<T, CHUNKS> {
+impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
     const fn shift() -> u32 {
-        // chunks = 1 << (log2 PLATFORM_BITS - log2 shift) + 1
-        // chunks - 1 = 1 << (log2 PLATFORM_BITS - log2 shift)
-        // log2 (chunks - 1) = log2 PLATFORM_BITS - log2 shift
-        // log2 PLATFORM_BITS - log2 (chunks - 1) = log2 shift
-        // shift = 1 << (log2 PLATFORM_BITS - log2 (chunks - 1))
-        // shift = PLATFORM_BITS / (chunks - 1)
-        u32::BITS / (CHUNKS - 1) as u32
+        BITS - (CHUNKS as u32 - 1)
     }
     const fn meta(&self, index: u32) -> ChunkMeta {
         let index_shift = index >> Self::shift();
         if index_shift > 0 {
-            let chunk_idx = u32::BITS - index_shift.leading_zeros();
+            let chunk_idx = 32 - index_shift.leading_zeros();
             let chunk_cap = 1 << (Self::shift() + chunk_idx - 1);
             let elem_idx = index - chunk_cap;
 
@@ -58,13 +51,13 @@ impl<T, const CHUNKS: usize> Xar<T, CHUNKS> {
             chunks: array::from_fn(|_| UnsafeCell::new(ptr::null_mut())),
         }
     }
-    pub fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> u32 {
         let first = self
             .chunks
             .iter()
-            .rposition(|ptr| !unsafe { ptr.get().read().is_null() });
+            .rposition(|ptr| unsafe { !ptr.get().read().is_null() });
         match first {
-            Some(chunk_idx) => 1 << (Self::shift() as usize + chunk_idx.max(1)),
+            Some(chunk_idx) => 1 << (Self::shift() as usize + chunk_idx),
             None => 0,
         }
     }

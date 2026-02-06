@@ -388,4 +388,12 @@ impl TypeTable {
     ) -> FunctionSignature {
         FunctionSignature(self.function_signatures.insert(value))
     }
+    pub fn eprint_lengths(&self) {
+        eprintln!("types: {}/{}", self.types.len(), self.types.capacity());
+        eprintln!("regions: {}/{}", self.regions.len(), self.regions.capacity());
+        eprintln!("effects: {}/{}", self.effects.len(), self.effects.capacity());
+        eprintln!("kinds: {}/{}", self.kinds.len(), self.kinds.capacity());
+        eprintln!("constants: {}/{}", self.constants.len(), self.constants.capacity());
+        eprintln!("function_signatures: {}/{}", self.function_signatures.len(), self.function_signatures.capacity());
+    }
 }

@@ -8,19 +8,19 @@ use crate::xar::Xar;
 
 pub mod xar;
 
-pub struct HandleMap<T, S = RandomState> {
+pub struct HandleMap<T, const BITS: u32 = 24, const CHUNKS: usize = 16, S = RandomState> {
     indices: RwLock<HashTable<u32>>,
-    entries: Xar<T>,
+    entries: Xar<T, BITS, CHUNKS>,
     hash_builder: S,
 }
 
-impl<T, S> Drop for HandleMap<T, S> {
+impl<T, const BITS: u32, const CHUNKS: usize, S> Drop for HandleMap<T, BITS, CHUNKS, S> {
     fn drop(&mut self) {
         unsafe { self.entries.drop(self.len()) };
     }
 }
 
-impl<T, S> Default for HandleMap<T, S>
+impl<T, const BITS: u32, const CHUNKS: usize, S> Default for HandleMap<T, BITS, CHUNKS, S>
 where
     S: Default,
 {
@@ -33,7 +33,7 @@ where
     }
 }
 
-impl<T, S> HandleMap<T, S> {
+impl<T, const BITS: u32, const CHUNKS: usize, S> HandleMap<T, BITS, CHUNKS, S> {
     pub fn new() -> Self
     where
         S: Default,
@@ -86,6 +86,9 @@ impl<T, S> HandleMap<T, S> {
     }
     pub fn len(&self) -> u32 {
         self.indices.read().unwrap().len() as u32
+    }
+    pub fn capacity(&self) -> u32 {
+        self.entries.capacity()
     }
     pub fn get(&self, index: u32) -> Option<&T> {
         (index < self.len()).then(|| unsafe { self.get_unchecked(index) })

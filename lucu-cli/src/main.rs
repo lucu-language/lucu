@@ -49,6 +49,7 @@ fn main() {
                 println!();
             }
         }
+        tt.eprint_lengths();
 
         // wait for changes
         let changes = watcher.await_change();

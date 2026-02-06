@@ -68,7 +68,7 @@ impl From<&Module> for Module {
 pub fn import_name(import: &str) -> &str {
     let relative_path = import
         .split_once(':')
-        .map(|(_, path)| path)
+        .map(|(pkg, path)| if path.is_empty() { pkg } else { path })
         .unwrap_or(import);
     let basename = relative_path
         .rsplit_once(['/', '\\'])
@@ -130,7 +130,12 @@ impl Module {
                 } else {
                     Library::new(lib)
                 };
-                Self::new(lib, path)
+                let path = if path.is_empty() {
+                    import_name(&lib.0)
+                } else {
+                    path
+                };
+                Self::new(lib.clone(), path)
             }
             None => {
                 let lib = parent.library.clone();

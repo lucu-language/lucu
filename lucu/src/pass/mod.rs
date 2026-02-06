@@ -141,7 +141,7 @@ impl Stages {
         })
     }
 
-    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &mut TypeTable) -> Option<&IR> {
+    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &TypeTable) -> Option<&IR> {
         let ast = self.ast()?;
         let imports = self.imports()?;
         let definitions = self.definitions()?;

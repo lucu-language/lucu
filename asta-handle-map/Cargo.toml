@@ -1,0 +1,7 @@
+[package]
+name = "asta-handle-map"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hashbrown = { version = "0.16.1" }

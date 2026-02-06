@@ -8,20 +8,20 @@ use crate::type_table::{
 };
 
 pub trait Substitute {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self;
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self;
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self;
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self;
     /// Used for inferring global handler generics from the function signatures
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()>;
 }
 
 impl GenericParameter {
-    fn instantiate(self, tt: &mut TypeTable, start: usize, arg: GenericArgument) -> Term {
+    fn instantiate(self, tt: &TypeTable, start: usize, arg: GenericArgument) -> Term {
         let term = if start > 0 {
             arg.shift(tt, 0, start).term
         } else {
@@ -44,16 +44,16 @@ impl<T> Substitute for Arc<[T]>
 where
     T: Substitute + Copy,
 {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         self.iter().map(|ty| ty.subst(tt, start, args)).collect()
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         self.iter().map(|ty| ty.shift(tt, start, offset)).collect()
     }
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -67,16 +67,16 @@ impl<T> Substitute for Option<T>
 where
     T: Substitute,
 {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         self.map(|tys| tys.subst(tt, start, args))
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         self.map(|tys| tys.shift(tt, start, offset))
     }
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -90,14 +90,14 @@ where
 }
 
 impl Substitute for Item {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         Self {
             module: self.module,
             name: self.name,
             apply: self.apply.subst(tt, start, args),
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         Self {
             module: self.module,
             name: self.name,
@@ -107,7 +107,7 @@ impl Substitute for Item {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -120,7 +120,7 @@ impl Substitute for Item {
 }
 
 impl Substitute for GenericParameter {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         GenericParameter {
             index: if self.index < start + args.len() {
                 self.index
@@ -130,7 +130,7 @@ impl Substitute for GenericParameter {
             apply: self.apply.subst(tt, start, args),
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         GenericParameter {
             index: if self.index < start {
                 self.index
@@ -143,7 +143,7 @@ impl Substitute for GenericParameter {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -155,13 +155,13 @@ impl Substitute for GenericParameter {
 }
 
 impl Substitute for GenericArgument {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         GenericArgument {
             term: self.term.subst(tt, start + self.arity.unwrap_or(0), args),
             arity: self.arity,
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         GenericArgument {
             term: self.term.shift(tt, start + self.arity.unwrap_or(0), offset),
             arity: self.arity,
@@ -170,7 +170,7 @@ impl Substitute for GenericArgument {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -181,7 +181,7 @@ impl Substitute for GenericArgument {
 }
 
 impl Substitute for Term {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         match self {
             Term::Type(ty) => Term::Type(ty.subst(tt, start, args)),
             Term::Region(region) => Term::Region(region.subst(tt, start, args)),
@@ -189,7 +189,7 @@ impl Substitute for Term {
             Term::Constant(constant) => Term::Constant(constant.subst(tt, start, args)),
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         match self {
             Term::Type(ty) => Term::Type(ty.shift(tt, start, offset)),
             Term::Region(region) => Term::Region(region.shift(tt, start, offset)),
@@ -200,7 +200,7 @@ impl Substitute for Term {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -215,7 +215,7 @@ impl Substitute for Term {
 }
 
 impl Substitute for Constant {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let changed = match tt[self] {
             ConstantEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
@@ -239,7 +239,7 @@ impl Substitute for Constant {
         };
         tt.insert_constant(changed)
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         let changed = match tt[self] {
             ConstantEnum::Generic(ref generic) => {
                 ConstantEnum::Generic(generic.clone().shift(tt, start, offset))
@@ -256,7 +256,7 @@ impl Substitute for Constant {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -305,7 +305,7 @@ impl Substitute for Constant {
 }
 
 impl Substitute for Type {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let changed = match tt[self] {
             TypeEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
@@ -340,7 +340,7 @@ impl Substitute for Type {
         };
         tt.insert_type(changed)
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         let changed = match tt[self] {
             TypeEnum::Generic(ref generic) => {
                 TypeEnum::Generic(generic.clone().shift(tt, start, offset))
@@ -368,7 +368,7 @@ impl Substitute for Type {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -433,7 +433,7 @@ impl Substitute for Type {
 }
 
 impl Substitute for Region {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let changed = match tt[self] {
             RegionEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
@@ -451,7 +451,7 @@ impl Substitute for Region {
         };
         tt.insert_region(changed)
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         let changed = match tt[self] {
             RegionEnum::Generic(ref generic) => {
                 RegionEnum::Generic(generic.clone().shift(tt, start, offset))
@@ -462,7 +462,7 @@ impl Substitute for Region {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -495,7 +495,7 @@ impl Substitute for Region {
 }
 
 impl Substitute for Effect {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let changed = match tt[self] {
             EffectEnum::Generic(ref generic) => {
                 let index = generic.index.checked_sub(start);
@@ -520,7 +520,7 @@ impl Substitute for Effect {
         };
         tt.insert_effect(changed)
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         let changed = match tt[self] {
             EffectEnum::Generic(ref generic) => {
                 EffectEnum::Generic(generic.clone().shift(tt, start, offset))
@@ -536,7 +536,7 @@ impl Substitute for Effect {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -591,13 +591,13 @@ impl Substitute for Effect {
 }
 
 impl Substitute for FunctionParameter {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         match self {
             FunctionParameter::Data(ty) => FunctionParameter::Data(ty.subst(tt, start, args)),
             FunctionParameter::Lambda(sig) => FunctionParameter::Lambda(sig.subst(tt, start, args)),
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         match self {
             FunctionParameter::Data(ty) => FunctionParameter::Data(ty.shift(tt, start, offset)),
             FunctionParameter::Lambda(sig) => {
@@ -608,7 +608,7 @@ impl Substitute for FunctionParameter {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -623,13 +623,13 @@ impl Substitute for FunctionParameter {
 }
 
 impl Substitute for FunctionReturns {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         match self {
             FunctionReturns::Data(ty) => FunctionReturns::Data(ty.subst(tt, start, args)),
             FunctionReturns::Never => FunctionReturns::Never,
         }
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         match self {
             FunctionReturns::Data(ty) => FunctionReturns::Data(ty.shift(tt, start, offset)),
             FunctionReturns::Never => FunctionReturns::Never,
@@ -638,7 +638,7 @@ impl Substitute for FunctionReturns {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -652,7 +652,7 @@ impl Substitute for FunctionReturns {
 }
 
 impl Substitute for FunctionSignature {
-    fn subst(self, tt: &mut TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let sig = tt[self].clone();
         let type_params = sig.type_params;
         let implicit_regions = sig.implicit_regions;
@@ -669,7 +669,7 @@ impl Substitute for FunctionSignature {
             effect,
         })
     }
-    fn shift(self, tt: &mut TypeTable, start: usize, offset: usize) -> Self {
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         let sig = tt[self].clone();
         // NOTE: if we eventually have dependent kinds we need to substitute here too
         let type_params = sig.type_params;
@@ -690,7 +690,7 @@ impl Substitute for FunctionSignature {
     fn infer(
         self,
         from: Self,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
         start: usize,
         args: &mut Vec<Option<GenericArgument>>,
     ) -> Option<()> {
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_shift() {
-        let mut table = TypeTable::new();
+        let table = TypeTable::new();
         let lhs = GenericArgument {
             term: Term::Type(table.insert_type(TypeEnum::Generic(GenericParameter {
                 index: 1,
@@ -736,12 +736,12 @@ mod tests {
             }))),
             arity: None,
         };
-        assert_eq!(lhs.subst(&mut table, 0, &[rhs]), lhs);
+        assert_eq!(lhs.subst(&table, 0, &[rhs]), lhs);
     }
 
     #[test]
     fn test_infer() {
-        let mut table = TypeTable::new();
+        let table = TypeTable::new();
 
         let typ_kind = table.insert_kind(KindEnum::TYPE);
         let typ = table.insert_type(TypeEnum::Generic(GenericParameter {
@@ -767,10 +767,7 @@ mod tests {
         });
 
         let mut generics = vec![None];
-        assert_eq!(
-            sig.infer(inserted_sig, &mut table, 0, &mut generics),
-            Some(())
-        );
+        assert_eq!(sig.infer(inserted_sig, &table, 0, &mut generics), Some(()));
         assert_eq!(
             generics[0],
             Some(GenericArgument {

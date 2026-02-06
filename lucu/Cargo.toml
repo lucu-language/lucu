@@ -11,7 +11,7 @@ lasso = "0.7.3"
 path-clean = "1.0.1"
 petgraph = { git = "https://github.com/astavie/petgraph.git", rev = "c9d1b2a5f3968ab37c3b32cd02fc1f244be7f22b", default-features = false, features = ["std"] }
 strum = { version = "0.27.2", features = ["derive"] }
-indexmap = "2.13.0"
+asta-handle-map = { path = "../asta-handle-map" }
 itertools = "0.14.0"
 
 include_dir = { workspace = true }

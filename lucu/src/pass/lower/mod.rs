@@ -24,7 +24,7 @@ use crate::type_table::{
 };
 
 struct Lower<'a> {
-    tt: &'a mut TypeTable,
+    tt: &'a TypeTable,
     module: &'a Module,
 
     ast: &'a ast::Module,
@@ -96,7 +96,7 @@ impl IR {
         ast: &ast::Module,
         imports: &Imports,
         definitions: &Definitions,
-        tt: &mut TypeTable,
+        tt: &TypeTable,
     ) -> Option<Result<Self>> {
         let lower = Lower {
             tt,

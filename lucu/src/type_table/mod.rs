@@ -2,8 +2,8 @@ use std::ops::Index;
 use std::slice;
 use std::sync::Arc;
 
+use asta_handle_map::HandleMap;
 use compact_str::CompactString;
-use indexmap::IndexSet;
 use itertools::Itertools;
 
 use crate::module::Module;
@@ -12,14 +12,14 @@ pub mod display;
 pub mod substitute;
 pub mod unapply;
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct TypeTable {
-    kinds: IndexSet<KindEnum>,
-    types: IndexSet<TypeEnum>,
-    regions: IndexSet<RegionEnum>,
-    effects: IndexSet<EffectEnum>,
-    function_signatures: IndexSet<FunctionSignatureValue>,
-    constants: IndexSet<ConstantEnum>,
+    kinds: HandleMap<KindEnum>,
+    types: HandleMap<TypeEnum>,
+    regions: HandleMap<RegionEnum>,
+    effects: HandleMap<EffectEnum>,
+    function_signatures: HandleMap<FunctionSignatureValue>,
+    constants: HandleMap<ConstantEnum>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -298,7 +298,7 @@ pub struct GenericArgument {
 }
 
 impl Effect {
-    pub fn row<'a>(effects: impl IntoIterator<Item = &'a Effect>, tt: &mut TypeTable) -> Self {
+    pub fn row<'a>(effects: impl IntoIterator<Item = &'a Effect>, tt: &TypeTable) -> Self {
         let row = effects
             .into_iter()
             .flat_map(|e| match &tt[*e] {
@@ -319,7 +319,7 @@ impl Index<Type> for TypeTable {
     type Output = TypeEnum;
 
     fn index(&self, index: Type) -> &Self::Output {
-        &self.types[index.0]
+        unsafe { self.types.get_unchecked(index.0) }
     }
 }
 
@@ -327,7 +327,7 @@ impl Index<Region> for TypeTable {
     type Output = RegionEnum;
 
     fn index(&self, index: Region) -> &Self::Output {
-        &self.regions[index.0]
+        unsafe { self.regions.get_unchecked(index.0) }
     }
 }
 
@@ -335,7 +335,7 @@ impl Index<Effect> for TypeTable {
     type Output = EffectEnum;
 
     fn index(&self, index: Effect) -> &Self::Output {
-        &self.effects[index.0]
+        unsafe { self.effects.get_unchecked(index.0) }
     }
 }
 
@@ -343,7 +343,7 @@ impl Index<Kind> for TypeTable {
     type Output = KindEnum;
 
     fn index(&self, index: Kind) -> &Self::Output {
-        &self.kinds[index.0]
+        unsafe { self.kinds.get_unchecked(index.0) }
     }
 }
 
@@ -351,7 +351,7 @@ impl Index<Constant> for TypeTable {
     type Output = ConstantEnum;
 
     fn index(&self, index: Constant) -> &Self::Output {
-        &self.constants[index.0]
+        unsafe { self.constants.get_unchecked(index.0) }
     }
 }
 
@@ -359,7 +359,7 @@ impl Index<FunctionSignature> for TypeTable {
     type Output = FunctionSignatureValue;
 
     fn index(&self, index: FunctionSignature) -> &Self::Output {
-        &self.function_signatures[index.0]
+        unsafe { self.function_signatures.get_unchecked(index.0) }
     }
 }
 
@@ -367,25 +367,25 @@ impl TypeTable {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn insert_type(&mut self, value: TypeEnum) -> Type {
-        Type(self.types.insert_full(value).0)
+    pub fn insert_type(&self, value: TypeEnum) -> Type {
+        Type(self.types.insert(value))
     }
-    pub fn insert_region(&mut self, value: RegionEnum) -> Region {
-        Region(self.regions.insert_full(value).0)
+    pub fn insert_region(&self, value: RegionEnum) -> Region {
+        Region(self.regions.insert(value))
     }
-    pub fn insert_effect(&mut self, value: EffectEnum) -> Effect {
-        Effect(self.effects.insert_full(value).0)
+    pub fn insert_effect(&self, value: EffectEnum) -> Effect {
+        Effect(self.effects.insert(value))
     }
-    pub fn insert_kind(&mut self, value: KindEnum) -> Kind {
-        Kind(self.kinds.insert_full(value).0)
+    pub fn insert_kind(&self, value: KindEnum) -> Kind {
+        Kind(self.kinds.insert(value))
     }
-    pub fn insert_constant(&mut self, value: ConstantEnum) -> Constant {
-        Constant(self.constants.insert_full(value).0)
+    pub fn insert_constant(&self, value: ConstantEnum) -> Constant {
+        Constant(self.constants.insert(value))
     }
     pub fn insert_function_signature(
-        &mut self,
+        &self,
         value: FunctionSignatureValue,
     ) -> FunctionSignature {
-        FunctionSignature(self.function_signatures.insert_full(value).0)
+        FunctionSignature(self.function_signatures.insert(value))
     }
 }

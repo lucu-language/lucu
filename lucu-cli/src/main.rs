@@ -20,7 +20,7 @@ fn main() {
     let mut graph = ModuleGraph::new();
     graph.insert_or_update(watcher.modules(), Module::MAIN);
 
-    let mut tt = TypeTable::new();
+    let tt = TypeTable::new();
 
     loop {
         println!("{}", graph.dot());
@@ -40,7 +40,7 @@ fn main() {
                         anstream::println!("{}", annotated);
                     }
 
-                    if let Some(untyped) = stages.untyped_ir(&graph, &mut tt) {
+                    if let Some(untyped) = stages.untyped_ir(&graph, &tt) {
                         println!("{}", untyped.display(&tt));
                     }
                 }

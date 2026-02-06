@@ -21,10 +21,9 @@ use tower_lsp_server::ls_types::{
 };
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
-#[derive(Debug)]
 struct Backend {
     workspaces: RwLock<HashMap<Uri, Workspace>>,
-    type_table: RwLock<TypeTable>,
+    type_table: TypeTable,
     client: Client,
 }
 
@@ -94,7 +93,7 @@ impl Workspace {
             order: OnceLock::new(),
         }
     }
-    async fn update(&self, tt: &mut TypeTable) {
+    async fn update(&self, tt: &TypeTable) {
         if let Ok(order) = self.order().await {
             for o in order {
                 if let Some(stages) = self.graph.stages(o) {
@@ -135,7 +134,7 @@ impl Backend {
     fn new(client: Client) -> Self {
         Self {
             workspaces: RwLock::new(HashMap::new()),
-            type_table: RwLock::new(TypeTable::new()),
+            type_table: TypeTable::new(),
             client,
         }
     }
@@ -152,10 +151,9 @@ impl Backend {
         })
     }
     async fn update(&self, uri: &Uri) {
-        let mut tt = self.type_table.write().await;
-        self.workspaces.read().await[uri].update(&mut tt).await;
-        drop(tt);
-
+        self.workspaces.read().await[uri]
+            .update(&self.type_table)
+            .await;
         self.publish(uri).await;
     }
     async fn publish(&self, uri: &Uri) {

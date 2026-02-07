@@ -444,7 +444,7 @@ fn diagnostics(uri: &Uri, source: &str, problems: Problems) -> Vec<Diagnostic> {
                 code_description: None,
                 source: Some("lucu".to_owned()),
                 message: match label {
-                    Some(label) => format!("{}: {}", header.title, label),
+                    Some(label) => format!("{}\n{}", header.title, label),
                     None => header.title.to_owned(),
                 },
                 related_information: Some(

@@ -1,8 +1,10 @@
+mod expr;
 pub mod visit;
 
 use std::fmt;
 
 use compact_str::CompactString;
+pub use expr::*;
 use strum::IntoStaticStr;
 
 use crate::span::{HasSpan, Span};
@@ -279,12 +281,6 @@ pub enum ConstantDefinition {
 pub enum FunctionDefinition {
     Expression(Box<Expression>),
     Intrinsic(Token),
-}
-
-#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
-#[strum(prefix = "Expression::")]
-pub enum Expression {
-    Block(Grouped<()>),
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -682,14 +678,6 @@ impl HasSpan for TypeDefinition {
             TypeDefinition::Type(ty) => ty.span(),
             TypeDefinition::Struct(struc) => struc.span(),
             TypeDefinition::Intrinsic(token) => token.span(),
-        }
-    }
-}
-
-impl HasSpan for Expression {
-    fn span(&self) -> Span {
-        match self {
-            Expression::Block(grouped) => grouped.span(),
         }
     }
 }

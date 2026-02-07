@@ -390,9 +390,8 @@ impl Ast for ast::Type {
 
 impl Ast for ast::Expression {
     fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        match self {
-            ast::Expression::Block(_) => V::Output::default(),
-        }
+        // TODO
+        V::Output::default()
     }
     fn node_name(&self) -> &'static str {
         self.into()

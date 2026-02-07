@@ -8,9 +8,8 @@ use crate::ast;
 use crate::ast::visit::{Ast, Visitor};
 use crate::error::{Problems, Result};
 use crate::ir::{
-    EffectDefinition, EffectMember, FunctionBody, FunctionBodyDefinition, HandlerBodyDefinition,
-    HandlerDef, HandlerMember, IR, IntrinsicFunction, ItemDef, ItemDefinition, Parent,
-    StructDefinition, StructMember,
+    EffectDefinition, EffectMember, HandlerBodyDefinition, HandlerDef, HandlerMember, IR, ItemDef,
+    ItemDefinition, StructDefinition, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -111,28 +110,34 @@ impl IR {
     }
 }
 
-impl Lower<'_> {
+impl<'a> Lower<'a> {
     fn module(mut self) -> Result<IR> {
         let mut decl_problems = Problems::ok();
         let defs = decl_problems
             .append(
                 self.definitions
-                    .postorder_with_parent(self.ast)
+                    .nodes_postorder()
+                    .map(|node| self.definitions.item_with_parent(node, self.ast))
                     .map(|(def, parent)| self.declaration(def, parent))
                     .collect::<Result<Vec<_>>>(),
             )
             .expect("ICE: no definition list");
         assert_eq!(
             defs.len(),
-            self.definitions.indices().len(),
+            self.definitions.nodes().len(),
             "ICE: definition list has different size"
         );
-        let def_problems = Iterator::zip(self.definitions.postorder(self.ast), defs)
-            .map(|(def, lower)| self.definition(def, lower))
-            .collect::<Problems>();
+        let def_problems = Iterator::zip(
+            self.definitions
+                .nodes_postorder()
+                .map(|node| self.definitions.item(node, self.ast)),
+            defs,
+        )
+        .map(|(def, lower)| self.definition(def, lower))
+        .collect::<Problems>();
         (decl_problems + def_problems).with(self.ir)
     }
-    fn generics<'a>(
+    fn generics(
         &self,
         params: Option<&Arc<[Kind]>>,
         name: Option<&'a ast::GenericParameters>,
@@ -150,7 +155,7 @@ impl Lower<'_> {
             _ => unreachable!(),
         }
     }
-    fn definition(&mut self, def: &ast::Item, lower: LoweredDef) -> Problems {
+    fn definition(&mut self, def: &'a ast::Item, lower: LoweredDef) -> Problems {
         let mut problems = Problems::ok();
 
         match def {
@@ -179,22 +184,7 @@ impl Lower<'_> {
                     self.ir.realize_struct(idx, StructDefinition { members });
                 }
             }
-            ast::Item::Function(_, def) => {
-                if let Some((_, ast::FunctionDefinition::Expression(body))) = def {
-                    let LoweredDef::Item(ItemDef::Function(_, Parent::TopLevel(fun))) = lower
-                    else {
-                        return problems;
-                    };
-
-                    self.ir.realize_function_body(
-                        fun,
-                        FunctionBodyDefinition::Expression {
-                            captures: 0,
-                            body: (),
-                        },
-                    );
-                }
-            }
+            ast::Item::Function(_, _) => {}
             ast::Item::Effect(_, _, defs) => {
                 if let Some((_, ast::EffectDefinition::Body(body))) = defs {
                     let LoweredDef::Item(ItemDef::Effect(_, eff)) = lower else {
@@ -265,7 +255,7 @@ impl Lower<'_> {
                             todo!("error: no definition for '{}' inside handler", member.name)
                         };
 
-                        let ast::Item::Function(fun_decl, fun_def) = matching else {
+                        let ast::Item::Function(fun_decl, _) = matching else {
                             todo!("error: definition '{}' is not a function", member.name)
                         };
 
@@ -275,7 +265,6 @@ impl Lower<'_> {
                             return HandlerMember {
                                 name: member.name,
                                 signature: expected_sig,
-                                body: None,
                             };
                         };
                         if expected_sig != signature {
@@ -286,31 +275,9 @@ impl Lower<'_> {
                             );
                         }
 
-                        let Some((_, fun_def)) = fun_def else {
-                            todo!("error")
-                        };
-
-                        match fun_def {
-                            ast::FunctionDefinition::Expression(expr) => {
-                                let body = self.ir.push_function_body();
-                                self.ir.realize_function_body(
-                                    body,
-                                    FunctionBodyDefinition::Expression {
-                                        captures: 0,
-                                        body: (),
-                                    },
-                                );
-                                HandlerMember {
-                                    body: Some(body),
-                                    name: member.name,
-                                    signature,
-                                }
-                            }
-                            ast::FunctionDefinition::Intrinsic(_) => HandlerMember {
-                                body: problems.append(self.intrinsic_function(&fun_decl.name)),
-                                name: member.name,
-                                signature,
-                            },
+                        HandlerMember {
+                            name: member.name,
+                            signature,
                         }
                     })
                     .collect::<Vec<HandlerMember>>();
@@ -325,7 +292,11 @@ impl Lower<'_> {
 
         problems
     }
-    fn declaration(&mut self, def: &ast::Item, parent: Option<&ast::Item>) -> Result<LoweredDef> {
+    fn declaration(
+        &mut self,
+        def: &'a ast::Item,
+        parent: Option<&'a ast::Item>,
+    ) -> Result<LoweredDef> {
         let mut problems = Problems::ok();
 
         match def {
@@ -397,31 +368,17 @@ impl Lower<'_> {
                             apply,
                         }));
 
-                        let item = ItemDef::Function(sig, Parent::Effect(effect));
+                        let item = ItemDef::Function(sig, Some(effect));
                         self.ir.insert(decl.name.ident.as_str(), item);
                         return problems.with(LoweredDef::Item(item));
                     }
                 }
                 None => {
                     let sig = problems.append(self.function_signature(decl, &Generics::new()));
-                    match def {
-                        Some((_, ast::FunctionDefinition::Expression(_))) => {
-                            if let Some(sig) = sig {
-                                let fun = self.ir.push_function_body();
-                                let item = ItemDef::Function(sig, Parent::TopLevel(fun));
-                                self.ir.insert(decl.name.ident.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
-                            }
-                        }
-                        Some((_, ast::FunctionDefinition::Intrinsic(_))) => {
-                            let fun = problems.append(self.intrinsic_function(&decl.name));
-                            if let (Some(sig), Some(fun)) = (sig, fun) {
-                                let item = ItemDef::Function(sig, Parent::TopLevel(fun));
-                                self.ir.insert(decl.name.ident.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
-                            }
-                        }
-                        None => todo!("error"),
+                    if let Some(sig) = sig {
+                        let item = ItemDef::Function(sig, None);
+                        self.ir.insert(decl.name.ident.as_str(), item);
+                        return problems.with(LoweredDef::Item(item));
                     }
                 }
             },
@@ -584,7 +541,7 @@ impl Lower<'_> {
             }
         }
     }
-    fn resolve_item<'a>(&'a self, item: &Item) -> ItemDefinition<'a> {
+    fn resolve_item<'b>(&'b self, item: &Item) -> ItemDefinition<'b> {
         let ir = if &item.module == self.module {
             &self.ir
         } else {
@@ -1058,29 +1015,6 @@ impl Lower<'_> {
         };
         Result::new(self.tt.insert_type(ty))
     }
-    fn intrinsic_function(&mut self, name: &ast::Name) -> Result<FunctionBody> {
-        let module = self.module.to_compact_string();
-        let value = match (module.as_str(), name.ident.as_str()) {
-            ("builtin:ops", "len") => IntrinsicFunction::Len,
-            ("builtin:regions", "local") => IntrinsicFunction::Local,
-            ("builtin:regions", "alloca") => IntrinsicFunction::Alloca,
-            ("builtin:builtin", "print_str") => IntrinsicFunction::PrintStr,
-            ("builtin:builtin", "loop") => IntrinsicFunction::Loop,
-            ("builtin:builtin", "unfounded") => IntrinsicFunction::Unfounded,
-
-            ("builtin:ops", "index") => IntrinsicFunction::Index,
-
-            _ => todo!(
-                "error: unknown intrinsic {}.{}",
-                module.as_str(),
-                name.ident.as_str()
-            ),
-        };
-        let fun = self.ir.push_function_body();
-        self.ir
-            .realize_function_body(fun, FunctionBodyDefinition::Intrinsic(value));
-        Result::new(fun)
-    }
     fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<Effect> {
         let module = self.module.to_compact_string();
         let effect = match (module.as_str(), name.ident.as_str()) {
@@ -1121,7 +1055,7 @@ impl Lower<'_> {
         Result::new(self.tt.insert_constant(constant))
     }
 
-    fn function_signature<'a>(
+    fn function_signature(
         &mut self,
         sig: &'a ast::FunctionDeclaration,
         generics: &Generics<'a>,
@@ -1175,7 +1109,7 @@ impl Lower<'_> {
             }
         }
     }
-    fn function_param<'a>(
+    fn function_param(
         &mut self,
         param: &'a ast::Parameter,
         generics: &Generics<'a>,

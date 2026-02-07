@@ -123,23 +123,21 @@ impl ast::Module {
 }
 
 impl Definitions {
-    pub fn postorder<'a>(&self, ast: &'a ast::Module) -> impl Iterator<Item = &'a ast::Item> {
-        self.postorder
-            .iter()
-            .copied()
-            .map(|idx| ast.item(idx, &self.defs))
+    pub fn item<'a>(&self, node: NodeIndex, ast: &'a ast::Module) -> &'a ast::Item {
+        ast.item(node, &self.defs)
     }
-    pub fn postorder_with_parent<'a>(
+    pub fn item_with_parent<'a>(
         &self,
+        node: NodeIndex,
         ast: &'a ast::Module,
-    ) -> impl Iterator<Item = (&'a ast::Item, Option<&'a ast::Item>)> {
-        self.postorder
-            .iter()
-            .copied()
-            .map(|idx| ast.item_with_parent(idx, &self.defs))
+    ) -> (&'a ast::Item, Option<&'a ast::Item>) {
+        ast.item_with_parent(node, &self.defs)
     }
-    pub fn indices(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
+    pub fn nodes(&self) -> impl ExactSizeIterator<Item = NodeIndex> + use<> {
         self.graph.node_indices()
+    }
+    pub fn nodes_postorder<'a>(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
+        self.postorder.iter().copied()
     }
     #[expect(clippy::implied_bounds_in_impls)]
     pub fn dot(

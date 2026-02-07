@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::ir::{FunctionBodyDefinition, IR, ItemDef, Parent, TypeTable};
+use crate::ir::{IR, ItemDef, TypeTable};
 use crate::type_table::EffectEnum;
 
 #[derive(Clone, Copy)]
@@ -9,7 +9,7 @@ struct Interned<'a, T>(T, &'a TypeTable);
 impl fmt::Display for Interned<'_, &'_ IR> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, (name, &item)) in self.0.items.iter().enumerate() {
-            if let ItemDef::Function(_, Parent::Effect(_)) = item {
+            if let ItemDef::Function(_, Some(_)) = item {
                 continue;
             }
             if i > 0 {
@@ -69,15 +69,8 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDef::Function(sign, def) => {
-                    let Parent::TopLevel(def) = def else {
-                        unreachable!()
-                    };
+                ItemDef::Function(sign, _) => {
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
-
-                    if let FunctionBodyDefinition::Expression { captures: _, body } = &self.0[def] {
-                        // TODO
-                    }
                 }
             }
         }
@@ -106,11 +99,6 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     member.name,
                     member.signature.display(self.1)
                 )?;
-                if let Some(FunctionBodyDefinition::Expression { captures: _, body }) =
-                    member.body.map(|body| &self.0[body])
-                {
-                    // TODO
-                }
             }
         }
         Ok(())

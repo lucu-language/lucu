@@ -122,7 +122,8 @@ where
     ) -> Annotated<'a, impl Iterator<Item = Annotation<impl Mark>>> {
         self.annotate(
             definitions
-                .postorder(ast)
+                .nodes_postorder()
+                .map(|node| definitions.item(node, ast))
                 .enumerate()
                 .map(|(idx, def)| Definition(idx).at(def.span()))
                 .sorted(),

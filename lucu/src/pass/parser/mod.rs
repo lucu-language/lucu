@@ -352,8 +352,9 @@ impl<'a> Parser<'a> {
     pub fn expression(&mut self) -> Result<Box<ast::Expression>> {
         m! {
             open <- self.consume(TokenEnum::Open(Group::Brace));
+            let end = self.last_token_end;
             close <- self.consume(TokenEnum::Close(Group::Brace)).tap_none(|| self.skip_group(Group::Brace));
-            return ast::Expression::Block(ast::Grouped { open, inner: (), close });
+            return ast::Expression::Block(ast::Grouped { open, inner: ast::Block { params: None, exprs: ast::Separated { elements: Vec::new(), end } }, close });
         }
         .map(Box::new)
     }

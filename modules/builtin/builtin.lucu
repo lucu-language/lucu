@@ -87,3 +87,16 @@ fun for(from usize, to usize, fun body(n usize)) = {
 		}
 	}
 }
+
+-- other utils
+
+-- USAGE:
+-- ```
+-- use defer(...)
+-- ...
+-- ```
+fun defer[T](fun deferred unit, fun body T) T = {
+	-- let t = body
+	-- deferred
+	-- t
+}

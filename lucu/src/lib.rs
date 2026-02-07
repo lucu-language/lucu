@@ -1,10 +1,14 @@
 #[cfg(feature = "annotate")]
 pub mod annotate;
-pub mod ast;
 pub mod error;
-pub mod ir;
-pub mod module;
 pub mod pass;
-pub mod span;
+
+// data model
+pub mod ast;
+pub mod ir;
 pub mod tokens;
 pub mod type_table;
+
+// location
+pub mod module;
+pub mod span;

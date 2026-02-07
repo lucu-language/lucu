@@ -590,11 +590,7 @@ impl Ast for ast::FunctionDefinition {
 
 impl Ast for ast::Expression {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        match self {
-            ast::Expression::Block(group) => {
-                group.push_nodes(nodes);
-            }
-        }
+        todo!()
     }
 }
 

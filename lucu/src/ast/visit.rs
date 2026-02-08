@@ -265,8 +265,9 @@ impl Ast for ast::FunctionDeclaration {
 impl Ast for ast::Returns {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
+            ast::Returns::Path(path) => visitor.visit_path(path),
+            ast::Returns::Type(ty) => visitor.visit_type(ty),
             ast::Returns::Never(_) => V::Output::default(),
-            ast::Returns::Data(ty) => visitor.visit_type(ty),
         }
     }
     fn node_name(&self) -> &'static str {
@@ -318,6 +319,7 @@ impl Ast for ast::Kind {
             ast::Kind::Type(_) => V::Output::default(),
             ast::Kind::Effect(_) => V::Output::default(),
             ast::Kind::Region(_) => V::Output::default(),
+            ast::Kind::Thunk(_) => V::Output::default(),
             ast::Kind::Constant(ty) => visitor.visit_type(ty),
         }
     }

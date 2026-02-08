@@ -165,6 +165,7 @@ pub enum TypeEnum {
     Integer(Integer),
     Boolean,
     Unit,
+    Never,
     Pointer(Type, Region),
     PointerSlice(Type, Region, Option<Sentinel>),
     Array(Type, Constant, Option<Sentinel>),
@@ -202,6 +203,7 @@ pub enum SimpleKind {
     Type,
     Effect,
     Region,
+    Thunk,
     Constant(Type),
 }
 
@@ -211,14 +213,19 @@ pub struct KindEnum {
     pub output: SimpleKind,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
+pub struct Thunk {
+    pub returns: Type,
+    pub effect: Effect, // a (row) effect
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 pub struct FunctionSignatureValue {
     pub type_params: Option<Arc<[Kind]>>,
     pub implicit_regions: usize,
 
     pub params: Option<Arc<[FunctionParameter]>>,
-    pub returns: FunctionReturns,
-    pub effect: Effect, // a singular (row) effect
+    pub thunk: Thunk,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -227,13 +234,11 @@ pub enum FunctionParameter {
     Lambda(FunctionSignature),
 }
 
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
-pub enum FunctionReturns {
-    Data(Type),
-    Never,
-}
-
 impl KindEnum {
+    pub const THUNK: KindEnum = KindEnum {
+        params: None,
+        output: SimpleKind::Thunk,
+    };
     pub const TYPE: KindEnum = KindEnum {
         params: None,
         output: SimpleKind::Type,
@@ -289,6 +294,7 @@ pub enum Term {
     Region(Region),
     Effect(Effect),
     Constant(Constant),
+    Thunk(Thunk),
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -298,6 +304,9 @@ pub struct GenericArgument {
 }
 
 impl Effect {
+    pub fn empty(tt: &TypeTable) -> Self {
+        tt.insert_effect(EffectEnum::Row(Arc::new([])))
+    }
     pub fn row<'a>(effects: impl IntoIterator<Item = &'a Effect>, tt: &TypeTable) -> Self {
         let row = effects
             .into_iter()

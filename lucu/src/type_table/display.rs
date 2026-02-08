@@ -1,9 +1,9 @@
 use std::fmt;
 
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
-    FunctionSignature, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind, KindEnum,
-    Region, RegionEnum, Sentinel, SimpleKind, Term, Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
+    GenericArgument, GenericParameter, IntSize, Integer, Item, Kind, KindEnum, Region, RegionEnum,
+    Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy)]
@@ -25,6 +25,7 @@ impl fmt::Display for Interned<'_, Kind> {
             SimpleKind::Type => write!(f, "*")?,
             SimpleKind::Effect => write!(f, "EFFECT")?,
             SimpleKind::Region => write!(f, "REGION")?,
+            SimpleKind::Thunk => write!(f, "THUNK")?,
             SimpleKind::Constant(ty) => write!(f, "{}", ty.display(self.1))?,
         }
         Ok(())
@@ -103,6 +104,7 @@ impl fmt::Display for Interned<'_, Type> {
             }
             TypeEnum::Boolean => write!(f, "Bool"),
             TypeEnum::Unit => write!(f, "()"),
+            TypeEnum::Never => write!(f, "Void"),
             TypeEnum::Integer(size) => write!(f, "{size}"),
             TypeEnum::Pointer(ty, region) => {
                 write!(f, "^(@{}){}", region.display(self.1), ty.display(self.1))
@@ -172,12 +174,24 @@ impl fmt::Display for Interned<'_, Constant> {
     }
 }
 
+impl fmt::Display for Interned<'_, Thunk> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "⟨{}⟩ {}",
+            self.0.effect.display(self.1),
+            self.0.returns.display(self.1)
+        )
+    }
+}
+
 impl fmt::Display for Interned<'_, Term> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             Term::Type(ty) => write!(f, "{}", ty.display(self.1)),
             Term::Region(region) => write!(f, "{}", region.display(self.1)),
             Term::Effect(effect) => write!(f, "{}", effect.display(self.1)),
+            Term::Thunk(thunk) => write!(f, "{}", thunk.display(self.1)),
             Term::Constant(constant) => write!(f, "{}", constant.display(self.1)),
         }
     }
@@ -233,12 +247,7 @@ impl fmt::Display for Interned<'_, FunctionSignature> {
             }
         }
 
-        write!(f, "⟨{}⟩ ", sig.effect.display(self.1))?;
-
-        match sig.returns {
-            FunctionReturns::Data(ty) => write!(f, "{}", ty.display(self.1))?,
-            FunctionReturns::Never => write!(f, "Void")?,
-        }
+        write!(f, "{}", sig.thunk.display(self.1),)?;
         Ok(())
     }
 }
@@ -308,8 +317,14 @@ impl Term {
             Term::Type(ty) => ty.enclosed(tt),
             Term::Region(region) => region.enclosed(tt),
             Term::Effect(effect) => effect.enclosed(tt),
+            Term::Thunk(_) => true,
             Term::Constant(constant) => constant.enclosed(tt),
         }
+    }
+}
+impl Thunk {
+    pub fn display(self, tt: &TypeTable) -> impl fmt::Display {
+        Interned(self, tt)
     }
 }
 impl GenericArgument {

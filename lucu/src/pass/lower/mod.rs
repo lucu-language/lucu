@@ -15,10 +15,9 @@ use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
-    FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer,
-    Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Type, TypeEnum,
-    TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
+    FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind,
+    KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 struct Lower<'a> {
@@ -545,6 +544,10 @@ impl<'a> Lower<'a> {
                         SimpleKind::Region => {
                             Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                         }
+                        SimpleKind::Thunk => Term::Thunk(Thunk {
+                            returns: self.tt.insert_type(TypeEnum::Generic(param.clone())),
+                            effect: self.tt.insert_effect(EffectEnum::Generic(param)),
+                        }),
                         SimpleKind::Constant(_) => todo!(),
                     };
                     GenericArgument { term, arity }
@@ -554,11 +557,10 @@ impl<'a> Lower<'a> {
     }
     fn term_path(
         &mut self,
-        kind: Kind,
         path: &ast::Path,
         generics: &Generics,
         implicit: Option<&mut Implicit>,
-    ) -> Result<Term> {
+    ) -> Result<(Kind, Term)> {
         let (item_kind, term) = {
             if path.package.is_none()
                 && let Some((index, kind)) = generics.get(path.name.as_str())
@@ -578,6 +580,10 @@ impl<'a> Lower<'a> {
                     SimpleKind::Region => {
                         Term::Region(self.tt.insert_region(RegionEnum::Generic(param)))
                     }
+                    SimpleKind::Thunk => Term::Thunk(Thunk {
+                        returns: self.tt.insert_type(TypeEnum::Generic(param.clone())),
+                        effect: self.tt.insert_effect(EffectEnum::Generic(param)),
+                    }),
                     SimpleKind::Constant(_) => {
                         Term::Constant(self.tt.insert_constant(ConstantEnum::Generic(param)))
                     }
@@ -617,13 +623,6 @@ impl<'a> Lower<'a> {
         };
 
         self.apply(item_kind, term, path.generics.as_ref(), generics, implicit)
-            .and_then(|(applied_kind, path)| {
-                if applied_kind == kind {
-                    Result::new(path)
-                } else {
-                    todo!("error")
-                }
-            })
     }
     fn generic_argument(
         &mut self,
@@ -635,7 +634,28 @@ impl<'a> Lower<'a> {
         let arity = self.tt[param].params.as_ref().map(|params| params.len());
         let generics = generics.shifted(arity.unwrap_or(0));
         match arg {
-            ast::GenericArgument::Path(path) => self.term_path(param, path, &generics, implicit),
+            ast::GenericArgument::Path(path) => {
+                self.term_path(path, &generics, implicit)
+                    .and_then(|(kind, term)| {
+                        if kind == param {
+                            Result::new(term)
+                        } else if let Term::Type(ty) = term
+                            && self.tt[param].params == self.tt[kind].params
+                            && self.tt[param].output == SimpleKind::Thunk
+                        {
+                            Result::new(Term::Thunk(Thunk {
+                                returns: ty,
+                                effect: Effect::empty(self.tt),
+                            }))
+                        } else {
+                            todo!(
+                                "error: found '{}' expected '{}'",
+                                kind.display(self.tt),
+                                param.display(self.tt)
+                            )
+                        }
+                    })
+            }
             ast::GenericArgument::Type(ty) => {
                 if self.tt[param] == KindEnum::TYPE {
                     self.r#type(ty, &generics, implicit).map(Term::Type)
@@ -653,11 +673,10 @@ impl<'a> Lower<'a> {
         generics: &Generics,
         implicit: Option<&mut Implicit>,
     ) -> Result<Region> {
-        let kind = self.tt.insert_kind(KindEnum::REGION);
-        self.term_path(kind, region, generics, implicit)
-            .map(|path| match path {
-                Term::Region(region) => region,
-                _ => panic!("ICE: generic argument of kind Region is not actually a Region"),
+        self.term_path(region, generics, implicit)
+            .and_then(|(kind, path)| match path {
+                Term::Region(region) if self.tt[kind].params.is_none() => Result::new(region),
+                _ => todo!("error"),
             })
     }
     fn effect(
@@ -666,11 +685,10 @@ impl<'a> Lower<'a> {
         generics: &Generics,
         implicit: Option<&mut Implicit>,
     ) -> Result<Effect> {
-        let kind = self.tt.insert_kind(KindEnum::EFFECT);
-        self.term_path(kind, effect, generics, implicit)
-            .map(|path| match path {
-                Term::Effect(effect) => effect,
-                _ => panic!("ICE: generic argument of kind Effect is not actually a Effect"),
+        self.term_path(effect, generics, implicit)
+            .and_then(|(kind, path)| match path {
+                Term::Effect(effect) if self.tt[kind].params.is_none() => Result::new(effect),
+                _ => todo!("error"),
             })
     }
     fn implicit_regions(&mut self, ast: &impl Ast) -> usize {
@@ -746,11 +764,10 @@ impl<'a> Lower<'a> {
     ) -> Result<Type> {
         match ty {
             ast::Type::Path(path) => {
-                let kind = self.tt.insert_kind(KindEnum::TYPE);
-                self.term_path(kind, path, generics, implicit)
-                    .map(|path| match path {
-                        Term::Type(ty) => ty,
-                        _ => panic!("ICE: generic argument of kind Type is not actually a Type"),
+                self.term_path(path, generics, implicit)
+                    .and_then(|(kind, path)| match path {
+                        Term::Type(ty) if self.tt[kind].params.is_none() => Result::new(ty),
+                        _ => todo!("error"),
                     })
             }
             ast::Type::Pointer(_, region, ty) => {
@@ -797,15 +814,11 @@ impl<'a> Lower<'a> {
     ) -> Result<Constant> {
         match constant {
             ast::Constant::Path(path) => {
-                let kind = self.tt.insert_kind(KindEnum::constant(ty));
-                self.term_path(kind, path, generics, implicit)
-                    .map(|path| match path {
-                        Term::Constant(ty) => ty,
-                        _ => {
-                            panic!(
-                                "ICE: generic argument of kind Constant is not actually a Constant"
-                            )
-                        }
+                let expected = self.tt.insert_kind(KindEnum::constant(ty));
+                self.term_path(path, generics, implicit)
+                    .and_then(|(kind, term)| match term {
+                        Term::Constant(ty) if kind == expected => Result::new(ty),
+                        _ => todo!("error"),
                     })
             }
             // TODO: mark somewhere that the type must be able to be created from these literals
@@ -829,6 +842,7 @@ impl<'a> Lower<'a> {
             ast::Kind::Type(_) => Result::new(SimpleKind::Type),
             ast::Kind::Effect(_) => Result::new(SimpleKind::Effect),
             ast::Kind::Region(_) => Result::new(SimpleKind::Region),
+            ast::Kind::Thunk(_) => Result::new(SimpleKind::Thunk),
             // TODO: allow constant with generic type?
             ast::Kind::Constant(ty) => self
                 .r#type(ty, &Generics::new(), None)
@@ -977,40 +991,61 @@ impl<'a> Lower<'a> {
                     .map(Some),
                 None => Result::new(None),
             };
-            returns <- self.returns(sig.returns.as_ref(), &generics, Some(&mut implicit));
+            thunk <- self.thunk(sig.returns.as_ref(), &generics, Some(&mut implicit));
             effects <- sig
                 .effects
                 .iter()
                 .flat_map(|we| &we.effects)
                 .map(|effect| self.effect(effect, &generics, Some(&mut implicit)))
                 .collect::<Result<Box<_>>>();
-            let effect = Effect::row(effects.iter().chain(implicit.effects.iter()), self.tt);
+            let effect = Effect::row(iter::once(&thunk.effect).chain(&effects).chain(&implicit.effects), self.tt);
             return self.tt.insert_function_signature(FunctionSignatureValue {
                 type_params,
                 implicit_regions,
                 params,
-                returns,
-                effect,
+                thunk: Thunk {
+                    returns: thunk.returns,
+                    effect,
+                }
             });
         }
     }
-    fn returns(
+    fn thunk(
         &mut self,
         returns: Option<&ast::Returns>,
         generics: &Generics,
         implicit: Option<&mut Implicit>,
-    ) -> Result<FunctionReturns> {
+    ) -> Result<Thunk> {
         match returns {
             Some(returns) => match returns {
-                ast::Returns::Never(_) => Result::new(FunctionReturns::Never),
-                ast::Returns::Data(ty) => self
-                    .r#type(ty, generics, implicit)
-                    .map(FunctionReturns::Data),
+                ast::Returns::Path(path) => {
+                    self.term_path(path, generics, implicit)
+                        .and_then(|(kind, term)| match term {
+                            Term::Type(ty) if self.tt[kind].params.is_none() => {
+                                Result::new(Thunk {
+                                    returns: ty,
+                                    effect: Effect::empty(self.tt),
+                                })
+                            }
+                            Term::Thunk(thunk) if self.tt[kind].params.is_none() => {
+                                Result::new(thunk)
+                            }
+                            _ => todo!("error"),
+                        })
+                }
+                ast::Returns::Type(ty) => self.r#type(ty, generics, implicit).map(|ty| Thunk {
+                    returns: ty,
+                    effect: Effect::empty(self.tt),
+                }),
+                ast::Returns::Never(_) => Result::new(Thunk {
+                    returns: self.tt.insert_type(TypeEnum::Never),
+                    effect: Effect::empty(self.tt),
+                }),
             },
-            None => {
-                let unit = self.tt.insert_type(TypeEnum::Unit);
-                Result::new(FunctionReturns::Data(unit))
-            }
+            None => Result::new(Thunk {
+                returns: self.tt.insert_type(TypeEnum::Unit),
+                effect: Effect::empty(self.tt),
+            }),
         }
     }
     fn function_param(

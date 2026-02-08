@@ -540,8 +540,9 @@ impl Ast for ast::FunctionDeclaration {
 impl Ast for ast::Returns {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
+            ast::Returns::Path(path) => path.push_nodes(nodes),
+            ast::Returns::Type(ty) => ty.push_nodes(nodes),
             ast::Returns::Never(token) => nodes.token(*token),
-            ast::Returns::Data(ty) => ty.push_nodes(nodes),
         }
     }
 }
@@ -635,9 +636,10 @@ impl Ast for ast::GenericParameter {
 impl Ast for ast::Kind {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
-            ast::Kind::Type(token) | ast::Kind::Effect(token) | ast::Kind::Region(token) => {
-                nodes.token(*token)
-            }
+            ast::Kind::Type(token)
+            | ast::Kind::Effect(token)
+            | ast::Kind::Region(token)
+            | ast::Kind::Thunk(token) => nodes.token(*token),
             ast::Kind::Constant(ty) => ty.push_nodes(nodes),
         }
     }

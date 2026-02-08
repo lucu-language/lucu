@@ -4,8 +4,8 @@ effect Read[r]
 effect Write[r]
    = #intrinsic
 
-fun local[T, U](val T, fun body(ptr ^mut T) U) U
+fun ref[T, U](val T, fun body(ptr ^mut T) U) U
    = #intrinsic
 
-fun alloca[T, U](len usize, fun body(slice ^mut []T) U) U
+fun alloca[T, U](fill T, len usize, fun body(slice ^mut []T) U) U
    = #intrinsic

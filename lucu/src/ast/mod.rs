@@ -117,6 +117,7 @@ pub enum Kind {
     Type(Token),
     Effect(Token),
     Region(Token),
+    Thunk(Token),
     Constant(Box<Type>),
 }
 
@@ -238,8 +239,9 @@ pub type Parameters = Grouped<Separated<Parameter>>;
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "FunctionReturns::")]
 pub enum Returns {
+    Path(Path),
+    Type(Box<Type>),
     Never(Token),
-    Data(Box<Type>),
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -563,6 +565,7 @@ impl HasSpan for Kind {
             Kind::Type(token) => token.span(),
             Kind::Effect(token) => token.span(),
             Kind::Region(token) => token.span(),
+            Kind::Thunk(token) => token.span(),
             Kind::Constant(ty) => ty.span(),
         }
     }
@@ -633,8 +636,9 @@ impl HasSpan for FunctionDeclaration {
 impl HasSpan for Returns {
     fn span(&self) -> Span {
         match self {
+            Returns::Path(path) => path.span(),
+            Returns::Type(ty) => ty.span(),
             Returns::Never(token) => token.span(),
-            Returns::Data(ty) => ty.span(),
         }
     }
 }

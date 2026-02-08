@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::type_table::unapply::Unapply;
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionReturns,
-    FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region,
-    RegionEnum, Sentinel, Term, Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
+    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Sentinel,
+    Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 pub trait Substitute {
@@ -180,6 +180,32 @@ impl Substitute for GenericArgument {
     }
 }
 
+impl Substitute for Thunk {
+    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
+        Self {
+            returns: self.returns.subst(tt, start, args),
+            effect: self.effect.subst(tt, start, args),
+        }
+    }
+    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
+        Self {
+            returns: self.returns.shift(tt, start, offset),
+            effect: self.effect.shift(tt, start, offset),
+        }
+    }
+    fn infer(
+        self,
+        from: Self,
+        tt: &TypeTable,
+        start: usize,
+        args: &mut Vec<Option<GenericArgument>>,
+    ) -> Option<()> {
+        self.returns.infer(from.returns, tt, start, args)?;
+        self.effect.infer(from.effect, tt, start, args)?;
+        Some(())
+    }
+}
+
 impl Substitute for Term {
     fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         match self {
@@ -187,6 +213,7 @@ impl Substitute for Term {
             Term::Region(region) => Term::Region(region.subst(tt, start, args)),
             Term::Effect(effect) => Term::Effect(effect.subst(tt, start, args)),
             Term::Constant(constant) => Term::Constant(constant.subst(tt, start, args)),
+            Term::Thunk(thunk) => Term::Thunk(thunk.subst(tt, start, args)),
         }
     }
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
@@ -195,6 +222,7 @@ impl Substitute for Term {
             Term::Region(region) => Term::Region(region.shift(tt, start, offset)),
             Term::Effect(effect) => Term::Effect(effect.shift(tt, start, offset)),
             Term::Constant(constant) => Term::Constant(constant.shift(tt, start, offset)),
+            Term::Thunk(thunk) => Term::Thunk(thunk.shift(tt, start, offset)),
         }
     }
     fn infer(
@@ -209,6 +237,7 @@ impl Substitute for Term {
             (Term::Region(a), Term::Region(b)) => a.infer(b, tt, start, args),
             (Term::Effect(a), Term::Effect(b)) => a.infer(b, tt, start, args),
             (Term::Constant(a), Term::Constant(b)) => a.infer(b, tt, start, args),
+            (Term::Thunk(a), Term::Thunk(b)) => a.infer(b, tt, start, args),
             _ => unreachable!(),
         }
     }
@@ -313,7 +342,7 @@ impl Substitute for Type {
                 // generics have *reversed* indices
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
-                        Term::Type(ty) => return ty,
+                        Term::Type(ty) | Term::Thunk(Thunk { returns: ty, .. }) => return ty,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
@@ -336,7 +365,9 @@ impl Substitute for Type {
                 // TODO: substitute when we allow more sentinels
                 sentinel,
             ),
-            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
+            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit | TypeEnum::Never => {
+                return self;
+            }
         };
         tt.insert_type(changed)
     }
@@ -361,7 +392,9 @@ impl Substitute for Type {
                 // TODO: shift when we allow more sentinels
                 sentinel,
             ),
-            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit => return self,
+            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit | TypeEnum::Never => {
+                return self;
+            }
         };
         tt.insert_type(changed)
     }
@@ -400,6 +433,7 @@ impl Substitute for Type {
             (TypeEnum::Integer(a), TypeEnum::Integer(b)) => (a == b).then_some(()),
             (TypeEnum::Boolean, TypeEnum::Boolean) => Some(()),
             (TypeEnum::Unit, TypeEnum::Unit) => Some(()),
+            (TypeEnum::Never, TypeEnum::Never) => Some(()),
             (&TypeEnum::Pointer(ta, ra), &TypeEnum::Pointer(tb, rb))
             | (&TypeEnum::PointerSlice(ta, ra, None), &TypeEnum::PointerSlice(tb, rb, None))
             | (
@@ -425,6 +459,7 @@ impl Substitute for Type {
             (TypeEnum::Integer(_), _) => None,
             (TypeEnum::Boolean, _) => None,
             (TypeEnum::Unit, _) => None,
+            (TypeEnum::Never, _) => None,
             (TypeEnum::Pointer(_, _), _) => None,
             (TypeEnum::PointerSlice(_, _, _), _) => None,
             (TypeEnum::Array(_, _, _), _) => None,
@@ -503,7 +538,7 @@ impl Substitute for Effect {
                 // generics have *reversed* indices
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
-                        Term::Effect(effect) => return effect,
+                        Term::Effect(effect) | Term::Thunk(Thunk { effect, .. }) => return effect,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
@@ -622,51 +657,19 @@ impl Substitute for FunctionParameter {
     }
 }
 
-impl Substitute for FunctionReturns {
-    fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
-        match self {
-            FunctionReturns::Data(ty) => FunctionReturns::Data(ty.subst(tt, start, args)),
-            FunctionReturns::Never => FunctionReturns::Never,
-        }
-    }
-    fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
-        match self {
-            FunctionReturns::Data(ty) => FunctionReturns::Data(ty.shift(tt, start, offset)),
-            FunctionReturns::Never => FunctionReturns::Never,
-        }
-    }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        match (self, from) {
-            (FunctionReturns::Data(a), FunctionReturns::Data(b)) => a.infer(b, tt, start, args),
-            (FunctionReturns::Never, FunctionReturns::Never) => Some(()),
-            // NOTE: that idea of 'thunk kinds' might allow this
-            _ => unreachable!(),
-        }
-    }
-}
-
 impl Substitute for FunctionSignature {
     fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
         let sig = tt[self].clone();
         let type_params = sig.type_params;
         let implicit_regions = sig.implicit_regions;
-        let arity =
-            type_params.as_ref().map(|params| params.len()).unwrap_or(0) + sig.implicit_regions;
+        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0) + implicit_regions;
         let params = sig.params.subst(tt, start + arity, args);
-        let returns = sig.returns.subst(tt, start + arity, args);
-        let effect = sig.effect.subst(tt, start + arity, args);
+        let thunk = sig.thunk.subst(tt, start + arity, args);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
             implicit_regions,
             params,
-            returns,
-            effect,
+            thunk,
         })
     }
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
@@ -674,17 +677,14 @@ impl Substitute for FunctionSignature {
         // NOTE: if we eventually have dependent kinds we need to substitute here too
         let type_params = sig.type_params;
         let implicit_regions = sig.implicit_regions;
-        let arity =
-            type_params.as_ref().map(|params| params.len()).unwrap_or(0) + sig.implicit_regions;
+        let arity = type_params.as_ref().map(|params| params.len()).unwrap_or(0) + implicit_regions;
         let params = sig.params.shift(tt, start + arity, offset);
-        let returns = sig.returns.shift(tt, start + arity, offset);
-        let effect = sig.effect.shift(tt, start + arity, offset);
+        let thunk = sig.thunk.shift(tt, start + arity, offset);
         tt.insert_function_signature(FunctionSignatureValue {
             type_params,
             implicit_regions,
             params,
-            returns,
-            effect,
+            thunk,
         })
     }
     fn infer(
@@ -708,8 +708,7 @@ impl Substitute for FunctionSignature {
             + a.implicit_regions;
 
         a.params.infer(b.params, tt, start + arity, args)?;
-        a.returns.infer(b.returns, tt, start + arity, args)?;
-        a.effect.infer(b.effect, tt, start + arity, args)?;
+        a.thunk.infer(b.thunk, tt, start + arity, args)?;
         Some(())
     }
 }
@@ -753,8 +752,10 @@ mod tests {
             type_params: Some(Arc::new([typ_kind])),
             implicit_regions: 0,
             params: Some(Arc::new([FunctionParameter::Data(typ)])),
-            returns: FunctionReturns::Data(typ),
-            effect,
+            thunk: Thunk {
+                returns: typ,
+                effect,
+            },
         });
 
         let inserted = table.insert_type(TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32))));
@@ -762,8 +763,10 @@ mod tests {
             type_params: Some(Arc::new([typ_kind])),
             implicit_regions: 0,
             params: Some(Arc::new([FunctionParameter::Data(inserted)])),
-            returns: FunctionReturns::Data(inserted),
-            effect,
+            thunk: Thunk {
+                returns: inserted,
+                effect,
+            },
         });
 
         let mut generics = vec![None];

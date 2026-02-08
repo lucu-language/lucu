@@ -1,6 +1,6 @@
 use strum::IntoStaticStr;
 
-use crate::ast::{Constant, Grouped, Identifier, Path, Separated, Token, Type};
+use crate::ast::{Constant, Grouped, Identifier, Path, Sentinel, Separated, Token, Type};
 use crate::span::{HasSpan, Span};
 use crate::tokens::{SymbolAssign, SymbolEquality, SymbolInequality};
 
@@ -91,6 +91,14 @@ pub struct Block {
     pub exprs: Separated<Box<Expression>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct Range {
+    pub from: Option<Box<Expression>>,
+    pub range: Token,
+    pub to: Option<Box<Expression>>,
+    pub sentinel: Option<Sentinel>,
+}
+
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Expression::")]
 pub enum Expression {
@@ -153,6 +161,10 @@ pub enum Expression {
         array: Box<Self>,
         index: Grouped<Box<Self>>,
     },
+    IndexRange {
+        array: Box<Self>,
+        index: Grouped<Range>,
+    },
     Array(Grouped<Separated<Box<Self>>>),
     Call {
         fun: Path,
@@ -212,6 +224,9 @@ impl HasSpan for Expression {
                 Span::new(expr.span().start, tk_caret.span().end)
             }
             Expression::Index { array, index } => Span::new(array.span().start, index.span().end),
+            Expression::IndexRange { array, index } => {
+                Span::new(array.span().start, index.span().end)
+            }
             Expression::Array(group) => group.span(),
             Expression::Call { fun, args, block } => {
                 let start = fun.span().start;

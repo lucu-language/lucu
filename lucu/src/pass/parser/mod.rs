@@ -389,10 +389,11 @@ impl<'a> Parser<'a> {
     }
     pub fn returns(&mut self) -> Result<ast::Returns> {
         match self.next().token {
+            TokenEnum::Identifier => self.path(false).map(ast::Returns::Path),
             TokenEnum::Symbol(Symbol::Bang) => Result::new(ast::Returns::Never(self.skip())),
             _ => {
                 if self.starts_type() {
-                    self.r#type().map(ast::Returns::Data)
+                    self.r#type().map(ast::Returns::Type)
                 } else {
                     self.error(Expected::Returns)
                 }
@@ -448,6 +449,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Type) => Result::new(ast::Kind::Type(self.skip())),
             TokenEnum::Keyword(Keyword::Effect) => Result::new(ast::Kind::Effect(self.skip())),
             TokenEnum::Keyword(Keyword::Region) => Result::new(ast::Kind::Region(self.skip())),
+            TokenEnum::Keyword(Keyword::Thunk) => Result::new(ast::Kind::Thunk(self.skip())),
             _ => {
                 if self.starts_type() {
                     self.r#type().map(ast::Kind::Constant)

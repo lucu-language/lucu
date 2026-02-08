@@ -183,10 +183,13 @@ pub enum Keyword {
     Discard,
     Break,
     Region,
-    #[strum(serialize = "#cast")]
-    Cast,
-    #[strum(serialize = "#addr")]
-    Addr,
+    Thunk,
+    #[strum(serialize = "#ext")]
+    Extend,
+    #[strum(serialize = "#trunc")]
+    Truncate,
+    #[strum(serialize = "#transmute")]
+    Transmute,
     #[strum(serialize = "#intrinsic")]
     Intrinsic,
     #[strum(disabled)]

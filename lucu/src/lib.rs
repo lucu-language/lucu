@@ -2,12 +2,12 @@
 pub mod annotate;
 pub mod error;
 pub mod pass;
+pub mod type_table;
 
 // data model
 pub mod ast;
-pub mod ir;
+pub mod header;
 pub mod tokens;
-pub mod type_table;
 
 // location
 pub mod module;

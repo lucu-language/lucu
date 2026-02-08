@@ -50,8 +50,8 @@ fn main() {
                             .mark_syntax(tokens)
                     );
 
-                    if let Some(untyped) = stages.untyped_ir(&graph, &tt) {
-                        println!("{}", untyped.display(&tt));
+                    if let Some(header) = stages.header(&graph, &tt) {
+                        println!("{}", header.display(&tt));
                     }
                 }
 

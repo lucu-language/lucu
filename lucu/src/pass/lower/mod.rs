@@ -1,5 +1,5 @@
 use std::iter;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use compact_str::ToCompactString;
 use do_notation::m;
@@ -7,9 +7,8 @@ use do_notation::m;
 use crate::ast;
 use crate::ast::visit::{Ast, Visitor};
 use crate::error::{Problems, Result};
-use crate::ir::{
-    EffectDefinition, EffectMember, HandlerBodyDefinition, HandlerDef, HandlerMember, IR, ItemDef,
-    ItemDefinition, StructDefinition, StructMember,
+use crate::header::{
+    EffectDecl, EffectMember, HandlerDecl, Header, ItemDecl, StructDecl, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -30,18 +29,12 @@ struct Lower<'a> {
     imports: &'a Imports,
     definitions: &'a Definitions,
 
-    query: &'a dyn IRQuery,
-    ir: IR,
+    query: &'a dyn HeaderQuery,
+    header: Header,
 }
 
-enum LoweredDef {
-    Item(ItemDef),
-    Handler(HandlerDef),
-    None,
-}
-
-pub trait IRQuery {
-    fn untyped_ir(&self, module: &Module) -> Option<&IR>;
+pub trait HeaderQuery {
+    fn header(&self, module: &Module) -> Option<&Header>;
 }
 
 #[derive(Clone, Default)]
@@ -88,9 +81,9 @@ impl Implicit {
     }
 }
 
-impl IR {
+impl Header {
     pub fn from(
-        query: &impl IRQuery,
+        query: &impl HeaderQuery,
         module: &Module,
         ast: &ast::Module,
         imports: &Imports,
@@ -104,21 +97,21 @@ impl IR {
             imports,
             definitions,
             query,
-            ir: IR::default(),
+            header: Header::default(),
         };
         Some(lower.module())
     }
 }
 
 impl<'a> Lower<'a> {
-    fn module(mut self) -> Result<IR> {
-        let mut decl_problems = Problems::ok();
-        let defs = decl_problems
+    fn module(mut self) -> Result<Header> {
+        let mut pass1_problems = Problems::ok();
+        let defs = pass1_problems
             .append(
                 self.definitions
                     .nodes_postorder()
                     .map(|node| self.definitions.item_with_parent(node, self.ast))
-                    .map(|(def, parent)| self.declaration(def, parent))
+                    .map(|(def, parent)| self.pass1(def, parent))
                     .collect::<Result<Vec<_>>>(),
             )
             .expect("ICE: no definition list");
@@ -127,15 +120,15 @@ impl<'a> Lower<'a> {
             self.definitions.nodes().len(),
             "ICE: definition list has different size"
         );
-        let def_problems = Iterator::zip(
+        let pass2_problems = Iterator::zip(
             self.definitions
                 .nodes_postorder()
                 .map(|node| self.definitions.item(node, self.ast)),
             defs,
         )
-        .map(|(def, lower)| self.definition(def, lower))
+        .map(|(def, lower)| self.pass2(def, lower))
         .collect::<Problems>();
-        (decl_problems + def_problems).with(self.ir)
+        (pass1_problems + pass2_problems).with(self.header)
     }
     fn generics(
         &self,
@@ -155,13 +148,13 @@ impl<'a> Lower<'a> {
             _ => unreachable!(),
         }
     }
-    fn definition(&mut self, def: &'a ast::Item, lower: LoweredDef) -> Problems {
+    fn pass2(&mut self, item: &'a ast::Item, partial: Option<ItemDecl>) -> Problems {
         let mut problems = Problems::ok();
 
-        match def {
+        match item {
             ast::Item::Type(_, name, def) => {
                 if let Some((_, ast::TypeDefinition::Struct(struc))) = def {
-                    let LoweredDef::Item(ItemDef::Struct(kind, idx)) = lower else {
+                    let Some(ItemDecl::Struct(kind, idx)) = partial else {
                         return problems;
                     };
 
@@ -180,14 +173,13 @@ impl<'a> Lower<'a> {
                                 .collect::<Result<_>>(),
                         )
                         .expect("ICE: empty result when getting struct members");
-
-                    self.ir.realize_struct(idx, StructDefinition { members });
+                    idx.set(StructDecl { members })
+                        .expect("ICE: struct already defined");
                 }
             }
-            ast::Item::Function(_, _) => {}
             ast::Item::Effect(_, _, defs) => {
                 if let Some((_, ast::EffectDefinition::Body(body))) = defs {
-                    let LoweredDef::Item(ItemDef::Effect(_, eff)) = lower else {
+                    let Some(ItemDecl::Effect(_, eff)) = partial else {
                         return problems;
                     };
 
@@ -198,7 +190,8 @@ impl<'a> Lower<'a> {
                         .filter_map(|def| {
                             // TODO: is there a way to get this without looking it up again?
                             let name = def.name()?;
-                            let ItemDef::Function(sig, _) = self.ir.get(name.ident.as_str())?
+                            let &ItemDecl::Function(sig, _) =
+                                self.header.get(name.ident.as_str())?
                             else {
                                 return None;
                             };
@@ -208,98 +201,25 @@ impl<'a> Lower<'a> {
                             })
                         })
                         .collect();
-
-                    self.ir.realize_effect(eff, EffectDefinition { members });
+                    eff.set(EffectDecl { members })
+                        .expect("ICE: effect already defined");
                 }
             }
+            ast::Item::Function(_, _) => {}
             ast::Item::Constant(_, _, _, _) => {}
-            ast::Item::Handle(_, params, handler) => {
-                let LoweredDef::Handler(HandlerDef {
-                    type_params,
-                    implicit_regions,
-                    effect,
-                    with_effect: _,
-                    body,
-                }) = lower
-                else {
-                    return problems;
-                };
-
-                let generics = self
-                    .generics(type_params.as_ref(), params.as_ref(), &Generics::new())
-                    .shifted(implicit_regions);
-
-                let EffectEnum::Item(effect_item) = &self.tt[effect] else {
-                    todo!("error: effect is not a single item")
-                };
-                let effect_args = effect_item.apply.clone();
-
-                let ItemDefinition::Effect(_, effect_def) = self.resolve_item(effect_item) else {
-                    unreachable!("ICE: effect item is not an effect")
-                };
-
-                let members = effect_def
-                    .members
-                    .clone()
-                    .into_iter()
-                    .map(|member| {
-                        let expected_sig = match &effect_args {
-                            Some(args) => member.signature.subst(self.tt, 0, args),
-                            None => member.signature,
-                        };
-
-                        let Some(matching) = handler.items.inner.iter().find(|def| {
-                            def.name()
-                                .is_some_and(|name| name.ident.as_str() == member.name)
-                        }) else {
-                            todo!("error: no definition for '{}' inside handler", member.name)
-                        };
-
-                        let ast::Item::Function(fun_decl, _) = matching else {
-                            todo!("error: definition '{}' is not a function", member.name)
-                        };
-
-                        let Some(signature) =
-                            problems.append(self.function_signature(fun_decl, &generics))
-                        else {
-                            return HandlerMember {
-                                name: member.name,
-                                signature: expected_sig,
-                            };
-                        };
-                        if expected_sig != signature {
-                            todo!(
-                                "error: signature mismatch. Expected {}, got {}",
-                                expected_sig.display(self.tt),
-                                signature.display(self.tt)
-                            );
-                        }
-
-                        HandlerMember {
-                            name: member.name,
-                            signature,
-                        }
-                    })
-                    .collect::<Vec<HandlerMember>>();
-
-                // TODO: check for duplicates
-                // TODO: check for unknown
-
-                self.ir
-                    .realize_handler_body(body, HandlerBodyDefinition { members });
-            }
+            ast::Item::Handle(_, _, _) => {}
         }
 
         problems
     }
-    fn declaration(
+    fn pass1(
         &mut self,
-        def: &'a ast::Item,
+        item: &'a ast::Item,
         parent: Option<&'a ast::Item>,
-    ) -> Result<LoweredDef> {
+    ) -> Result<Option<ItemDecl>> {
         let mut problems = Problems::ok();
 
-        match def {
+        match item {
             ast::Item::Type(_, name, def) => {
                 if let Some(parent) = parent {
                     todo!("error")
@@ -318,26 +238,25 @@ impl<'a> Lower<'a> {
                             );
                             let ty = problems.append(self.r#type(ast, &generics, None));
                             if let Some(ty) = ty {
-                                let item = ItemDef::Alias(kind, Term::Type(ty));
-                                self.ir.insert(name.ident.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
+                                let item = ItemDecl::Alias(kind, Term::Type(ty));
+                                self.header.insert(name.ident.as_str(), item.clone());
+                                return problems.with(Some(item));
                             }
                         }
                     }
                     Some((_, ast::TypeDefinition::Struct(_))) => {
                         if let Some(kind) = kind {
-                            let struc = self.ir.push_struct();
-                            let item = ItemDef::Struct(kind, struc);
-                            self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            let item = ItemDecl::Struct(kind, Arc::new(OnceLock::new()));
+                            self.header.insert(name.ident.as_str(), item.clone());
+                            return problems.with(Some(item));
                         }
                     }
                     Some((_, ast::TypeDefinition::Intrinsic(_))) => {
                         let ty = problems.append(self.intrinsic_type(name));
                         if let (Some(kind), Some(ty)) = (kind, ty) {
-                            let item = ItemDef::Alias(kind, Term::Type(ty));
-                            self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            let item = ItemDecl::Alias(kind, Term::Type(ty));
+                            self.header.insert(name.ident.as_str(), item.clone());
+                            return problems.with(Some(item));
                         }
                     }
                     None => todo!("error"),
@@ -347,10 +266,10 @@ impl<'a> Lower<'a> {
                 Some(parent) => {
                     // TODO: is there a way to get this without looking it up again?
                     let Some(name) = parent.name() else { todo!() };
-                    let Some(item) = self.ir.get(name.ident.as_str()) else {
+                    let Some(item) = self.header.get(name.ident.as_str()) else {
                         todo!()
                     };
-                    let ItemDef::Effect(kind, _) = item else {
+                    let &ItemDecl::Effect(kind, _) = item else {
                         todo!("error")
                     };
 
@@ -368,17 +287,17 @@ impl<'a> Lower<'a> {
                             apply,
                         }));
 
-                        let item = ItemDef::Function(sig, Some(effect));
-                        self.ir.insert(decl.name.ident.as_str(), item);
-                        return problems.with(LoweredDef::Item(item));
+                        let item = ItemDecl::Function(sig, Some(effect));
+                        self.header.insert(decl.name.ident.as_str(), item.clone());
+                        return problems.with(Some(item));
                     }
                 }
                 None => {
                     let sig = problems.append(self.function_signature(decl, &Generics::new()));
                     if let Some(sig) = sig {
-                        let item = ItemDef::Function(sig, None);
-                        self.ir.insert(decl.name.ident.as_str(), item);
-                        return problems.with(LoweredDef::Item(item));
+                        let item = ItemDecl::Function(sig, None);
+                        self.header.insert(decl.name.ident.as_str(), item.clone());
+                        return problems.with(Some(item));
                     }
                 }
             },
@@ -393,10 +312,9 @@ impl<'a> Lower<'a> {
                 match def {
                     Some((_, ast::EffectDefinition::Body(_))) => {
                         if let Some(kind) = kind {
-                            let effect = self.ir.push_effect();
-                            let item = ItemDef::Effect(kind, effect);
-                            self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            let item = ItemDecl::Effect(kind, Arc::new(OnceLock::new()));
+                            self.header.insert(name.ident.as_str(), item.clone());
+                            return problems.with(Some(item));
                         }
                     }
                     Some((_, ast::EffectDefinition::Alias(effects))) => {
@@ -414,18 +332,18 @@ impl<'a> Lower<'a> {
                             );
                             if let Some(effects) = effects {
                                 let effect = Effect::row(effects.iter(), self.tt);
-                                let item = ItemDef::Alias(kind, Term::Effect(effect));
-                                self.ir.insert(name.ident.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
+                                let item = ItemDecl::Alias(kind, Term::Effect(effect));
+                                self.header.insert(name.ident.as_str(), item.clone());
+                                return problems.with(Some(item));
                             }
                         }
                     }
                     Some((_, ast::EffectDefinition::Intrinsic(_))) => {
                         let eff = problems.append(self.intrinsic_effect(name));
                         if let (Some(kind), Some(eff)) = (kind, eff) {
-                            let item = ItemDef::Alias(kind, Term::Effect(eff));
-                            self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            let item = ItemDecl::Alias(kind, Term::Effect(eff));
+                            self.header.insert(name.ident.as_str(), item.clone());
+                            return problems.with(Some(item));
                         }
                     }
                     None => todo!("error"),
@@ -457,18 +375,18 @@ impl<'a> Lower<'a> {
                             let constant =
                                 problems.append(self.constant(constant, &generics, ty, None));
                             if let Some(constant) = constant {
-                                let item = ItemDef::Alias(kind, Term::Constant(constant));
-                                self.ir.insert(name.ident.as_str(), item);
-                                return problems.with(LoweredDef::Item(item));
+                                let item = ItemDecl::Alias(kind, Term::Constant(constant));
+                                self.header.insert(name.ident.as_str(), item.clone());
+                                return problems.with(Some(item));
                             }
                         }
                     }
                     Some((_, ast::ConstantDefinition::Intrinsic(_))) => {
                         let constant = problems.append(self.intrinsic_constant(name));
                         if let (Some(kind), Some(constant)) = (kind, constant) {
-                            let item = ItemDef::Alias(kind, Term::Constant(constant));
-                            self.ir.insert(name.ident.as_str(), item);
-                            return problems.with(LoweredDef::Item(item));
+                            let item = ItemDecl::Alias(kind, Term::Constant(constant));
+                            self.header.insert(name.ident.as_str(), item.clone());
+                            return problems.with(Some(item));
                         }
                     }
                     None => todo!("error"),
@@ -510,22 +428,20 @@ impl<'a> Lower<'a> {
                             with_effects.iter().chain(implicit.effects.iter()),
                             self.tt,
                         );
-                        let body = self.ir.push_handler_body();
-                        let handler = HandlerDef {
+                        let handler = HandlerDecl {
                             type_params,
                             implicit_regions,
                             effect,
                             with_effect,
-                            body,
                         };
-                        self.ir.insert_global_handler(handler.clone());
-                        return problems.with(LoweredDef::Handler(handler));
+                        self.header.insert_global_handler(handler);
+                        return problems.with(None);
                     }
                 }
             }
         }
 
-        problems.with(LoweredDef::None)
+        problems.with(None)
     }
     fn struct_member(
         &mut self,
@@ -541,32 +457,20 @@ impl<'a> Lower<'a> {
             }
         }
     }
-    fn resolve_item<'b>(&'b self, item: &Item) -> ItemDefinition<'b> {
-        let ir = if &item.module == self.module {
-            &self.ir
-        } else {
-            self.query
-                .untyped_ir(&item.module)
-                .expect("ICE: module doesn't exist anymore")
-        };
-        ir.get(&item.name)
-            .expect("ICE: item doesn't exist anymore")
-            .resolve(ir)
-    }
-    fn item(&self, path: &ast::Path) -> std::result::Result<(&Module, ItemDef), Problems> {
+    fn item(&self, path: &ast::Path) -> std::result::Result<(&Module, &ItemDecl), Problems> {
         let (module, preamble) = match &path.package {
             Some((pkg, _)) => match self.imports.get(pkg.as_str()) {
-                Some(module) => match self.query.untyped_ir(module) {
+                Some(module) => match self.query.header(module) {
                     Some(ir) => ((module, ir), None),
                     None => todo!("recover"),
                 },
                 None => todo!("error"),
             },
             None => (
-                (self.module, &self.ir),
+                (self.module, &self.header),
                 self.imports
                     .preamble()
-                    .and_then(|module| self.query.untyped_ir(module).map(|ir| (module, ir))),
+                    .and_then(|module| self.query.header(module).map(|ir| (module, ir))),
             ),
         };
 
@@ -685,9 +589,9 @@ impl<'a> Lower<'a> {
                     Ok((module, item)) => (module, item),
                     Err(problems) => return problems.with(todo!("recovery value")),
                 };
-                match item {
-                    ItemDef::Alias(item_kind, term) => (item_kind, term),
-                    ItemDef::Struct(item_kind, _) => {
+                match *item {
+                    ItemDecl::Alias(item_kind, term) => (item_kind, term),
+                    ItemDecl::Struct(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
                         let base = self.tt.insert_type(TypeEnum::Item(Item {
@@ -697,7 +601,7 @@ impl<'a> Lower<'a> {
                         }));
                         (item_kind, Term::Type(base))
                     }
-                    ItemDef::Effect(item_kind, _) => {
+                    ItemDecl::Effect(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
                         let base = self.tt.insert_effect(EffectEnum::Item(Item {
@@ -707,7 +611,7 @@ impl<'a> Lower<'a> {
                         }));
                         (item_kind, Term::Effect(base))
                     }
-                    ItemDef::Function(_, _) => todo!("error"),
+                    ItemDecl::Function(_, _) => todo!("error"),
                 }
             }
         };

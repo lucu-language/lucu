@@ -17,12 +17,12 @@ use petgraph::visit::{
 };
 
 use crate::error::{HasProblems, Problem, Result};
-use crate::ir::IR;
+use crate::header::Header;
 use crate::module::{Module, Modules};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::{Import, Imports};
 use crate::pass::lexer::Lexer;
-use crate::pass::lower::IRQuery;
+use crate::pass::lower::HeaderQuery;
 use crate::pass::parser::Parser;
 use crate::tokens::Token;
 use crate::type_table::TypeTable;
@@ -37,7 +37,7 @@ pub struct Stages {
     imports: Lazy<Imports>,
     definitions: Lazy<Definitions>,
 
-    untyped_ir: Lazy<IR>,
+    header: Lazy<Header>,
 }
 
 impl HasProblems for Stages {
@@ -104,7 +104,7 @@ impl Stages {
     fn reset_imports(&mut self) {
         // reset imports and everything that depends on imports
         self.imports = Lazy::new();
-        self.untyped_ir = Lazy::new();
+        self.header = Lazy::new();
     }
     fn resolve_imports(&self, resolver: &impl Modules) -> Option<&Imports> {
         self.imports.get_or_init(|| {
@@ -141,12 +141,12 @@ impl Stages {
         })
     }
 
-    pub fn untyped_ir(&self, graph: &ModuleGraph, tt: &TypeTable) -> Option<&IR> {
+    pub fn header(&self, graph: &ModuleGraph, tt: &TypeTable) -> Option<&Header> {
         let ast = self.ast()?;
         let imports = self.imports()?;
         let definitions = self.definitions()?;
-        self.untyped_ir
-            .get_or_init(|| IR::from(graph, &self.module, ast, imports, definitions, tt))
+        self.header
+            .get_or_init(|| Header::from(graph, &self.module, ast, imports, definitions, tt))
     }
 }
 
@@ -179,10 +179,9 @@ pub struct ModuleGraph {
     graph: DiGraph<Module, Import>,
 }
 
-impl IRQuery for ModuleGraph {
-    fn untyped_ir(&self, module: &Module) -> Option<&IR> {
-        self.stages(module)
-            .and_then(|stages| stages.untyped_ir.get())
+impl HeaderQuery for ModuleGraph {
+    fn header(&self, module: &Module) -> Option<&Header> {
+        self.stages(module).and_then(|stages| stages.header.get())
     }
 }
 

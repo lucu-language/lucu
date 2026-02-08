@@ -100,7 +100,7 @@ impl Workspace {
         if let Ok(order) = self.order().await {
             for o in order {
                 if let Some(stages) = self.graph.stages(o) {
-                    let _ = stages.untyped_ir(&self.graph, tt);
+                    let _ = stages.header(&self.graph, tt);
                 }
             }
         }

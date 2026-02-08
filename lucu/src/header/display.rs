@@ -1,22 +1,22 @@
 use std::fmt;
 
-use crate::ir::{IR, ItemDef, TypeTable};
-use crate::type_table::EffectEnum;
+use crate::header::{Header, ItemDecl};
+use crate::type_table::{EffectEnum, TypeTable};
 
 #[derive(Clone, Copy)]
 struct Interned<'a, T>(T, &'a TypeTable);
 
-impl fmt::Display for Interned<'_, &'_ IR> {
+impl fmt::Display for Interned<'_, &'_ Header> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, (name, &item)) in self.0.items.iter().enumerate() {
-            if let ItemDef::Function(_, Some(_)) = item {
+        for (i, (name, item)) in self.0.items.iter().enumerate() {
+            if let ItemDecl::Function(_, Some(_)) = item {
                 continue;
             }
             if i > 0 {
                 writeln!(f)?;
             }
-            match item {
-                ItemDef::Alias(kind, term) => {
+            match *item {
+                ItemDecl::Alias(kind, term) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -29,7 +29,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
                     writeln!(f, "{}", term.display(self.1))?;
                 }
-                ItemDef::Struct(kind, def) => {
+                ItemDecl::Struct(kind, ref def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -41,12 +41,12 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                         write!(f, "λ ")?;
                     }
                     writeln!(f, "{name} {{")?;
-                    for member in &self.0[def].members {
+                    for member in &def.get().unwrap().members {
                         writeln!(f, "  {} :: {},", member.name, member.ty.display(self.1))?;
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDef::Effect(kind, def) => {
+                ItemDecl::Effect(kind, ref def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -59,7 +59,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
 
                     writeln!(f, "{name} {{")?;
-                    for member in &self.0[def].members {
+                    for member in &def.get().unwrap().members {
                         writeln!(
                             f,
                             "  {} :: {},",
@@ -69,7 +69,7 @@ impl fmt::Display for Interned<'_, &'_ IR> {
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDef::Function(sign, _) => {
+                ItemDecl::Function(sign, _) => {
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
                 }
             }
@@ -89,23 +89,13 @@ impl fmt::Display for Interned<'_, &'_ IR> {
             if self.1[handler.with_effect] != EffectEnum::empty() {
                 write!(f, "⟨{}⟩ => ", handler.with_effect.display(self.1))?;
             }
-            writeln!(f, "{} where", handler.effect.display(self.1))?;
-
-            let body = &self.0[handler.body];
-            for member in &body.members {
-                writeln!(
-                    f,
-                    "  {} :: {}",
-                    member.name,
-                    member.signature.display(self.1)
-                )?;
-            }
+            writeln!(f, "{}", handler.effect.display(self.1))?;
         }
         Ok(())
     }
 }
 
-impl IR {
+impl Header {
     pub fn display(&self, tt: &TypeTable) -> impl fmt::Display {
         Interned(self, tt)
     }

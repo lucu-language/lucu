@@ -629,13 +629,45 @@ impl<'a> Lower<'a> {
         param: Kind,
         arg: &ast::GenericArgument,
         generics: &Generics,
-        implicit: Option<&mut Implicit>,
+        mut implicit: Option<&mut Implicit>,
     ) -> Result<GenericArgument> {
         let arity = self.tt[param].params.as_ref().map(|params| params.len());
         let generics = generics.shifted(arity.unwrap_or(0));
         match arg {
-            ast::GenericArgument::Path(path) => {
-                self.term_path(path, &generics, implicit)
+            ast::GenericArgument::Path(path, effects) => match effects {
+                Some(effects) => {
+                    if self.tt[param] == KindEnum::THUNK {
+                        m! {
+                            thunk <- self
+                                .term_path(path, &generics, implicit.as_deref_mut())
+                                .and_then(|(kind, term)| {
+                                    match term {
+                                        Term::Type(returns) if self.tt[kind].params.is_none() =>
+                                            Result::new(Thunk {
+                                                returns,
+                                                effect: Effect::empty(self.tt)
+                                            }),
+                                        Term::Thunk(thunk) if self.tt[kind].params.is_none() =>
+                                            Result::new(thunk),
+                                        _ => todo!("error"),
+                                    }
+                                });
+                            effects <- effects.effects
+                                .iter()
+                                .map(|effect| self.effect(effect, &generics, implicit.as_deref_mut()))
+                                .collect::<Result<Box<_>>>();
+                            let effect = Effect::row(iter::once(&thunk.effect).chain(&effects), self.tt);
+                            return Term::Thunk(Thunk {
+                                returns: thunk.returns,
+                                effect,
+                            });
+                        }
+                    } else {
+                        todo!("error")
+                    }
+                }
+                None => self
+                    .term_path(path, &generics, implicit)
                     .and_then(|(kind, term)| {
                         if kind == param {
                             Result::new(term)
@@ -647,6 +679,14 @@ impl<'a> Lower<'a> {
                                 returns: ty,
                                 effect: Effect::empty(self.tt),
                             }))
+                        } else if let Term::Effect(effect) = term
+                            && self.tt[param].params == self.tt[kind].params
+                            && self.tt[param].output == SimpleKind::Thunk
+                        {
+                            Result::new(Term::Thunk(Thunk {
+                                returns: self.tt.insert_type(TypeEnum::Unit),
+                                effect,
+                            }))
                         } else {
                             todo!(
                                 "error: found '{}' expected '{}'",
@@ -654,11 +694,25 @@ impl<'a> Lower<'a> {
                                 param.display(self.tt)
                             )
                         }
-                    })
-            }
-            ast::GenericArgument::Type(ty) => {
-                if self.tt[param] == KindEnum::TYPE {
+                    }),
+            },
+            ast::GenericArgument::Type(ty, effects) => {
+                if self.tt[param] == KindEnum::TYPE && effects.is_none() {
                     self.r#type(ty, &generics, implicit).map(Term::Type)
+                } else if self.tt[param] == KindEnum::THUNK {
+                    m! {
+                        returns <- self.r#type(ty, &generics, implicit.as_deref_mut());
+                        effects <- effects
+                            .iter()
+                            .flat_map(|we| &we.effects)
+                            .map(|effect| self.effect(effect, &generics, implicit.as_deref_mut()))
+                            .collect::<Result<Box<_>>>();
+                        let effect = Effect::row(&effects, self.tt);
+                        return Term::Thunk(Thunk {
+                            returns,
+                            effect,
+                        });
+                    }
                 } else {
                     todo!("error")
                 }
@@ -1025,6 +1079,12 @@ impl<'a> Lower<'a> {
                                 Result::new(Thunk {
                                     returns: ty,
                                     effect: Effect::empty(self.tt),
+                                })
+                            }
+                            Term::Effect(effect) if self.tt[kind].params.is_none() => {
+                                Result::new(Thunk {
+                                    returns: self.tt.insert_type(TypeEnum::Unit),
+                                    effect,
                                 })
                             }
                             Term::Thunk(thunk) if self.tt[kind].params.is_none() => {

@@ -161,8 +161,8 @@ impl GenericParameter {
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "GenericArgument::")]
 pub enum GenericArgument {
-    Path(Path),
-    Type(Box<Type>),
+    Path(Path, Option<WithEffects>),
+    Type(Box<Type>, Option<WithEffects>),
     Constant(Box<Constant>),
 }
 
@@ -528,8 +528,24 @@ impl HasSpan for Path {
 impl HasSpan for GenericArgument {
     fn span(&self) -> Span {
         match self {
-            GenericArgument::Path(path) => path.span(),
-            GenericArgument::Type(ty) => ty.span(),
+            GenericArgument::Path(path, effects) => {
+                let start = path.span().start;
+                let end = effects
+                    .as_ref()
+                    .map(HasSpan::span)
+                    .unwrap_or_else(|| path.span())
+                    .end;
+                Span { start, end }
+            }
+            GenericArgument::Type(ty, effects) => {
+                let start = ty.span().start;
+                let end = effects
+                    .as_ref()
+                    .map(HasSpan::span)
+                    .unwrap_or_else(|| ty.span())
+                    .end;
+                Span { start, end }
+            }
             GenericArgument::Constant(constant) => constant.span(),
         }
     }

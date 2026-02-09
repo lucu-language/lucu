@@ -427,8 +427,14 @@ impl Ast for ast::Path {
 impl Ast for ast::GenericArgument {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::GenericArgument::Path(path) => visitor.visit_path(path),
-            ast::GenericArgument::Type(ty) => visitor.visit_type(ty),
+            ast::GenericArgument::Path(path, effects) => V::Output::combine([
+                visitor.visit_path(path),
+                visit_option(effects, visitor, |v, e| v.visit(e)),
+            ]),
+            ast::GenericArgument::Type(ty, effects) => V::Output::combine([
+                visitor.visit_type(ty),
+                visit_option(effects, visitor, |v, e| v.visit(e)),
+            ]),
             ast::GenericArgument::Constant(constant) => visitor.visit(&**constant),
         }
     }

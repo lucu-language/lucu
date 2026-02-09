@@ -26,12 +26,12 @@ effect Map[M[_] thunk] = {
    fun map[A, B](fun f(a A) B, fun ma M[A]) M[B]
 }
 
-effect Zip[M[_] thunk] = {
-   fun zip_with[A, B, C](fun f(lhs A, rhs B) C, fun ma M[A], fun mb M[B]) M[C]
+effect CrossMap[M[_] thunk] = {
+   fun cross_map[A, B, C](fun f(lhs A, rhs B) C, fun ma M[A], fun mb M[B]) M[C]
 }
 
-fun zip[M[_] thunk, A, B](fun ma M[A], fun mb M[B]) M[Pair[A, B]] with Zip[M] = {
-   -- zip_with({ a, b -> (a, b) }, lhs, rhs)
+fun cross[M[_] thunk, A, B](fun ma M[A], fun mb M[B]) M[Pair[A, B]] with CrossMap[M] = {
+   -- cross_map({ a, b -> (a, b) }, lhs, rhs)
 }
 
 effect FlatMap[M[_] thunk] = {
@@ -43,5 +43,5 @@ fun flatten[M[_] type, A](mma M[M[A]]) M[A] with FlatMap[M] = {
 }
 
 effect Functor[M[_] thunk] = Map[M]
-effect Applicative[M[_] thunk] = Wrap[M] Zip[M]
+effect Applicative[M[_] thunk] = Wrap[M] CrossMap[M]
 effect Monad[M[_] thunk] = Wrap[M] FlatMap[M]

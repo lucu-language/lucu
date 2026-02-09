@@ -221,7 +221,7 @@ impl<'a> Nodes<'a> {
     }
 }
 
-trait Ast: HasSpan {
+trait Ast {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>);
 }
 
@@ -329,7 +329,7 @@ impl Ast for ast::Import {
     }
 }
 
-impl<T: Ast> Ast for ast::Grouped<ast::Separated<T>> {
+impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>> {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         if &nodes.source[self.open.0] == "{" {
             nodes.token(self.open);
@@ -591,7 +591,17 @@ impl Ast for ast::FunctionDefinition {
 
 impl Ast for ast::Expression {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        todo!()
+        match self {
+            ast::Expression::Block(group) => {
+                nodes.token(group.open);
+                nodes.indent(|nodes| {
+                    nodes.check_comments(group.close.0.start, false, 1);
+                });
+                nodes.line();
+                nodes.token(group.close);
+            }
+            _ => todo!(),
+        }
     }
 }
 
@@ -791,11 +801,28 @@ impl Ast for ast::Path {
     }
 }
 
+impl<T> Ast for Option<T>
+where
+    T: Ast,
+{
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if let Some(t) = self {
+            t.push_nodes(nodes)
+        }
+    }
+}
+
 impl Ast for ast::GenericArgument {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
-            ast::GenericArgument::Path(path) => path.push_nodes(nodes),
-            ast::GenericArgument::Type(ty) => ty.push_nodes(nodes),
+            ast::GenericArgument::Path(path, effects) => {
+                path.push_nodes(nodes);
+                effects.push_nodes(nodes);
+            }
+            ast::GenericArgument::Type(ty, effects) => {
+                ty.push_nodes(nodes);
+                effects.push_nodes(nodes);
+            }
             ast::GenericArgument::Constant(constant) => constant.push_nodes(nodes),
         }
     }

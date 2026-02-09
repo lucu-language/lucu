@@ -228,8 +228,20 @@ impl<'a> Parser<'a> {
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
         match self.next().token {
-            TokenEnum::Identifier => self.path(false).map(ast::GenericArgument::Path),
-            _ if self.starts_type() => self.r#type().map(ast::GenericArgument::Type),
+            TokenEnum::Identifier => {
+                m! {
+                    path <- self.path(false);
+                    effects <- self.when_next(Keyword::With, Parser::with_effects);
+                    return ast::GenericArgument::Path(path, effects);
+                }
+            }
+            _ if self.starts_type() => {
+                m! {
+                    ty <- self.r#type();
+                    effects <- self.when_next(Keyword::With, Parser::with_effects);
+                    return ast::GenericArgument::Type(ty, effects);
+                }
+            }
             _ if self.starts_constant() => self
                 .constant(Expected::Constant)
                 .map(ast::GenericArgument::Constant),
@@ -383,7 +395,7 @@ impl<'a> Parser<'a> {
                 Parser::parameter,
             ));
             returns <- self.when(Parser::starts_type, Parser::returns);
-            effects <- self.when_next(TokenEnum::Keyword(Keyword::With), Parser::with_effects);
+            effects <- self.when_next(Keyword::With, Parser::with_effects);
             return ast::FunctionDeclaration { fun, name, parameters, returns, effects };
         }
     }

@@ -288,6 +288,7 @@ impl<'a> Parser<'a> {
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });
                 }
             }
+            // FIXME: allow for generic arguments
             TokenEnum::Identifier => self.ident().and_then(|ident| match self.next().token {
                 TokenEnum::Symbol(Symbol::Dot) => {
                     let tk_dot = self.skip();

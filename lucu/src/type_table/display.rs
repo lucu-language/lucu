@@ -212,6 +212,9 @@ impl fmt::Display for Interned<'_, GenericArgument> {
 impl fmt::Display for Interned<'_, FunctionSignature> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sig = &self.1[self.0];
+        for _ in 0..sig.implicit_regions {
+            write!(f, "∀:REGION ")?;
+        }
         if let Some(params) = &sig.type_params {
             for &param in params.iter() {
                 write!(f, "∀")?;
@@ -225,9 +228,6 @@ impl fmt::Display for Interned<'_, FunctionSignature> {
                 }
                 write!(f, " ")?;
             }
-        }
-        for _ in 0..sig.implicit_regions {
-            write!(f, "∀:REGION ")?;
         }
 
         if let Some(params) = &sig.params {

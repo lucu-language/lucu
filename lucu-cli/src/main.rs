@@ -51,7 +51,7 @@ fn main() {
                     );
 
                     if let Some(header) = stages.header(&graph, &tt) {
-                        // println!("{}", header.display(&tt));
+                        println!("{}", header.display(&tt));
                     }
                 }
 

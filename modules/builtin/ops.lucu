@@ -166,5 +166,3 @@ handle[E, N usize, R region] Index[
 -- -- if we eventually allow dependent kinds:
 -- type RangeTerminated[T, SENTINEL T] = struct(start usize, end usize)
 -- type RangeNullTerminated[T]         = RangeTerminated[T, 0]
-
--- &var[2] should be parsed as (&var)[2]

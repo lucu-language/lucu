@@ -32,10 +32,9 @@ impl Visitor for DefinitionPaths {
     type Output<'a> = im::HashSet<&'a str>;
     fn visit_path(self, path: &ast::Path) -> Self::Output<'_> {
         Self::Output::combine([
-            if path.package.is_none() {
-                im::HashSet::unit(path.name.as_str())
-            } else {
-                im::HashSet::new()
+            match &path.origin {
+                ast::PathOrigin::Local(id) => im::HashSet::unit(id.as_str()),
+                _ => im::HashSet::new(),
             },
             visit_option(&path.generics, self, |v, g| {
                 visit_vec(&g.inner.elements, v, |v, (t, _)| v.visit(t))

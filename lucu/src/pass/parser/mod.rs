@@ -1,4 +1,4 @@
-use compact_str::ToCompactString;
+use compact_str::{CompactString, ToCompactString};
 use do_notation::m;
 
 use crate::ast;
@@ -69,6 +69,16 @@ impl<'a> Parser<'a> {
             };
         }
     }
+    pub fn ident_or_underscore(&mut self) -> Result<ast::Identifier> {
+        if self.is_next(TokenEnum::Underscore) {
+            Result::new(ast::Identifier {
+                token: self.skip(),
+                value: CompactString::new(""),
+            })
+        } else {
+            self.ident()
+        }
+    }
     pub fn import(&mut self) -> Result<ast::Import> {
         m! {
             import <- self.consume(Keyword::Import);
@@ -96,7 +106,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Type) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::type_definition);
                     return ast::Item::Type(token, name, definition);
                 }
@@ -104,7 +114,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Effect) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::effect_definition);
                     return ast::Item::Effect(token, name, definition);
                 }
@@ -112,7 +122,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Const) => {
                 m! {
                     let token = self.skip();
-                    name <- self.name();
+                    name <- self.name(false);
                     ty <- self.r#type();
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::constant_definition);
                     return ast::Item::Constant(token, name, ty, definition);
@@ -198,10 +208,23 @@ impl<'a> Parser<'a> {
             _ => self.r#type().map(ast::TypeDefinition::Type),
         }
     }
+    pub fn path_origin(&mut self) -> Result<ast::PathOrigin> {
+        if self.is_next(TokenEnum::Underscore) {
+            Result::new(ast::PathOrigin::Underscore(self.skip()))
+        } else {
+            m! {
+                first <- self.ident();
+                second <- self.consume_next(Symbol::Dot, Parser::ident);
+                return match second {
+                    Some((dot, name)) => ast::PathOrigin::Package(first, dot, name),
+                    None => ast::PathOrigin::Local(first),
+                };
+            }
+        }
+    }
     pub fn path(&mut self, may_precede_type: bool) -> Result<ast::Path> {
         m! {
-            first <- self.ident();
-            second <- self.consume_next(Symbol::Dot, Parser::ident);
+            origin <- self.path_origin();
             generics <-
                 self.when(
                     |parser| {
@@ -220,15 +243,12 @@ impl<'a> Parser<'a> {
                         parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
                     },
                 );
-            return match second {
-                Some((dot, name)) => ast::Path { package: Some((first, dot)), name, generics },
-                None => ast::Path { package: None, name: first, generics },
-            };
+            return ast::Path { origin, generics };
         }
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
         match self.next().token {
-            TokenEnum::Identifier => {
+            TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
                     path <- self.path(false);
                     effects <- self.when_next(Keyword::With, Parser::with_effects);
@@ -251,13 +271,13 @@ impl<'a> Parser<'a> {
     fn starts_constant(&self) -> bool {
         matches!(
             self.next().token,
-            TokenEnum::Identifier | TokenEnum::Literal(_)
+            TokenEnum::Identifier | TokenEnum::Underscore | TokenEnum::Literal(_)
         )
     }
     fn starts_type(&self) -> bool {
         matches!(
             self.next().token,
-            TokenEnum::Identifier
+            TokenEnum::Identifier | TokenEnum::Underscore
                 | TokenEnum::Symbol(Symbol::Caret)
                 | TokenEnum::Open(Group::Bracket)
                 // not really types, but we count them
@@ -312,7 +332,9 @@ impl<'a> Parser<'a> {
     }
     pub fn constant(&mut self, expected: Expected) -> Result<Box<ast::Constant>> {
         match self.next().token {
-            TokenEnum::Identifier => self.path(false).map(ast::Constant::Path),
+            TokenEnum::Identifier | TokenEnum::Underscore => {
+                self.path(false).map(ast::Constant::Path)
+            }
             TokenEnum::Literal(l) => match l {
                 Literal::String => self.string().map(ast::Constant::String),
                 Literal::Character => self.character().map(ast::Constant::Character),
@@ -325,7 +347,7 @@ impl<'a> Parser<'a> {
     }
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         match self.next().token {
-            TokenEnum::Identifier => self.path(false).map(ast::Type::Path),
+            TokenEnum::Identifier | TokenEnum::Underscore => self.path(false).map(ast::Type::Path),
             TokenEnum::Symbol(Symbol::Caret) => {
                 // Pointer
                 m! {
@@ -375,9 +397,9 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Fun) => {
                 self.function_declaration().map(ast::Parameter::Lambda)
             }
-            TokenEnum::Identifier => {
+            TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
-                    name <- self.ident();
+                    name <- self.ident_or_underscore();
                     ty <- self.r#type();
                     return ast::Parameter::Data(name, ty);
                 }
@@ -388,7 +410,7 @@ impl<'a> Parser<'a> {
     pub fn function_declaration(&mut self) -> Result<ast::FunctionDeclaration> {
         m! {
             fun <- self.consume(Keyword::Fun);
-            name <- self.name();
+            name <- self.name(false);
             parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
                 Symbol::Comma,
@@ -401,7 +423,9 @@ impl<'a> Parser<'a> {
     }
     pub fn returns(&mut self) -> Result<ast::Returns> {
         match self.next().token {
-            TokenEnum::Identifier => self.path(false).map(ast::Returns::Path),
+            TokenEnum::Identifier | TokenEnum::Underscore => {
+                self.path(false).map(ast::Returns::Path)
+            }
             TokenEnum::Symbol(Symbol::Bang) => Result::new(ast::Returns::Never(self.skip())),
             _ => {
                 if self.starts_type() {
@@ -412,9 +436,9 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    pub fn name(&mut self) -> Result<ast::Name> {
+    pub fn name(&mut self, underscore: bool) -> Result<ast::Name> {
         m! {
-            ident <- self.ident();
+            ident <- if underscore { self.ident_or_underscore() } else { self.ident() };
             generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                 Group::Bracket,
                 Symbol::Comma,
@@ -428,7 +452,7 @@ impl<'a> Parser<'a> {
             _ if self.starts_region_kind() => {
                 m! {
                     kind <- self.region_kind();
-                    ident <- self.ident();
+                    ident <- self.ident_or_underscore();
                     return ast::GenericParameter::Region(Some(kind), ident);
                 }
             }
@@ -441,9 +465,9 @@ impl<'a> Parser<'a> {
                     return ast::GenericParameter::Region(None, ident);
                 }
             }
-            TokenEnum::Identifier => {
+            TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
-                    name <- self.name();
+                    name <- self.name(true);
                     kind <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma)], Parser::kind);
                     return match kind {
                         Some(kind) => ast::GenericParameter::Other(name, kind),
@@ -452,7 +476,7 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => {
-                todo!("error")
+                self.error(Expected::GenericParameter)
             }
         }
     }

@@ -35,8 +35,8 @@ handle control.Wrap[Yield] {
    }
 }
 
-handle control.Map[Yield] {
-   fun map[A, B](fun f(a A) B, fun body with Yield[A]) with Yield[B] = {
+handle[T] control.Map[T with Yield[_]] {
+   fun map[A, B](fun f(a A) B, fun body T with Yield[A]) T with Yield[B] = {
       -- perform body with Yield[A] { a ->
       --    yield(f(a))
       -- }

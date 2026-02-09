@@ -224,7 +224,9 @@ fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) 
             }
 
             let word = &src[..len];
-            if word == "0" {
+            if word == "_" {
+                Underscore
+            } else if word == "0" {
                 Literal(Zero)
             } else if !word.starts_with('_')
                 && !word.ends_with('_')

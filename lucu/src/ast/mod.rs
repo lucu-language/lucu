@@ -166,11 +166,17 @@ pub enum GenericArgument {
     Constant(Box<Constant>),
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Path {
-    pub package: Option<(Identifier, Token)>,
-    pub name: Identifier,
+    pub origin: PathOrigin,
     pub generics: Option<GenericArguments>,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum PathOrigin {
+    Package(Identifier, Token, Identifier),
+    Local(Identifier),
+    Underscore(Token),
 }
 
 pub type GenericArguments = Grouped<Separated<GenericArgument>>;
@@ -305,11 +311,12 @@ pub struct Handler {
     pub items: Grouped<Separated<Item>>,
 }
 
-impl fmt::Debug for Path {
+impl fmt::Debug for PathOrigin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.package {
-            Some((pkg, _)) => write!(f, "\"{}.{}\"", pkg.value, self.name.value),
-            None => write!(f, "\"{}\"", self.name.value),
+        match self {
+            PathOrigin::Package(pkg, _, id) => write!(f, "\"{}.{}\"", pkg.value, id.value),
+            PathOrigin::Local(id) => write!(f, "\"{}\"", id.value),
+            PathOrigin::Underscore(_) => write!(f, "\"_\""),
         }
     }
 }
@@ -507,19 +514,27 @@ impl HasSpan for Type {
     }
 }
 
+impl HasSpan for PathOrigin {
+    fn span(&self) -> Span {
+        match self {
+            PathOrigin::Package(pkg, _, id) => Span {
+                start: pkg.span().start,
+                end: id.span().end,
+            },
+            PathOrigin::Local(id) => id.span(),
+            PathOrigin::Underscore(token) => token.span(),
+        }
+    }
+}
+
 impl HasSpan for Path {
     fn span(&self) -> Span {
-        let start = self
-            .package
-            .as_ref()
-            .map(|(pkg, _)| pkg.span())
-            .unwrap_or_else(|| self.name.span())
-            .start;
+        let start = self.origin.span().start;
         let end = self
             .generics
             .as_ref()
             .map(HasSpan::span)
-            .unwrap_or_else(|| self.name.span())
+            .unwrap_or_else(|| self.origin.span())
             .end;
         Span { start, end }
     }

@@ -22,6 +22,7 @@ pub enum TokenEnum {
     Open(Group),
     Close(Group),
     Identifier,
+    Underscore,
     Eof,
     #[default]
     Unknown,
@@ -93,6 +94,7 @@ impl Display for TokenEnum {
                 Group::Bracket => write!(f, "']'"),
             },
             TokenEnum::Identifier => write!(f, "an identifier"),
+            TokenEnum::Underscore => write!(f, "'_'"),
             TokenEnum::Eof => write!(f, "end of file"),
             TokenEnum::Unknown => write!(f, "unknown symbol"),
         }

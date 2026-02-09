@@ -787,27 +787,29 @@ impl Ast for ast::EffectBody {
     }
 }
 
-impl Ast for ast::Path {
+impl Ast for ast::PathOrigin {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        if let Some((pkg, dot)) = &self.package {
-            nodes.token(pkg.token);
-            nodes.token(*dot);
-        }
-        nodes.token(self.name.token);
-
-        if let Some(generics) = &self.generics {
-            generics.push_nodes(nodes);
+        match self {
+            ast::PathOrigin::Package(pkg, token, id) => {
+                nodes.token(pkg.token);
+                nodes.token(*token);
+                nodes.token(id.token);
+            }
+            ast::PathOrigin::Local(id) => {
+                nodes.token(id.token);
+            }
+            ast::PathOrigin::Underscore(token) => {
+                nodes.token(*token);
+            }
         }
     }
 }
 
-impl<T> Ast for Option<T>
-where
-    T: Ast,
-{
+impl Ast for ast::Path {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        if let Some(t) = self {
-            t.push_nodes(nodes)
+        self.origin.push_nodes(nodes);
+        if let Some(generics) = &self.generics {
+            generics.push_nodes(nodes);
         }
     }
 }
@@ -817,11 +819,17 @@ impl Ast for ast::GenericArgument {
         match self {
             ast::GenericArgument::Path(path, effects) => {
                 path.push_nodes(nodes);
-                effects.push_nodes(nodes);
+                if let Some(effects) = effects {
+                    nodes.space();
+                    effects.push_nodes(nodes);
+                }
             }
             ast::GenericArgument::Type(ty, effects) => {
                 ty.push_nodes(nodes);
-                effects.push_nodes(nodes);
+                if let Some(effects) = effects {
+                    nodes.space();
+                    effects.push_nodes(nodes);
+                }
             }
             ast::GenericArgument::Constant(constant) => constant.push_nodes(nodes),
         }

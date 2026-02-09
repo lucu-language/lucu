@@ -8,6 +8,7 @@ use crate::pass::parser::err::Expected;
 use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, Token, TokenEnum};
 
 pub mod err;
+mod expr;
 
 pub struct Parser<'a> {
     module: &'a Module,
@@ -196,7 +197,9 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Intrinsic) => {
                 Result::new(ast::FunctionDefinition::Intrinsic(self.skip()))
             }
-            _ => self.expression().map(ast::FunctionDefinition::Expression),
+            _ => self
+                .expression(true)
+                .map(ast::FunctionDefinition::Expression),
         }
     }
     pub fn type_definition(&mut self) -> Result<ast::TypeDefinition> {
@@ -382,15 +385,6 @@ impl<'a> Parser<'a> {
             ty <- self.r#type();
             return ast::StructMember::Data(name, ty);
         }
-    }
-    pub fn expression(&mut self) -> Result<Box<ast::Expression>> {
-        m! {
-            open <- self.consume(TokenEnum::Open(Group::Brace));
-            let end = self.last_token_end;
-            close <- self.consume(TokenEnum::Close(Group::Brace)).tap_none(|| self.skip_group(Group::Brace));
-            return ast::Expression::Block(ast::Grouped { open, inner: ast::Block { params: None, exprs: ast::Separated { elements: Vec::new(), end } }, close });
-        }
-        .map(Box::new)
     }
     pub fn parameter(&mut self) -> Result<ast::Parameter> {
         match self.next().token {
@@ -669,6 +663,33 @@ impl<'a> Parser<'a> {
                     t <- parse(parser)
                         .tap_none(|| parser.skip_to_recovery(separator, &[]));
                     sep <- parser.unless_next(&[], |parser| parser.consume(separator)
+                        .tap_none(|| parser.skip_to_recovery(separator, &[])).recover());
+                    return (t, sep.flatten());
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|elements| {
+            let end = self.last_token_end;
+            ast::Separated { elements, end }
+        })
+    }
+    fn many_until_seperated<T>(
+        &mut self,
+        separator: Symbol,
+        until: &[TokenEnum],
+        parse: impl Fn(&mut Self) -> Result<T>,
+    ) -> Result<ast::Separated<T>> {
+        std::iter::from_fn(|| {
+            let next = self.next().token;
+            let has_next =
+                !until.contains(&next) && !matches!(next, TokenEnum::Close(_) | TokenEnum::Eof);
+            has_next.then(|| {
+                let parser = &mut *self;
+                m! {
+                    t <- parse(parser)
+                        .tap_none(|| parser.skip_to_recovery(separator, &[]));
+                    sep <- parser.unless_next(until, |parser| parser.consume(separator)
                         .tap_none(|| parser.skip_to_recovery(separator, &[])).recover());
                     return (t, sep.flatten());
                 }

@@ -33,30 +33,30 @@ effect Write[r] = regions.Write[r]
 -- printing
 
 fun print_int(n int) = {
-	mut buf [21]u8 = ---
+	let buf = use ref[[21]u8](---)
 
-	mut remaining = if n < 0 then -n else n
+	let remaining = use ref(if n < 0 then -n else n)
 
-	mut start = try {
+	let start = perform {
 		for(20, 0) { current ->
-			let digit u8 = '0' + #cast (remaining % 10)
-			remaining /= 10
+			let digit u8 = '0' + #trunc (remaining^ % 10)
+			remaining^ /= 10
 
-			buf[current] = digit
+			buf[current]^ = digit
 
-			if remaining == 0 {
-				break current
+			if remaining^ == 0 {
+				return current
 			}
 		}
-		break 1
+		return 1
 	}
 
 	if n < 0 {
-		start -= 1
-		buf[start] = '-'
+		buf[start - 1] = '-'
+		print_str(buf[start - 1..21])
+	} else {
+		print_str(buf[start..21])
 	}
-
-	print_str(&buf[start..21])
 }
 
 fun print_str(buf ^[]u8)
@@ -75,15 +75,15 @@ fun unfounded[T](fun body T with Div) T
 
 fun for(from usize, to usize, fun body(n usize)) = {
 	let rising = to > from
-	mut current = from
-	try unfounded loop {
-		if current == to then break
-		body(current)
+	let current = use ref(from)
+	perform unfounded loop {
+		if current^ == to then return
+		body(current^)
 
 		if rising {
-			current += 1
+			current^ += 1
 		} else {
-			current -= 1
+			current^ -= 1
 		}
 	}
 }
@@ -96,7 +96,7 @@ fun for(from usize, to usize, fun body(n usize)) = {
 -- ...
 -- ```
 fun defer[T](fun deferred unit, fun body T) T = {
-	-- let t = body
-	-- deferred
-	-- t
+	let t = body
+	deferred
+	t
 }

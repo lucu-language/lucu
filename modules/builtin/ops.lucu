@@ -17,27 +17,19 @@ handle[E, R region] Slice[^@R [:0]E] with regions.Read[R] {
 }
 
 handle[E, N usize] Slice[[N]E] {
-   fun len(array [N]E) usize = {
-   }
-   -- = N
+   fun len(array [N]E) usize = N
 }
 
 handle[E, N usize] Slice[[N:0]E] {
-   fun len(array [N:0]E) usize = {
-   }
-   -- = N
+   fun len(array [N:0]E) usize = N
 }
 
 handle[E, R region, N usize] Slice[^@R [N]E] {
-   fun len(array_ptr ^@R [N]E) usize = {
-   }
-   -- = N
+   fun len(array_ptr ^@R [N]E) usize = N
 }
 
 handle[E, R region, N usize] Slice[^@R [N:0]E] {
-   fun len(array_ptr ^@R [N:0]E) usize = {
-   }
-   -- = N
+   fun len(array_ptr ^@R [N:0]E) usize = N
 }
 
 -- INDEXING --
@@ -71,8 +63,8 @@ handle[E, R region] Index[^@R []E, RangeOpen, ^@R []E] {
 
 handle[E, R region] Index[^@R []E, RangeNullTerminated[E], ^@R [:0]E] with regions.Read[R] {
    fun index(slice ^@R []E, range RangeNullTerminated[E]) ^@R [:0]E = {
-      -- assert(slice[range.end]^ == 0, "slice is not null-terminated")
-      -- #cast slice[range.start..range.end]
+      assert(slice[range.end]^ == 0, "slice is not null-terminated")
+      #transmute slice[range.start]
    }
 }
 
@@ -96,8 +88,8 @@ handle[E, R region] Index[^@R [:0]E, RangeOpen, ^@R [:0]E] {
 
 handle[E, R region] Index[^@R [:0]E, RangeNullTerminated[E], ^@R [:0]E] with regions.Read[R] {
    fun index(slice ^@R [:0]E, range RangeNullTerminated[E]) ^@R [:0]E = {
-      -- assert(slice[range.end]^ == 0, "slice is not null-terminated")
-      -- #cast slice[range.start..range.end]
+      assert(slice[range.end]^ == 0, "slice is not null-terminated")
+      #transmute slice[range.start]
    }
 }
 
@@ -138,8 +130,8 @@ handle[E, N usize, R region] Index[
    ^@R [:0]E,
 ] with regions.Read[R] {
    fun index(array_ptr ^@R [N]E, range RangeNullTerminated[E]) ^@R [:0]E = {
-      -- assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
-      -- #cast array_ptr[range.start..range.end]
+      assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
+      #transmute array_ptr[range.start]
    }
 }
 
@@ -166,8 +158,8 @@ handle[E, N usize, R region] Index[
    ^@R [:0]E,
 ] with regions.Read[R] {
    fun index(array_ptr ^@R [N:0]E, range RangeNullTerminated[E]) ^@R [:0]E = {
-      -- assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
-      -- #cast array_ptr[range.start..range.end]
+      assert(array_ptr[range.end]^ == 0, "slice is not null-terminated")
+      #transmute array_ptr[range.start]
    }
 }
 

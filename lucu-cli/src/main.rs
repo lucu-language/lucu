@@ -32,13 +32,13 @@ fn main() {
                     let tokens = stages.tokens().unwrap();
                     let ast = stages.ast().unwrap();
 
-                    let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
+                    // let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
 
-                    if let Some(definitions) = stages.definitions() {
-                        anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
-                    } else {
-                        anstream::println!("{}", annotated);
-                    }
+                    // if let Some(definitions) = stages.definitions() {
+                    //     anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
+                    // } else {
+                    //     anstream::println!("{}", annotated);
+                    // }
 
                     anstream::println!(
                         "{}",
@@ -51,7 +51,7 @@ fn main() {
                     );
 
                     if let Some(header) = stages.header(&graph, &tt) {
-                        println!("{}", header.display(&tt));
+                        // println!("{}", header.display(&tt));
                     }
                 }
 

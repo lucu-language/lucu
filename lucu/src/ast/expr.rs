@@ -81,30 +81,43 @@ pub enum UnOp {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LambdaParameter {
-    pub name: Identifier,
+    pub var: Identifier,
     pub ty: Option<Box<Type>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Block {
     pub params: Option<(Separated<LambdaParameter>, Token)>,
-    pub exprs: Separated<Box<Expression>>,
+    pub stmts: Separated<Box<Expression>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Range {
-    pub from: Option<Box<Expression>>,
-    pub range: Token,
-    pub to: Option<Box<Expression>>,
-    pub sentinel: Option<Sentinel>,
+#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[strum(prefix = "Index::")]
+pub enum Index {
+    Single(Box<Expression>),
+    Range {
+        from: Option<Box<Expression>>,
+        range: Token,
+        to: Option<Box<Expression>>,
+        sentinel: Option<Sentinel>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Expression::")]
 pub enum Expression {
-    Constant(Constant),
+    Constant(Box<Constant>),
+    Uninit(Token),
+    /// Local variable, local item, local function call without args
     Var(Identifier),
+    /// Local variable member, module item, module function call without args
+    MemberOrModuleItem {
+        lhs: Identifier,
+        tk_dot: Token,
+        rhs: Identifier,
+    },
     Block(Grouped<Block>),
+    Enclosed(Grouped<Box<Self>>),
     Let {
         tk_let: Token,
         var: Identifier,
@@ -112,7 +125,7 @@ pub enum Expression {
         tk_equals: Token,
         value: Box<Self>,
     },
-    // integer casting
+    // casting
     Trunc {
         tk_trunc: Token,
         expr: Box<Self>,
@@ -121,9 +134,8 @@ pub enum Expression {
         tk_ext: Token,
         expr: Box<Self>,
     },
-    // other casting
-    Cast {
-        tk_cast: Token,
+    Transmute {
+        tk_transmute: Token,
         expr: Box<Self>,
     },
     If {
@@ -136,18 +148,8 @@ pub enum Expression {
         tk_discard: Token,
         expr: Box<Self>,
     },
-    AssignOp {
-        op: AssignOp,
-        lhs: Box<Self>,
-        tk_op: Token,
-        rhs: Box<Self>,
-    },
-    BinOp {
-        op: BinOp,
-        lhs: Box<Self>,
-        tk_op: Token,
-        rhs: Box<Self>,
-    },
+    AssignOp(AssignOp, Box<Self>, Token, Box<Self>),
+    BinOp(BinOp, Box<Self>, Token, Box<Self>),
     UnOp {
         op: UnOp,
         tk_op: Token,
@@ -159,13 +161,10 @@ pub enum Expression {
     },
     Index {
         array: Box<Self>,
-        index: Grouped<Box<Self>>,
-    },
-    IndexRange {
-        array: Box<Self>,
-        index: Grouped<Range>,
+        index: Grouped<Index>,
     },
     Array(Grouped<Separated<Box<Self>>>),
+    /// Call, type constructor
     Call {
         fun: Path,
         args: Option<Grouped<Separated<Box<Self>>>>,
@@ -176,14 +175,15 @@ pub enum Expression {
         tk_use: Token,
         fun: Path,
         args: Option<Grouped<Separated<Box<Self>>>>,
+        tk_newline: Token,
         block: Separated<Box<Self>>,
     },
-    Try {
-        tk_try: Token,
+    Perform {
+        tk_perform: Token,
         expr: Box<Self>,
     },
-    Break {
-        tk_break: Token,
+    Return {
+        tk_return: Token,
         expr: Option<Box<Self>>,
     },
 }
@@ -194,6 +194,8 @@ impl HasSpan for Expression {
             Expression::Constant(c) => c.span(),
             Expression::Var(i) => i.span(),
             Expression::Block(group) => group.span(),
+            Expression::Enclosed(group) => group.span(),
+            Expression::Uninit(token) => token.span(),
             Expression::Let { tk_let, value, .. } => {
                 Span::new(tk_let.span().start, value.span().end)
             }
@@ -201,9 +203,11 @@ impl HasSpan for Expression {
                 Span::new(tk_trunc.span().start, expr.span().end)
             }
             Expression::Ext { tk_ext, expr, .. } => Span::new(tk_ext.span().start, expr.span().end),
-            Expression::Cast { tk_cast, expr, .. } => {
-                Span::new(tk_cast.span().start, expr.span().end)
-            }
+            Expression::Transmute {
+                tk_transmute: tk_cast,
+                expr,
+                ..
+            } => Span::new(tk_cast.span().start, expr.span().end),
             Expression::If {
                 tk_if,
                 branch_true,
@@ -216,7 +220,7 @@ impl HasSpan for Expression {
             Expression::Discard { tk_discard, expr } => {
                 Span::new(tk_discard.span().start, expr.span().end)
             }
-            Expression::AssignOp { lhs, rhs, .. } | Expression::BinOp { lhs, rhs, .. } => {
+            Expression::AssignOp(_, lhs, _, rhs) | Expression::BinOp(_, lhs, _, rhs) => {
                 Span::new(lhs.span().start, rhs.span().end)
             }
             Expression::UnOp { tk_op, expr, .. } => Span::new(tk_op.span().start, expr.span().end),
@@ -224,9 +228,6 @@ impl HasSpan for Expression {
                 Span::new(expr.span().start, tk_caret.span().end)
             }
             Expression::Index { array, index } => Span::new(array.span().start, index.span().end),
-            Expression::IndexRange { array, index } => {
-                Span::new(array.span().start, index.span().end)
-            }
             Expression::Array(group) => group.span(),
             Expression::Call { fun, args, block } => {
                 let start = fun.span().start;
@@ -252,11 +253,60 @@ impl HasSpan for Expression {
                 let end = block.span().end;
                 Span::new(start, end)
             }
-            Expression::Try { tk_try, expr } => Span::new(tk_try.span().start, expr.span().end),
-            Expression::Break { tk_break, expr } => match expr {
+            Expression::Perform {
+                tk_perform: tk_try,
+                expr,
+            } => Span::new(tk_try.span().start, expr.span().end),
+            Expression::Return {
+                tk_return: tk_break,
+                expr,
+            } => match expr {
                 Some(expr) => Span::new(tk_break.span().start, expr.span().end),
                 None => tk_break.span(),
             },
+            Expression::MemberOrModuleItem { lhs, rhs, .. } => {
+                Span::new(lhs.span().start, rhs.span().end)
+            }
+        }
+    }
+}
+
+impl HasSpan for LambdaParameter {
+    fn span(&self) -> Span {
+        let start = self.var.span().start;
+        let end = self
+            .ty
+            .as_ref()
+            .map(HasSpan::span)
+            .unwrap_or_else(|| self.var.span())
+            .end;
+        Span::new(start, end)
+    }
+}
+
+impl HasSpan for Index {
+    fn span(&self) -> Span {
+        match self {
+            Index::Single(expression) => expression.span(),
+            Index::Range {
+                from,
+                range,
+                to,
+                sentinel,
+            } => {
+                let start = from
+                    .as_deref()
+                    .map(HasSpan::span)
+                    .unwrap_or_else(|| range.span())
+                    .start;
+                let end = sentinel
+                    .as_ref()
+                    .map(HasSpan::span)
+                    .or_else(|| to.as_ref().map(HasSpan::span))
+                    .unwrap_or_else(|| range.span())
+                    .end;
+                Span::new(start, end)
+            }
         }
     }
 }

@@ -10,7 +10,7 @@ effect Applicative0[M[_]] = {
 }
 
 effect Monad0[M[_]] = {
-   fun return[A](a A) M[A]
+   fun return_[A](a A) M[A]
    fun bind[A, B](a M[A], fun body(a A) M[B]) M[B]
 }
 
@@ -31,7 +31,7 @@ effect CrossMap[M[_] thunk] = {
 }
 
 fun cross[M[_] thunk, A, B](fun ma M[A], fun mb M[B]) M[Pair[A, B]] with CrossMap[M] = {
-   -- cross_map({ a, b -> (a, b) }, lhs, rhs)
+   cross_map({ a, b -> Pair(a, b) }, lhs, rhs)
 }
 
 effect FlatMap[M[_] thunk] = {
@@ -39,7 +39,7 @@ effect FlatMap[M[_] thunk] = {
 }
 
 fun flatten[M[_] type, A](mma M[M[A]]) M[A] with FlatMap[M] = {
-   -- flat_map({ ma -> ma }, mma)
+   flat_map({ ma -> ma }, mma)
 }
 
 effect Functor[M[_] thunk] = Map[M]

@@ -170,7 +170,6 @@ pub struct Token {
 pub enum Keyword {
     Import,
     With,
-    Try,
     Let,
     Const,
     Mut,
@@ -183,9 +182,11 @@ pub enum Keyword {
     Else,
     Struct,
     Discard,
-    Break,
     Region,
     Thunk,
+    Perform,
+    Return,
+    Use,
     #[strum(serialize = "#ext")]
     Extend,
     #[strum(serialize = "#trunc")]

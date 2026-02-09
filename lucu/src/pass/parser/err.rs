@@ -18,6 +18,7 @@ pub enum Expected {
     RegionKind,
     PointerRegion,
     Effect,
+    Expression,
 }
 
 impl Diagnostic for Expected {
@@ -36,6 +37,7 @@ impl Diagnostic for Expected {
             Expected::RegionKind => Some("expected an identifier or 'mut'".into()),
             Expected::PointerRegion => Some("expected '@', 'mut', or a type".into()),
             Expected::Effect => Some("expected an effect".into()),
+            Expected::Expression => Some("expected an expression".into()),
         }
     }
 }

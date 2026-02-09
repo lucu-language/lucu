@@ -390,10 +390,104 @@ impl Ast for ast::Type {
     }
 }
 
+impl Ast for ast::LambdaParameter {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        visit_option(&self.ty, visitor, |v, t| v.visit_type(t))
+    }
+    fn node_name(&self) -> &'static str {
+        "LambdaParameter"
+    }
+}
+
+impl Ast for ast::Index {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        match self {
+            ast::Index::Single(expression) => visitor.visit(&**expression),
+            ast::Index::Range {
+                from, to, sentinel, ..
+            } => V::Output::combine([
+                visit_option(from, visitor, |v, e| v.visit(&**e)),
+                visit_option(to, visitor, |v, e| v.visit(&**e)),
+                visit_option(sentinel, visitor, Visitor::visit),
+            ]),
+        }
+    }
+    fn node_name(&self) -> &'static str {
+        self.into()
+    }
+}
+
 impl Ast for ast::Expression {
-    fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
-        // TODO
-        V::Output::default()
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        match self {
+            ast::Expression::Constant(constant) => visitor.visit(&**constant),
+            ast::Expression::Uninit(_) => V::Output::default(),
+            ast::Expression::Var(_) => V::Output::default(),
+            ast::Expression::MemberOrModuleItem { .. } => V::Output::default(),
+            ast::Expression::Block(g) => V::Output::combine([
+                visit_option(&g.inner.params, visitor, |v, (params, _)| {
+                    visit_vec(&params.elements, v, |v, (t, _)| v.visit(t))
+                }),
+                visit_vec(&g.inner.stmts.elements, visitor, |v, (e, _)| v.visit(&**e)),
+            ]),
+            ast::Expression::Enclosed(grouped) => visitor.visit(&*grouped.inner),
+            ast::Expression::Let { ty, value, .. } => V::Output::combine([
+                visit_option(ty, visitor, |v, t| v.visit_type(t)),
+                visitor.visit(&**value),
+            ]),
+            ast::Expression::Return { expr, .. } => {
+                visit_option(expr, visitor, |v, e| v.visit(&**e))
+            }
+            ast::Expression::Perform { expr, .. }
+            | ast::Expression::Discard { expr, .. }
+            | ast::Expression::UnOp { expr, .. }
+            | ast::Expression::Dereference { expr, .. }
+            | ast::Expression::Trunc { expr, .. }
+            | ast::Expression::Ext { expr, .. }
+            | ast::Expression::Transmute { expr, .. } => visitor.visit(&**expr),
+            ast::Expression::If {
+                condition,
+                branch_true,
+                branch_false,
+                ..
+            } => V::Output::combine([
+                visitor.visit(&**condition),
+                visitor.visit(&*branch_true.1),
+                visit_option(branch_false, visitor, |v, (_, e)| v.visit(&**e)),
+            ]),
+            ast::Expression::AssignOp(_, lhs, _, rhs) | ast::Expression::BinOp(_, lhs, _, rhs) => {
+                V::Output::combine([visitor.visit(&**lhs), visitor.visit(&**rhs)])
+            }
+            ast::Expression::Index { array, index } => {
+                V::Output::combine([visitor.visit(&**array), visitor.visit(&index.inner)])
+            }
+            ast::Expression::Array(grouped) => {
+                visit_vec(&grouped.inner.elements, visitor, |v, (e, _)| v.visit(&**e))
+            }
+            ast::Expression::Call { fun, args, block } => V::Output::combine([
+                visitor.visit_path(fun),
+                visit_option(args, visitor, |v, g| {
+                    visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
+                }),
+                visit_option(block, visitor, |v, e| v.visit(&**e)),
+            ]),
+            ast::Expression::Use {
+                params,
+                fun,
+                args,
+                block,
+                ..
+            } => V::Output::combine([
+                visit_option(params, visitor, |v, (_, p, _)| {
+                    visit_vec(&p.elements, v, |v, (p, _)| v.visit(p))
+                }),
+                visitor.visit_path(fun),
+                visit_option(args, visitor, |v, g| {
+                    visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
+                }),
+                visit_vec(&block.elements, visitor, |v, (e, _)| v.visit(&**e)),
+            ]),
+        }
     }
     fn node_name(&self) -> &'static str {
         self.into()

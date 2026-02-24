@@ -28,7 +28,9 @@ pub(super) fn test() {
 
     let u8_t = tt.insert_type(TypeEnum::U8);
     let uptr_t = tt.insert_type(TypeEnum::UPTR);
-    let cstring_t = tt.insert_type(TypeEnum::PointerSlice(u8_t, region_static, Some(Sentinel)));
+    let usize_t = tt.insert_type(TypeEnum::USIZE);
+    let u8_slice_t = tt.insert_type(TypeEnum::PointerSlice(u8_t, region_static, None));
+    let u8_pointer_t = tt.insert_type(TypeEnum::Pointer(u8_t, region_static));
 
     let ir = IR::default();
     let function = ir.push_function(FunctionDefinition {
@@ -50,11 +52,16 @@ pub(super) fn test() {
                 ),
                 // message ptr
                 (
-                    cstring_t,
+                    u8_slice_t,
                     Instruction::Constant(
                         tt.insert_constant(ConstantEnum::String("Hello, World!\n".into())),
                     ),
                 ),
+                (
+                    usize_t,
+                    Instruction::Constant(tt.insert_constant(ConstantEnum::Integer(0))),
+                ),
+                (u8_pointer_t, Instruction::Index { array: 2, index: 3 }),
                 // message length
                 (
                     uptr_t,
@@ -65,7 +72,7 @@ pub(super) fn test() {
                     uptr_t,
                     Instruction::Syscall {
                         nr: 0,
-                        args: Box::new([1, 2, 3]),
+                        args: Box::new([1, 4, 5]),
                     },
                 ),
                 // exit syscall
@@ -82,8 +89,8 @@ pub(super) fn test() {
                 (
                     uptr_t,
                     Instruction::Syscall {
-                        nr: 5,
-                        args: Box::new([6]),
+                        nr: 7,
+                        args: Box::new([8]),
                     },
                 ),
             ]),

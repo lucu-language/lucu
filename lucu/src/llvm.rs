@@ -654,7 +654,35 @@ impl<'ctx> Llvm<'ctx> {
                     }
                     Instruction::BinOp { lhs, op, rhs } => todo!(),
                     Instruction::UnOp { op, rhs } => todo!(),
-                    Instruction::Index { array, index } => todo!(),
+                    Instruction::Index { array, index } => {
+                        let index = regs[*index as usize].as_data().unwrap().into_int_value();
+                        Reg::Data(regs[*array as usize].as_data().and_then(|array_value| {
+                            match self.tt[ir.type_of(*array)] {
+                                TypeEnum::PointerSlice(inner, _, None) => {
+                                    self.get_type(inner).map(|inner_ty| {
+                                        let ptr = self
+                                            .builder
+                                            .build_extract_value(
+                                                array_value.into_struct_value(),
+                                                0,
+                                                "",
+                                            )
+                                            .unwrap()
+                                            .into_pointer_value();
+                                        unsafe {
+                                            self.builder
+                                                .build_in_bounds_gep(inner_ty, ptr, &[index], "")
+                                                .unwrap()
+                                                .into()
+                                        }
+                                    })
+                                }
+                                TypeEnum::PointerSlice(inner, _, Some(_)) => todo!(),
+                                TypeEnum::Array(inner, _, _) => todo!(),
+                                _ => unreachable!(),
+                            }
+                        }))
+                    }
                     Instruction::IndexRange { array, from, to } => todo!(),
                     Instruction::Constant(constant) => Reg::Data(match self.tt[*constant] {
                         ConstantEnum::Generic(_) => todo!(),
@@ -674,9 +702,17 @@ impl<'ctx> Llvm<'ctx> {
                                     .map(|(global, size)| match sentinel {
                                         Some(_) => global.into(),
                                         None => {
-                                            let slice = self.slice_t().get_undef();
-                                            slice.set_field_at_index(0, global);
-                                            slice.set_field_at_index(1, size);
+                                            let mut slice = self.slice_t().get_undef();
+                                            slice = self
+                                                .builder
+                                                .build_insert_value(slice, global, 0, "")
+                                                .unwrap()
+                                                .into_struct_value();
+                                            slice = self
+                                                .builder
+                                                .build_insert_value(slice, size, 1, "")
+                                                .unwrap()
+                                                .into_struct_value();
                                             slice.into()
                                         }
                                     })

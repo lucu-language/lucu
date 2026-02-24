@@ -67,6 +67,17 @@ pub struct HandlerDefinition {
     pub functions: Vec<Function>,
 }
 
+impl FunctionDefinition {
+    pub fn type_of(&self, reg: Reg) -> Type {
+        self.blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .nth(reg as usize)
+            .unwrap()
+            .0
+    }
+}
+
 type Reg = u32;
 type Vec<T> = Box<[T]>;
 

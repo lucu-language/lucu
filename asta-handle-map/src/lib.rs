@@ -4,13 +4,13 @@ use std::sync::RwLock;
 use hashbrown::Equivalent;
 use hashbrown::hash_table::HashTable;
 
-use crate::xar::Xar;
+use crate::xar::XarInner;
 
 pub mod xar;
 
 pub struct HandleMap<T, const BITS: u32 = 24, const CHUNKS: usize = 16, S = RandomState> {
     indices: RwLock<HashTable<u32>>,
-    entries: Xar<T, BITS, CHUNKS>,
+    entries: XarInner<T, BITS, CHUNKS>,
     hash_builder: S,
 }
 

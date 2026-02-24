@@ -1,3 +1,5 @@
+#![cfg(feature = "annotate")]
+
 use std::fmt;
 use std::ops::Range;
 

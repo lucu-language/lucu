@@ -133,6 +133,7 @@ impl fmt::Display for Interned<'_, Region> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.1[self.0] {
             RegionEnum::Generic(ref param) => write!(f, "{}", param.display(self.1)),
+            RegionEnum::Static => write!(f, "'static"),
         }
     }
 }
@@ -279,6 +280,7 @@ impl Region {
     fn enclosed(self, tt: &TypeTable) -> bool {
         match &tt[self] {
             RegionEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
+            RegionEnum::Static => false,
         }
     }
 }

@@ -25,7 +25,7 @@ pub struct TypeTable {
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum IntSize {
     /// Exact number of bits
-    Exact(usize),
+    Exact(u32),
 
     /// The size of a continuous block of memory
     /// At least 16 bits
@@ -173,13 +173,25 @@ pub enum TypeEnum {
 
 impl TypeEnum {
     pub const U8: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8)));
+    pub const U32: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32)));
     pub const INT: Self = TypeEnum::Integer(Integer::signed(IntSize::Register));
     pub const USIZE: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Index));
+    pub const UPTR: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Address));
+}
+
+impl Type {
+    pub fn is_u8(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::U8
+    }
+    pub fn is_u32(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::U32
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum RegionEnum {
     Generic(GenericParameter),
+    Static,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -310,16 +322,19 @@ impl Effect {
     pub fn row<'a>(effects: impl IntoIterator<Item = &'a Effect>, tt: &TypeTable) -> Self {
         let row = effects
             .into_iter()
-            .flat_map(|e| match &tt[*e] {
-                EffectEnum::Row(effects) => effects.iter().copied(),
-                _ => slice::from_ref(e).iter().copied(),
-            })
+            .flat_map(|e| e.effects(tt))
             .unique()
             .sorted()
             .collect::<Arc<_>>();
         match *row {
             [single] => single,
             _ => tt.insert_effect(EffectEnum::Row(row)),
+        }
+    }
+    pub fn effects<'a>(&'a self, tt: &'a TypeTable) -> impl Iterator<Item = Self> + 'a {
+        match &tt[*self] {
+            EffectEnum::Row(effects) => effects.iter().copied(),
+            _ => slice::from_ref(self).iter().copied()
         }
     }
 }

@@ -1,6 +1,10 @@
 /target
 .direnv
 
+**/out
+**/out.o
+**/out.asm
+
 
 # Added by cargo
 #

@@ -43,7 +43,7 @@ pub enum ItemDecl {
     Function(FunctionSignature, Option<Effect>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HandlerDecl {
     pub type_params: Option<Arc<[Kind]>>,
     pub implicit_regions: usize,

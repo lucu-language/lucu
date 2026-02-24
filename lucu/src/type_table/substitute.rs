@@ -483,6 +483,7 @@ impl Substitute for Region {
                     RegionEnum::Generic(generic)
                 }
             }
+            RegionEnum::Static => return self,
         };
         tt.insert_region(changed)
     }
@@ -491,6 +492,7 @@ impl Substitute for Region {
             RegionEnum::Generic(ref generic) => {
                 RegionEnum::Generic(generic.clone().shift(tt, start, offset))
             }
+            RegionEnum::Static => return self,
         };
         tt.insert_region(changed)
     }
@@ -525,6 +527,10 @@ impl Substitute for Region {
             (RegionEnum::Generic(a), RegionEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
+            (RegionEnum::Static, RegionEnum::Static) => Some(()),
+
+            (RegionEnum::Generic(_), _) => None,
+            (RegionEnum::Static, _) => None,
         }
     }
 }
@@ -654,6 +660,20 @@ impl Substitute for FunctionParameter {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+impl FunctionSignature {
+    pub fn apply(self, tt: &TypeTable, args: &[GenericArgument]) -> Self {
+        let sig = tt[self].clone();
+        let params = sig.params.subst(tt, 0, args);
+        let thunk = sig.thunk.subst(tt, 0, args);
+        tt.insert_function_signature(FunctionSignatureValue {
+            type_params: None,
+            implicit_regions: 0,
+            params,
+            thunk,
+        })
     }
 }
 

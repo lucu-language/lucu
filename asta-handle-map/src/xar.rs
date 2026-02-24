@@ -2,18 +2,19 @@ use std::alloc::{self, Layout};
 use std::array;
 use std::cell::UnsafeCell;
 use std::ptr::{self, NonNull};
+use std::sync::RwLock;
 
-pub(crate) struct Xar<T, const BITS: u32, const CHUNKS: usize> {
-    chunks: [UnsafeCell<*mut T>; CHUNKS],
+pub struct Xar<T, const BITS: u32 = 24, const CHUNKS: usize = 16> {
+    inner: XarInner<T, BITS, CHUNKS>,
+    // TODO: we could even have a lock ONLY for pushing when we need to allocate
+    // add optional mutex lock parameter to XarInner::push
+    len: RwLock<u32>,
 }
 
-unsafe impl<T, const BITS: u32, const CHUNKS: usize> Send for Xar<T, BITS, CHUNKS> where T: Sync {}
-unsafe impl<T, const BITS: u32, const CHUNKS: usize> Sync for Xar<T, BITS, CHUNKS> where T: Sync {}
-
-struct ChunkMeta {
-    chunk_idx: u32,
-    chunk_cap: u32,
-    elem_idx: u32,
+impl<T, const BITS: u32, const CHUNKS: usize> Drop for Xar<T, BITS, CHUNKS> {
+    fn drop(&mut self) {
+        unsafe { self.inner.drop(*self.len.get_mut().unwrap()) };
+    }
 }
 
 impl<T, const BITS: u32, const CHUNKS: usize> Default for Xar<T, BITS, CHUNKS> {
@@ -23,6 +24,61 @@ impl<T, const BITS: u32, const CHUNKS: usize> Default for Xar<T, BITS, CHUNKS> {
 }
 
 impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
+    pub fn new() -> Self {
+        Self {
+            inner: XarInner::new(),
+            len: RwLock::new(0),
+        }
+    }
+    pub fn capacity(&self) -> u32 {
+        self.inner.capacity()
+    }
+    pub fn len(&self) -> u32 {
+        *self.len.read().unwrap()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn get(&self, idx: u32) -> Option<&T> {
+        (idx < self.len()).then(|| unsafe { self.get_unchecked(idx) })
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        (0..self.len()).map(|idx| unsafe { self.get_unchecked(idx) })
+    }
+    pub unsafe fn get_unchecked(&self, idx: u32) -> &T {
+        unsafe { self.inner.get(idx) }
+    }
+    pub fn push(&self, t: T) -> u32 {
+        let mut len = self.len.write().unwrap();
+        let idx = *len;
+        unsafe { self.inner.push(t, *len) };
+        *len += 1;
+        idx
+    }
+}
+
+pub(crate) struct XarInner<T, const BITS: u32, const CHUNKS: usize> {
+    chunks: [UnsafeCell<*mut T>; CHUNKS],
+}
+
+unsafe impl<T, const BITS: u32, const CHUNKS: usize> Send for XarInner<T, BITS, CHUNKS> where T: Sync
+{}
+unsafe impl<T, const BITS: u32, const CHUNKS: usize> Sync for XarInner<T, BITS, CHUNKS> where T: Sync
+{}
+
+struct ChunkMeta {
+    chunk_idx: u32,
+    chunk_cap: u32,
+    elem_idx: u32,
+}
+
+impl<T, const BITS: u32, const CHUNKS: usize> Default for XarInner<T, BITS, CHUNKS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const BITS: u32, const CHUNKS: usize> XarInner<T, BITS, CHUNKS> {
     const fn shift() -> u32 {
         BITS - (CHUNKS as u32 - 1)
     }

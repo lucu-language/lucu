@@ -9,7 +9,7 @@ struct Interned<'a, T>(T, &'a TypeTable);
 impl fmt::Display for Interned<'_, &'_ Header> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, (name, item)) in self.0.items.iter().enumerate() {
-            if let ItemDecl::Function(_, Some(_)) = item {
+            if let ItemDecl::Function(_, Some(_), _) = item {
                 continue;
             }
             if i > 0 {
@@ -69,7 +69,7 @@ impl fmt::Display for Interned<'_, &'_ Header> {
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDecl::Function(sign, _) => {
+                ItemDecl::Function(sign, _, _) => {
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
                 }
             }

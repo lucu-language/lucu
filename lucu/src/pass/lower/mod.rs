@@ -295,7 +295,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }));
                         (item_kind, Term::Effect(base))
                     }
-                    ItemDecl::Function(_, _) => todo!("error"),
+                    ItemDecl::Function(_, _, _) => todo!("error"),
                 }
             }
         };

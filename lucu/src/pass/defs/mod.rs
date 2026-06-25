@@ -135,7 +135,7 @@ impl Definitions {
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = NodeIndex> + use<> {
         self.graph.node_indices()
     }
-    pub fn nodes_postorder<'a>(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
+    pub fn nodes_postorder(&self) -> impl ExactSizeIterator<Item = NodeIndex> {
         self.postorder.iter().copied()
     }
     #[expect(clippy::implied_bounds_in_impls)]

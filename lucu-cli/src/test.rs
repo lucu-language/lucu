@@ -6,8 +6,7 @@ use lucu::llvm;
 use lucu::module::Module;
 use lucu::pass::ModuleGraph;
 use lucu::type_table::{
-    ConstantEnum, EffectEnum, FunctionSignatureValue, RegionEnum, Sentinel, Thunk, TypeEnum,
-    TypeTable,
+    ConstantEnum, EffectEnum, FunctionSignatureValue, RegionEnum, Thunk, TypeEnum, TypeTable,
 };
 
 pub(super) fn test() {

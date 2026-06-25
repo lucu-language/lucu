@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use compact_str::CompactString;
+use petgraph::graph::NodeIndex;
 
 use crate::type_table::{Effect, FunctionSignature, Kind, Term, Type};
 
@@ -40,7 +41,7 @@ pub enum ItemDecl {
     Alias(Kind, Term),
     Struct(Kind, Arc<OnceLock<StructDecl>>),
     Effect(Kind, Arc<OnceLock<EffectDecl>>),
-    Function(FunctionSignature, Option<Effect>),
+    Function(FunctionSignature, Option<Effect>, NodeIndex),
 }
 
 #[derive(Debug, Clone)]

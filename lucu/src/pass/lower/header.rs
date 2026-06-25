@@ -1,6 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use compact_str::{CompactString, ToCompactString};
+use petgraph::graph::NodeIndex;
 
 use crate::ast;
 use crate::error::{Problems, Result};
@@ -49,8 +50,8 @@ impl<'a, 'b> Lower<'a, 'b> {
             .append(
                 definitions
                     .nodes_postorder()
-                    .map(|node| definitions.item_with_parent(node, ast))
-                    .map(|(def, parent)| {
+                    .map(|node| {
+                        let (def, parent) = definitions.item_with_parent(node, ast);
                         let mut l = self.reborrow();
                         let header_wip = HeaderWIP {
                             query: l.query,
@@ -58,17 +59,18 @@ impl<'a, 'b> Lower<'a, 'b> {
                             header: &header,
                         };
                         l.query = &header_wip;
-                        l.item_pass1(def, parent, &header).map(|decl| match decl {
-                            Some(Decl::Item(name, decl)) => {
-                                header.insert(name, decl.clone());
-                                Some(decl)
-                            }
-                            Some(Decl::Handler(decl)) => {
-                                header.insert_global_handler(decl);
-                                None
-                            }
-                            None => None,
-                        })
+                        l.item_pass1(node, def, parent, &header)
+                            .map(|decl| match decl {
+                                Some(Decl::Item(name, decl)) => {
+                                    header.insert(name, decl.clone());
+                                    Some(decl)
+                                }
+                                Some(Decl::Handler(decl)) => {
+                                    header.insert_global_handler(decl);
+                                    None
+                                }
+                                None => None,
+                            })
                     })
                     .collect::<Result<Vec<_>>>(),
             )
@@ -101,6 +103,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn item_pass1(
         &mut self,
+        node: NodeIndex,
         item: &'a ast::Item,
         parent: Option<&'a ast::Item>,
         header: &Header,
@@ -178,7 +181,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                     apply,
                                 }));
 
-                                let item = ItemDecl::Function(sig, Some(effect));
+                                let item = ItemDecl::Function(sig, Some(effect), node);
                                 Some(Decl::Item(decl.name.ident.as_str().into(), item))
                             } else {
                                 None
@@ -190,7 +193,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 None => {
                     let sig = problems.append(self.function_signature(decl));
                     if let Some(sig) = sig {
-                        let item = ItemDecl::Function(sig, None);
+                        let item = ItemDecl::Function(sig, None, node);
                         return problems
                             .with(Some(Decl::Item(decl.name.ident.as_str().into(), item)));
                     }
@@ -403,7 +406,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         .filter_map(|def| {
                             // TODO: is there a way to get this without looking it up again?
                             let name = def.name()?;
-                            let &ItemDecl::Function(sig, _) = header.get(name.ident.as_str())?
+                            let &ItemDecl::Function(sig, _, _) = header.get(name.ident.as_str())?
                             else {
                                 return None;
                             };

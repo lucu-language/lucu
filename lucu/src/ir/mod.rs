@@ -224,6 +224,7 @@ pub enum Instruction {
     },
     /// MUST be the last instruction of the block.
     /// Signifies that the block catches Returns.
+    // FIXME: YEAH THIS SUCKS ?
     Perform(Reg),
     Return {
         outer: Function,

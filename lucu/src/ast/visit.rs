@@ -464,12 +464,18 @@ impl Ast for ast::Expression {
             ast::Expression::Array(grouped) => {
                 visit_vec(&grouped.inner.elements, visitor, |v, (e, _)| v.visit(&**e))
             }
-            ast::Expression::Call { fun, args, block } => V::Output::combine([
+            ast::Expression::Call {
+                fun,
+                args,
+                block,
+                with_effects,
+            } => V::Output::combine([
                 visitor.visit_path(fun),
                 visit_option(args, visitor, |v, g| {
                     visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
                 }),
                 visit_option(block, visitor, |v, e| v.visit(&**e)),
+                visit_option(with_effects, visitor, |v, es| v.visit(es)),
             ]),
             ast::Expression::Use {
                 params,

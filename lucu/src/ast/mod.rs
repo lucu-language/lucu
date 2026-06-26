@@ -42,7 +42,7 @@ impl Character {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Identifier {
     pub token: Token,
     pub value: CompactString,

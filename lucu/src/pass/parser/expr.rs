@@ -1,6 +1,6 @@
 use do_notation::m;
 
-use crate::ast::{self, LambdaParameter};
+use crate::ast::{self, LambdaParameter, Path, Token};
 use crate::error::Result;
 use crate::pass::parser::Parser;
 use crate::pass::parser::err::Expected;
@@ -289,75 +289,55 @@ impl<'a> Parser<'a> {
                 }
             }
             // FIXME: allow for generic arguments
-            TokenEnum::Identifier => self.ident().and_then(|ident| match self.next().token {
-                TokenEnum::Symbol(Symbol::Dot) => {
-                    let tk_dot = self.skip();
-                    self.ident().and_then(|member| match self.next().token {
-                        TokenEnum::Open(Group::Parenthesis) => m! {
-                            args <- self.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true));
-                            block <- if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
-                                // TODO: if it is an identifier, force it to have lambda args?
-                                self.expression_top(true).map(Some)
-                            } else {
-                                Result::new(None)
-                            };
-                            return Box::new(ast::Expression::Call {
-                                fun: ast::Path { origin: ast::PathOrigin::Package(ident, tk_dot, member), generics: None },
-                                args: Some(args),
-                                block
-                            });
-                        },
-                        _ => {
-                            if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
-                                // TODO: if it is an identifier, force it to have lambda args?
-                                self.expression_top(true).map(Some)
-                            } else {
-                                Result::new(None)
-                            }.map(|block| match block {
-                                Some(block) => Box::new(ast::Expression::Call {
-                                    fun: ast::Path { origin: ast::PathOrigin::Package(ident, tk_dot, member), generics: None },
-                                    args: None,
-                                    block: Some(block),
-                                }),
-                                None => Box::new(ast::Expression::MemberOrItem {
+            TokenEnum::Identifier => {
+                m! {
+                    ident <- self.ident();
+                    fundefault <- match self.next().token {
+                        TokenEnum::Symbol(Symbol::Dot) => {
+                            let tk_dot = self.skip();
+                            self.ident().map(|member| (
+                                ast::Path {
+                                    origin: ast::PathOrigin::Package(ident.clone(), tk_dot, member.clone()),
+                                    generics: None
+                                },
+                                ast::Expression::MemberOrItem {
                                     lhs: ident,
                                     tk_dot,
                                     rhs: member,
-                                }),
-                            })
-                        },
-                    })
-                }
-                TokenEnum::Open(Group::Parenthesis) => m! {
-                    args <- self.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true));
+                                }
+                            ))
+                        }
+                        _ => {
+                            Result::new((
+                                ast::Path {
+                                    origin: ast::PathOrigin::Local(ident.clone()),
+                                    generics: None
+                                },
+                                ast::Expression::Local(ident),
+                            ))
+                        }
+                    };
+                    let (fun, default) = fundefault;
+                    args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true)));
                     block <- if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
                         // TODO: if it is an identifier, force it to have lambda args?
                         self.expression_top(true).map(Some)
                     } else {
                         Result::new(None)
                     };
-                    return Box::new(ast::Expression::Call {
-                        fun: ast::Path { origin: ast::PathOrigin::Local(ident), generics: None },
-                        args: Some(args),
-                        block
-                    });
-                },
-                _ => {
-                    if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
-                        // TODO: if it is an identifier, force it to have lambda args?
-                        self.expression_top(true).map(Some)
+                    with_effects <- self.when_next(Keyword::With, Parser::with_effects);
+                    return Box::new(if args.is_none() && block.is_none() && with_effects.is_none() {
+                        default
                     } else {
-                        Result::new(None)
-                    }.map(|block| match block {
-                        Some(block) => Box::new(ast::Expression::Call {
-                            fun: ast::Path { origin: ast::PathOrigin::Local(ident), generics: None },
-                            args: None,
-                            block: Some(block),
-                        }),
-                        None => Box::new(ast::Expression::Local(ident)),
-                    })
-                },
-            }),
+                        ast::Expression::Call {
+                            fun,
+                            args,
+                            block,
+                            with_effects,
+                        }
+                    });
+                }
+            }
             _ if self.starts_constant() => self
                 .constant(Expected::Expression)
                 .map(|constant| Box::new(ast::Expression::Constant(constant))),

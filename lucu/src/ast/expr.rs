@@ -1,6 +1,8 @@
 use strum::IntoStaticStr;
 
-use crate::ast::{Constant, Grouped, Identifier, Path, Sentinel, Separated, Token, Type};
+use crate::ast::{
+    Constant, Grouped, Identifier, Path, Sentinel, Separated, Token, Type, WithEffects,
+};
 use crate::span::{HasSpan, Span};
 use crate::tokens::{SymbolAssign, SymbolEquality, SymbolInequality};
 
@@ -169,6 +171,7 @@ pub enum Expression {
         fun: Path,
         args: Option<Grouped<Separated<Box<Self>>>>,
         block: Option<Box<Self>>,
+        with_effects: Option<WithEffects>,
     },
     Use {
         params: Option<(Token, Separated<LambdaParameter>, Token)>,
@@ -229,11 +232,17 @@ impl HasSpan for Expression {
             }
             Expression::Index { array, index } => Span::new(array.span().start, index.span().end),
             Expression::Array(group) => group.span(),
-            Expression::Call { fun, args, block } => {
+            Expression::Call {
+                fun,
+                args,
+                block,
+                with_effects,
+            } => {
                 let start = fun.span().start;
-                let end = block
+                let end = with_effects
                     .as_ref()
                     .map(HasSpan::span)
+                    .or_else(|| block.as_ref().map(HasSpan::span))
                     .or_else(|| args.as_ref().map(HasSpan::span))
                     .unwrap_or_else(|| fun.span())
                     .end;

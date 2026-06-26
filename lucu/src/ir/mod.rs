@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use asta_handle_map::xar::Xar;
 use compact_str::CompactString;
 
-use crate::ast::BinOp;
+use crate::ast::{BinOp, UnOp};
 use crate::header::HandlerDecl;
 use crate::module::Module;
 use crate::type_table::substitute::Substitute;
@@ -83,15 +83,13 @@ type Vec<T> = Box<[T]>;
 
 pub struct Block {
     pub instructions: Vec<(Type, Instruction)>,
-    pub next: Option<u32>,
+    pub next: Next,
 }
 
-impl Block {
-    pub fn catches_returns(&self) -> bool {
-        self.instructions
-            .last()
-            .is_some_and(|(_, i)| matches!(i, Instruction::Perform(_)))
-    }
+pub enum Next {
+    Block(u32),
+    Return(Reg),
+    Unreachable,
 }
 
 #[derive(Clone, Copy)]
@@ -143,8 +141,8 @@ impl Substitute for ClosureParameter {
 
 pub enum Instruction {
     // any
-    Parameter(Reg),
-    ClosureParameter(Reg),
+    Parameter(u32),
+    ClosureParameter(u32),
 
     // function
     FunctionTop {
@@ -187,7 +185,7 @@ pub enum Instruction {
         rhs: Reg,
     },
     UnOp {
-        op: BinOp,
+        op: UnOp,
         rhs: Reg,
     },
     Index {
@@ -222,12 +220,6 @@ pub enum Instruction {
         args: Vec<Reg>,
         effects: Vec<Reg>,
     },
-    /// MUST be the last instruction of the block.
-    /// Signifies that the block catches Returns.
-    // FIXME: YEAH THIS SUCKS ?
-    Perform(Reg),
-    Return {
-        outer: Function,
-        value: Reg,
-    },
+    Alloca,
+    ArrayAlloca(Reg),
 }

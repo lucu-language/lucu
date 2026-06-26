@@ -23,7 +23,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, OptimizationLevel};
 
 use crate::header::{ItemDecl, StructDecl};
-use crate::ir::{ClosureParameter, Function, Handler, IR, Instruction};
+use crate::ir::{ClosureParameter, Function, Handler, IR, Instruction, Next};
 use crate::module;
 use crate::pass::ModuleGraph;
 use crate::type_table::substitute::Substitute;
@@ -803,17 +803,18 @@ impl<'ctx> Llvm<'ctx> {
                         args,
                         effects,
                     } => todo!(),
-                    Instruction::Perform(n) => regs[*n as usize].clone(),
-                    Instruction::Return { outer, value } => todo!(),
+                    Instruction::Alloca => todo!(),
+                    Instruction::ArrayAlloca(_) => todo!(),
                 };
                 regs.push(reg);
             }
             match block.next {
-                Some(block) => self
+                Next::Block(block) => self
                     .builder
                     .build_unconditional_branch(blocks[block as usize])
                     .unwrap(),
-                None => self.builder.build_unreachable().unwrap(),
+                Next::Return(_) => todo!(),
+                Next::Unreachable => self.builder.build_unreachable().unwrap(),
             };
         }
     }

@@ -319,7 +319,7 @@ impl<'a> Parser<'a> {
                                     args: None,
                                     block: Some(block),
                                 }),
-                                None => Box::new(ast::Expression::MemberOrModuleItem {
+                                None => Box::new(ast::Expression::MemberOrItem {
                                     lhs: ident,
                                     tk_dot,
                                     rhs: member,
@@ -354,7 +354,7 @@ impl<'a> Parser<'a> {
                             args: None,
                             block: Some(block),
                         }),
-                        None => Box::new(ast::Expression::Var(ident)),
+                        None => Box::new(ast::Expression::Local(ident)),
                     })
                 },
             }),

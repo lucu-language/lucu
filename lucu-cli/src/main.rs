@@ -6,6 +6,7 @@ use facet::Facet;
 use facet_args as args;
 use lucu::annotate::AnnotateExt;
 use lucu::error::print::PrintProblems;
+use lucu::ir::IR;
 use lucu::module::watcher::FileWatcher;
 use lucu::module::{Library, LibraryDir, Module};
 use lucu::pass::ModuleGraph;
@@ -129,6 +130,8 @@ fn watch(cmd: CheckCommand) {
             println!("{}", graph.dot());
         }
 
+        let ir = IR::default();
+
         for module in graph.postorder().unwrap() {
             if let Some(stages) = graph.stages(module) {
                 if cmd.debug && stages.source().is_some() {
@@ -157,9 +160,22 @@ fn watch(cmd: CheckCommand) {
                     if let Some(header) = stages.header(&graph, &tt) {
                         println!("{}", header.display(&tt));
                     }
+
+                    if let Some(definitions) = stages.definitions() {
+                        ir.lower(
+                            &graph,
+                            module,
+                            ast,
+                            stages.imports().unwrap(),
+                            definitions,
+                            &tt,
+                        )
+                        .print_problems(watcher.modules(), false);
+                    }
                 }
 
                 stages.print_problems(watcher.modules(), true);
+
                 if cmd.debug {
                     println!();
                 }

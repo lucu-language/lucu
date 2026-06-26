@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use lucu::ir::{Block, FunctionDefinition, IR, Instruction};
+use lucu::ir::{Block, FunctionDefinition, IR, Instruction, Next};
 use lucu::llvm;
 use lucu::module::Module;
 use lucu::pass::ModuleGraph;
@@ -93,7 +93,7 @@ pub(super) fn test() {
                     },
                 ),
             ]),
-            next: None,
+            next: Next::Unreachable,
         }]),
     });
     ir.function_map

@@ -10,10 +10,11 @@ use crate::header::{
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
+use crate::pass::imports::Imports;
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, GenericParameter, IntSize, Integer, Item,
-    RegionEnum, SimpleKind, Term, Type, TypeEnum,
+    RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
 };
 
 struct HeaderWIP<'a> {
@@ -29,6 +30,32 @@ impl HeaderQuery for HeaderWIP<'_> {
         } else {
             self.query.header(module)
         }
+    }
+}
+
+impl Header {
+    pub fn from(
+        query: &impl HeaderQuery,
+        module: &Module,
+        ast: &ast::Module,
+        imports: &Imports,
+        definitions: &Definitions,
+        tt: &TypeTable,
+    ) -> Option<Result<Self>> {
+        let mut used_underscore = false;
+        let mut lower = Lower {
+            tt,
+            module,
+            imports,
+            query,
+
+            generics: im::HashMap::new(),
+            used_underscore: &mut used_underscore,
+            next_implicit_region: None,
+            implicit_region_offset: 0,
+            implicit_effects: None,
+        };
+        Some(lower.header(ast, definitions))
     }
 }
 

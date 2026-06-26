@@ -109,9 +109,9 @@ pub enum Expression {
     Constant(Box<Constant>),
     Uninit(Token),
     /// Local variable, local item, local function call without args
-    Var(Identifier),
+    Local(Identifier),
     /// Local variable member, module item, module function call without args
-    MemberOrModuleItem {
+    MemberOrItem {
         lhs: Identifier,
         tk_dot: Token,
         rhs: Identifier,
@@ -192,7 +192,7 @@ impl HasSpan for Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Constant(c) => c.span(),
-            Expression::Var(i) => i.span(),
+            Expression::Local(i) => i.span(),
             Expression::Block(group) => group.span(),
             Expression::Enclosed(group) => group.span(),
             Expression::Uninit(token) => token.span(),
@@ -264,7 +264,7 @@ impl HasSpan for Expression {
                 Some(expr) => Span::new(tk_break.span().start, expr.span().end),
                 None => tk_break.span(),
             },
-            Expression::MemberOrModuleItem { lhs, rhs, .. } => {
+            Expression::MemberOrItem { lhs, rhs, .. } => {
                 Span::new(lhs.span().start, rhs.span().end)
             }
         }

@@ -24,6 +24,9 @@ impl Header {
     pub fn insert_global_handler(&mut self, handler: HandlerDecl) {
         self.global_handlers.push(handler);
     }
+    pub fn items(&self) -> impl Iterator<Item = (&str, &ItemDecl)> {
+        self.items.iter().map(|(c, d)| (c.as_str(), d))
+    }
 }
 
 #[derive(Debug)]

@@ -11,7 +11,6 @@ use crate::header::{
     Header, ItemDecl,
 };
 use crate::module::Module;
-use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
@@ -21,6 +20,7 @@ use crate::type_table::{
 };
 
 mod header;
+mod function;
 
 struct Lower<'a, 'scope> {
     tt: &'a TypeTable,
@@ -56,32 +56,6 @@ impl<'a, 'scope> Lower<'a, 'scope> {
 
 pub trait HeaderQuery {
     fn header(&self, module: &Module) -> Option<&Header>;
-}
-
-impl Header {
-    pub fn from(
-        query: &impl HeaderQuery,
-        module: &Module,
-        ast: &ast::Module,
-        imports: &Imports,
-        definitions: &Definitions,
-        tt: &TypeTable,
-    ) -> Option<Result<Self>> {
-        let mut used_underscore = false;
-        let mut lower = Lower {
-            tt,
-            module,
-            imports,
-            query,
-
-            generics: im::HashMap::new(),
-            used_underscore: &mut used_underscore,
-            next_implicit_region: None,
-            implicit_region_offset: 0,
-            implicit_effects: None,
-        };
-        Some(lower.header(ast, definitions))
-    }
 }
 
 impl<'a, 'b> Lower<'a, 'b> {

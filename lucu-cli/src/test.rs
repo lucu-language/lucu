@@ -18,15 +18,9 @@ pub(super) fn test() {
     let et = unsafe { ExpressionTable::new() };
 
     let unit_t = tt.unit();
-    let never_t = tt.never();
     let bool_t = tt.base(Base::Boolean);
     let uptr_t = tt.base(Base::UPTR);
     let cstr_t = tt.base(Base::CString);
-
-    let syscall1 = tt.insert_tuple([uptr_t, uptr_t]);
-    let syscall3 = tt.insert_tuple([uptr_t, uptr_t, uptr_t, uptr_t]);
-
-    let branch_sig = tt.function(unit_t, unit_t);
 
     // let
     let boolean = et.operation(Operation::Constant(bool_t, Constant::Integer(1)));
@@ -48,17 +42,17 @@ pub(super) fn test() {
                         et.constant(uptr_t, Constant::Integer(14)),
                     ],
                     et.apply_operation_multi(
+                        &tt,
                         Operation::Callable(Callable::If),
-                        tt.insert_tuple([bool_t, branch_sig]),
                         [
                             boolean,
                             et.lambda(
                                 unit_t,
                                 et.apply_multi(
+                                    &tt,
                                     et.operation(Operation::Callable(Callable::Syscall {
                                         args: 3,
                                     })),
-                                    syscall3,
                                     [
                                         // nr
                                         et.constant(uptr_t, Constant::Integer(1)),
@@ -75,8 +69,8 @@ pub(super) fn test() {
                     ),
                 ),
                 et.apply_operation_multi(
+                    &tt,
                     Operation::Callable(Callable::Syscall { args: 1 }),
-                    syscall1,
                     [
                         // nr
                         et.constant(uptr_t, Constant::Integer(60)),

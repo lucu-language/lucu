@@ -65,10 +65,15 @@ pub trait ExpressionTable:
     }
     fn apply_multi(
         &self,
+        tt: &(impl TypeTable<Base = Self::Base> + ?Sized),
         f: Expression,
-        types: Types,
         vals: impl IntoIterator<Item = Expression>,
     ) -> Expression {
+        let types = f
+            .get_type(tt, self)
+            .into_function(tt)
+            .from()
+            .into_product(tt);
         self.push_expression(ExpressionEnum::Apply(f, self.construct(types, vals)))
     }
     fn operation(&self, o: Self::Operation) -> Expression {
@@ -79,11 +84,11 @@ pub trait ExpressionTable:
     }
     fn apply_operation_multi(
         &self,
+        tt: &(impl TypeTable<Base = Self::Base> + ?Sized),
         o: Self::Operation,
-        types: Types,
         vals: impl IntoIterator<Item = Expression>,
     ) -> Expression {
-        self.apply_multi(self.operation(o), types, vals)
+        self.apply_multi(tt, self.operation(o), vals)
     }
     /// Using De Bruijn-indices
     fn reference(&self, ty: Type, i: u32) -> Expression {

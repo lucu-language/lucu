@@ -1,10 +1,8 @@
 use std::iter;
 
 use compact_str::CompactString;
-use mu::TypeTable as _;
 
 use crate::ast;
-use crate::mu::table::TypeTable;
 use crate::type_table::Integer;
 
 pub mod table;

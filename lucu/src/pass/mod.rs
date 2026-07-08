@@ -16,10 +16,8 @@ use petgraph::visit::{
     Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable,
 };
 
-use crate::ast;
-use crate::error::{HasProblems, Problem, Problems, Result};
-use crate::header::{self, Header, ItemDecl};
-use crate::ir::IR;
+use crate::error::{HasProblems, Problem, Result};
+use crate::header::Header;
 use crate::module::{Module, Modules};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::{Import, Imports};

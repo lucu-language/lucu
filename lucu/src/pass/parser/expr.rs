@@ -1,6 +1,6 @@
 use do_notation::m;
 
-use crate::ast::{self, LambdaParameter, Path, Token};
+use crate::ast::{self, LambdaParameter};
 use crate::error::Result;
 use crate::pass::parser::Parser;
 use crate::pass::parser::err::Expected;

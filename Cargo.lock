@@ -558,39 +558,15 @@ dependencies = [
 
 [[package]]
 name = "inkwell"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1def4112dfb2ce2993db7027f7acdb43c1f4ee1c70a082a2eef306ed5d0df365"
-dependencies = [
- "inkwell_internals 0.13.0",
- "libc",
- "llvm-sys",
- "once_cell",
- "thiserror",
-]
-
-[[package]]
-name = "inkwell"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7decbc9dfa45a4a827a6ff7b822c113b1285678a937e84213417d4ca8a095782"
 dependencies = [
  "bitflags 2.10.0",
- "inkwell_internals 0.14.0",
+ "inkwell_internals",
  "libc",
  "llvm-sys",
  "thiserror",
-]
-
-[[package]]
-name = "inkwell_internals"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63736175c9a30ea123f7018de9f26163e0b39cd6978990ae486b510c4f3bad69"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -753,10 +729,10 @@ dependencies = [
  "do-notation",
  "im",
  "include_dir",
- "inkwell 0.8.0",
  "itertools",
  "lasso",
  "line-column 0.2.0",
+ "mu",
  "notify-debouncer-full",
  "path-clean",
  "petgraph",
@@ -772,6 +748,7 @@ dependencies = [
  "facet",
  "facet-args",
  "lucu",
+ "mu-llvm",
 ]
 
 [[package]]
@@ -819,7 +796,7 @@ name = "mu-llvm"
 version = "0.1.0"
 dependencies = [
  "im",
- "inkwell 0.9.0",
+ "inkwell",
  "mu",
 ]
 

@@ -7,52 +7,54 @@ use std::sync::RwLock;
 
 use inkwell::AddressSpace;
 use inkwell::attributes::AttributeLoc;
-use inkwell::context::Context;
-use inkwell::module::{Linkage, Module};
+use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::support::LLVMString;
 use inkwell::targets::{FileType, TargetData, TargetMachine};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, StructType};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+};
+use mu::TypeTable as _;
 
-pub trait Base {
-    fn get<'ctx, TT, ET>(&self, llvm: &Builder<'ctx, TT, ET>) -> Type<'ctx>
-    where
-        TT: mu::TypeTable<Base = Self>,
-        TT::Name: Deref<Target = str>,
-        ET: mu::ExpressionTable,
-        ET::Operation: Operation;
-}
+pub trait Builder
+where
+    <Self::TT as mu::TypeTable>::Name: Deref<Target = str>,
+{
+    type TT: mu::TypeTable + ?Sized;
+    type ET: mu::ExpressionTable + ?Sized;
+    type Callable: Clone + Hash + Eq;
 
-pub trait Operation {
-    type Callable: Callable + Clone + Hash + Eq;
-    fn build<'ctx, TT, ET>(
-        &self,
-        llvm: &Builder<'ctx, TT, ET>,
-    ) -> (mu::Type, Value<'ctx, Self::Callable>)
-    where
-        TT: mu::TypeTable,
-        TT::Base: Base,
-        TT::Name: Deref<Target = str>,
-        ET: mu::ExpressionTable<Operation = Self>;
-}
-
-pub trait Callable {
-    fn build<'ctx, TT, ET>(
-        &self,
-        llvm: &Builder<'ctx, TT, ET>,
+    fn get_base_type<'ctx>(
+        base: &<Self::TT as mu::TypeTable>::Base,
+        llvm: &Context<'ctx, Self>,
+    ) -> Type<'ctx>;
+    fn build_operation<'ctx>(
+        op: &<Self::ET as mu::ExpressionTable>::Operation,
+        llvm: &Context<'ctx, Self>,
+    ) -> (mu::Type, Value<'ctx, Self::Callable>);
+    fn build_callable<'ctx>(
+        op: &Self::Callable,
         param: DataValue<'ctx>,
-    ) -> DataValue<'ctx>
-    where
-        TT: mu::TypeTable,
-        TT::Base: Base,
-        TT::Name: Deref<Target = str>,
-        ET: mu::ExpressionTable,
-        ET::Operation: Operation<Callable = Self>;
+        llvm: &Context<'ctx, Self>,
+    ) -> DataValue<'ctx>;
+    // TODO: build callable from constant values
+    // this will prevent every if statement to be a seperate function
 }
 
 #[derive(Clone, Copy)]
 pub struct DataValue<'ctx>(pub Option<BasicValueEnum<'ctx>>);
+
+impl<'ctx> DataValue<'ctx> {
+    pub fn llvm_members<B: Builder + ?Sized>(
+        self,
+        llvm: &Context<'ctx, B>,
+    ) -> impl ExactSizeIterator<Item = BasicValueEnum<'ctx>> {
+        let struc = self.0.unwrap().into_struct_value();
+        (0..struc.count_fields())
+            .map(move |n| llvm.builder.build_extract_value(struc, n, "").unwrap())
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct DataType<'ctx>(pub Option<BasicTypeEnum<'ctx>>);
@@ -70,16 +72,12 @@ impl<'ctx> Type<'ctx> {
             Type::Function(_) => true,
         }
     }
-    pub fn data_type<TT, ET>(self, builder: &Builder<'ctx, TT, ET>) -> DataType<'ctx>
-    where
-        ET: mu::ExpressionTable,
-        ET::Operation: Operation,
-    {
+    pub fn get_data_type<B: Builder + ?Sized>(self, llvm: &Context<'ctx, B>) -> DataType<'ctx> {
         match self {
             Type::Data(data_type) => data_type,
-            Type::Function(_) => DataType(Some(
-                builder.context.ptr_type(AddressSpace::default()).into(),
-            )),
+            Type::Function(_) => {
+                DataType(Some(llvm.context.ptr_type(AddressSpace::default()).into()))
+            }
         }
     }
 }
@@ -93,60 +91,54 @@ pub enum Value<'ctx, C> {
 
 impl<'ctx, C> Value<'ctx, C>
 where
-    C: Callable + Clone + Eq + Hash,
+    C: Hash + Eq + Clone,
 {
-    fn build<TT, ET>(self, ty: mu::Type, builder: &Builder<'ctx, TT, ET>) -> DataValue<'ctx>
-    where
-        ET: mu::ExpressionTable,
-        ET::Operation: Operation<Callable = C>,
-        TT: mu::TypeTable,
-        TT::Base: Base,
-        TT::Name: Deref<Target = str>,
-    {
+    fn build<B: Builder<Callable = C> + ?Sized>(
+        self,
+        ty: mu::Type,
+        llvm: &Context<'ctx, B>,
+    ) -> DataValue<'ctx> {
         match self {
             Value::Data(data) => data,
-            Value::Function(function, closure) => builder.build_closure(function, closure),
+            Value::Function(function, closure) => llvm.build_closure(function, closure),
             Value::Callable(c) => {
                 // we create a small function that is just this operation cuz we need it as a closure
-                let function = match builder.callables.read().unwrap().get(&c).copied() {
+                let function = match llvm.callables.read().unwrap().get(&c).copied() {
                     Some(function) => function,
                     None => {
                         // build function
-                        let current_block = builder.builder.get_insert_block().unwrap();
-                        let mu::TypeEnum::Function(fun) = builder.tt[ty] else {
+                        let current_block = llvm.builder.get_insert_block().unwrap();
+                        let mu::TypeEnum::Function(fun) = llvm.tt[ty] else {
                             panic!();
                         };
 
-                        let function_type = builder.get_function_type(fun);
+                        let function_type = llvm.get_function_type(fun, true);
                         let function =
-                            builder
-                                .module
+                            llvm.module
                                 .add_function("", function_type, Some(Linkage::Private));
-                        builder.function_attributes(function);
-                        builder
-                            .builder
-                            .position_at_end(builder.context.append_basic_block(function, ""));
+                        llvm.function_attributes(function);
+                        llvm.builder
+                            .position_at_end(llvm.context.append_basic_block(function, ""));
                         let param = DataValue(
                             (function.count_params() == 2)
                                 .then(|| function.get_first_param().unwrap()),
                         );
-                        let out = c.build(builder, param);
-                        builder
-                            .builder
-                            .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
-                            .unwrap();
+                        let out = B::build_callable(&c, param, llvm);
+                        if fun.never_returns(llvm.tt) {
+                            llvm.builder.build_unreachable().unwrap();
+                        } else {
+                            llvm.builder
+                                .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+                                .unwrap();
+                        }
 
                         // return
-                        builder.builder.position_at_end(current_block);
-                        builder
-                            .callables
-                            .write()
-                            .unwrap()
-                            .insert(c.clone(), function);
+                        llvm.builder.position_at_end(current_block);
+                        llvm.callables.write().unwrap().insert(c.clone(), function);
                         function
                     }
                 };
-                builder.build_closure(function, None)
+                llvm.build_closure(function, None)
             }
         }
     }
@@ -155,30 +147,23 @@ where
 type CallableCache<'ctx, C> = HashMap<C, FunctionValue<'ctx>>;
 type StructCache<'ctx> = HashMap<mu::Types, (Box<[Type<'ctx>]>, Option<StructType<'ctx>>)>;
 
-pub struct Builder<'ctx, TT, ET>
-where
-    ET: mu::ExpressionTable,
-    ET::Operation: Operation,
-{
-    pub context: &'ctx Context,
-    pub tt: &'ctx TT,
-    pub et: &'ctx ET,
-    pub module: Module<'ctx>,
+pub struct Context<'ctx, B: Builder + ?Sized> {
+    pub context: &'ctx inkwell::context::Context,
+    pub tt: &'ctx B::TT,
+    pub et: &'ctx B::ET,
+    pub base: &'ctx B,
+    pub module: inkwell::module::Module<'ctx>,
     pub builder: inkwell::builder::Builder<'ctx>,
+    pub target_machine: TargetMachine,
+    pub target_data: TargetData,
 
-    target_machine: TargetMachine,
-    target_data: TargetData,
     structs: RwLock<StructCache<'ctx>>,
-    callables: RwLock<CallableCache<'ctx, <ET::Operation as Operation>::Callable>>,
+    callables: RwLock<CallableCache<'ctx, B::Callable>>,
     // TODO: remove this from here
     syscalls: Box<[(FunctionType<'ctx>, PointerValue<'ctx>)]>,
 }
 
-impl<'ctx, TT, ET> Builder<'ctx, TT, ET>
-where
-    ET: mu::ExpressionTable,
-    ET::Operation: Operation,
-{
+impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     // TODO: remove this from here
     pub fn build_syscall<I>(&self, nr: IntValue<'ctx>, args: I) -> BasicValueEnum<'ctx>
     where
@@ -193,20 +178,7 @@ where
                 ptr,
                 &iter::once(nr.as_basic_value_enum())
                     .chain(iter)
-                    .map(|v| {
-                        if v.is_pointer_value() {
-                            self.builder
-                                .build_ptr_to_int(
-                                    v.into_pointer_value(),
-                                    self.context.ptr_sized_int_type(&self.target_data, None),
-                                    "",
-                                )
-                                .unwrap()
-                                .into()
-                        } else {
-                            v.into()
-                        }
-                    })
+                    .map(BasicMetadataValueEnum::from)
                     .collect::<Box<_>>(),
                 "",
             )
@@ -215,10 +187,12 @@ where
             .unwrap_basic()
     }
     pub fn new(
-        context: &'ctx Context,
-        tt: &'ctx TT,
-        et: &'ctx ET,
+        context: &'ctx inkwell::context::Context,
+        tt: &'ctx B::TT,
+        et: &'ctx B::ET,
+        base: &'ctx B,
         target_machine: TargetMachine,
+        module_name: &str,
     ) -> Self {
         let target_data = target_machine.get_target_data();
         let ptr_int_t = context.ptr_sized_int_type(&target_data, None);
@@ -226,7 +200,8 @@ where
             context,
             tt,
             et,
-            module: context.create_module("main"),
+            base,
+            module: context.create_module(module_name),
             builder: context.create_builder(),
             target_machine,
             target_data,
@@ -346,19 +321,14 @@ where
                 .create_string_attribute("no-stack-arg-probe", ""),
         );
     }
-}
-impl<'ctx, TT, ET> Builder<'ctx, TT, ET>
-where
-    TT: mu::TypeTable,
-    TT::Base: Base,
-    TT::Name: Deref<Target = str>,
-    ET: mu::ExpressionTable,
-    ET::Operation: Operation,
-{
+
     pub fn get_struct(&self, tys: mu::Types) -> Option<StructType<'ctx>> {
-        match self.structs.read().unwrap().get(&tys) {
+        let read = self.structs.read().unwrap();
+        match read.get(&tys) {
             Some(&(_, s)) => s,
             None => {
+                drop(read);
+
                 // NOTE: recursive structs will cause a stack overflow here
                 let fields = self.tt[tys]
                     .iter()
@@ -366,46 +336,62 @@ where
                     .collect::<Box<_>>();
                 let llvm_fields = fields
                     .iter()
-                    .filter_map(|f| f.data_type(self).0)
+                    .filter_map(|f| f.get_data_type(self).0)
                     .collect::<Box<_>>();
-                if llvm_fields.is_empty() {
-                    self.structs.write().unwrap().insert(tys, (fields, None));
-                    None
-                } else {
-                    let s = self.context.opaque_struct_type(self.tt.aggregate_name(tys));
-                    self.structs.write().unwrap().insert(tys, (fields, Some(s)));
-                    s.set_body(&llvm_fields, false);
-                    Some(s)
-                }
+                let struc = (!llvm_fields.is_empty()).then(|| match self.tt.tuple_name(tys) {
+                    Some(name) => {
+                        let s = self.context.opaque_struct_type(name);
+                        s.set_body(&llvm_fields, false);
+                        s
+                    }
+                    None => self.context.struct_type(&llvm_fields, false),
+                });
+                self.structs.write().unwrap().insert(tys, (fields, struc));
+                struc
             }
         }
     }
     pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
         match self.tt[ty] {
-            mu::TypeEnum::Base(ref base) => base.get(self),
+            mu::TypeEnum::Base(ref base) => B::get_base_type(base, self),
+            mu::TypeEnum::Never => Type::Data(DataType(None)),
             mu::TypeEnum::Product(tys) => {
                 Type::Data(DataType(self.get_struct(tys).map(Into::into)))
             }
-            mu::TypeEnum::Function(function) => Type::Function(self.get_function_type(function)),
+            mu::TypeEnum::Function(function) => {
+                Type::Function(self.get_function_type(function, true))
+            }
         }
     }
-    pub fn get_function_type(&self, function: mu::Function) -> FunctionType<'ctx> {
-        let from = self.get_type(function.from());
-        let to = self.get_type(function.to());
-        let closure = self.context.ptr_type(AddressSpace::default());
+    pub fn get_function_type(
+        &self,
+        function: mu::Function,
+        closure_param: bool,
+    ) -> FunctionType<'ctx> {
+        let from = self.get_type(function.from()).get_data_type(self);
+        let to = self.get_type(function.to()).get_data_type(self);
 
-        let param_types = match from.data_type(self).0 {
-            Some(f) => [f.into(), closure.into()],
-            None => [closure.into(), closure.into()],
-        };
-        let param_types = match from.data_type(self).0 {
-            Some(_) => &param_types,
-            None => &param_types[0..1],
-        };
-
-        match to.data_type(self).0 {
-            Some(t) => t.fn_type(param_types, false),
-            None => self.context.void_type().fn_type(param_types, false),
+        if closure_param {
+            let closure = self.context.ptr_type(AddressSpace::default());
+            let param_types = match from.0 {
+                Some(f) => [f.into(), closure.into()],
+                None => [closure.into(), closure.into()],
+            };
+            let param_types = match from.0 {
+                Some(_) => &param_types,
+                None => &param_types[0..1],
+            };
+            match to.0 {
+                Some(t) => t.fn_type(param_types, false),
+                None => self.context.void_type().fn_type(param_types, false),
+            }
+        } else {
+            let meta = from.0.map(BasicMetadataTypeEnum::from);
+            let param_types = meta.as_slice();
+            match to.0 {
+                Some(t) => t.fn_type(param_types, false),
+                None => self.context.void_type().fn_type(param_types, false),
+            }
         }
     }
     pub fn build_function(
@@ -421,7 +407,7 @@ where
             panic!();
         };
 
-        let function_type = self.get_function_type(fun);
+        let function_type = self.get_function_type(fun, false);
         let function = self.module.add_function(name, function_type, linkage);
         self.function_attributes(function);
         self.builder
@@ -436,25 +422,23 @@ where
             )),
         );
         let out = out.build(ty, self);
-        self.builder
-            .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
-            .unwrap();
+        if fun.never_returns(self.tt) {
+            self.builder.build_unreachable().unwrap();
+        } else {
+            self.builder
+                .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+                .unwrap();
+        }
         self.builder.clear_insertion_position();
         function
     }
     fn build_expression(
         &self,
         e: mu::Expression,
-        refs: &im::Vector<(
-            mu::Type,
-            Value<'ctx, <ET::Operation as Operation>::Callable>,
-        )>,
-    ) -> (
-        mu::Type,
-        Value<'ctx, <ET::Operation as Operation>::Callable>,
-    ) {
+        refs: &im::Vector<(mu::Type, Value<'ctx, B::Callable>)>,
+    ) -> (mu::Type, Value<'ctx, B::Callable>) {
         match self.et[e] {
-            mu::ExpressionEnum::Operation(ref o) => o.build(self),
+            mu::ExpressionEnum::Operation(ref o) => B::build_operation(o, self),
             mu::ExpressionEnum::Reference(n) => refs[n as usize].clone(),
             mu::ExpressionEnum::Let(e1, e2) => {
                 let mut refs_new = refs.clone();
@@ -474,12 +458,19 @@ where
                 let members = self.et[expressions]
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, &e)| {
+                    .filter_map(|(index, &e)| {
                         let (ty, val) = self.build_expression(e, refs);
                         // any 'callable' will get turned into a small function
-                        val.build(ty, self)
-                            .0
-                            .map(|v| (self.tt.aggregate_field_name(types, i as u32).deref(), v))
+                        val.build(ty, self).0.map(|v| {
+                            (
+                                self.tt
+                                    .tuple_field_name(types, index as u32)
+                                    .map(Deref::deref)
+                                    // NOTE: `format!(".{index}")` maybe?
+                                    .unwrap_or(""),
+                                v,
+                            )
+                        })
                     });
 
                 match s {
@@ -512,7 +503,7 @@ where
 
                 match fval {
                     Value::Data(data) => {
-                        let function_type = self.get_function_type(f);
+                        let function_type = self.get_function_type(f, true);
                         let (fptr, closure) = self.get_closure(data);
                         let args = match val.0 {
                             Some(v) => [v.into(), closure.into()],
@@ -551,7 +542,7 @@ where
                         (f.to(), Value::Data(DataValue(out)))
                     }
                     Value::Callable(c) => {
-                        let out = c.build(self, val);
+                        let out = B::build_callable(&c, val, self);
                         (f.to(), Value::Data(out))
                     }
                 }
@@ -579,7 +570,11 @@ where
                                 .build_extract_value(
                                     data.into_struct_value(),
                                     nth,
-                                    self.tt.aggregate_field_name(types, index),
+                                    // NOTE: `format!(".{index}")` maybe?
+                                    self.tt
+                                        .tuple_field_name(types, index)
+                                        .map(Deref::deref)
+                                        .unwrap_or(""),
                                 )
                                 .unwrap()
                         })
@@ -594,7 +589,7 @@ where
                     panic!();
                 };
 
-                let function_type = self.get_function_type(fun);
+                let function_type = self.get_function_type(fun, true);
                 let function = self
                     .module
                     .add_function("", function_type, Some(Linkage::Private));

@@ -1,7 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["lucu", "lucu-cli", "asta-annotate", "asta-pretty", "lucu-fmt", "lucu-lsp", "asta-handle-map", "mu", "mu-llvm"]
+members = ["lucu", "lucu-cli", "asta-annotate", "asta-pretty", "lucu-fmt", "lucu-lsp", "asta-handle-map", "mu", "mu-llvm", "lucu-llvm"]
 
 [workspace.dependencies]
+inkwell = { version = "0.9.0", features = ["llvm21-1"] }
+compact_str = "0.9.0"
 anstyle = { version = "1.0.13", default-features = false }
 include_dir = "0.7.4"

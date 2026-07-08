@@ -745,9 +745,13 @@ version = "0.1.0"
 dependencies = [
  "anstream",
  "asta-annotate",
+ "compact_str",
  "facet",
  "facet-args",
+ "inkwell",
  "lucu",
+ "lucu-llvm",
+ "mu",
  "mu-llvm",
 ]
 
@@ -757,6 +761,16 @@ version = "0.1.0"
 dependencies = [
  "asta-pretty",
  "lucu",
+]
+
+[[package]]
+name = "lucu-llvm"
+version = "0.1.0"
+dependencies = [
+ "inkwell",
+ "lucu",
+ "mu",
+ "mu-llvm",
 ]
 
 [[package]]

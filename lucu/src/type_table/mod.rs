@@ -2,7 +2,7 @@ use std::ops::Index;
 use std::slice;
 use std::sync::Arc;
 
-use asta_handle_map::HandleMap;
+use asta_handle_map::HandleSet;
 use compact_str::CompactString;
 use itertools::Itertools;
 
@@ -14,12 +14,12 @@ pub mod unapply;
 
 #[derive(Default)]
 pub struct TypeTable {
-    kinds: HandleMap<KindEnum>,
-    types: HandleMap<TypeEnum>,
-    regions: HandleMap<RegionEnum>,
-    effects: HandleMap<EffectEnum>,
-    function_signatures: HandleMap<FunctionSignatureValue>,
-    constants: HandleMap<ConstantEnum>,
+    kinds: HandleSet<KindEnum>,
+    types: HandleSet<TypeEnum>,
+    regions: HandleSet<RegionEnum>,
+    effects: HandleSet<EffectEnum>,
+    function_signatures: HandleSet<FunctionSignatureValue>,
+    constants: HandleSet<ConstantEnum>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
@@ -116,6 +116,12 @@ impl IntSize {
 }
 
 impl Integer {
+    pub const U8: Self = Integer::unsigned(IntSize::Exact(8));
+    pub const U32: Self = Integer::unsigned(IntSize::Exact(32));
+    pub const INT: Self = Integer::signed(IntSize::Register);
+    pub const USIZE: Self = Integer::unsigned(IntSize::Index);
+    pub const UPTR: Self = Integer::unsigned(IntSize::Address);
+
     pub const fn signed(size: IntSize) -> Self {
         Self::Integer(true, size)
     }
@@ -145,6 +151,12 @@ impl Integer {
             (Integer::CChar, Integer::CChar) => true,
         }
     }
+    pub const fn is_signed(self, signed_char: bool) -> bool {
+        match self {
+            Integer::Integer(signed, _) => signed,
+            Integer::CChar => signed_char,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
@@ -172,11 +184,11 @@ pub enum TypeEnum {
 }
 
 impl TypeEnum {
-    pub const U8: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8)));
-    pub const U32: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Exact(32)));
-    pub const INT: Self = TypeEnum::Integer(Integer::signed(IntSize::Register));
-    pub const USIZE: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Index));
-    pub const UPTR: Self = TypeEnum::Integer(Integer::unsigned(IntSize::Address));
+    pub const U8: Self = Self::Integer(Integer::U8);
+    pub const U32: Self = Self::Integer(Integer::U32);
+    pub const INT: Self = Self::Integer(Integer::INT);
+    pub const USIZE: Self = Self::Integer(Integer::USIZE);
+    pub const UPTR: Self = Self::Integer(Integer::UPTR);
 }
 
 impl Type {

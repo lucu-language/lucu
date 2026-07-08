@@ -1,0 +1,196 @@
+use std::num::NonZeroU32;
+
+use inkwell::AddressSpace;
+use inkwell::module::Linkage;
+use inkwell::types::BasicTypeEnum;
+use lucu::ast::Cast;
+use lucu::mu::table::{ExpressionTable, TypeTable};
+use lucu::mu::{Base, Callable, Constant, Operation};
+use lucu::type_table::{IntSize, Integer};
+
+pub struct Builder;
+
+impl mu_llvm::Builder for Builder {
+    type TT = TypeTable;
+    type ET = ExpressionTable;
+    type Callable = Callable;
+
+    fn get_base_type<'ctx>(
+        base: &Base,
+        llvm: &mu_llvm::Context<'ctx, Self>,
+    ) -> mu_llvm::Type<'ctx> {
+        mu_llvm::Type::Data(mu_llvm::DataType(match base {
+            Base::Boolean => Some(llvm.context.bool_type().into()),
+            Base::Integer(integer) => match *integer {
+                Integer::Integer(_, int_size) => match int_size {
+                    IntSize::Exact(n) => NonZeroU32::new(n)
+                        .map(|bits| llvm.context.custom_width_int_type(bits).unwrap().into()),
+                    IntSize::Index => {
+                        // TODO
+                        Some(
+                            llvm.context
+                                .ptr_sized_int_type(&llvm.target_data, None)
+                                .into(),
+                        )
+                    }
+                    IntSize::Address => Some(
+                        llvm.context
+                            .ptr_sized_int_type(&llvm.target_data, None)
+                            .into(),
+                    ),
+                    IntSize::Register => {
+                        // TODO
+                        Some(llvm.context.i64_type().into())
+                    }
+                    IntSize::CChar => todo!(),
+                    IntSize::CShort => todo!(),
+                    IntSize::CInt => todo!(),
+                    IntSize::CLong => todo!(),
+                    IntSize::CLongLong => todo!(),
+                },
+                Integer::CChar => todo!(),
+            },
+            Base::CString => Some(llvm.context.ptr_type(AddressSpace::default()).into()),
+        }))
+    }
+
+    fn build_operation<'ctx>(
+        op: &Operation,
+        llvm: &mu_llvm::Context<'ctx, Self>,
+    ) -> (mu::Type, mu_llvm::Value<'ctx, Callable>) {
+        let ty = op.get_type(llvm.tt);
+        (
+            ty,
+            match op {
+                Operation::Unreachable => {
+                    let _ = llvm.builder.build_unreachable().unwrap();
+                    mu_llvm::Value::Data(mu_llvm::DataValue(None))
+                }
+                Operation::Constant(_, constant) => mu_llvm::Value::Data(mu_llvm::DataValue(
+                    llvm.get_type(ty)
+                        .get_data_type(llvm)
+                        .0
+                        .map(|ty| match *constant {
+                            Constant::Integer(i) => ty.into_int_type().const_int(i, false).into(),
+                            Constant::Zero => ty.const_zero(),
+                            Constant::Uninit => match ty {
+                                BasicTypeEnum::ArrayType(array_type) => {
+                                    array_type.get_undef().into()
+                                }
+                                BasicTypeEnum::FloatType(float_type) => {
+                                    float_type.get_undef().into()
+                                }
+                                BasicTypeEnum::IntType(int_type) => int_type.get_undef().into(),
+                                BasicTypeEnum::PointerType(pointer_type) => {
+                                    pointer_type.get_undef().into()
+                                }
+                                BasicTypeEnum::StructType(struct_type) => {
+                                    struct_type.get_undef().into()
+                                }
+                                BasicTypeEnum::VectorType(vector_type) => {
+                                    vector_type.get_undef().into()
+                                }
+                                BasicTypeEnum::ScalableVectorType(scalable_vector_type) => {
+                                    scalable_vector_type.get_undef().into()
+                                }
+                            },
+                            Constant::String(ref value) => {
+                                let const_str = llvm.context.const_string(value.as_bytes(), true);
+                                let global_str =
+                                    llvm.module.add_global(const_str.get_type(), None, "");
+                                global_str.set_linkage(Linkage::Internal);
+                                global_str.set_constant(true);
+                                global_str.set_initializer(&const_str);
+                                global_str.as_pointer_value().into()
+                            }
+                        }),
+                )),
+                Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
+            },
+        )
+    }
+
+    fn build_callable<'ctx>(
+        op: &Callable,
+        param: mu_llvm::DataValue<'ctx>,
+        llvm: &mu_llvm::Context<'ctx, Self>,
+    ) -> mu_llvm::DataValue<'ctx> {
+        match *op {
+            Callable::Cast { to, op, .. } => {
+                let ty = llvm.get_type(to).get_data_type(llvm);
+                mu_llvm::DataValue(ty.0.map(|llvm_ty| match op {
+                    Cast::Truncate => {
+                        let val = param.0.unwrap();
+                        llvm.builder
+                            .build_int_truncate_or_bit_cast(
+                                val.into_int_value(),
+                                llvm_ty.into_int_type(),
+                                "",
+                            )
+                            .unwrap()
+                            .into()
+                    }
+                    Cast::Extend => match param.0 {
+                        Some(val) => {
+                            let mu::TypeEnum::Base(Base::Integer(i)) = llvm.tt[to] else {
+                                panic!()
+                            };
+                            // TODO: is 'char' signed
+                            if i.is_signed(true) {
+                                llvm.builder.build_int_s_extend_or_bit_cast(
+                                    val.into_int_value(),
+                                    llvm_ty.into_int_type(),
+                                    "",
+                                )
+                            } else {
+                                llvm.builder.build_int_z_extend_or_bit_cast(
+                                    val.into_int_value(),
+                                    llvm_ty.into_int_type(),
+                                    "",
+                                )
+                            }
+                            .unwrap()
+                            .into()
+                        }
+                        None => llvm_ty.const_zero(),
+                    },
+                    Cast::Transmute => {
+                        // NOTE: do we want to do ptrtoint here?
+                        // maybe we should not allow transmuting from integers back to pointers
+                        let val = param.0.unwrap();
+                        if val.is_pointer_value() && llvm_ty.is_int_type() {
+                            llvm.builder
+                                .build_ptr_to_int(
+                                    val.into_pointer_value(),
+                                    llvm_ty.into_int_type(),
+                                    "",
+                                )
+                                .unwrap()
+                                .into()
+                        } else if val.is_int_value() && llvm_ty.is_pointer_type() {
+                            llvm.builder
+                                .build_int_to_ptr(
+                                    val.into_int_value(),
+                                    llvm_ty.into_pointer_type(),
+                                    "",
+                                )
+                                .unwrap()
+                                .into()
+                        } else {
+                            llvm.builder.build_bit_cast(val, llvm_ty, "").unwrap()
+                        }
+                    }
+                }))
+            }
+            Callable::UnOp { ty, op } => todo!(),
+            Callable::BinOp { ty, op } => todo!(),
+            Callable::If => todo!(),
+            Callable::IfElse { to } => todo!(),
+            Callable::Syscall { .. } => {
+                let mut members = param.llvm_members(llvm);
+                let nr = members.next().unwrap().into_int_value();
+                mu_llvm::DataValue(Some(llvm.build_syscall(nr, members)))
+            }
+        }
+    }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "lucu-llvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lucu = { path = "../lucu" }
+inkwell = { workspace = true }
+mu = { path = "../mu" }
+mu-llvm = { path = "../mu-llvm" }

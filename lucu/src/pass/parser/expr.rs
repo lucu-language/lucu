@@ -171,19 +171,34 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenEnum::Keyword(Keyword::Extend) => {
-                let tk_ext = self.skip();
-                self.expression_prefix(allow_lambda)
-                    .map(|expr| Box::new(ast::Expression::Ext { tk_ext, expr }))
+                let tk_cast = self.skip();
+                self.expression_prefix(allow_lambda).map(|expr| {
+                    Box::new(ast::Expression::Cast {
+                        op: ast::Cast::Extend,
+                        tk_cast,
+                        expr,
+                    })
+                })
             }
             TokenEnum::Keyword(Keyword::Truncate) => {
-                let tk_trunc = self.skip();
-                self.expression_prefix(allow_lambda)
-                    .map(|expr| Box::new(ast::Expression::Trunc { tk_trunc, expr }))
+                let tk_cast = self.skip();
+                self.expression_prefix(allow_lambda).map(|expr| {
+                    Box::new(ast::Expression::Cast {
+                        op: ast::Cast::Truncate,
+                        tk_cast,
+                        expr,
+                    })
+                })
             }
             TokenEnum::Keyword(Keyword::Transmute) => {
-                let tk_transmute = self.skip();
-                self.expression_prefix(allow_lambda)
-                    .map(|expr| Box::new(ast::Expression::Transmute { tk_transmute, expr }))
+                let tk_cast = self.skip();
+                self.expression_prefix(allow_lambda).map(|expr| {
+                    Box::new(ast::Expression::Cast {
+                        op: ast::Cast::Transmute,
+                        tk_cast,
+                        expr,
+                    })
+                })
             }
             _ => self.expression_postfix(allow_lambda),
         }

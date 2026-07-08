@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 mu = { path = "../mu" }
-inkwell = { version = "0.9.0", features = ["llvm21-1"] }
+inkwell = { workspace = true }
 im = "15.1.0"

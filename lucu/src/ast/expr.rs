@@ -68,6 +68,8 @@ impl From<SymbolInequality> for InequalityOp {
     }
 }
 
+// NOTE: Should we seperate the (in)equality ops from the math ops?
+// they act a bit different: (in)equality returns bool, while math returns the same type
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
 pub enum BinOp {
     Equality(EqualityOp),
@@ -105,6 +107,13 @@ pub enum Index {
     },
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum Cast {
+    Truncate,
+    Extend,
+    Transmute,
+}
+
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Expression::")]
 pub enum Expression {
@@ -127,17 +136,9 @@ pub enum Expression {
         tk_equals: Token,
         value: Box<Self>,
     },
-    // casting
-    Trunc {
-        tk_trunc: Token,
-        expr: Box<Self>,
-    },
-    Ext {
-        tk_ext: Token,
-        expr: Box<Self>,
-    },
-    Transmute {
-        tk_transmute: Token,
+    Cast {
+        op: Cast,
+        tk_cast: Token,
         expr: Box<Self>,
     },
     If {
@@ -202,15 +203,9 @@ impl HasSpan for Expression {
             Expression::Let { tk_let, value, .. } => {
                 Span::new(tk_let.span().start, value.span().end)
             }
-            Expression::Trunc { tk_trunc, expr, .. } => {
-                Span::new(tk_trunc.span().start, expr.span().end)
+            Expression::Cast { tk_cast, expr, .. } => {
+                Span::new(tk_cast.span().start, expr.span().end)
             }
-            Expression::Ext { tk_ext, expr, .. } => Span::new(tk_ext.span().start, expr.span().end),
-            Expression::Transmute {
-                tk_transmute: tk_cast,
-                expr,
-                ..
-            } => Span::new(tk_cast.span().start, expr.span().end),
             Expression::If {
                 tk_if,
                 branch_true,

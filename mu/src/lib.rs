@@ -10,14 +10,29 @@ pub trait TypeTable:
     type Name: Debug;
 
     fn insert_type(&self, ty: TypeEnum<Self::Base>) -> Type;
-    fn push_aggregate(
+    fn insert_tuple(&self, tys: impl IntoIterator<Item = Type>) -> Types;
+    fn push_named_tuple(
         &self,
         tys: impl IntoIterator<Item = (Self::Name, Type)>,
         name: Self::Name,
     ) -> Types;
 
-    fn aggregate_name(&self, tys: Types) -> &Self::Name;
-    fn aggregate_field_name(&self, tys: Types, index: u32) -> &Self::Name;
+    fn tuple_name(&self, tys: Types) -> Option<&Self::Name>;
+    fn tuple_field_name(&self, tys: Types, index: u32) -> Option<&Self::Name>;
+
+    // convenience functions
+    fn insert_unit(&self) -> Type {
+        self.insert_type(TypeEnum::Product(self.insert_tuple([])))
+    }
+    fn insert_never(&self) -> Type {
+        self.insert_type(TypeEnum::Never)
+    }
+    fn insert_function(&self, from: Type, to: Type) -> Type {
+        self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
+    }
+    fn insert_base(&self, base: Self::Base) -> Type {
+        self.insert_type(TypeEnum::Base(base))
+    }
 }
 
 pub trait ExpressionTable:
@@ -30,22 +45,58 @@ pub trait ExpressionTable:
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Type(pub u32);
+pub struct Type(u32);
+
+impl Type {
+    pub unsafe fn new(i: u32) -> Self {
+        Self(i)
+    }
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Types(pub u32);
+pub struct Types(u32);
+
+impl Types {
+    pub unsafe fn new(i: u32) -> Self {
+        Self(i)
+    }
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Expression(pub u32);
+pub struct Expression(u32);
+
+impl Expression {
+    pub unsafe fn new(i: u32) -> Self {
+        Self(i)
+    }
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Expressions(pub u32);
+pub struct Expressions(u32);
+
+impl Expressions {
+    pub unsafe fn new(i: u32) -> Self {
+        Self(i)
+    }
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
 pub struct Function(Type, Type);
 
 impl Function {
-    pub fn new(from: Type, to: Type, tt: &impl TypeTable) -> Self {
+    pub fn new(from: Type, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
         assert!(to.first_order(tt));
         Function(from, to)
     }
@@ -55,11 +106,15 @@ impl Function {
     pub fn to(self) -> Type {
         self.1
     }
+    pub fn never_returns(self, tt: &(impl TypeTable + ?Sized)) -> bool {
+        matches!(tt[self.to()], TypeEnum::Never)
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
 pub enum TypeEnum<B> {
     Base(B),
+    Never,
     Product(Types),
     Function(Function),
 }
@@ -89,9 +144,9 @@ pub enum ExpressionEnum<O> {
 }
 
 impl Type {
-    pub fn first_order(self, tt: &impl TypeTable) -> bool {
+    pub fn first_order(self, tt: &(impl TypeTable + ?Sized)) -> bool {
         match tt[self] {
-            TypeEnum::Base(_) => true,
+            TypeEnum::Base(_) | TypeEnum::Never => true,
             TypeEnum::Product(product) => tt[product].iter().copied().all(|ty| ty.first_order(tt)),
             TypeEnum::Function(_) => false,
         }
@@ -99,10 +154,15 @@ impl Type {
 }
 
 impl Expression {
-    pub fn get_captures(self, tt: &impl ExpressionTable, captures: &mut [bool]) {
+    pub fn get_captures(self, tt: &(impl ExpressionTable + ?Sized), captures: &mut [bool]) {
         self.get_captures_inner(tt, 0, captures);
     }
-    fn get_captures_inner(self, tt: &impl ExpressionTable, offset: u32, captures: &mut [bool]) {
+    fn get_captures_inner(
+        self,
+        tt: &(impl ExpressionTable + ?Sized),
+        offset: u32,
+        captures: &mut [bool],
+    ) {
         match tt[self] {
             ExpressionEnum::Operation(_) => {}
             ExpressionEnum::Reference(n) => {

@@ -442,9 +442,7 @@ impl Ast for ast::Expression {
             | ast::Expression::Discard { expr, .. }
             | ast::Expression::UnOp { expr, .. }
             | ast::Expression::Dereference { expr, .. }
-            | ast::Expression::Trunc { expr, .. }
-            | ast::Expression::Ext { expr, .. }
-            | ast::Expression::Transmute { expr, .. } => visitor.visit(&**expr),
+            | ast::Expression::Cast { expr, .. } => visitor.visit(&**expr),
             ast::Expression::If {
                 condition,
                 branch_true,

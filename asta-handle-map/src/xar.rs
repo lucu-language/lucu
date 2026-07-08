@@ -125,7 +125,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> XarInner<T, BITS, CHUNKS> {
                 .as_ref()
         }
     }
-    pub(crate) unsafe fn push(&self, value: T, len: u32) {
+    pub(crate) unsafe fn push(&self, value: T, len: u32) -> &T {
         let meta = self.meta(len);
 
         let chunk_ptr = self.chunks[meta.chunk_idx as usize].get();
@@ -142,7 +142,11 @@ impl<T, const BITS: u32, const CHUNKS: usize> XarInner<T, BITS, CHUNKS> {
             }
         };
 
-        unsafe { ptr.offset(meta.elem_idx as isize).write(value) };
+        unsafe {
+            let offset = ptr.offset(meta.elem_idx as isize);
+            offset.write(value);
+            offset.as_ref()
+        }
     }
     pub(crate) unsafe fn drop(&mut self, len: u32) {
         if len == 0 {

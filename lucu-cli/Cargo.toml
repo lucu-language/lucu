@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+compact_str = { workspace = true }
 lucu = { path = "../lucu", features = ["watcher", "print"] }
+lucu-llvm = { path = "../lucu-llvm" }
+mu = { path = "../mu" }
 mu-llvm = { path = "../mu-llvm" }
+inkwell = { workspace = true }
 asta-annotate = { path = "../asta-annotate" }
 
 anstream = "0.6.21"

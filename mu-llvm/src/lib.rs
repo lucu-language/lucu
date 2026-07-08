@@ -1,0 +1,691 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::iter;
+use std::ops::Deref;
+use std::path::Path;
+use std::sync::RwLock;
+
+use inkwell::AddressSpace;
+use inkwell::attributes::AttributeLoc;
+use inkwell::context::Context;
+use inkwell::module::{Linkage, Module};
+use inkwell::passes::PassBuilderOptions;
+use inkwell::support::LLVMString;
+use inkwell::targets::{FileType, TargetData, TargetMachine};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, StructType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+
+pub trait Base {
+    fn get<'ctx, TT, ET>(&self, llvm: &Builder<'ctx, TT, ET>) -> Type<'ctx>
+    where
+        TT: mu::TypeTable<Base = Self>,
+        TT::Name: Deref<Target = str>,
+        ET: mu::ExpressionTable,
+        ET::Operation: Operation;
+}
+
+pub trait Operation {
+    type Callable: Callable + Clone + Hash + Eq;
+    fn build<'ctx, TT, ET>(
+        &self,
+        llvm: &Builder<'ctx, TT, ET>,
+    ) -> (mu::Type, Value<'ctx, Self::Callable>)
+    where
+        TT: mu::TypeTable,
+        TT::Base: Base,
+        TT::Name: Deref<Target = str>,
+        ET: mu::ExpressionTable<Operation = Self>;
+}
+
+pub trait Callable {
+    fn build<'ctx, TT, ET>(
+        &self,
+        llvm: &Builder<'ctx, TT, ET>,
+        param: DataValue<'ctx>,
+    ) -> DataValue<'ctx>
+    where
+        TT: mu::TypeTable,
+        TT::Base: Base,
+        TT::Name: Deref<Target = str>,
+        ET: mu::ExpressionTable,
+        ET::Operation: Operation<Callable = Self>;
+}
+
+#[derive(Clone, Copy)]
+pub struct DataValue<'ctx>(pub Option<BasicValueEnum<'ctx>>);
+
+#[derive(Clone, Copy)]
+pub struct DataType<'ctx>(pub Option<BasicTypeEnum<'ctx>>);
+
+#[derive(Clone, Copy)]
+pub enum Type<'ctx> {
+    Data(DataType<'ctx>),
+    Function(FunctionType<'ctx>),
+}
+
+impl<'ctx> Type<'ctx> {
+    fn nonzero_sized(self) -> bool {
+        match self {
+            Type::Data(data_type) => data_type.0.is_some(),
+            Type::Function(_) => true,
+        }
+    }
+    pub fn data_type<TT, ET>(self, builder: &Builder<'ctx, TT, ET>) -> DataType<'ctx>
+    where
+        ET: mu::ExpressionTable,
+        ET::Operation: Operation,
+    {
+        match self {
+            Type::Data(data_type) => data_type,
+            Type::Function(_) => DataType(Some(
+                builder.context.ptr_type(AddressSpace::default()).into(),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Value<'ctx, C> {
+    Data(DataValue<'ctx>),
+    Function(FunctionValue<'ctx>, Option<PointerValue<'ctx>>),
+    Callable(C),
+}
+
+impl<'ctx, C> Value<'ctx, C>
+where
+    C: Callable + Clone + Eq + Hash,
+{
+    fn build<TT, ET>(self, ty: mu::Type, builder: &Builder<'ctx, TT, ET>) -> DataValue<'ctx>
+    where
+        ET: mu::ExpressionTable,
+        ET::Operation: Operation<Callable = C>,
+        TT: mu::TypeTable,
+        TT::Base: Base,
+        TT::Name: Deref<Target = str>,
+    {
+        match self {
+            Value::Data(data) => data,
+            Value::Function(function, closure) => builder.build_closure(function, closure),
+            Value::Callable(c) => {
+                // we create a small function that is just this operation cuz we need it as a closure
+                let function = match builder.callables.read().unwrap().get(&c).copied() {
+                    Some(function) => function,
+                    None => {
+                        // build function
+                        let current_block = builder.builder.get_insert_block().unwrap();
+                        let mu::TypeEnum::Function(fun) = builder.tt[ty] else {
+                            panic!();
+                        };
+
+                        let function_type = builder.get_function_type(fun);
+                        let function =
+                            builder
+                                .module
+                                .add_function("", function_type, Some(Linkage::Private));
+                        builder.function_attributes(function);
+                        builder
+                            .builder
+                            .position_at_end(builder.context.append_basic_block(function, ""));
+                        let param = DataValue(
+                            (function.count_params() == 2)
+                                .then(|| function.get_first_param().unwrap()),
+                        );
+                        let out = c.build(builder, param);
+                        builder
+                            .builder
+                            .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+                            .unwrap();
+
+                        // return
+                        builder.builder.position_at_end(current_block);
+                        builder
+                            .callables
+                            .write()
+                            .unwrap()
+                            .insert(c.clone(), function);
+                        function
+                    }
+                };
+                builder.build_closure(function, None)
+            }
+        }
+    }
+}
+
+type CallableCache<'ctx, C> = HashMap<C, FunctionValue<'ctx>>;
+type StructCache<'ctx> = HashMap<mu::Types, (Box<[Type<'ctx>]>, Option<StructType<'ctx>>)>;
+
+pub struct Builder<'ctx, TT, ET>
+where
+    ET: mu::ExpressionTable,
+    ET::Operation: Operation,
+{
+    pub context: &'ctx Context,
+    pub tt: &'ctx TT,
+    pub et: &'ctx ET,
+    pub module: Module<'ctx>,
+    pub builder: inkwell::builder::Builder<'ctx>,
+
+    target_machine: TargetMachine,
+    target_data: TargetData,
+    structs: RwLock<StructCache<'ctx>>,
+    callables: RwLock<CallableCache<'ctx, <ET::Operation as Operation>::Callable>>,
+    // TODO: remove this from here
+    syscalls: Box<[(FunctionType<'ctx>, PointerValue<'ctx>)]>,
+}
+
+impl<'ctx, TT, ET> Builder<'ctx, TT, ET>
+where
+    ET: mu::ExpressionTable,
+    ET::Operation: Operation,
+{
+    // TODO: remove this from here
+    pub fn build_syscall<I>(&self, nr: IntValue<'ctx>, args: I) -> BasicValueEnum<'ctx>
+    where
+        I: IntoIterator<Item = BasicValueEnum<'ctx>>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let iter = args.into_iter();
+        let (ty, ptr) = self.syscalls[iter.len()];
+        self.builder
+            .build_indirect_call(
+                ty,
+                ptr,
+                &iter::once(nr.as_basic_value_enum())
+                    .chain(iter)
+                    .map(|v| {
+                        if v.is_pointer_value() {
+                            self.builder
+                                .build_ptr_to_int(
+                                    v.into_pointer_value(),
+                                    self.context.ptr_sized_int_type(&self.target_data, None),
+                                    "",
+                                )
+                                .unwrap()
+                                .into()
+                        } else {
+                            v.into()
+                        }
+                    })
+                    .collect::<Box<_>>(),
+                "",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+    }
+    pub fn new(
+        context: &'ctx Context,
+        tt: &'ctx TT,
+        et: &'ctx ET,
+        target_machine: TargetMachine,
+    ) -> Self {
+        let target_data = target_machine.get_target_data();
+        let ptr_int_t = context.ptr_sized_int_type(&target_data, None);
+        Self {
+            context,
+            tt,
+            et,
+            module: context.create_module("main"),
+            builder: context.create_builder(),
+            target_machine,
+            target_data,
+            syscalls: (0..=6)
+                .map(|n| {
+                    const SYS_RET: &str = "rax";
+                    const SYS_NR: &str = "rax";
+                    const SYS_ARGS: &[&str] = &["rdi", "rsi", "rdx", "r10", "r8", "r9"];
+                    const SYS_CLOBBER: &[&str] = &["rcx", "r11", "memory"];
+
+                    let inputs = iter::repeat_n(BasicMetadataTypeEnum::from(ptr_int_t), n + 1)
+                        .collect::<Vec<_>>();
+                    let ty = ptr_int_t.fn_type(&inputs, false);
+
+                    let constrains = format!(
+                        "={{{}}},{{{}}},{},{}",
+                        SYS_RET,
+                        SYS_NR,
+                        SYS_ARGS
+                            .iter()
+                            .take(n)
+                            .map(|r| format!("{{{}}}", r))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        SYS_CLOBBER
+                            .iter()
+                            .map(|r| format!("~{{{}}}", r))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                    let asm = context.create_inline_asm(
+                        ty,
+                        "syscall".into(),
+                        constrains,
+                        true,
+                        false,
+                        None,
+                        false,
+                    );
+
+                    (ty, asm)
+                })
+                .collect(),
+            structs: RwLock::new(HashMap::new()),
+            callables: RwLock::new(HashMap::new()),
+        }
+    }
+    pub fn eprint(&self) {
+        self.module.print_to_stderr();
+    }
+    pub fn verify(&self) -> Result<(), LLVMString> {
+        self.module.verify()
+    }
+    pub fn optimize(&self) -> Result<(), LLVMString> {
+        let opts = PassBuilderOptions::create();
+        self.module
+            .run_passes("default<O3>", &self.target_machine, opts)
+    }
+    pub fn write_asm(&self, path: &Path) -> Result<(), LLVMString> {
+        self.target_machine
+            .write_to_file(&self.module, FileType::Assembly, path)
+    }
+    pub fn write_object(&self, path: &Path) -> Result<(), LLVMString> {
+        self.target_machine
+            .write_to_file(&self.module, FileType::Object, path)
+    }
+
+    fn build_closure(
+        &self,
+        function: FunctionValue<'ctx>,
+        closure: Option<PointerValue<'ctx>>,
+    ) -> DataValue<'ctx> {
+        let mut array = self
+            .context
+            .ptr_type(AddressSpace::default())
+            .array_type(2)
+            .get_poison();
+        array = self
+            .builder
+            .build_insert_value(
+                array,
+                function.as_global_value().as_pointer_value(),
+                0,
+                "function pointer",
+            )
+            .unwrap()
+            .into_array_value();
+        if let Some(closure) = closure {
+            array = self
+                .builder
+                .build_insert_value(array, closure, 1, "function closure")
+                .unwrap()
+                .into_array_value();
+        }
+        DataValue(Some(array.into()))
+    }
+    fn get_closure(&self, data: DataValue<'ctx>) -> (PointerValue<'ctx>, PointerValue<'ctx>) {
+        let closure = data.0.unwrap().into_array_value();
+        let fptr = self
+            .builder
+            .build_extract_value(closure, 0, "function pointer")
+            .unwrap()
+            .into_pointer_value();
+        let cptr = self
+            .builder
+            .build_extract_value(closure, 1, "function closure")
+            .unwrap()
+            .into_pointer_value();
+        (fptr, cptr)
+    }
+    fn function_attributes(&self, function: FunctionValue<'ctx>) {
+        // do not probe the stack
+        // TODO: link with a library on windows that has a stack prober
+        function.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("no-stack-arg-probe", ""),
+        );
+    }
+}
+impl<'ctx, TT, ET> Builder<'ctx, TT, ET>
+where
+    TT: mu::TypeTable,
+    TT::Base: Base,
+    TT::Name: Deref<Target = str>,
+    ET: mu::ExpressionTable,
+    ET::Operation: Operation,
+{
+    pub fn get_struct(&self, tys: mu::Types) -> Option<StructType<'ctx>> {
+        match self.structs.read().unwrap().get(&tys) {
+            Some(&(_, s)) => s,
+            None => {
+                // NOTE: recursive structs will cause a stack overflow here
+                let fields = self.tt[tys]
+                    .iter()
+                    .map(|&field| self.get_type(field))
+                    .collect::<Box<_>>();
+                let llvm_fields = fields
+                    .iter()
+                    .filter_map(|f| f.data_type(self).0)
+                    .collect::<Box<_>>();
+                if llvm_fields.is_empty() {
+                    self.structs.write().unwrap().insert(tys, (fields, None));
+                    None
+                } else {
+                    let s = self.context.opaque_struct_type(self.tt.aggregate_name(tys));
+                    self.structs.write().unwrap().insert(tys, (fields, Some(s)));
+                    s.set_body(&llvm_fields, false);
+                    Some(s)
+                }
+            }
+        }
+    }
+    pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
+        match self.tt[ty] {
+            mu::TypeEnum::Base(ref base) => base.get(self),
+            mu::TypeEnum::Product(tys) => {
+                Type::Data(DataType(self.get_struct(tys).map(Into::into)))
+            }
+            mu::TypeEnum::Function(function) => Type::Function(self.get_function_type(function)),
+        }
+    }
+    pub fn get_function_type(&self, function: mu::Function) -> FunctionType<'ctx> {
+        let from = self.get_type(function.from());
+        let to = self.get_type(function.to());
+        let closure = self.context.ptr_type(AddressSpace::default());
+
+        let param_types = match from.data_type(self).0 {
+            Some(f) => [f.into(), closure.into()],
+            None => [closure.into(), closure.into()],
+        };
+        let param_types = match from.data_type(self).0 {
+            Some(_) => &param_types,
+            None => &param_types[0..1],
+        };
+
+        match to.data_type(self).0 {
+            Some(t) => t.fn_type(param_types, false),
+            None => self.context.void_type().fn_type(param_types, false),
+        }
+    }
+    pub fn build_function(
+        &self,
+        abstraction: mu::Expression,
+        name: &str,
+        linkage: Option<Linkage>,
+    ) -> FunctionValue<'ctx> {
+        let mu::ExpressionEnum::Abstract(ty, e) = self.et[abstraction] else {
+            panic!();
+        };
+        let mu::TypeEnum::Function(fun) = self.tt[ty] else {
+            panic!();
+        };
+
+        let function_type = self.get_function_type(fun);
+        let function = self.module.add_function(name, function_type, linkage);
+        self.function_attributes(function);
+        self.builder
+            .position_at_end(self.context.append_basic_block(function, ""));
+        let (ty, out) = self.build_expression(
+            e,
+            &im::Vector::unit((
+                fun.from(),
+                Value::Data(DataValue(
+                    (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
+                )),
+            )),
+        );
+        let out = out.build(ty, self);
+        self.builder
+            .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+            .unwrap();
+        self.builder.clear_insertion_position();
+        function
+    }
+    fn build_expression(
+        &self,
+        e: mu::Expression,
+        refs: &im::Vector<(
+            mu::Type,
+            Value<'ctx, <ET::Operation as Operation>::Callable>,
+        )>,
+    ) -> (
+        mu::Type,
+        Value<'ctx, <ET::Operation as Operation>::Callable>,
+    ) {
+        match self.et[e] {
+            mu::ExpressionEnum::Operation(ref o) => o.build(self),
+            mu::ExpressionEnum::Reference(n) => refs[n as usize].clone(),
+            mu::ExpressionEnum::Let(e1, e2) => {
+                let mut refs_new = refs.clone();
+                refs_new.push_front(self.build_expression(e1, refs));
+                self.build_expression(e2, &refs_new)
+            }
+            mu::ExpressionEnum::Sequence(es, en) => {
+                for &e in self.et[es].iter() {
+                    let _ = self.build_expression(e, refs);
+                }
+                self.build_expression(en, refs)
+            }
+            mu::ExpressionEnum::Construct(types, expressions) => {
+                let product = self.tt.insert_type(mu::TypeEnum::Product(types));
+                let s = self.get_struct(types);
+
+                let members = self.et[expressions]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &e)| {
+                        let (ty, val) = self.build_expression(e, refs);
+                        // any 'callable' will get turned into a small function
+                        val.build(ty, self)
+                            .0
+                            .map(|v| (self.tt.aggregate_field_name(types, i as u32).deref(), v))
+                    });
+
+                match s {
+                    Some(struc) => {
+                        let mut value = struc.get_poison();
+                        for (nth, (name, member)) in members.enumerate() {
+                            value = self
+                                .builder
+                                .build_insert_value(value, member, nth as u32, name)
+                                .unwrap()
+                                .into_struct_value();
+                        }
+                        (product, Value::Data(DataValue(Some(value.into()))))
+                    }
+                    None => {
+                        // fully consume fields iterator
+                        members.for_each(drop);
+                        (product, Value::Data(DataValue(None)))
+                    }
+                }
+            }
+            mu::ExpressionEnum::Apply(f, e) => {
+                let (fty, fval) = self.build_expression(f, refs);
+                let (ty, val) = self.build_expression(e, refs);
+                let val = val.build(ty, self);
+
+                let mu::TypeEnum::Function(f) = self.tt[fty] else {
+                    panic!()
+                };
+
+                match fval {
+                    Value::Data(data) => {
+                        let function_type = self.get_function_type(f);
+                        let (fptr, closure) = self.get_closure(data);
+                        let args = match val.0 {
+                            Some(v) => [v.into(), closure.into()],
+                            None => [closure.into(), closure.into()],
+                        };
+                        let args = match val.0 {
+                            Some(_) => &args,
+                            None => &args[0..1],
+                        };
+                        let out = self
+                            .builder
+                            .build_indirect_call(function_type, fptr, args, "")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .basic();
+                        (f.to(), Value::Data(DataValue(out)))
+                    }
+                    Value::Function(function, closure) => {
+                        let closure = closure.unwrap_or_else(|| {
+                            self.context.ptr_type(AddressSpace::default()).get_poison()
+                        });
+                        let args = match val.0 {
+                            Some(v) => [v.into(), closure.into()],
+                            None => [closure.into(), closure.into()],
+                        };
+                        let args = match val.0 {
+                            Some(_) => &args,
+                            None => &args[0..1],
+                        };
+                        let out = self
+                            .builder
+                            .build_call(function, args, "")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .basic();
+                        (f.to(), Value::Data(DataValue(out)))
+                    }
+                    Value::Callable(c) => {
+                        let out = c.build(self, val);
+                        (f.to(), Value::Data(out))
+                    }
+                }
+            }
+            mu::ExpressionEnum::Member(e, index) => {
+                let (ty, val) = self.build_expression(e, refs);
+
+                let mu::TypeEnum::Product(types) = self.tt[ty] else {
+                    panic!()
+                };
+                let member_types = &self.tt[types];
+                let member = member_types[index as usize];
+
+                let Value::Data(data) = val else { panic!() };
+
+                (
+                    member,
+                    Value::Data(DataValue(data.0.and_then(|data| {
+                        self.get_type(member).nonzero_sized().then(|| {
+                            let nth = member_types[..index as usize]
+                                .iter()
+                                .filter(|&&member| self.get_type(member).nonzero_sized())
+                                .count() as u32;
+                            self.builder
+                                .build_extract_value(
+                                    data.into_struct_value(),
+                                    nth,
+                                    self.tt.aggregate_field_name(types, index),
+                                )
+                                .unwrap()
+                        })
+                    }))),
+                )
+            }
+            mu::ExpressionEnum::Abstract(ty, e) => {
+                let current_block = self.builder.get_insert_block().unwrap();
+
+                // create function
+                let mu::TypeEnum::Function(fun) = self.tt[ty] else {
+                    panic!();
+                };
+
+                let function_type = self.get_function_type(fun);
+                let function = self
+                    .module
+                    .add_function("", function_type, Some(Linkage::Private));
+                self.function_attributes(function);
+                self.builder
+                    .position_at_end(self.context.append_basic_block(function, ""));
+
+                // build closure
+                let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
+                e.get_captures(self.et, &mut captures);
+                let mut closure_members = Vec::new();
+                let mut closure_refs = Vec::new();
+                for (i, (_, val)) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
+                    match *val {
+                        Value::Data(DataValue(Some(val))) => {
+                            closure_members.push(val);
+                            closure_refs.push(i);
+                        }
+                        Value::Function(_, Some(val)) => {
+                            closure_members.push(val.into());
+                            closure_refs.push(i);
+                        }
+                        _ => {}
+                    }
+                }
+
+                let mut refs_new = refs.clone();
+                let closure_type = (!closure_members.is_empty()).then(|| {
+                    let closure_pointer = function.get_last_param().unwrap().into_pointer_value();
+                    let closure_types = closure_members
+                        .iter()
+                        .map(|v| v.get_type())
+                        .collect::<Box<_>>();
+                    let closure_type = self.context.struct_type(&closure_types, false);
+                    let closure = self
+                        .builder
+                        .build_load(closure_type, closure_pointer, "")
+                        .unwrap()
+                        .into_struct_value();
+                    for (nth, i) in closure_refs.into_iter().enumerate() {
+                        match &mut refs_new[i].1 {
+                            Value::Data(DataValue(Some(val))) => {
+                                *val = self
+                                    .builder
+                                    .build_extract_value(closure, nth as u32, "")
+                                    .unwrap();
+                            }
+                            Value::Function(_, Some(val)) => {
+                                *val = self
+                                    .builder
+                                    .build_extract_value(closure, nth as u32, "")
+                                    .unwrap()
+                                    .into_pointer_value();
+                            }
+                            _ => {}
+                        }
+                    }
+                    closure_type
+                });
+
+                // build function
+                refs_new.push_front((
+                    fun.from(),
+                    Value::Data(DataValue(
+                        (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
+                    )),
+                ));
+                let (ty, out) = self.build_expression(e, &refs_new);
+                let out = out.build(ty, self);
+                self.builder
+                    .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+                    .unwrap();
+
+                // return
+                self.builder.position_at_end(current_block);
+                let closure_pointer = closure_type.map(|closure_type| {
+                    let closure_pointer = self.builder.build_alloca(closure_type, "").unwrap();
+                    let mut closure = closure_type.get_poison();
+                    for (nth, member) in closure_members.into_iter().enumerate() {
+                        closure = self
+                            .builder
+                            .build_insert_value(closure, member, nth as u32, "")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    let _ = self.builder.build_store(closure_pointer, closure).unwrap();
+                    closure_pointer
+                });
+                (ty, Value::Function(function, closure_pointer))
+            }
+            mu::ExpressionEnum::Try(ty, e) => todo!(),
+        }
+    }
+}

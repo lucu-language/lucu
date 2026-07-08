@@ -1,0 +1,9 @@
+[package]
+name = "mu-llvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mu = { path = "../mu" }
+inkwell = { version = "0.9.0", features = ["llvm21-1"] }
+im = "15.1.0"

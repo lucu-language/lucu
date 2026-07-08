@@ -17,71 +17,78 @@ pub(super) fn test() {
     let tt = unsafe { TypeTable::new() };
     let et = unsafe { ExpressionTable::new() };
 
-    let unit_t = tt.insert_unit();
-    let never_t = tt.insert_never();
-    let uptr_t = tt.insert_base(Base::UPTR);
-    let cstr_t = tt.insert_base(Base::CString);
+    let unit_t = tt.unit();
+    let never_t = tt.never();
+    let bool_t = tt.base(Base::Boolean);
+    let uptr_t = tt.base(Base::UPTR);
+    let cstr_t = tt.base(Base::CString);
 
-    let syscall1 = tt.insert_tuple([uptr_t, uptr_t]);
-    let syscall3 = tt.insert_tuple([uptr_t, uptr_t, uptr_t, uptr_t]);
+    let syscall1 = tt.tuple([uptr_t, uptr_t]);
+    let syscall3 = tt.tuple([uptr_t, uptr_t, uptr_t, uptr_t]);
 
-    let main_sig = tt.insert_function(unit_t, never_t);
+    let main_sig = tt.function(unit_t, never_t);
+    let branch_sig = tt.function(unit_t, unit_t);
 
-    // hello world
-    let syscall = et.push_expression(mu::ExpressionEnum::Operation(Operation::Callable(
-        Callable::Syscall { args: 3 },
-    )));
-    let nr = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        uptr_t,
-        Constant::Integer(1),
-    )));
-    let file = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        uptr_t,
-        Constant::Integer(0),
-    )));
-    let transmute = et.push_expression(mu::ExpressionEnum::Operation(Operation::Callable(
-        Callable::Cast {
-            from: cstr_t,
-            to: uptr_t,
-            op: Cast::Transmute,
-        },
-    )));
-    let msg_ptr = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        cstr_t,
-        Constant::String(CompactString::const_new("Hello, World!\n")),
-    )));
-    let msg_uptr = et.push_expression(mu::ExpressionEnum::Apply(transmute, msg_ptr));
-    let msg_len = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        uptr_t,
-        Constant::Integer(14),
-    )));
-    let syscall_members = et.push_expressions([nr, file, msg_uptr, msg_len]);
-    let syscall_struct =
-        et.push_expression(mu::ExpressionEnum::Construct(syscall3, syscall_members));
-    let syscall_apply0 = et.push_expression(mu::ExpressionEnum::Apply(syscall, syscall_struct));
-
-    // exit
-    let syscall = et.push_expression(mu::ExpressionEnum::Operation(Operation::Callable(
-        Callable::Syscall { args: 1 },
-    )));
-    let nr = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        uptr_t,
-        Constant::Integer(60),
-    )));
-    let exit_code = et.push_expression(mu::ExpressionEnum::Operation(Operation::Constant(
-        uptr_t,
-        Constant::Integer(0),
-    )));
-    let syscall_members = et.push_expressions([nr, exit_code]);
-    let syscall_struct =
-        et.push_expression(mu::ExpressionEnum::Construct(syscall1, syscall_members));
-    let syscall_apply1 = et.push_expression(mu::ExpressionEnum::Apply(syscall, syscall_struct));
-
-    // function
-    let body = et.push_expressions([syscall_apply0, syscall_apply1]);
-    let unreachable = et.push_expression(mu::ExpressionEnum::Operation(Operation::Unreachable));
-    let sequence = et.push_expression(mu::ExpressionEnum::Sequence(body, unreachable));
-    let abstraction = et.push_expression(mu::ExpressionEnum::Abstract(main_sig, sequence));
+    // let
+    let boolean = et.operation(Operation::Constant(bool_t, Constant::Integer(1)));
+    let abstraction = et.lambda(
+        main_sig,
+        et.sequence(
+            [
+                et.let_chain(
+                    [
+                        et.cast(
+                            cstr_t,
+                            uptr_t,
+                            Cast::Transmute,
+                            et.constant(
+                                cstr_t,
+                                Constant::String(CompactString::const_new("Hello, World!\n")),
+                            ),
+                        ),
+                        et.constant(uptr_t, Constant::Integer(14)),
+                    ],
+                    et.apply_operation_multi(
+                        Operation::Callable(Callable::If),
+                        tt.tuple([bool_t, branch_sig]),
+                        [
+                            boolean,
+                            et.lambda(
+                                branch_sig,
+                                et.apply_multi(
+                                    et.operation(Operation::Callable(Callable::Syscall {
+                                        args: 3,
+                                    })),
+                                    syscall3,
+                                    [
+                                        // nr
+                                        et.constant(uptr_t, Constant::Integer(1)),
+                                        // file
+                                        et.constant(uptr_t, Constant::Integer(0)),
+                                        // msg ptr
+                                        et.reference(2),
+                                        // msg len
+                                        et.reference(1),
+                                    ],
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+                et.apply_operation_multi(
+                    Operation::Callable(Callable::Syscall { args: 1 }),
+                    syscall1,
+                    [
+                        // nr
+                        et.constant(uptr_t, Constant::Integer(60)),
+                        // exit code
+                        et.constant(uptr_t, Constant::Integer(0)),
+                    ],
+                ),
+            ],
+            et.operation(Operation::Unreachable),
+        ),
+    );
 
     // COMPILE
     Target::initialize_native(&InitializationConfig::default()).unwrap();

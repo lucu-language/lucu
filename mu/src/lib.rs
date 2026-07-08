@@ -10,7 +10,7 @@ pub trait TypeTable:
     type Name: Debug;
 
     fn insert_type(&self, ty: TypeEnum<Self::Base>) -> Type;
-    fn insert_tuple(&self, tys: impl IntoIterator<Item = Type>) -> Types;
+    fn tuple(&self, tys: impl IntoIterator<Item = Type>) -> Types;
     fn push_named_tuple(
         &self,
         tys: impl IntoIterator<Item = (Self::Name, Type)>,
@@ -21,16 +21,16 @@ pub trait TypeTable:
     fn tuple_field_name(&self, tys: Types, index: u32) -> Option<&Self::Name>;
 
     // convenience functions
-    fn insert_unit(&self) -> Type {
-        self.insert_type(TypeEnum::Product(self.insert_tuple([])))
+    fn unit(&self) -> Type {
+        self.insert_type(TypeEnum::Product(self.tuple([])))
     }
-    fn insert_never(&self) -> Type {
+    fn never(&self) -> Type {
         self.insert_type(TypeEnum::Never)
     }
-    fn insert_function(&self, from: Type, to: Type) -> Type {
+    fn function(&self, from: Type, to: Type) -> Type {
         self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
     }
-    fn insert_base(&self, base: Self::Base) -> Type {
+    fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
     }
 }
@@ -42,6 +42,70 @@ pub trait ExpressionTable:
     type Operation;
     fn push_expression(&self, expr: ExpressionEnum<Self::Operation>) -> Expression;
     fn push_expressions(&self, exprs: impl IntoIterator<Item = Expression>) -> Expressions;
+
+    // convenience functions
+    fn construct(&self, types: Types, exprs: impl IntoIterator<Item = Expression>) -> Expression {
+        self.push_expression(ExpressionEnum::Construct(
+            types,
+            self.push_expressions(exprs),
+        ))
+    }
+    fn sequence(
+        &self,
+        exprs: impl IntoIterator<Item = Expression>,
+        expr: Expression,
+    ) -> Expression {
+        self.push_expression(ExpressionEnum::Sequence(self.push_expressions(exprs), expr))
+    }
+    fn apply_multi(
+        &self,
+        f: Expression,
+        types: Types,
+        vals: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        self.push_expression(ExpressionEnum::Apply(f, self.construct(types, vals)))
+    }
+    fn operation(&self, o: Self::Operation) -> Expression {
+        self.push_expression(ExpressionEnum::Operation(o))
+    }
+    fn apply_operation(&self, o: Self::Operation, val: Expression) -> Expression {
+        self.apply(self.operation(o), val)
+    }
+    fn apply_operation_multi(
+        &self,
+        o: Self::Operation,
+        types: Types,
+        vals: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        self.apply_multi(self.operation(o), types, vals)
+    }
+    /// Using De Bruijn-indices
+    fn reference(&self, i: u32) -> Expression {
+        self.push_expression(ExpressionEnum::Reference(i))
+    }
+    fn let_chain(
+        &self,
+        values: impl IntoIterator<IntoIter = impl DoubleEndedIterator<Item = Expression>>,
+        inner: Expression,
+    ) -> Expression {
+        let mut e = inner;
+        for v in values.into_iter().rev() {
+            e = self.push_expression(ExpressionEnum::Let(v, e));
+        }
+        e
+    }
+    fn apply(&self, f: Expression, val: Expression) -> Expression {
+        self.push_expression(ExpressionEnum::Apply(f, val))
+    }
+    fn member(&self, val: Expression, i: u32) -> Expression {
+        self.push_expression(ExpressionEnum::Member(val, i))
+    }
+    fn lambda(&self, ty: Type, body: Expression) -> Expression {
+        self.push_expression(ExpressionEnum::Abstract(ty, body))
+    }
+    fn try_break(&self, ty: Type, body: Expression) -> Expression {
+        self.push_expression(ExpressionEnum::Try(ty, body))
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -97,7 +161,7 @@ pub struct Function(Type, Type);
 
 impl Function {
     pub fn new(from: Type, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
-        assert!(to.first_order(tt));
+        assert!(to.is_first_order(tt));
         Function(from, to)
     }
     pub fn from(self) -> Type {
@@ -144,11 +208,25 @@ pub enum ExpressionEnum<O> {
 }
 
 impl Type {
-    pub fn first_order(self, tt: &(impl TypeTable + ?Sized)) -> bool {
+    pub fn is_first_order(self, tt: &(impl TypeTable + ?Sized)) -> bool {
         match tt[self] {
             TypeEnum::Base(_) | TypeEnum::Never => true,
-            TypeEnum::Product(product) => tt[product].iter().copied().all(|ty| ty.first_order(tt)),
+            TypeEnum::Product(product) => {
+                tt[product].iter().copied().all(|ty| ty.is_first_order(tt))
+            }
             TypeEnum::Function(_) => false,
+        }
+    }
+    pub fn into_product(self, tt: &(impl TypeTable + ?Sized)) -> Types {
+        match tt[self] {
+            TypeEnum::Product(types) => types,
+            _ => panic!(),
+        }
+    }
+    pub fn into_function(self, tt: &(impl TypeTable + ?Sized)) -> Function {
+        match tt[self] {
+            TypeEnum::Function(function) => function,
+            _ => panic!(),
         }
     }
 }

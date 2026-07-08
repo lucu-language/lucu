@@ -3,8 +3,10 @@ use std::ops::Index;
 use asta_handle_map::xar::Xar;
 use asta_handle_map::{HandleMap, HandleSet};
 use compact_str::CompactString;
+use mu::ExpressionTable as _;
 
-use crate::mu::{Base, Operation};
+use crate::ast;
+use crate::mu::{Base, Callable, Constant, Operation};
 
 pub struct TypeTable {
     types: HandleSet<mu::TypeEnum<Base>>,
@@ -56,7 +58,7 @@ impl mu::TypeTable for TypeTable {
         unsafe { mu::Type::new(i) }
     }
 
-    fn insert_tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Types {
+    fn tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Types {
         let fields = tys.into_iter().collect::<Box<_>>();
         *self
             .tuples
@@ -128,6 +130,21 @@ impl ExpressionTable {
             expressions: Xar::new(),
             expression_seqs: Xar::new(),
         }
+    }
+    pub fn cast(
+        &self,
+        from: mu::Type,
+        to: mu::Type,
+        op: ast::Cast,
+        value: mu::Expression,
+    ) -> mu::Expression {
+        self.apply(
+            self.operation(Operation::Callable(Callable::Cast { from, to, op })),
+            value,
+        )
+    }
+    pub fn constant(&self, ty: mu::Type, constant: Constant) -> mu::Expression {
+        self.operation(Operation::Constant(ty, constant))
     }
 }
 

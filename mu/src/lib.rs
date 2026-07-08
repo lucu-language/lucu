@@ -10,7 +10,7 @@ pub trait TypeTable:
     type Name: Debug;
 
     fn insert_type(&self, ty: TypeEnum<Self::Base>) -> Type;
-    fn tuple(&self, tys: impl IntoIterator<Item = Type>) -> Types;
+    fn insert_tuple(&self, tys: impl IntoIterator<Item = Type>) -> Types;
     fn push_named_tuple(
         &self,
         tys: impl IntoIterator<Item = (Self::Name, Type)>,
@@ -22,7 +22,7 @@ pub trait TypeTable:
 
     // convenience functions
     fn unit(&self) -> Type {
-        self.insert_type(TypeEnum::Product(self.tuple([])))
+        self.insert_type(TypeEnum::Product(self.insert_tuple([])))
     }
     fn never(&self) -> Type {
         self.insert_type(TypeEnum::Never)
@@ -35,11 +35,17 @@ pub trait TypeTable:
     }
 }
 
+pub trait Typed {
+    type Base;
+    fn get_type(&self, tt: &(impl TypeTable<Base = Self::Base> + ?Sized)) -> Type;
+}
+
 pub trait ExpressionTable:
     Index<Expression, Output = ExpressionEnum<Self::Operation>>
     + Index<Expressions, Output = [Expression]>
 {
-    type Operation;
+    type Base;
+    type Operation: Typed<Base = Self::Base>;
     fn push_expression(&self, expr: ExpressionEnum<Self::Operation>) -> Expression;
     fn push_expressions(&self, exprs: impl IntoIterator<Item = Expression>) -> Expressions;
 
@@ -80,8 +86,8 @@ pub trait ExpressionTable:
         self.apply_multi(self.operation(o), types, vals)
     }
     /// Using De Bruijn-indices
-    fn reference(&self, i: u32) -> Expression {
-        self.push_expression(ExpressionEnum::Reference(i))
+    fn reference(&self, ty: Type, i: u32) -> Expression {
+        self.push_expression(ExpressionEnum::Reference(ty, i))
     }
     fn let_chain(
         &self,
@@ -100,8 +106,8 @@ pub trait ExpressionTable:
     fn member(&self, val: Expression, i: u32) -> Expression {
         self.push_expression(ExpressionEnum::Member(val, i))
     }
-    fn lambda(&self, ty: Type, body: Expression) -> Expression {
-        self.push_expression(ExpressionEnum::Abstract(ty, body))
+    fn lambda(&self, from: Type, body: Expression) -> Expression {
+        self.push_expression(ExpressionEnum::Abstract(from, body))
     }
     fn try_break(&self, ty: Type, body: Expression) -> Expression {
         self.push_expression(ExpressionEnum::Try(ty, body))
@@ -189,7 +195,7 @@ pub enum ExpressionEnum<O> {
     Operation(O),
     // x
     /// Using De Bruijn-indices
-    Reference(u32),
+    Reference(Type, u32),
     // let x = e1 in e2
     Let(Expression, Expression),
     // e1; e2; e3; ...; en
@@ -201,7 +207,6 @@ pub enum ExpressionEnum<O> {
     // (pi e)
     Member(Expression, u32),
     // (lambda x : tau. e)
-    /// Type must be TypeEnum::Function
     Abstract(Type, Expression),
     // (mu x <- tau. e)
     Try(Type, Expression),
@@ -232,46 +237,70 @@ impl Type {
 }
 
 impl Expression {
-    pub fn get_captures(self, tt: &(impl ExpressionTable + ?Sized), captures: &mut [bool]) {
-        self.get_captures_inner(tt, 0, captures);
+    pub fn get_type<B>(
+        self,
+        tt: &(impl TypeTable<Base = B> + ?Sized),
+        et: &(impl ExpressionTable<Base = B> + ?Sized),
+    ) -> Type {
+        match et[self] {
+            ExpressionEnum::Operation(ref o) => o.get_type(tt),
+            ExpressionEnum::Reference(ty, _) | ExpressionEnum::Try(ty, _) => ty,
+            ExpressionEnum::Let(_, e) | ExpressionEnum::Sequence(_, e) => e.get_type(tt, et),
+            ExpressionEnum::Construct(types, _) => tt.insert_type(TypeEnum::Product(types)),
+            ExpressionEnum::Apply(f, _) => {
+                let fun = f.get_type(tt, et).into_function(tt);
+                fun.to()
+            }
+            ExpressionEnum::Member(e, n) => {
+                let types = e.get_type(tt, et).into_product(tt);
+                tt[types][n as usize]
+            }
+            ExpressionEnum::Abstract(from, e) => {
+                let to = e.get_type(tt, et);
+                tt.function(from, to)
+            }
+        }
+    }
+    pub fn get_captures(self, et: &(impl ExpressionTable + ?Sized), captures: &mut [bool]) {
+        self.get_captures_inner(et, 0, captures);
     }
     fn get_captures_inner(
         self,
-        tt: &(impl ExpressionTable + ?Sized),
+        et: &(impl ExpressionTable + ?Sized),
         offset: u32,
         captures: &mut [bool],
     ) {
-        match tt[self] {
+        match et[self] {
             ExpressionEnum::Operation(_) => {}
-            ExpressionEnum::Reference(n) => {
+            ExpressionEnum::Reference(_, n) => {
                 if n >= offset && ((n - offset) as usize) < captures.len() {
                     captures[(n - offset) as usize] = true;
                 }
             }
             ExpressionEnum::Let(e1, e2) => {
-                e1.get_captures_inner(tt, offset, captures);
-                e2.get_captures_inner(tt, offset + 1, captures);
+                e1.get_captures_inner(et, offset, captures);
+                e2.get_captures_inner(et, offset + 1, captures);
             }
             ExpressionEnum::Sequence(es, en) => {
-                for e in tt[es].iter() {
-                    e.get_captures_inner(tt, offset, captures);
+                for e in et[es].iter() {
+                    e.get_captures_inner(et, offset, captures);
                 }
-                en.get_captures_inner(tt, offset, captures);
+                en.get_captures_inner(et, offset, captures);
             }
             ExpressionEnum::Construct(_, es) => {
-                for e in tt[es].iter() {
-                    e.get_captures_inner(tt, offset, captures);
+                for e in et[es].iter() {
+                    e.get_captures_inner(et, offset, captures);
                 }
             }
             ExpressionEnum::Apply(e1, e2) => {
-                e1.get_captures_inner(tt, offset, captures);
-                e2.get_captures_inner(tt, offset, captures);
+                e1.get_captures_inner(et, offset, captures);
+                e2.get_captures_inner(et, offset, captures);
             }
             ExpressionEnum::Member(e, _) => {
-                e.get_captures_inner(tt, offset, captures);
+                e.get_captures_inner(et, offset, captures);
             }
             ExpressionEnum::Abstract(_, e) | ExpressionEnum::Try(_, e) => {
-                e.get_captures_inner(tt, offset + 1, captures);
+                e.get_captures_inner(et, offset + 1, captures);
             }
         }
     }

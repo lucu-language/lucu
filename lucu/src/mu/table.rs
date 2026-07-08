@@ -58,7 +58,7 @@ impl mu::TypeTable for TypeTable {
         unsafe { mu::Type::new(i) }
     }
 
-    fn tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Types {
+    fn insert_tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Types {
         let fields = tys.into_iter().collect::<Box<_>>();
         *self
             .tuples
@@ -165,6 +165,7 @@ impl Index<mu::Expressions> for ExpressionTable {
 }
 
 impl mu::ExpressionTable for ExpressionTable {
+    type Base = Base;
     type Operation = Operation;
 
     fn push_expression(&self, expr: mu::ExpressionEnum<Self::Operation>) -> mu::Expression {

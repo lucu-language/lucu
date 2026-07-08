@@ -23,16 +23,15 @@ pub(super) fn test() {
     let uptr_t = tt.base(Base::UPTR);
     let cstr_t = tt.base(Base::CString);
 
-    let syscall1 = tt.tuple([uptr_t, uptr_t]);
-    let syscall3 = tt.tuple([uptr_t, uptr_t, uptr_t, uptr_t]);
+    let syscall1 = tt.insert_tuple([uptr_t, uptr_t]);
+    let syscall3 = tt.insert_tuple([uptr_t, uptr_t, uptr_t, uptr_t]);
 
-    let main_sig = tt.function(unit_t, never_t);
     let branch_sig = tt.function(unit_t, unit_t);
 
     // let
     let boolean = et.operation(Operation::Constant(bool_t, Constant::Integer(1)));
     let abstraction = et.lambda(
-        main_sig,
+        unit_t,
         et.sequence(
             [
                 et.let_chain(
@@ -50,11 +49,11 @@ pub(super) fn test() {
                     ],
                     et.apply_operation_multi(
                         Operation::Callable(Callable::If),
-                        tt.tuple([bool_t, branch_sig]),
+                        tt.insert_tuple([bool_t, branch_sig]),
                         [
                             boolean,
                             et.lambda(
-                                branch_sig,
+                                unit_t,
                                 et.apply_multi(
                                     et.operation(Operation::Callable(Callable::Syscall {
                                         args: 3,
@@ -66,9 +65,9 @@ pub(super) fn test() {
                                         // file
                                         et.constant(uptr_t, Constant::Integer(0)),
                                         // msg ptr
-                                        et.reference(2),
+                                        et.reference(uptr_t, 2),
                                         // msg len
-                                        et.reference(1),
+                                        et.reference(uptr_t, 1),
                                     ],
                                 ),
                             ),

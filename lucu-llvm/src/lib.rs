@@ -7,10 +7,12 @@ use lucu::ast::Cast;
 use lucu::mu::table::{ExpressionTable, TypeTable};
 use lucu::mu::{Base, Callable, Constant, Operation};
 use lucu::type_table::{IntSize, Integer};
+use mu::Typed as _;
 
 pub struct Builder;
 
 impl mu_llvm::Builder for Builder {
+    type Base = Base;
     type TT = TypeTable;
     type ET = ExpressionTable;
     type Callable = Callable;

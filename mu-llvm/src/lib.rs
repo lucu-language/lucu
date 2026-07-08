@@ -22,8 +22,9 @@ pub trait Builder
 where
     <Self::TT as mu::TypeTable>::Name: Deref<Target = str>,
 {
-    type TT: mu::TypeTable + ?Sized;
-    type ET: mu::ExpressionTable + ?Sized;
+    type Base;
+    type TT: mu::TypeTable<Base = Self::Base> + ?Sized;
+    type ET: mu::ExpressionTable<Base = Self::Base> + ?Sized;
     type Callable: Clone + Hash + Eq;
 
     fn get_base_type<'ctx>(
@@ -451,10 +452,10 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         name: &str,
         linkage: Option<Linkage>,
     ) -> FunctionValue<'ctx> {
-        let mu::ExpressionEnum::Abstract(ty, e) = self.et[abstraction] else {
+        let mu::ExpressionEnum::Abstract(from, e) = self.et[abstraction] else {
             panic!();
         };
-        let fun = ty.into_function(self.tt);
+        let fun = mu::Function::new(from, e.get_type(self.tt, self.et), self.tt);
         let function_type = self.get_function_type(fun, false);
         let function = self.module.add_function(name, function_type, linkage);
         self.function_attributes(function);
@@ -494,7 +495,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     ) -> (mu::Type, Value<'ctx, B::Callable>) {
         match self.et[e] {
             mu::ExpressionEnum::Operation(ref o) => B::build_operation(o, self),
-            mu::ExpressionEnum::Reference(n) => refs[n as usize].clone(),
+            mu::ExpressionEnum::Reference(ty, n) => (ty, refs[n as usize].1.clone()),
             mu::ExpressionEnum::Let(e1, e2) => {
                 let mut refs_new = refs.clone();
                 refs_new.push_front(self.build_expression(e1, refs));
@@ -611,7 +612,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     }))),
                 )
             }
-            mu::ExpressionEnum::Abstract(ty, body) => {
+            mu::ExpressionEnum::Abstract(from, body) => {
                 let current_fun = {
                     let guard = self.function.read().unwrap();
                     guard.unwrap()
@@ -619,7 +620,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 let current_block = self.builder.get_insert_block().unwrap();
 
                 // create function
-                let fun = ty.into_function(self.tt);
+                let fun = mu::Function::new(from, body.get_type(self.tt, self.et), self.tt);
                 let function_type = self.get_function_type(fun, true);
                 let function = self
                     .module
@@ -632,7 +633,6 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 // build closure
                 let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
                 e.get_captures(self.et, &mut captures);
-                println!("{:?}", captures);
                 let mut closure_members = Vec::new();
                 let mut closure_refs = Vec::new();
                 for (i, (_, val)) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {

@@ -62,61 +62,46 @@ pub enum Operation {
     Callable(Callable),
 }
 
+impl mu::Typed for Callable {
+    type Base = Base;
+    fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
+        match *self {
+            Callable::Cast { from, to, .. } => tt.function([from], to),
+            Callable::UnOp { ty, .. } => tt.function([ty], ty),
+            Callable::BinOp { ty, op } => {
+                let output = match op {
+                    ast::BinOp::Equality(_) | ast::BinOp::Inequality(_) => tt.base(Base::Boolean),
+                    ast::BinOp::Math(_) => ty,
+                };
+                tt.function([ty, ty], output)
+            }
+            Callable::If => {
+                let bool = tt.base(Base::Boolean);
+                let unit = tt.unit();
+                let branch = tt.function([unit], unit);
+                tt.function([bool, branch], unit)
+            }
+            Callable::IfElse { to } => {
+                let bool = tt.base(Base::Boolean);
+                let unit = tt.unit();
+                let branch = tt.function([unit], to);
+                tt.function([bool, branch, branch], to)
+            }
+            Callable::Syscall { args } => {
+                let uptr = tt.base(Base::UPTR);
+                tt.function(iter::repeat_n(uptr, args as usize + 1), uptr)
+            }
+        }
+    }
+}
+
 impl mu::Typed for Operation {
     type Base = Base;
     fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
             Operation::Unreachable => tt.never(),
             Operation::Constant(ty, _) => ty,
-            Operation::Callable(ref callable) => match *callable {
-                Callable::Cast { from, to, .. } => tt.insert_type(mu::TypeEnum::Function(
-                    mu::Function::new(tt.insert_tuple([from]), to, tt),
-                )),
-                Callable::UnOp { ty, .. } => tt.insert_type(mu::TypeEnum::Function(
-                    mu::Function::new(tt.insert_tuple([ty]), ty, tt),
-                )),
-                Callable::BinOp { ty, op } => {
-                    let input = tt.insert_tuple([ty, ty]);
-                    match op {
-                        ast::BinOp::Equality(_) | ast::BinOp::Inequality(_) => {
-                            let bool = tt.insert_type(mu::TypeEnum::Base(Base::Boolean));
-                            tt.insert_type(mu::TypeEnum::Function(mu::Function::new(
-                                input, bool, tt,
-                            )))
-                        }
-                        ast::BinOp::Math(_) => {
-                            tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, ty, tt)))
-                        }
-                    }
-                }
-                Callable::If => {
-                    let bool = tt.base(Base::Boolean);
-                    let unit = tt.unit();
-                    let branch = tt.insert_type(mu::TypeEnum::Function(mu::Function::new(
-                        tt.insert_tuple([unit]),
-                        unit,
-                        tt,
-                    )));
-                    let input = tt.insert_tuple([bool, branch]);
-                    tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, unit, tt)))
-                }
-                Callable::IfElse { to } => {
-                    let bool = tt.base(Base::Boolean);
-                    let unit = tt.unit();
-                    let branch = tt.insert_type(mu::TypeEnum::Function(mu::Function::new(
-                        tt.insert_tuple([unit]),
-                        to,
-                        tt,
-                    )));
-                    let input = tt.insert_tuple([bool, branch, branch]);
-                    tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, to, tt)))
-                }
-                Callable::Syscall { args } => {
-                    let uptr = tt.insert_type(mu::TypeEnum::Base(Base::UPTR));
-                    let input = tt.insert_tuple(iter::repeat_n(uptr, args as usize + 1));
-                    tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, uptr, tt)))
-                }
-            },
+            Operation::Callable(ref callable) => callable.get_type(tt),
         }
     }
 }

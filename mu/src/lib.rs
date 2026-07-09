@@ -30,8 +30,12 @@ pub trait TypeTable:
     fn never(&self) -> Type {
         self.insert_type(TypeEnum::Never)
     }
-    fn function(&self, from: Types, to: Type) -> Type {
-        self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
+    fn function(&self, from: impl IntoIterator<Item = Type>, to: Type) -> Type {
+        self.insert_type(TypeEnum::Function(Function::new(
+            self.insert_tuple(from),
+            to,
+            self,
+        )))
     }
     fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
@@ -248,7 +252,7 @@ impl Expression {
             }
             ExpressionEnum::Abstract(from, e) => {
                 let to = e.get_type(tt, et);
-                tt.function(from, to)
+                tt.insert_type(TypeEnum::Function(Function::new(from, to, tt)))
             }
         }
     }

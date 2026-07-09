@@ -25,7 +25,7 @@ where
     type Base;
     type TT: mu::TypeTable<Base = Self::Base> + ?Sized;
     type ET: mu::ExpressionTable<Base = Self::Base> + ?Sized;
-    type Callable: Clone + Hash + Eq;
+    type Callable: mu::Typed<Base = Self::Base> + Clone + Hash + Eq;
 
     fn get_base_type<'ctx>(
         base: &<Self::TT as mu::TypeTable>::Base,
@@ -34,7 +34,7 @@ where
     fn build_operation<'ctx>(
         op: &<Self::ET as mu::ExpressionTable>::Operation,
         llvm: &Context<'ctx, Self>,
-    ) -> (mu::Type, Value<'ctx, Self::Callable>);
+    ) -> Value<'ctx, Self::Callable>;
     fn build_callable<'ctx>(
         op: &Self::Callable,
         op_ty: mu::Function,
@@ -147,9 +147,11 @@ where
 {
     pub fn build<B: Builder<Callable = C> + ?Sized>(
         self,
-        ty: mu::Type,
         llvm: &Context<'ctx, B>,
-    ) -> DataValue<'ctx> {
+    ) -> DataValue<'ctx>
+    where
+        C: mu::Typed<Base = B::Base>,
+    {
         match self {
             Value::Data(data) => data,
             Value::Function(function, closure) => llvm.build_closure(function, closure),
@@ -160,7 +162,7 @@ where
                     None => {
                         // build function
                         let current_block = llvm.builder.get_insert_block().unwrap();
-                        let fun = ty.into_function(llvm.tt);
+                        let fun = c.get_type(llvm.tt).into_function(llvm.tt);
 
                         let function_type = llvm.get_function_type(fun, true);
                         let function =
@@ -469,13 +471,14 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         self.builder
             .position_at_end(self.context.append_basic_block(function, ""));
         *self.function.write().unwrap() = Some(function);
-        let (ty, out) = self.build_expression(
-            e,
-            &im::Vector::unit(Value::Data(DataValue(
-                (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
-            ))),
-        );
-        let out = out.build(ty, self);
+        let out = self
+            .build_expression(
+                e,
+                &im::Vector::unit(Value::Data(DataValue(
+                    (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
+                ))),
+            )
+            .build(self);
         if fun.never_returns(self.tt) {
             self.builder.build_unreachable().unwrap();
         } else {
@@ -496,13 +499,13 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         &self,
         e: mu::Expression,
         refs: &im::Vector<Value<'ctx, B::Callable>>,
-    ) -> (mu::Type, Value<'ctx, B::Callable>) {
+    ) -> Value<'ctx, B::Callable> {
         match self.et[e] {
             mu::ExpressionEnum::Operation(ref o) => B::build_operation(o, self),
-            mu::ExpressionEnum::Reference(ty, n) => (ty, refs[n as usize].clone()),
+            mu::ExpressionEnum::Reference(_, n) => refs[n as usize].clone(),
             mu::ExpressionEnum::Let(e1, e2) => {
                 let mut refs_new = refs.clone();
-                refs_new.push_front(self.build_expression(e1, refs).1);
+                refs_new.push_front(self.build_expression(e1, refs));
                 self.build_expression(e2, &refs_new)
             }
             mu::ExpressionEnum::Sequence(es, en) => {
@@ -515,44 +518,39 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 types,
                 self.et[expressions]
                     .iter()
-                    .map(|&e| self.build_expression(e, refs).1),
+                    .map(|&e| self.build_expression(e, refs)),
             ),
             mu::ExpressionEnum::Apply(f, e) => {
-                let (fty, fval) = self.build_expression(f, refs);
-                let f = fty.into_function(self.tt);
-                let vals = self.et[e].iter().map(|&e| self.build_expression(e, refs).1);
-                self.build_call(f, fval, vals)
+                let fun = f.get_type(self.tt, self.et).into_function(self.tt);
+                let fval = self.build_expression(f, refs);
+                let vals = self.et[e].iter().map(|&e| self.build_expression(e, refs));
+                self.build_call(fun, fval, vals)
             }
             mu::ExpressionEnum::Member(e, index) => {
-                let (ty, val) = self.build_expression(e, refs);
-
-                let types = ty.into_product(self.tt);
+                let types = e.get_type(self.tt, self.et).into_product(self.tt);
                 let member_types = &self.tt[types];
                 let member = member_types[index as usize];
 
-                let Value::Data(data) = val else { panic!() };
+                let val = self.build_expression(e, refs).build(self);
 
-                (
-                    member,
-                    Value::Data(DataValue(data.0.and_then(|data| {
-                        self.get_type(member).nonzero_sized().then(|| {
-                            let nth = member_types[..index as usize]
-                                .iter()
-                                .filter(|&&member| self.get_type(member).nonzero_sized())
-                                .count() as u32;
-                            self.builder
-                                .build_extract_value(
-                                    data.into_struct_value(),
-                                    nth,
-                                    self.tt
-                                        .tuple_field_name(types, index)
-                                        .map(Deref::deref)
-                                        .unwrap_or(""),
-                                )
-                                .unwrap()
-                        })
-                    }))),
-                )
+                Value::Data(DataValue(val.0.and_then(|data| {
+                    self.get_type(member).nonzero_sized().then(|| {
+                        let nth = member_types[..index as usize]
+                            .iter()
+                            .filter(|&&member| self.get_type(member).nonzero_sized())
+                            .count() as u32;
+                        self.builder
+                            .build_extract_value(
+                                data.into_struct_value(),
+                                nth,
+                                self.tt
+                                    .tuple_field_name(types, index)
+                                    .map(Deref::deref)
+                                    .unwrap_or(""),
+                            )
+                            .unwrap()
+                    })
+                })))
             }
             mu::ExpressionEnum::Abstract(from, body) => {
                 let current_fun = {
@@ -629,8 +627,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 refs_new.push_front(Value::Data(DataValue(
                     (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
                 )));
-                let (ty, out) = self.build_expression(body, &refs_new);
-                let out = out.build(ty, self);
+                let out = self.build_expression(body, &refs_new).build(self);
                 self.builder
                     .build_return(
                         out.0
@@ -656,7 +653,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     let _ = self.builder.build_store(closure_pointer, closure).unwrap();
                     closure_pointer
                 });
-                (ty, Value::Function(function, closure_pointer))
+                Value::Function(function, closure_pointer)
             }
             mu::ExpressionEnum::Try(ty, e) => todo!(),
         }
@@ -665,58 +662,48 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         &self,
         types: mu::Types,
         members: impl IntoIterator<Item = Value<'ctx, B::Callable>>,
-    ) -> (mu::Type, Value<'ctx, B::Callable>) {
-        let members = members
-            .into_iter()
-            .zip(&self.tt[types])
-            .enumerate()
-            .filter_map(|(index, (val, &ty))| {
-                // any 'callable' will get turned into a small function
-                val.build(ty, self).0.map(|v| {
-                    (
-                        self.tt
-                            .tuple_field_name(types, index as u32)
-                            .map(Deref::deref)
-                            .unwrap_or(""),
-                        v,
-                    )
-                })
-            });
-
-        let product = self.tt.insert_type(mu::TypeEnum::Product(types));
-        (
-            product,
-            match self.get_struct(types) {
-                Some(struc) => {
-                    let mut value = struc.get_poison();
-                    for (nth, (name, member)) in members.enumerate() {
-                        value = self
-                            .builder
-                            .build_insert_value(value, member, nth as u32, name)
-                            .unwrap()
-                            .into_struct_value();
-                    }
-                    Value::Data(DataValue(Some(value.into())))
+    ) -> Value<'ctx, B::Callable> {
+        let members = members.into_iter().enumerate().filter_map(|(index, val)| {
+            // any 'callable' will get turned into a small function
+            val.build(self).0.map(|v| {
+                (
+                    self.tt
+                        .tuple_field_name(types, index as u32)
+                        .map(Deref::deref)
+                        .unwrap_or(""),
+                    v,
+                )
+            })
+        });
+        match self.get_struct(types) {
+            Some(struc) => {
+                let mut value = struc.get_poison();
+                for (nth, (name, member)) in members.enumerate() {
+                    value = self
+                        .builder
+                        .build_insert_value(value, member, nth as u32, name)
+                        .unwrap()
+                        .into_struct_value();
                 }
-                None => {
-                    // fully consume fields iterator
-                    members.for_each(drop);
-                    Value::Data(DataValue(None))
-                }
-            },
-        )
+                Value::Data(DataValue(Some(value.into())))
+            }
+            None => {
+                // fully consume fields iterator
+                members.for_each(drop);
+                Value::Data(DataValue(None))
+            }
+        }
     }
     pub fn build_call(
         &self,
         fun: mu::Function,
         fval: Value<'ctx, B::Callable>,
         vals: impl IntoIterator<Item = Value<'ctx, B::Callable>>,
-    ) -> (mu::Type, Value<'ctx, B::Callable>) {
+    ) -> Value<'ctx, B::Callable> {
         match fval {
             Value::Data(data) => self.build_indirect_call(fun, data, vals),
             Value::Function(function, closure) => {
-                let (ty, val) = self.build_construct(fun.from(), vals);
-                let val = val.build(ty, self);
+                let val = self.build_construct(fun.from(), vals).build(self);
 
                 let closure = closure
                     .unwrap_or_else(|| self.context.ptr_type(AddressSpace::default()).get_poison());
@@ -734,11 +721,11 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     .unwrap()
                     .try_as_basic_value()
                     .basic();
-                (fun.to(), Value::Data(DataValue(out)))
+                Value::Data(DataValue(out))
             }
             Value::Callable(c) => {
                 let out = B::build_callable(&c, fun, vals, self);
-                (fun.to(), Value::Data(out))
+                Value::Data(out)
             }
         }
     }
@@ -747,9 +734,8 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         fun: mu::Function,
         fval: DataValue<'ctx>,
         vals: impl IntoIterator<Item = Value<'ctx, B::Callable>>,
-    ) -> (mu::Type, Value<'ctx, B::Callable>) {
-        let (ty, val) = self.build_construct(fun.from(), vals);
-        let val = val.build(ty, self);
+    ) -> Value<'ctx, B::Callable> {
+        let val = self.build_construct(fun.from(), vals).build(self);
 
         let function_type = self.get_function_type(fun, true);
         let (fptr, closure) = self.get_closure(fval);
@@ -768,7 +754,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             .unwrap()
             .try_as_basic_value()
             .basic();
-        (fun.to(), Value::Data(DataValue(out)))
+        Value::Data(DataValue(out))
     }
     pub fn build_block(&self, name: &str) -> BasicBlock<'ctx> {
         self.context

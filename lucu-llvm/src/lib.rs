@@ -7,7 +7,6 @@ use lucu::ast::Cast;
 use lucu::mu::table::{ExpressionTable, TypeTable};
 use lucu::mu::{Base, Callable, Constant, Operation};
 use lucu::type_table::{IntSize, Integer};
-use mu::{TypeTable as _, Typed as _};
 
 pub struct Builder;
 
@@ -59,57 +58,48 @@ impl mu_llvm::Builder for Builder {
     fn build_operation<'ctx>(
         op: &Operation,
         llvm: &mu_llvm::Context<'ctx, Self>,
-    ) -> (mu::Type, mu_llvm::Value<'ctx, Callable>) {
-        let ty = op.get_type(llvm.tt);
-        (
-            ty,
-            match op {
-                Operation::Unreachable => {
-                    let _ = llvm.builder.build_unreachable().unwrap();
-                    mu_llvm::Value::Data(mu_llvm::DataValue(None))
-                }
-                Operation::Constant(_, constant) => mu_llvm::Value::Data(mu_llvm::DataValue(
-                    llvm.get_type(ty)
-                        .get_data_type(llvm)
-                        .0
-                        .map(|ty| match *constant {
-                            Constant::Integer(i) => ty.into_int_type().const_int(i, false).into(),
-                            Constant::Zero => ty.const_zero(),
-                            Constant::Uninit => match ty {
-                                BasicTypeEnum::ArrayType(array_type) => {
-                                    array_type.get_undef().into()
-                                }
-                                BasicTypeEnum::FloatType(float_type) => {
-                                    float_type.get_undef().into()
-                                }
-                                BasicTypeEnum::IntType(int_type) => int_type.get_undef().into(),
-                                BasicTypeEnum::PointerType(pointer_type) => {
-                                    pointer_type.get_undef().into()
-                                }
-                                BasicTypeEnum::StructType(struct_type) => {
-                                    struct_type.get_undef().into()
-                                }
-                                BasicTypeEnum::VectorType(vector_type) => {
-                                    vector_type.get_undef().into()
-                                }
-                                BasicTypeEnum::ScalableVectorType(scalable_vector_type) => {
-                                    scalable_vector_type.get_undef().into()
-                                }
-                            },
-                            Constant::String(ref value) => {
-                                let const_str = llvm.context.const_string(value.as_bytes(), true);
-                                let global_str =
-                                    llvm.module.add_global(const_str.get_type(), None, "");
-                                global_str.set_linkage(Linkage::Internal);
-                                global_str.set_constant(true);
-                                global_str.set_initializer(&const_str);
-                                global_str.as_pointer_value().into()
+    ) -> mu_llvm::Value<'ctx, Callable> {
+        match op {
+            Operation::Unreachable => {
+                let _ = llvm.builder.build_unreachable().unwrap();
+                mu_llvm::Value::Data(mu_llvm::DataValue(None))
+            }
+            Operation::Constant(ty, constant) => mu_llvm::Value::Data(mu_llvm::DataValue(
+                llvm.get_type(*ty)
+                    .get_data_type(llvm)
+                    .0
+                    .map(|ty| match *constant {
+                        Constant::Integer(i) => ty.into_int_type().const_int(i, false).into(),
+                        Constant::Zero => ty.const_zero(),
+                        Constant::Uninit => match ty {
+                            BasicTypeEnum::ArrayType(array_type) => array_type.get_undef().into(),
+                            BasicTypeEnum::FloatType(float_type) => float_type.get_undef().into(),
+                            BasicTypeEnum::IntType(int_type) => int_type.get_undef().into(),
+                            BasicTypeEnum::PointerType(pointer_type) => {
+                                pointer_type.get_undef().into()
                             }
-                        }),
-                )),
-                Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
-            },
-        )
+                            BasicTypeEnum::StructType(struct_type) => {
+                                struct_type.get_undef().into()
+                            }
+                            BasicTypeEnum::VectorType(vector_type) => {
+                                vector_type.get_undef().into()
+                            }
+                            BasicTypeEnum::ScalableVectorType(scalable_vector_type) => {
+                                scalable_vector_type.get_undef().into()
+                            }
+                        },
+                        Constant::String(ref value) => {
+                            let const_str = llvm.context.const_string(value.as_bytes(), true);
+                            let global_str = llvm.module.add_global(const_str.get_type(), None, "");
+                            global_str.set_linkage(Linkage::Internal);
+                            global_str.set_constant(true);
+                            global_str.set_initializer(&const_str);
+                            global_str.as_pointer_value().into()
+                        }
+                    }),
+            )),
+            Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
+        }
     }
 
     fn build_callable<'ctx>(
@@ -120,8 +110,8 @@ impl mu_llvm::Builder for Builder {
     ) -> mu_llvm::DataValue<'ctx> {
         let mut params = params.into_iter();
         match *op {
-            Callable::Cast { from, to, op } => {
-                let param = params.next().unwrap().build(from, llvm);
+            Callable::Cast { to, op, .. } => {
+                let param = params.next().unwrap().build(llvm);
                 let ty = llvm.get_type(to).get_data_type(llvm);
                 mu_llvm::DataValue(ty.0.map(|llvm_ty| match op {
                     Cast::Truncate => {
@@ -191,10 +181,9 @@ impl mu_llvm::Builder for Builder {
             Callable::BinOp { ty, op } => todo!(),
             Callable::If => {
                 let types = op_ty.from();
-                let bool_t = llvm.tt[types][0];
                 let branch_sig = llvm.tt[types][1].into_function(llvm.tt);
 
-                let bool = params.next().unwrap().build(bool_t, llvm);
+                let bool = params.next().unwrap().build(llvm);
                 let branch = params.next().unwrap();
 
                 let then_block = llvm.build_block("");
@@ -218,10 +207,9 @@ impl mu_llvm::Builder for Builder {
             }
             Callable::IfElse { to } => {
                 let types = op_ty.from();
-                let bool_t = llvm.tt[types][0];
                 let branch_sig = llvm.tt[types][1].into_function(llvm.tt);
 
-                let bool = params.next().unwrap().build(bool_t, llvm);
+                let bool = params.next().unwrap().build(llvm);
                 let branch_true = params.next().unwrap();
                 let branch_false = params.next().unwrap();
 
@@ -236,14 +224,14 @@ impl mu_llvm::Builder for Builder {
                     )
                     .unwrap();
                 llvm.builder.position_at_end(then_block);
-                let (_, val_true) = llvm.build_call(
+                let val_true = llvm.build_call(
                     branch_sig,
                     branch_true,
                     [mu_llvm::Value::Data(mu_llvm::DataValue(None))],
                 );
                 llvm.builder.build_unconditional_branch(next_block).unwrap();
                 llvm.builder.position_at_end(else_block);
-                let (_, val_false) = llvm.build_call(
+                let val_false = llvm.build_call(
                     branch_sig,
                     branch_false,
                     [mu_llvm::Value::Data(mu_llvm::DataValue(None))],
@@ -251,24 +239,23 @@ impl mu_llvm::Builder for Builder {
                 llvm.builder.build_unconditional_branch(next_block).unwrap();
                 llvm.builder.position_at_end(next_block);
                 mu_llvm::DataValue(llvm.get_type(to).get_data_type(llvm).0.map(|ty| {
-                    let val_true = val_true.build(to, llvm).0.unwrap();
-                    let val_false = val_false.build(to, llvm).0.unwrap();
+                    let val_true = val_true.build(llvm).0.unwrap();
+                    let val_false = val_false.build(llvm).0.unwrap();
                     let phi = llvm.builder.build_phi(ty, "").unwrap();
                     phi.add_incoming(&[(&val_true, then_block), (&val_false, else_block)]);
                     phi.as_basic_value()
                 }))
             }
             Callable::Syscall { .. } => {
-                let uptr_t = llvm.tt.base(Base::UPTR);
                 let nr = params
                     .next()
                     .unwrap()
-                    .build(uptr_t, llvm)
+                    .build(llvm)
                     .0
                     .unwrap()
                     .into_int_value();
                 let args = params
-                    .map(|arg| arg.build(uptr_t, llvm).0.unwrap().into_int_value())
+                    .map(|arg| arg.build(llvm).0.unwrap().into_int_value())
                     .collect::<Box<_>>();
                 mu_llvm::DataValue(Some(llvm.build_syscall(nr, args)))
             }

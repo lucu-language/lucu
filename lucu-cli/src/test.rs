@@ -21,11 +21,12 @@ pub(super) fn test() {
     let bool_t = tt.base(Base::Boolean);
     let uptr_t = tt.base(Base::UPTR);
     let cstr_t = tt.base(Base::CString);
+    let unit_tuple = tt.insert_tuple([unit_t]);
 
     // let
     let boolean = et.operation(Operation::Constant(bool_t, Constant::Integer(1)));
     let abstraction = et.lambda(
-        unit_t,
+        unit_tuple,
         et.sequence(
             [
                 et.let_chain(
@@ -41,15 +42,13 @@ pub(super) fn test() {
                         ),
                         et.constant(uptr_t, Constant::Integer(14)),
                     ],
-                    et.apply_operation_multi(
-                        &tt,
+                    et.apply_operation(
                         Operation::Callable(Callable::If),
                         [
                             boolean,
                             et.lambda(
-                                unit_t,
-                                et.apply_multi(
-                                    &tt,
+                                unit_tuple,
+                                et.apply(
                                     et.operation(Operation::Callable(Callable::Syscall {
                                         args: 3,
                                     })),
@@ -68,8 +67,7 @@ pub(super) fn test() {
                         ],
                     ),
                 ),
-                et.apply_operation_multi(
-                    &tt,
+                et.apply_operation(
                     Operation::Callable(Callable::Syscall { args: 1 }),
                     [
                         // nr

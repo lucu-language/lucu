@@ -1,4 +1,3 @@
-#[cfg(feature = "annotate")]
 pub mod ansi;
 
 use std::fmt::{self, Debug, Display};
@@ -49,7 +48,7 @@ impl Display for TokenEnum {
                     Symbol::Arrow => "->",
                     Symbol::FatArrow => "=>",
                     Symbol::Dash => "-",
-                    Symbol::DashDashDash => "---",
+                    Symbol::TripleDash => "---",
                     Symbol::Plus => "+",
                     Symbol::Ampersand => "&",
                     Symbol::Slash => "/",
@@ -214,7 +213,7 @@ pub enum Symbol {
     Arrow,          // ->
     FatArrow,       // =>
     Dash,           // -
-    DashDashDash,   // ---
+    TripleDash,     // ---
     Plus,           // +
     Ampersand,      // &
     Slash,          // /

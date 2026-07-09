@@ -3,6 +3,9 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::Index;
 
+mod kind;
+pub use kind::*;
+
 pub trait TypeTable:
     Index<Type, Output = TypeEnum<Self::Base>> + Index<Types, Output = [Type]>
 {
@@ -27,7 +30,7 @@ pub trait TypeTable:
     fn never(&self) -> Type {
         self.insert_type(TypeEnum::Never)
     }
-    fn function(&self, from: Type, to: Type) -> Type {
+    fn function(&self, from: Types, to: Type) -> Type {
         self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
     }
     fn base(&self, base: Self::Base) -> Type {
@@ -63,32 +66,18 @@ pub trait ExpressionTable:
     ) -> Expression {
         self.push_expression(ExpressionEnum::Sequence(self.push_expressions(exprs), expr))
     }
-    fn apply_multi(
-        &self,
-        tt: &(impl TypeTable<Base = Self::Base> + ?Sized),
-        f: Expression,
-        vals: impl IntoIterator<Item = Expression>,
-    ) -> Expression {
-        let types = f
-            .get_type(tt, self)
-            .into_function(tt)
-            .from()
-            .into_product(tt);
-        self.push_expression(ExpressionEnum::Apply(f, self.construct(types, vals)))
+    fn apply(&self, f: Expression, vals: impl IntoIterator<Item = Expression>) -> Expression {
+        self.push_expression(ExpressionEnum::Apply(f, self.push_expressions(vals)))
     }
     fn operation(&self, o: Self::Operation) -> Expression {
         self.push_expression(ExpressionEnum::Operation(o))
     }
-    fn apply_operation(&self, o: Self::Operation, val: Expression) -> Expression {
-        self.apply(self.operation(o), val)
-    }
-    fn apply_operation_multi(
+    fn apply_operation(
         &self,
-        tt: &(impl TypeTable<Base = Self::Base> + ?Sized),
         o: Self::Operation,
         vals: impl IntoIterator<Item = Expression>,
     ) -> Expression {
-        self.apply_multi(tt, self.operation(o), vals)
+        self.apply(self.operation(o), vals)
     }
     /// Using De Bruijn-indices
     fn reference(&self, ty: Type, i: u32) -> Expression {
@@ -105,13 +94,10 @@ pub trait ExpressionTable:
         }
         e
     }
-    fn apply(&self, f: Expression, val: Expression) -> Expression {
-        self.push_expression(ExpressionEnum::Apply(f, val))
-    }
     fn member(&self, val: Expression, i: u32) -> Expression {
         self.push_expression(ExpressionEnum::Member(val, i))
     }
-    fn lambda(&self, from: Type, body: Expression) -> Expression {
+    fn lambda(&self, from: Types, body: Expression) -> Expression {
         self.push_expression(ExpressionEnum::Abstract(from, body))
     }
     fn try_break(&self, ty: Type, body: Expression) -> Expression {
@@ -168,14 +154,14 @@ impl Expressions {
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Function(Type, Type);
+pub struct Function(Types, Type);
 
 impl Function {
-    pub fn new(from: Type, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
+    pub fn new(from: Types, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
         assert!(to.is_first_order(tt));
         Function(from, to)
     }
-    pub fn from(self) -> Type {
+    pub fn from(self) -> Types {
         self.0
     }
     pub fn to(self) -> Type {
@@ -208,11 +194,11 @@ pub enum ExpressionEnum<O> {
     // (e1, e2, e3, ...)
     Construct(Types, Expressions),
     // (e1 e2)
-    Apply(Expression, Expression),
+    Apply(Expression, Expressions),
     // (pi e)
     Member(Expression, u32),
     // (lambda x : tau. e)
-    Abstract(Type, Expression),
+    Abstract(Types, Expression),
     // (mu x <- tau. e)
     Try(Type, Expression),
 }
@@ -297,9 +283,11 @@ impl Expression {
                     e.get_captures_inner(et, offset, captures);
                 }
             }
-            ExpressionEnum::Apply(e1, e2) => {
+            ExpressionEnum::Apply(e1, es) => {
                 e1.get_captures_inner(et, offset, captures);
-                e2.get_captures_inner(et, offset, captures);
+                for &e2 in et[es].iter() {
+                    e2.get_captures_inner(et, offset, captures);
+                }
             }
             ExpressionEnum::Member(e, _) => {
                 e.get_captures_inner(et, offset, captures);

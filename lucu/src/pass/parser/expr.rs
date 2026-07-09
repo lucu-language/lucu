@@ -282,7 +282,7 @@ impl<'a> Parser<'a> {
                     return Box::new(ast::Expression::Return { tk_return, expr });
                 }
             }
-            TokenEnum::Symbol(Symbol::DashDashDash) => {
+            TokenEnum::Symbol(Symbol::TripleDash) => {
                 Result::new(Box::new(ast::Expression::Uninit(self.skip())))
             }
             TokenEnum::Keyword(Keyword::If) => {

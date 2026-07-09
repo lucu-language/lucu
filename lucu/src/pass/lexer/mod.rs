@@ -198,7 +198,7 @@ fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) 
         b'-' => {
             if next!(b'-') {
                 if next!(b'-') {
-                    Symbol(DashDashDash)
+                    Symbol(TripleDash)
                 } else {
                     Unknown
                 }

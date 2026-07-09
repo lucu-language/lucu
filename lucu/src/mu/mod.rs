@@ -69,14 +69,14 @@ impl mu::Typed for Operation {
             Operation::Unreachable => tt.never(),
             Operation::Constant(ty, _) => ty,
             Operation::Callable(ref callable) => match *callable {
-                Callable::Cast { from, to, .. } => {
-                    tt.insert_type(mu::TypeEnum::Function(mu::Function::new(from, to, tt)))
-                }
-                Callable::UnOp { ty, .. } => {
-                    tt.insert_type(mu::TypeEnum::Function(mu::Function::new(ty, ty, tt)))
-                }
+                Callable::Cast { from, to, .. } => tt.insert_type(mu::TypeEnum::Function(
+                    mu::Function::new(tt.insert_tuple([from]), to, tt),
+                )),
+                Callable::UnOp { ty, .. } => tt.insert_type(mu::TypeEnum::Function(
+                    mu::Function::new(tt.insert_tuple([ty]), ty, tt),
+                )),
                 Callable::BinOp { ty, op } => {
-                    let input = tt.insert_type(mu::TypeEnum::Product(tt.insert_tuple([ty, ty])));
+                    let input = tt.insert_tuple([ty, ty]);
                     match op {
                         ast::BinOp::Equality(_) | ast::BinOp::Inequality(_) => {
                             let bool = tt.insert_type(mu::TypeEnum::Base(Base::Boolean));
@@ -92,27 +92,28 @@ impl mu::Typed for Operation {
                 Callable::If => {
                     let bool = tt.base(Base::Boolean);
                     let unit = tt.unit();
-                    let branch =
-                        tt.insert_type(mu::TypeEnum::Function(mu::Function::new(unit, unit, tt)));
-                    let input =
-                        tt.insert_type(mu::TypeEnum::Product(tt.insert_tuple([bool, branch])));
+                    let branch = tt.insert_type(mu::TypeEnum::Function(mu::Function::new(
+                        tt.insert_tuple([unit]),
+                        unit,
+                        tt,
+                    )));
+                    let input = tt.insert_tuple([bool, branch]);
                     tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, unit, tt)))
                 }
                 Callable::IfElse { to } => {
                     let bool = tt.base(Base::Boolean);
                     let unit = tt.unit();
-                    let branch =
-                        tt.insert_type(mu::TypeEnum::Function(mu::Function::new(unit, to, tt)));
-                    let input = tt.insert_type(mu::TypeEnum::Product(
-                        tt.insert_tuple([bool, branch, branch]),
-                    ));
+                    let branch = tt.insert_type(mu::TypeEnum::Function(mu::Function::new(
+                        tt.insert_tuple([unit]),
+                        to,
+                        tt,
+                    )));
+                    let input = tt.insert_tuple([bool, branch, branch]);
                     tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, to, tt)))
                 }
                 Callable::Syscall { args } => {
                     let uptr = tt.insert_type(mu::TypeEnum::Base(Base::UPTR));
-                    let input = tt.insert_type(mu::TypeEnum::Product(
-                        tt.insert_tuple(iter::repeat_n(uptr, args as usize + 1)),
-                    ));
+                    let input = tt.insert_tuple(iter::repeat_n(uptr, args as usize + 1));
                     tt.insert_type(mu::TypeEnum::Function(mu::Function::new(input, uptr, tt)))
                 }
             },

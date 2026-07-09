@@ -1,3 +1,4 @@
+#![cfg(feature = "annotate")]
 use anstyle::{AnsiColor, Color};
 
 use crate::tokens::{Keyword, TokenEnum};

@@ -138,9 +138,9 @@ impl ExpressionTable {
         op: ast::Cast,
         value: mu::Expression,
     ) -> mu::Expression {
-        self.apply(
-            self.operation(Operation::Callable(Callable::Cast { from, to, op })),
-            value,
+        self.apply_operation(
+            Operation::Callable(Callable::Cast { from, to, op }),
+            [value],
         )
     }
     pub fn constant(&self, ty: mu::Type, constant: Constant) -> mu::Expression {

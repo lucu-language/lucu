@@ -138,13 +138,17 @@ impl ExpressionTable {
         op: ast::Cast,
         value: mu::Expression,
     ) -> mu::Expression {
-        self.apply_operation(
-            Operation::Callable(Callable::Cast { from, to, op }),
-            [value],
-        )
+        self.call(Callable::Cast { from, to, op }, [value])
     }
     pub fn constant(&self, ty: mu::Type, constant: Constant) -> mu::Expression {
         self.operation(Operation::Constant(ty, constant))
+    }
+    pub fn call(
+        &self,
+        c: Callable,
+        vals: impl IntoIterator<Item = mu::Expression>,
+    ) -> mu::Expression {
+        self.apply_operation(Operation::Callable(c), vals)
     }
 }
 

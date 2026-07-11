@@ -13,9 +13,14 @@ pub enum Base {
     // Never is part of Mu
     Boolean,
     Integer(Integer),
-    // TODO: this should be `^[:0]char`
-    CString,
-    // TODO: pointers, arrays
+    /// ^a
+    Pointer(mu::Type),
+    /// *a
+    MultiPointer(mu::Type),
+    /// ^[]a
+    PointerSlice(mu::Type),
+    /// [N]a
+    Array(mu::Type, u32),
 }
 
 impl Base {
@@ -55,7 +60,34 @@ pub enum Callable {
     // TODO: inline assembly
     /// (UPtr x UPtr x UPtr x ...) -> UPtr
     Syscall { args: u8 },
-    // TODO: deref, index, array
+
+    /// (a x (^a -> b)) -> b
+    LetReference { ty: mu::Type, to: mu::Type },
+    /// ^a -> a
+    Read { ty: mu::Type },
+    /// (^a x a) -> ()
+    Write { ty: mu::Type },
+    /// ^a -> ^b
+    PointerMember { tys: mu::Types, member: u32 },
+
+    /// ([N]a x USize) -> a
+    ArrayIndex { ty: mu::Type, size: u32 },
+    /// (^[]a x USize) -> ^a
+    PointerSliceIndex { ty: mu::Type },
+    /// Unsafe operation:
+    /// (*a x USize) -> ^a
+    MultiPointerIndex { ty: mu::Type },
+
+    /// (^[N]a x USize x USize) -> ^[]a
+    PointerArraySlice { ty: mu::Type, size: u32 },
+    /// (^[]a x USize x USize) -> ^[]a
+    PointerSliceSlice { ty: mu::Type },
+    /// Unsafe operation:
+    /// (*a x USize x USize) -> ^[]a
+    MultiPointerSlice { ty: mu::Type },
+
+    /// ^[]a -> USize
+    Len { ty: mu::Type },
 }
 
 pub enum Operation {
@@ -87,6 +119,64 @@ impl mu::Typed for Callable {
             Callable::Syscall { args } => {
                 let uptr = tt.base(Base::UPTR);
                 tt.function(iter::repeat_n(uptr, args as usize + 1), uptr)
+            }
+            Callable::LetReference { ty, to } => {
+                let ptr = tt.base(Base::Pointer(ty));
+                let fun = tt.function([ptr], to);
+                tt.function([ty, fun], to)
+            }
+            Callable::Read { ty } => {
+                let ptr = tt.base(Base::Pointer(ty));
+                tt.function([ptr], ty)
+            }
+            Callable::Write { ty } => {
+                let ptr = tt.base(Base::Pointer(ty));
+                let unit = tt.unit();
+                tt.function([ptr, ty], unit)
+            }
+            Callable::PointerMember { tys, member } => {
+                let product = tt.insert_type(mu::TypeEnum::Product(tys));
+                let field = tt[tys][member as usize];
+                tt.function([product], field)
+            }
+            Callable::MultiPointerIndex { ty } => {
+                let multi_ptr = tt.base(Base::MultiPointer(ty));
+                let usize = tt.base(Base::USIZE);
+                let ptr = tt.base(Base::Pointer(ty));
+                tt.function([multi_ptr, usize], ptr)
+            }
+            Callable::PointerSliceIndex { ty } => {
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                let usize = tt.base(Base::USIZE);
+                let ptr = tt.base(Base::Pointer(ty));
+                tt.function([ptr_slice, usize], ptr)
+            }
+            Callable::ArrayIndex { ty, size } => {
+                let arr = tt.base(Base::Array(ty, size));
+                let usize = tt.base(Base::USIZE);
+                tt.function([arr, usize], ty)
+            }
+            Callable::MultiPointerSlice { ty } => {
+                let multi_ptr = tt.base(Base::MultiPointer(ty));
+                let usize = tt.base(Base::USIZE);
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                tt.function([multi_ptr, usize, usize], ptr_slice)
+            }
+            Callable::PointerSliceSlice { ty } => {
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                let usize = tt.base(Base::USIZE);
+                tt.function([ptr_slice, usize, usize], ptr_slice)
+            }
+            Callable::PointerArraySlice { ty, size } => {
+                let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
+                let usize = tt.base(Base::USIZE);
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                tt.function([ptr_array, usize, usize], ptr_slice)
+            }
+            Callable::Len { ty } => {
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                let usize = tt.base(Base::USIZE);
+                tt.function([ptr_slice], usize)
             }
         }
     }

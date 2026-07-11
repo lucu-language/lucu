@@ -1,12 +1,13 @@
 use std::num::NonZeroU32;
 
 use inkwell::module::Linkage;
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicType as _, BasicTypeEnum};
 use inkwell::{AddressSpace, IntPredicate};
 use lucu::ast::{self, Cast};
 use lucu::mu::table::{ExpressionTable, TypeTable};
 use lucu::mu::{Base, Callable, Constant, Operation};
 use lucu::type_table::{IntSize, Integer};
+use mu::TypeTable as _;
 
 pub struct Builder;
 
@@ -36,9 +37,9 @@ impl mu_llvm::Builder for Builder {
         base: &Base,
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> mu_llvm::Type<'ctx> {
-        mu_llvm::Type::Data(match base {
+        mu_llvm::Type::Data(match *base {
             Base::Boolean => Some(llvm.context.bool_type().into()),
-            Base::Integer(integer) => match *integer {
+            Base::Integer(integer) => match integer {
                 Integer::Integer(_, IntSize::Exact(n)) => NonZeroU32::new(n)
                     .map(|bits| llvm.context.custom_width_int_type(bits).unwrap().into()),
                 Integer::Integer(_, IntSize::Index) => {
@@ -81,7 +82,23 @@ impl mu_llvm::Builder for Builder {
                     Some(llvm.context.i64_type().into())
                 }
             },
-            Base::CString => Some(llvm.context.ptr_type(AddressSpace::default()).into()),
+            Base::Pointer(inner) | Base::MultiPointer(inner) => llvm
+                .get_type(inner)
+                .nonzero_sized()
+                .then(|| llvm.context.ptr_type(AddressSpace::default()).into()),
+            Base::PointerSlice(inner) => llvm
+                .get_type(
+                    llvm.tt
+                        .insert_type(mu::TypeEnum::Product(llvm.tt.insert_tuple([
+                            llvm.tt.base(Base::Pointer(inner)),
+                            llvm.tt.base(Base::USIZE),
+                        ]))),
+                )
+                .basic_type(llvm),
+            Base::Array(inner, size) => llvm
+                .get_type(inner)
+                .basic_type(llvm)
+                .map(|ty| ty.array_type(size).into()),
         })
     }
 
@@ -117,12 +134,47 @@ impl mu_llvm::Builder for Builder {
                             }
                         },
                         Constant::String(ref value) => {
-                            let const_str = llvm.context.const_string(value.as_bytes(), true);
+                            // TODO: support UTF-16, UTF-32
+                            let const_str = llvm.context.const_string(value.as_bytes(), false);
                             let global_str = llvm.module.add_global(const_str.get_type(), None, "");
                             global_str.set_linkage(Linkage::Internal);
                             global_str.set_constant(true);
                             global_str.set_initializer(&const_str);
-                            global_str.as_pointer_value().into()
+                            match ty {
+                                // pointer
+                                BasicTypeEnum::PointerType(_) => {
+                                    global_str.as_pointer_value().into()
+                                }
+                                // slice
+                                BasicTypeEnum::StructType(ty) => {
+                                    let mut out = ty.get_poison();
+                                    out = llvm
+                                        .builder
+                                        .build_insert_value(
+                                            out,
+                                            global_str.as_pointer_value(),
+                                            0,
+                                            "",
+                                        )
+                                        .unwrap()
+                                        .into_struct_value();
+                                    out = llvm
+                                        .builder
+                                        .build_insert_value(
+                                            out,
+                                            ty.get_field_type_at_index(1)
+                                                .unwrap()
+                                                .into_int_type()
+                                                .const_int(value.len() as u64, false),
+                                            1,
+                                            "",
+                                        )
+                                        .unwrap()
+                                        .into_struct_value();
+                                    out.into()
+                                }
+                                _ => panic!(),
+                            }
                         }
                     },
                 ))
@@ -356,6 +408,220 @@ impl mu_llvm::Builder for Builder {
                     .map(|arg| arg.build(llvm).basic_value(llvm).unwrap().into_int_value())
                     .collect::<Box<_>>();
                 mu_llvm::Value::Data(Some(llvm.build_syscall(nr, args)))
+            }
+            Callable::LetReference { ty, to } => {
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let ptr = val.map(|val| {
+                    let alloc = llvm.builder.build_alloca(val.get_type(), "").unwrap();
+                    let _ = llvm.builder.build_store(alloc, val).unwrap();
+                    alloc.into()
+                });
+
+                let fun = mu::Function::new(
+                    llvm.tt.insert_tuple([llvm.tt.base(Base::Pointer(ty))]),
+                    to,
+                    llvm.tt,
+                );
+                let fval = params.next().unwrap();
+                fval.build_call(fun, [mu_llvm::Value::Data(ptr).into()], llvm)
+            }
+            Callable::Read { ty } => {
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                mu_llvm::Value::Data(val.map(|val| {
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    llvm.builder
+                        .build_load(llvm_ty, val.into_pointer_value(), "")
+                        .unwrap()
+                }))
+            }
+            Callable::Write { .. } => {
+                let ptr = params.next().unwrap().build(llvm).basic_value(llvm);
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                if let Some((ptr, val)) = ptr.zip(val) {
+                    llvm.builder
+                        .build_store(ptr.into_pointer_value(), val)
+                        .unwrap();
+                }
+                mu_llvm::Value::Data(None)
+            }
+            Callable::PointerMember { tys, member } => {
+                let val = params.next().unwrap().build(llvm);
+                llvm.build_member_pointer(tys, member, val)
+            }
+            Callable::MultiPointerIndex { ty } => {
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let index = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                mu_llvm::Value::Data(val.map(|val| {
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    unsafe {
+                        llvm.builder
+                            .build_gep(llvm_ty, val.into_pointer_value(), &[index], "")
+                    }
+                    .unwrap()
+                    .into()
+                }))
+            }
+            Callable::PointerSliceIndex { ty } => {
+                // TODO: do a bounds check
+                let val = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_struct_value();
+                let index = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                mu_llvm::Value::Data((val.get_type().count_fields() == 2).then(|| {
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    let ptr = llvm
+                        .builder
+                        .build_extract_value(val, 0, "")
+                        .unwrap()
+                        .into_pointer_value();
+                    unsafe { llvm.builder.build_gep(llvm_ty, ptr, &[index], "") }
+                        .unwrap()
+                        .into()
+                }))
+            }
+            Callable::ArrayIndex { ty, size } => {
+                // TODO: do a bounds check
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let index = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                mu_llvm::Value::Data(val.map(|val| {
+                    // there is no dynamic array index in llvm,
+                    // so we gotta do an alloca
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    let ptr = llvm
+                        .builder
+                        .build_alloca(llvm_ty.array_type(size), "")
+                        .unwrap();
+                    let _ = llvm.builder.build_store(ptr, val).unwrap();
+                    let offset =
+                        unsafe { llvm.builder.build_gep(llvm_ty, ptr, &[index], "") }.unwrap();
+                    llvm.builder.build_load(llvm_ty, offset, "").unwrap()
+                }))
+            }
+            Callable::PointerSliceSlice { ty } => {
+                // TODO: do a bounds check
+                let val = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_struct_value();
+                let from = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                let to = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+
+                let count_fields = val.get_type().count_fields();
+                let ptr = (count_fields == 2).then(|| {
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    let ptr = llvm
+                        .builder
+                        .build_extract_value(val, 0, "")
+                        .unwrap()
+                        .into_pointer_value();
+                    unsafe { llvm.builder.build_gep(llvm_ty, ptr, &[from], "") }.unwrap()
+                });
+                let len = llvm.builder.build_int_sub(to, from, "").unwrap();
+
+                let mut out = val.get_type().get_poison();
+                if let Some(ptr) = ptr {
+                    out = llvm
+                        .builder
+                        .build_insert_value(out, ptr, 0, "")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                out = llvm
+                    .builder
+                    .build_insert_value(out, len, count_fields - 1, "")
+                    .unwrap()
+                    .into_struct_value();
+                mu_llvm::Value::Data(Some(out.into()))
+            }
+            Callable::PointerArraySlice { ty, .. } | Callable::MultiPointerSlice { ty } => {
+                // TODO: do a bounds check
+                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let from = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                let to = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+
+                let len = llvm.builder.build_int_sub(to, from, "").unwrap();
+
+                let mut out = llvm
+                    .get_type(llvm.tt.base(Base::PointerSlice(ty)))
+                    .basic_type(llvm)
+                    .unwrap()
+                    .into_struct_type()
+                    .get_poison();
+                if let Some(ptr) = val {
+                    out = llvm
+                        .builder
+                        .build_insert_value(out, ptr.into_pointer_value(), 0, "")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                out = llvm
+                    .builder
+                    .build_insert_value(out, len, val.map(|_| 1).unwrap_or(0), "")
+                    .unwrap()
+                    .into_struct_value();
+                mu_llvm::Value::Data(Some(out.into()))
+            }
+            Callable::Len { .. } => {
+                let val = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_struct_value();
+                llvm.builder
+                    .build_extract_value(val, val.get_type().count_fields() - 1, "")
+                    .unwrap()
+                    .into()
             }
         }
     }

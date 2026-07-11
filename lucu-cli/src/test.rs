@@ -20,92 +20,185 @@ pub(super) fn test() {
 
     let i8_t = tt.base(Base::Integer(Integer::signed(IntSize::Exact(8))));
     let unit_t = tt.unit();
-    let bool_t = tt.base(Base::Boolean);
     let uptr_t = tt.base(Base::UPTR);
-    let cstr_t = tt.base(Base::CString);
+    let usize_t = tt.base(Base::USIZE);
+    let array_size = 16;
+    let i8_ptr_t = tt.base(Base::Pointer(i8_t));
+    let uptr_ptr_t = tt.base(Base::Pointer(uptr_t));
+    let uptr_slice_ptr_t = tt.base(Base::PointerSlice(uptr_t));
+    let uptr_array_t = tt.base(Base::Array(uptr_t, array_size));
+    let uptr_array_ptr_t = tt.base(Base::Pointer(uptr_array_t));
+    let uptr_array_ptr_tuple = tt.insert_tuple([uptr_array_ptr_t]);
+    let uptr_array_ptr_tuple_t = tt.insert_type(mu::TypeEnum::Product(uptr_array_ptr_tuple));
+    let str_t = tt.base(Base::PointerSlice(i8_t));
     let unit_tuple = tt.insert_tuple([unit_t]);
 
     // let
-    let boolean = et.operation(Operation::Constant(bool_t, Constant::Integer(1)));
     let abstraction = et.lambda(
         unit_tuple,
         et.sequence(
             [
                 et.let_chain(
                     [
-                        et.cast(
-                            cstr_t,
-                            uptr_t,
-                            Cast::Transmute,
-                            et.apply_operation(
-                                Operation::Callable(Callable::IfElse { to: cstr_t }),
-                                [
-                                    et.apply_operation(
-                                        Operation::Callable(Callable::PredicateOp {
-                                            ty: i8_t,
-                                            op: PredicateOp::Equality(EqualityOp::Equals),
-                                        }),
+                        et.call(
+                            Callable::IfElse { to: str_t },
+                            [
+                                et.call(
+                                    Callable::PredicateOp {
+                                        ty: i8_t,
+                                        op: PredicateOp::Equality(EqualityOp::Equals),
+                                    },
+                                    [
+                                        // 1 % -123 == 1
+                                        et.call(
+                                            Callable::MathOp {
+                                                ty: i8_t,
+                                                op: MathOp::Mod,
+                                            },
+                                            [
+                                                et.constant(i8_t, Constant::Integer(1)),
+                                                et.call(
+                                                    Callable::UnOp {
+                                                        ty: i8_t,
+                                                        op: UnOp::Negate,
+                                                    },
+                                                    [et.constant(i8_t, Constant::Integer(123))],
+                                                ),
+                                            ],
+                                        ),
+                                        et.constant(i8_t, Constant::Integer(1)),
+                                    ],
+                                ),
+                                et.lambda(
+                                    unit_tuple,
+                                    et.constant(
+                                        str_t,
+                                        Constant::String(CompactString::const_new(
+                                            "Hello, World!\n",
+                                        )),
+                                    ),
+                                ),
+                                et.lambda(
+                                    unit_tuple,
+                                    et.constant(
+                                        str_t,
+                                        Constant::String(CompactString::const_new(
+                                            "Wrong value?\n",
+                                        )),
+                                    ),
+                                ),
+                            ],
+                        ),
+                        et.call(
+                            Callable::LetReference {
+                                ty: uptr_array_t,
+                                to: uptr_t,
+                            },
+                            [
+                                et.constant(uptr_array_t, Constant::Uninit),
+                                et.lambda(
+                                    uptr_array_ptr_tuple,
+                                    et.let_chain(
                                         [
-                                            // 1 % -123 == 1
-                                            et.apply_operation(
-                                                Operation::Callable(Callable::MathOp {
-                                                    ty: i8_t,
-                                                    op: MathOp::Mod,
-                                                }),
+                                            et.call(
+                                                Callable::PointerArraySlice {
+                                                    ty: uptr_t,
+                                                    size: array_size,
+                                                },
                                                 [
-                                                    et.constant(i8_t, Constant::Integer(1)),
-                                                    et.apply_operation(
-                                                        Operation::Callable(Callable::UnOp {
-                                                            ty: i8_t,
-                                                            op: UnOp::Negate,
-                                                        }),
-                                                        [et.constant(i8_t, Constant::Integer(123))],
+                                                    et.member(
+                                                        et.reference(uptr_array_ptr_tuple_t, 0),
+                                                        0,
+                                                    ),
+                                                    et.constant(usize_t, Constant::Zero),
+                                                    et.constant(
+                                                        usize_t,
+                                                        Constant::Integer(array_size as u64),
                                                     ),
                                                 ],
                                             ),
-                                            et.constant(i8_t, Constant::Integer(1)),
+                                            et.call(
+                                                Callable::PointerSliceIndex { ty: uptr_t },
+                                                [
+                                                    et.reference(uptr_slice_ptr_t, 0),
+                                                    et.constant(usize_t, Constant::Integer(6)),
+                                                ],
+                                            ),
+                                            et.call(
+                                                Callable::PointerSliceIndex { ty: uptr_t },
+                                                [
+                                                    et.reference(uptr_slice_ptr_t, 1),
+                                                    et.constant(usize_t, Constant::Integer(7)),
+                                                ],
+                                            ),
                                         ],
-                                    ),
-                                    et.lambda(
-                                        unit_tuple,
-                                        et.constant(
-                                            cstr_t,
-                                            Constant::String(CompactString::const_new(
-                                                "Hello, World!\n",
-                                            )),
+                                        et.sequence(
+                                            [
+                                                et.call(
+                                                    Callable::Write { ty: uptr_t },
+                                                    [
+                                                        et.reference(uptr_ptr_t, 0),
+                                                        et.constant(uptr_t, Constant::Integer(13)),
+                                                    ],
+                                                ),
+                                                et.call(
+                                                    Callable::Write { ty: uptr_t },
+                                                    [
+                                                        et.reference(uptr_ptr_t, 1),
+                                                        et.constant(uptr_t, Constant::Integer(14)),
+                                                    ],
+                                                ),
+                                            ],
+                                            et.call(
+                                                Callable::Read { ty: uptr_t },
+                                                [et.reference(uptr_ptr_t, 1)],
+                                            ),
                                         ),
                                     ),
-                                    et.lambda(
-                                        unit_tuple,
-                                        et.constant(
-                                            cstr_t,
-                                            Constant::String(CompactString::const_new(
-                                                "Wrong value?!\n",
-                                            )),
-                                        ),
+                                ),
+                            ],
+                        ),
+                    ],
+                    et.call(
+                        Callable::If,
+                        [
+                            et.call(
+                                Callable::PredicateOp {
+                                    ty: usize_t,
+                                    op: PredicateOp::Equality(EqualityOp::Equals),
+                                },
+                                [
+                                    et.call(Callable::Len { ty: i8_t }, [et.reference(str_t, 1)]),
+                                    et.cast(
+                                        uptr_t,
+                                        usize_t,
+                                        Cast::Truncate,
+                                        et.reference(uptr_t, 0),
                                     ),
                                 ],
                             ),
-                        ),
-                        et.constant(uptr_t, Constant::Integer(14)),
-                    ],
-                    et.apply_operation(
-                        Operation::Callable(Callable::If),
-                        [
-                            boolean,
                             et.lambda(
                                 unit_tuple,
-                                et.apply(
-                                    et.operation(Operation::Callable(Callable::Syscall {
-                                        args: 3,
-                                    })),
+                                et.call(
+                                    Callable::Syscall { args: 3 },
                                     [
                                         // nr
                                         et.constant(uptr_t, Constant::Integer(1)),
                                         // file
                                         et.constant(uptr_t, Constant::Integer(0)),
                                         // msg ptr
-                                        et.reference(uptr_t, 2),
+                                        et.cast(
+                                            i8_ptr_t,
+                                            uptr_t,
+                                            Cast::Transmute,
+                                            et.call(
+                                                Callable::PointerSliceIndex { ty: i8_t },
+                                                [
+                                                    et.reference(str_t, 2),
+                                                    et.constant(usize_t, Constant::Zero),
+                                                ],
+                                            ),
+                                        ),
                                         // msg len
                                         et.reference(uptr_t, 1),
                                     ],
@@ -114,8 +207,8 @@ pub(super) fn test() {
                         ],
                     ),
                 ),
-                et.apply_operation(
-                    Operation::Callable(Callable::Syscall { args: 1 }),
+                et.call(
+                    Callable::Syscall { args: 1 },
                     [
                         // nr
                         et.constant(uptr_t, Constant::Integer(60)),

@@ -586,29 +586,8 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             }
             mu::ExpressionEnum::Member(e, index) => {
                 let types = e.get_type(self.tt, self.et).into_product(self.tt);
-                let member_types = &self.tt[types];
-                let member = member_types[index as usize];
-
-                let val = self.build_expression(e, refs).basic_value(self);
-
-                Value::Data(val.and_then(|data| {
-                    self.get_type(member).nonzero_sized().then(|| {
-                        let nth = member_types[..index as usize]
-                            .iter()
-                            .filter(|&&member| self.get_type(member).nonzero_sized())
-                            .count() as u32;
-                        self.builder
-                            .build_extract_value(
-                                data.into_struct_value(),
-                                nth,
-                                self.tt
-                                    .tuple_field_name(types, index)
-                                    .map(Deref::deref)
-                                    .unwrap_or(""),
-                            )
-                            .unwrap()
-                    })
-                }))
+                let val = self.build_expression(e, refs);
+                self.build_member(types, index, val)
             }
             mu::ExpressionEnum::Abstract(from, body) => {
                 let current_fun = {
@@ -714,6 +693,66 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             }
             mu::ExpressionEnum::Try(ty, e) => todo!(),
         }
+    }
+    pub fn build_member(
+        &self,
+        types: mu::Types,
+        index: u32,
+        val: Value<'ctx, B>,
+    ) -> Value<'ctx, B> {
+        let member_types = &self.tt[types];
+        let member = member_types[index as usize];
+        Value::Data(val.basic_value(self).and_then(|data| {
+            self.get_type(member).nonzero_sized().then(|| {
+                let nth = member_types[..index as usize]
+                    .iter()
+                    .filter(|&&member| self.get_type(member).nonzero_sized())
+                    .count() as u32;
+                self.builder
+                    .build_extract_value(
+                        data.into_struct_value(),
+                        nth,
+                        self.tt
+                            .tuple_field_name(types, index)
+                            .map(Deref::deref)
+                            .unwrap_or(""),
+                    )
+                    .unwrap()
+            })
+        }))
+    }
+    pub fn build_member_pointer(
+        &self,
+        types: mu::Types,
+        index: u32,
+        val: Value<'ctx, B>,
+    ) -> Value<'ctx, B> {
+        let member_types = &self.tt[types];
+        let member = member_types[index as usize];
+        Value::Data(val.basic_value(self).and_then(|data| {
+            self.get_type(member).nonzero_sized().then(|| {
+                let pointee_ty = self
+                    .get_type(self.tt.insert_type(mu::TypeEnum::Product(types)))
+                    .basic_type(self)
+                    .unwrap();
+                let nth = member_types[..index as usize]
+                    .iter()
+                    .filter(|&&member| self.get_type(member).nonzero_sized())
+                    .count() as u32;
+                self.builder
+                    .build_struct_gep(
+                        pointee_ty,
+                        data.into_pointer_value(),
+                        nth,
+                        self.tt
+                            .tuple_field_name(types, index)
+                            .map(Deref::deref)
+                            .unwrap_or(""),
+                    )
+                    .unwrap()
+                    .into()
+            })
+        }))
     }
     fn build_construct(
         &self,

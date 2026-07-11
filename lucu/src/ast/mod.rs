@@ -211,6 +211,7 @@ impl PartialEq for ArrayProperties {
 #[strum(prefix = "Type::")]
 pub enum Type {
     Path(Path),
+    Maybe(Token, Box<Type>),
     Array(Grouped<ArrayProperties>, Box<Type>),
     Pointer(Token, Option<PointerRegion>, Box<Type>),
 }
@@ -505,7 +506,7 @@ impl HasSpan for Type {
                 let end = ty.span().end;
                 Span { start, end }
             }
-            Type::Pointer(token, _, ty) => {
+            Type::Pointer(token, _, ty) | Type::Maybe(token, ty) => {
                 let start = token.span().start;
                 let end = ty.span().end;
                 Span { start, end }

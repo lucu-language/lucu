@@ -125,6 +125,7 @@ impl fmt::Display for Interned<'_, Type> {
                 write!(f, "]{}", ty.display(self.1))?;
                 Ok(())
             }
+            TypeEnum::Maybe(ty) => write!(f, "?{}", ty.display(self.1)),
         }
     }
 }

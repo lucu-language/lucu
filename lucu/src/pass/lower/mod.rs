@@ -526,6 +526,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                         _ => todo!("error"),
                     })
             }
+            ast::Type::Maybe(_, inner) => {
+                self.r#type(inner).map(|ty| self.tt.insert_type(TypeEnum::Maybe(ty)))
+            }
             ast::Type::Pointer(_, region, ty) => {
                 if let ast::Type::Array(props, inner) = &**ty
                     && props.inner.size.is_none()

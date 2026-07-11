@@ -9,9 +9,6 @@ pub mod table;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Base {
-    // Unit is represented by the empty tuple
-    // Never is part of Mu
-    Boolean,
     Integer(Integer),
     /// ^a
     Pointer(mu::Type),
@@ -53,10 +50,6 @@ pub enum Callable {
     PredicateOp { ty: mu::Type, op: ast::PredicateOp },
     /// (a x a) -> a
     MathOp { ty: mu::Type, op: ast::MathOp },
-    /// (Bool x (() -> ())) -> ()
-    If,
-    /// (Bool x (() -> a) x (() -> a)) -> a
-    IfElse { to: mu::Type },
     // TODO: inline assembly
     /// (UPtr x UPtr x UPtr x ...) -> UPtr
     Syscall { args: u8 },
@@ -68,7 +61,7 @@ pub enum Callable {
     /// (^a x a) -> ()
     Write { ty: mu::Type },
     /// ^a -> ^b
-    PointerMember { tys: mu::Types, member: u32 },
+    PointerMember { tys: mu::Tuple, member: u32 },
 
     /// ([N]a x USize) -> a
     ArrayIndex { ty: mu::Type, size: u32 },
@@ -102,20 +95,8 @@ impl mu::Typed for Callable {
         match *self {
             Callable::Cast { from, to, .. } => tt.function([from], to),
             Callable::UnOp { ty, .. } => tt.function([ty], ty),
-            Callable::PredicateOp { ty, .. } => tt.function([ty, ty], tt.base(Base::Boolean)),
+            Callable::PredicateOp { ty, .. } => tt.function([ty, ty], tt.bool()),
             Callable::MathOp { ty, .. } => tt.function([ty, ty], ty),
-            Callable::If => {
-                let bool = tt.base(Base::Boolean);
-                let unit = tt.unit();
-                let branch = tt.function([unit], unit);
-                tt.function([bool, branch], unit)
-            }
-            Callable::IfElse { to } => {
-                let bool = tt.base(Base::Boolean);
-                let unit = tt.unit();
-                let branch = tt.function([unit], to);
-                tt.function([bool, branch, branch], to)
-            }
             Callable::Syscall { args } => {
                 let uptr = tt.base(Base::UPTR);
                 tt.function(iter::repeat_n(uptr, args as usize + 1), uptr)

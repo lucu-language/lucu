@@ -710,6 +710,10 @@ impl Ast for ast::Type {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
             ast::Type::Path(path) => path.push_nodes(nodes),
+            ast::Type::Maybe(maybe, ty) => {
+                nodes.token(*maybe);
+                ty.push_nodes(nodes);
+            }
             ast::Type::Pointer(pointer, region, ty) => {
                 nodes.token(*pointer);
                 if let Some(region) = region {

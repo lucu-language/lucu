@@ -351,6 +351,14 @@ impl<'a> Parser<'a> {
     pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
         match self.next().token {
             TokenEnum::Identifier | TokenEnum::Underscore => self.path(false).map(ast::Type::Path),
+            TokenEnum::Symbol(Symbol::Question) => {
+                // Maybe
+                m! {
+                    let maybe = self.skip();
+                    inner <- self.r#type();
+                    return ast::Type::Maybe(maybe, inner);
+                }
+            }
             TokenEnum::Symbol(Symbol::Caret) => {
                 // Pointer
                 m! {

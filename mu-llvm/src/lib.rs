@@ -5,7 +5,6 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::RwLock;
 
-use inkwell::AddressSpace;
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
@@ -13,11 +12,12 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::support::LLVMString;
 use inkwell::targets::{FileType, TargetData, TargetMachine};
 use inkwell::types::{
-    BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, FunctionType, StructType,
+    BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, FunctionType, IntType, StructType,
 };
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PhiValue, PointerValue,
 };
+use inkwell::{AddressSpace, IntPredicate};
 use mu::{TypeTable as _, Typed as _};
 
 pub trait Builder
@@ -29,7 +29,11 @@ where
     type ET: mu::ExpressionTable<Base = Self::Base> + ?Sized;
     type Callable: mu::Typed<Base = Self::Base> + Clone + Hash + Eq;
 
-    fn get_base_type<'ctx>(
+    fn has_zero_niche<'ctx>(
+        base: &<Self::TT as mu::TypeTable>::Base,
+        llvm: &Context<'ctx, Self>,
+    ) -> bool;
+    fn get_type<'ctx>(
         base: &<Self::TT as mu::TypeTable>::Base,
         llvm: &Context<'ctx, Self>,
     ) -> Type<'ctx>;
@@ -260,7 +264,29 @@ impl<'ctx, B: Builder + ?Sized> From<Value<'ctx, B>> for ValueOrExpression<'ctx,
 }
 
 type CallableCache<'ctx, C> = HashMap<C, FunctionValue<'ctx>>;
-type StructCache<'ctx> = HashMap<mu::Types, (Box<[Type<'ctx>]>, Option<StructType<'ctx>>)>;
+type EnumCache<'ctx> = HashMap<mu::Enum, (Box<[Type<'ctx>]>, Enum<'ctx>)>;
+type StructCache<'ctx> = HashMap<mu::Tuple, (Box<[Type<'ctx>]>, Option<StructType<'ctx>>)>;
+
+#[derive(Clone, Copy, Debug)]
+pub enum Enum<'ctx> {
+    Never,
+    Units(IntType<'ctx>),
+    Single(Option<BasicTypeEnum<'ctx>>),
+    ZeroNiche(Option<BasicTypeEnum<'ctx>>, bool),
+    TaggedUnion(StructType<'ctx>),
+}
+
+impl<'ctx> From<Enum<'ctx>> for Type<'ctx> {
+    fn from(value: Enum<'ctx>) -> Self {
+        Type::Data(match value {
+            Enum::Never => None,
+            Enum::Units(repr) => Some(repr.into()),
+            Enum::Single(repr) => repr,
+            Enum::ZeroNiche(repr, _) => repr,
+            Enum::TaggedUnion(repr) => Some(repr.into()),
+        })
+    }
+}
 
 pub struct Context<'ctx, B: Builder + ?Sized> {
     pub context: &'ctx inkwell::context::Context,
@@ -274,6 +300,7 @@ pub struct Context<'ctx, B: Builder + ?Sized> {
 
     function: RwLock<Option<FunctionValue<'ctx>>>,
     structs: RwLock<StructCache<'ctx>>,
+    enums: RwLock<EnumCache<'ctx>>,
     callables: RwLock<CallableCache<'ctx, B::Callable>>,
     // TODO: remove this from here
     syscalls: Box<[(FunctionType<'ctx>, PointerValue<'ctx>)]>,
@@ -362,6 +389,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 })
                 .collect(),
             structs: RwLock::new(HashMap::new()),
+            enums: RwLock::new(HashMap::new()),
             callables: RwLock::new(HashMap::new()),
             function: RwLock::new(None),
         }
@@ -439,7 +467,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         );
     }
 
-    pub fn get_struct(&self, tys: mu::Types) -> Option<StructType<'ctx>> {
+    pub fn get_struct(&self, tys: mu::Tuple) -> Option<StructType<'ctx>> {
         let read = self.structs.read().unwrap();
         match read.get(&tys) {
             Some(&(_, s)) => s,
@@ -468,11 +496,66 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             }
         }
     }
+    pub fn has_zero_niche(&self, ty: mu::Type) -> bool {
+        match self.tt[ty] {
+            mu::TypeEnum::Base(ref base) => B::has_zero_niche(base, self),
+            mu::TypeEnum::Sum(tys) => match self.get_enum(tys) {
+                Enum::Never => true,
+                Enum::Units(_) | Enum::ZeroNiche(_, _) => false,
+                Enum::Single(_) | Enum::TaggedUnion(_) => self.has_zero_niche(self.tt[tys][0]),
+            },
+            mu::TypeEnum::Product(tys) => {
+                self.tt[tys].iter().any(|&field| self.has_zero_niche(field))
+            }
+            mu::TypeEnum::Function(_) => true,
+        }
+    }
+    pub fn get_enum(&self, tys: mu::Enum) -> Enum<'ctx> {
+        let read = self.enums.read().unwrap();
+        match read.get(&tys) {
+            Some(&(_, s)) => s,
+            None => {
+                drop(read);
+
+                // NOTE: recursive structs will cause a stack overflow here
+                let variants = self.tt[tys]
+                    .iter()
+                    .map(|&field| self.get_type(field))
+                    .collect::<Box<_>>();
+                let tag_ty = || match (variants.len() - 1).ilog2() {
+                    0 => self.context.bool_type(),
+                    1..8 => self.context.i8_type(),
+                    8..16 => self.context.i16_type(),
+                    16..32 => self.context.i32_type(),
+                    _ => panic!("that's just way too many variants"),
+                };
+                let e = match self.tt[tys] {
+                    // no variants
+                    [] => Enum::Never,
+                    // single variant
+                    [_] => Enum::Single(variants[0].basic_type(self)),
+                    // only unit variant
+                    _ if variants.iter().all(|v| !v.nonzero_sized()) => Enum::Units(tag_ty()),
+                    // unit variant and variant with zero niche
+                    [value, _] if self.has_zero_niche(value) && !variants[1].nonzero_sized() => {
+                        Enum::ZeroNiche(variants[0].basic_type(self), true)
+                    }
+                    [_, value] if self.has_zero_niche(value) && !variants[0].nonzero_sized() => {
+                        Enum::ZeroNiche(variants[1].basic_type(self), false)
+                    }
+                    // other
+                    _ => todo!("tagged union"),
+                };
+                self.enums.write().unwrap().insert(tys, (variants, e));
+                e
+            }
+        }
+    }
     pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
         match self.tt[ty] {
-            mu::TypeEnum::Base(ref base) => B::get_base_type(base, self),
-            mu::TypeEnum::Never => Type::Data(None),
+            mu::TypeEnum::Base(ref base) => B::get_type(base, self),
             mu::TypeEnum::Product(tys) => Type::Data(self.get_struct(tys).map(Into::into)),
+            mu::TypeEnum::Sum(tys) => self.get_enum(tys).into(),
             mu::TypeEnum::Function(function) => {
                 Type::Function(self.get_function_type(function, true))
             }
@@ -589,6 +672,135 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 let val = self.build_expression(e, refs);
                 self.build_member(types, index, val)
             }
+            mu::ExpressionEnum::Variant(variants, i, e) => {
+                let variant = self.build_expression(e, refs);
+
+                match self.get_enum(variants) {
+                    Enum::Never => panic!(),
+                    Enum::Units(int) => int.const_int(i as u64, false).into(),
+                    Enum::Single(_) => variant,
+                    Enum::ZeroNiche(ty, zero_index) => {
+                        if i == zero_index as u32 {
+                            Value::Data(ty.map(BasicTypeEnum::const_zero))
+                        } else {
+                            variant
+                        }
+                    }
+                    Enum::TaggedUnion(_) => todo!(),
+                }
+            }
+            mu::ExpressionEnum::Match(e, es) => {
+                let sum = e.get_type(self.tt, self.et).into_sum(self.tt);
+                let variant = self.build_expression(e, refs);
+
+                let out = self
+                    .get_type(self.et[es][0].get_type(self.tt, self.et))
+                    .basic_type(self);
+                match self.get_enum(sum) {
+                    Enum::Never => Value::Data(None),
+                    Enum::Units(int) => {
+                        // TODO: simplify in the case of exactly 2 units
+
+                        let else_block = self.build_block("");
+                        let cases = (0..self.et[es].len() as u32)
+                            .map(|n| {
+                                (
+                                    int.const_int(n.into(), false),
+                                    self.build_block(
+                                        self.tt
+                                            .enum_variant_name(sum, n)
+                                            .map(Deref::deref)
+                                            .unwrap_or(""),
+                                    ),
+                                )
+                            })
+                            .collect::<Box<_>>();
+                        let end_block = self.build_block("");
+
+                        self.builder
+                            .build_switch(
+                                variant.basic_value(self).unwrap().into_int_value(),
+                                else_block,
+                                &cases,
+                            )
+                            .unwrap();
+
+                        let phi = out.map(|ty| {
+                            self.builder.position_at_end(end_block);
+                            self.builder.build_phi(ty, "").unwrap()
+                        });
+
+                        let mut refs_new = refs.clone();
+                        refs_new.push_front(Value::Data(None));
+                        for ((_, case), &e) in cases.into_iter().zip(&self.et[es]) {
+                            self.builder.position_at_end(case);
+                            let val = self.build_expression(e, &refs_new);
+                            self.builder.build_unconditional_branch(end_block).unwrap();
+
+                            if let Some(phi) = phi {
+                                phi.add_incoming(&[(
+                                    &val.basic_value(self).unwrap(),
+                                    self.builder.get_insert_block().unwrap(),
+                                )]);
+                            }
+                        }
+
+                        self.builder.position_at_end(else_block);
+                        self.builder.build_unreachable().unwrap();
+
+                        self.builder.position_at_end(end_block);
+                        Value::Data(phi.map(PhiValue::as_basic_value))
+                    }
+                    Enum::Single(_) => {
+                        let mut refs_new = refs.clone();
+                        refs_new.push_front(variant);
+                        self.build_expression(self.et[es][0], &refs_new)
+                    }
+                    Enum::ZeroNiche(_, zero_index) => match variant.basic_value(self) {
+                        Some(v) => {
+                            let is_zero = self.build_is_zero(v);
+
+                            let then_block = self.build_block("");
+                            let else_block = self.build_block("");
+                            let next_block = self.build_block("");
+                            self.builder
+                                .build_conditional_branch(is_zero, then_block, else_block)
+                                .unwrap();
+
+                            self.builder.position_at_end(then_block);
+                            let mut refs_new = refs.clone();
+                            refs_new.push_front(Value::Data(None));
+                            let then_val =
+                                self.build_expression(self.et[es][zero_index as usize], &refs_new);
+                            let then_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(next_block).unwrap();
+
+                            self.builder.position_at_end(else_block);
+                            let mut refs_new = refs.clone();
+                            refs_new.push_front(Value::Data(Some(v)));
+                            let else_val = self
+                                .build_expression(self.et[es][(!zero_index) as usize], &refs_new);
+                            let else_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(next_block).unwrap();
+
+                            self.builder.position_at_end(next_block);
+                            Value::Data(out.map(|ty| {
+                                let then_val = then_val.basic_value(self).unwrap();
+                                let else_val = else_val.basic_value(self).unwrap();
+                                let phi = self.builder.build_phi(ty, "").unwrap();
+                                phi.add_incoming(&[(&then_val, then_end), (&else_val, else_end)]);
+                                phi.as_basic_value()
+                            }))
+                        }
+                        None => {
+                            let mut refs_new = refs.clone();
+                            refs_new.push_front(Value::Data(None));
+                            self.build_expression(self.et[es][zero_index as usize], &refs_new)
+                        }
+                    },
+                    Enum::TaggedUnion(_) => todo!(),
+                }
+            }
             mu::ExpressionEnum::Abstract(from, body) => {
                 let current_fun = {
                     let guard = self.function.read().unwrap();
@@ -694,9 +906,33 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             mu::ExpressionEnum::Try(ty, e) => todo!(),
         }
     }
+    fn build_is_zero(&self, v: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
+        match v {
+            BasicValueEnum::IntValue(int) if int.get_type().get_bit_width() == 1 => int,
+            BasicValueEnum::IntValue(int) => self
+                .builder
+                .build_int_compare(IntPredicate::EQ, int, int.get_type().const_zero(), "")
+                .unwrap(),
+            BasicValueEnum::PointerValue(ptr) => self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ptr, ptr.get_type().const_null(), "")
+                .unwrap(),
+            BasicValueEnum::StructValue(struc) => {
+                // TODO: do bitwise compare with 0 if struct is simply comparable
+                let mut is_zero = self.context.bool_type().const_all_ones();
+                for n in 0..struc.get_type().count_fields() {
+                    let field = self.builder.build_extract_value(struc, n, "").unwrap();
+                    let is_field_zero = self.build_is_zero(field);
+                    is_zero = self.builder.build_and(is_zero, is_field_zero, "").unwrap()
+                }
+                is_zero
+            }
+            _ => todo!(),
+        }
+    }
     pub fn build_member(
         &self,
-        types: mu::Types,
+        types: mu::Tuple,
         index: u32,
         val: Value<'ctx, B>,
     ) -> Value<'ctx, B> {
@@ -723,7 +959,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     }
     pub fn build_member_pointer(
         &self,
-        types: mu::Types,
+        types: mu::Tuple,
         index: u32,
         val: Value<'ctx, B>,
     ) -> Value<'ctx, B> {
@@ -756,7 +992,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     }
     fn build_construct(
         &self,
-        types: mu::Types,
+        types: mu::Tuple,
         members: impl IntoIterator<Item = Value<'ctx, B>>,
     ) -> Value<'ctx, B> {
         let members = members.into_iter().enumerate().filter_map(|(index, val)| {

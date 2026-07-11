@@ -175,6 +175,7 @@ pub enum TypeEnum {
     Pointer(Type, Region),
     PointerSlice(Type, Region, Option<Sentinel>),
     Array(Type, Constant, Option<Sentinel>),
+    Maybe(Type),
 }
 
 impl TypeEnum {

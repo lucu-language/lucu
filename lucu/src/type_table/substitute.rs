@@ -350,6 +350,7 @@ impl Substitute for Type {
                 }
             }
             TypeEnum::Item(ref item) => TypeEnum::Item(item.clone().subst(tt, start, args)),
+            TypeEnum::Maybe(ty) => TypeEnum::Maybe(ty.subst(tt, start, args)),
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.subst(tt, start, args), region.subst(tt, start, args))
             }
@@ -377,6 +378,7 @@ impl Substitute for Type {
                 TypeEnum::Generic(generic.clone().shift(tt, start, offset))
             }
             TypeEnum::Item(ref item) => TypeEnum::Item(item.clone().shift(tt, start, offset)),
+            TypeEnum::Maybe(ty) => TypeEnum::Maybe(ty.shift(tt, start, offset)),
             TypeEnum::Pointer(ty, region) => {
                 TypeEnum::Pointer(ty.shift(tt, start, offset), region.shift(tt, start, offset))
             }
@@ -434,6 +436,7 @@ impl Substitute for Type {
             (TypeEnum::Boolean, TypeEnum::Boolean) => Some(()),
             (TypeEnum::Unit, TypeEnum::Unit) => Some(()),
             (TypeEnum::Never, TypeEnum::Never) => Some(()),
+            (&TypeEnum::Maybe(a), &TypeEnum::Maybe(b)) => a.infer(b, tt, start, args),
             (&TypeEnum::Pointer(ta, ra), &TypeEnum::Pointer(tb, rb))
             | (&TypeEnum::PointerSlice(ta, ra, None), &TypeEnum::PointerSlice(tb, rb, None))
             | (
@@ -460,6 +463,7 @@ impl Substitute for Type {
             (TypeEnum::Boolean, _) => None,
             (TypeEnum::Unit, _) => None,
             (TypeEnum::Never, _) => None,
+            (TypeEnum::Maybe(_), _) => None,
             (TypeEnum::Pointer(_, _), _) => None,
             (TypeEnum::PointerSlice(_, _, _), _) => None,
             (TypeEnum::Array(_, _, _), _) => None,

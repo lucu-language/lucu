@@ -10,8 +10,10 @@ use crate::mu::{Base, Callable, Constant, Operation};
 
 pub struct TypeTable {
     types: HandleSet<mu::TypeEnum<Base>>,
-    tuples: HandleMap<Box<[mu::Type]>, mu::Types>,
-    aggregates: Xar<Aggregate>,
+    tuple_map: HandleMap<Box<[mu::Type]>, mu::Tuple>,
+    tuples: Xar<Aggregate>,
+    enum_map: HandleMap<Box<[mu::Type]>, mu::Enum>,
+    enums: Xar<Aggregate>,
 }
 
 impl TypeTable {
@@ -23,8 +25,10 @@ impl TypeTable {
     pub unsafe fn new() -> Self {
         Self {
             types: HandleSet::new(),
-            tuples: HandleMap::new(),
-            aggregates: Xar::new(),
+            tuple_map: HandleMap::new(),
+            tuples: Xar::new(),
+            enum_map: HandleMap::new(),
+            enums: Xar::new(),
         }
     }
 }
@@ -37,13 +41,25 @@ impl Index<mu::Type> for TypeTable {
     }
 }
 
-impl Index<mu::Types> for TypeTable {
+impl Index<mu::Tuple> for TypeTable {
     type Output = [mu::Type];
 
-    fn index(&self, index: mu::Types) -> &Self::Output {
-        let aggregate = unsafe { self.aggregates.get_unchecked(index.index()) };
+    fn index(&self, index: mu::Tuple) -> &Self::Output {
+        let aggregate = unsafe { self.tuples.get_unchecked(index.index()) };
         match aggregate {
-            &Aggregate::Tuple(n) => unsafe { self.tuples.get_unchecked(n) }.0,
+            &Aggregate::Unnamed(n) => unsafe { self.tuple_map.get_unchecked(n) }.0,
+            Aggregate::Named { fields, .. } => fields,
+        }
+    }
+}
+
+impl Index<mu::Enum> for TypeTable {
+    type Output = [mu::Type];
+
+    fn index(&self, index: mu::Enum) -> &Self::Output {
+        let aggregate = unsafe { self.enums.get_unchecked(index.index()) };
+        match aggregate {
+            &Aggregate::Unnamed(n) => unsafe { self.enum_map.get_unchecked(n) }.0,
             Aggregate::Named { fields, .. } => fields,
         }
     }
@@ -58,18 +74,18 @@ impl mu::TypeTable for TypeTable {
         unsafe { mu::Type::new(i) }
     }
 
-    fn insert_tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Types {
+    fn insert_tuple(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Tuple {
         let fields = tys.into_iter().collect::<Box<_>>();
         *self
-            .tuples
+            .tuple_map
             .get_or_insert(fields, |n| {
-                let i = self.aggregates.push(Aggregate::Tuple(n));
+                let i = self.tuples.push(Aggregate::Unnamed(n));
                 // SAFETY: We are really close to a potential race condition at this point!
                 // If the fields of this new aggregate gets looked up right now, undefined memory would be read.
                 // However, this aggregate isn't accessible until the function ends,
                 // at which point the fields will be inserted.
                 // If we allow iterating over all aggregates, then we'd be screwed.
-                unsafe { mu::Types::new(i) }
+                unsafe { mu::Tuple::new(i) }
             })
             .1
     }
@@ -78,35 +94,81 @@ impl mu::TypeTable for TypeTable {
         &self,
         tys: impl IntoIterator<Item = (Self::Name, mu::Type)>,
         name: Self::Name,
-    ) -> mu::Types {
+    ) -> mu::Tuple {
         let (field_names, fields): (Vec<_>, Vec<_>) = tys.into_iter().unzip();
-        let i = self.aggregates.push(Aggregate::Named {
+        let i = self.tuples.push(Aggregate::Named {
             name,
             field_names: field_names.into_boxed_slice(),
             fields: fields.into_boxed_slice(),
         });
-        unsafe { mu::Types::new(i) }
+        unsafe { mu::Tuple::new(i) }
     }
 
-    fn tuple_name(&self, tys: mu::Types) -> Option<&Self::Name> {
-        let aggregate = unsafe { self.aggregates.get_unchecked(tys.index()) };
+    fn tuple_name(&self, tys: mu::Tuple) -> Option<&Self::Name> {
+        let aggregate = unsafe { self.tuples.get_unchecked(tys.index()) };
         match aggregate {
-            Aggregate::Tuple(_) => None,
+            Aggregate::Unnamed(_) => None,
             Aggregate::Named { name, .. } => Some(name),
         }
     }
 
-    fn tuple_field_name(&self, tys: mu::Types, index: u32) -> Option<&Self::Name> {
-        let aggregate = unsafe { self.aggregates.get_unchecked(tys.index()) };
+    fn tuple_field_name(&self, tys: mu::Tuple, index: u32) -> Option<&Self::Name> {
+        let aggregate = unsafe { self.tuples.get_unchecked(tys.index()) };
         match aggregate {
-            Aggregate::Tuple(_) => None,
+            Aggregate::Unnamed(_) => None,
+            Aggregate::Named { field_names, .. } => Some(&field_names[index as usize]),
+        }
+    }
+
+    fn insert_enum(&self, tys: impl IntoIterator<Item = mu::Type>) -> mu::Enum {
+        let fields = tys.into_iter().collect::<Box<_>>();
+        *self
+            .enum_map
+            .get_or_insert(fields, |n| {
+                let i = self.enums.push(Aggregate::Unnamed(n));
+                // SAFETY: We are really close to a potential race condition at this point!
+                // If the fields of this new aggregate gets looked up right now, undefined memory would be read.
+                // However, this aggregate isn't accessible until the function ends,
+                // at which point the fields will be inserted.
+                // If we allow iterating over all aggregates, then we'd be screwed.
+                unsafe { mu::Enum::new(i) }
+            })
+            .1
+    }
+
+    fn push_named_enum(
+        &self,
+        tys: impl IntoIterator<Item = (Self::Name, mu::Type)>,
+        name: Self::Name,
+    ) -> mu::Enum {
+        let (field_names, fields): (Vec<_>, Vec<_>) = tys.into_iter().unzip();
+        let i = self.enums.push(Aggregate::Named {
+            name,
+            field_names: field_names.into_boxed_slice(),
+            fields: fields.into_boxed_slice(),
+        });
+        unsafe { mu::Enum::new(i) }
+    }
+
+    fn enum_name(&self, tys: mu::Enum) -> Option<&Self::Name> {
+        let aggregate = unsafe { self.enums.get_unchecked(tys.index()) };
+        match aggregate {
+            Aggregate::Unnamed(_) => None,
+            Aggregate::Named { name, .. } => Some(name),
+        }
+    }
+
+    fn enum_variant_name(&self, tys: mu::Enum, index: u32) -> Option<&Self::Name> {
+        let aggregate = unsafe { self.enums.get_unchecked(tys.index()) };
+        match aggregate {
+            Aggregate::Unnamed(_) => None,
             Aggregate::Named { field_names, .. } => Some(&field_names[index as usize]),
         }
     }
 }
 
 enum Aggregate {
-    Tuple(u32),
+    Unnamed(u32),
     Named {
         name: CompactString,
         field_names: Box<[CompactString]>,

@@ -375,6 +375,7 @@ impl Ast for ast::ArrayProperties {
 impl Ast for ast::Type {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
+            ast::Type::Maybe(_, ty) => visitor.visit_type(ty),
             ast::Type::Pointer(_, region, ty) => V::Output::combine([
                 visit_option(region, visitor, Visitor::visit),
                 visitor.visit_type(ty),

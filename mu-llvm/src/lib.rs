@@ -12,9 +12,11 @@ use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::support::LLVMString;
 use inkwell::targets::{FileType, TargetData, TargetMachine};
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, StructType};
+use inkwell::types::{
+    BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, FunctionType, StructType,
+};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
 use mu::TypeTable as _;
 
@@ -40,103 +42,44 @@ where
         op_ty: mu::Function,
         params: impl IntoIterator<Item = Value<'ctx, Self::Callable>>,
         llvm: &Context<'ctx, Self>,
-    ) -> DataValue<'ctx>;
+    ) -> Value<'ctx, Self::Callable>;
     // TODO: build callable with param as expression
     // this will prevent every if statement to be a seperate function
 }
 
-#[derive(Clone, Copy)]
-pub struct DataValue<'ctx>(pub Option<BasicValueEnum<'ctx>>);
+pub type BasicValue<'ctx> = Option<BasicValueEnum<'ctx>>;
 
-impl<'ctx> DataValue<'ctx> {
-    pub fn llvm_members<B: Builder + ?Sized>(
-        self,
-        llvm: &Context<'ctx, B>,
-    ) -> impl ExactSizeIterator<Item = BasicValueEnum<'ctx>> {
-        let fields = self
-            .0
-            .map(|v| v.into_struct_value().get_type().count_fields())
-            .unwrap_or(0);
-        (0..fields).map(move |nth| {
-            let struc = self.0.unwrap().into_struct_value();
-            llvm.builder.build_extract_value(struc, nth, "").unwrap()
-        })
-    }
-    pub fn members<B: Builder + ?Sized>(
-        self,
-        types: mu::Types,
-        llvm: &Context<'ctx, B>,
-    ) -> impl ExactSizeIterator<Item = DataValue<'ctx>> {
-        let mut nth = 0;
-        llvm.tt[types]
-            .iter()
-            .copied()
-            .enumerate()
-            .map(move |(index, t)| {
-                if llvm.get_type(t).nonzero_sized() {
-                    let struc = self.0.unwrap().into_struct_value();
-                    let val = llvm
-                        .builder
-                        .build_extract_value(
-                            struc,
-                            nth,
-                            llvm.tt
-                                .tuple_field_name(types, index as u32)
-                                .map(Deref::deref)
-                                .unwrap_or(""),
-                        )
-                        .unwrap();
-                    nth += 1;
-                    DataValue(Some(val))
-                } else {
-                    DataValue(None)
-                }
-            })
-    }
-    pub fn members_exact<const N: usize, B: Builder + ?Sized>(
-        self,
-        types: mu::Types,
-        llvm: &Context<'ctx, B>,
-    ) -> [DataValue<'ctx>; N] {
-        match self.members(types, llvm).collect::<Vec<_>>().try_into() {
-            Ok(v) => v,
-            Err(_) => panic!(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct DataType<'ctx>(pub Option<BasicTypeEnum<'ctx>>);
+pub type BasicType<'ctx> = Option<BasicTypeEnum<'ctx>>;
 
 #[derive(Clone, Copy)]
 pub enum Type<'ctx> {
-    Data(DataType<'ctx>),
+    Data(BasicType<'ctx>),
     Function(FunctionType<'ctx>),
 }
 
 impl<'ctx> Type<'ctx> {
     fn nonzero_sized(self) -> bool {
         match self {
-            Type::Data(data_type) => data_type.0.is_some(),
+            Type::Data(data_type) => data_type.is_some(),
             Type::Function(_) => true,
         }
     }
-    pub fn get_data_type<B: Builder + ?Sized>(self, llvm: &Context<'ctx, B>) -> DataType<'ctx> {
+    pub fn get_data_type<B: Builder + ?Sized>(self, llvm: &Context<'ctx, B>) -> BasicType<'ctx> {
         match self {
             Type::Data(data_type) => data_type,
-            Type::Function(_) => DataType(Some(
+            Type::Function(_) => Some(
                 llvm.context
                     .ptr_type(AddressSpace::default())
                     .array_type(2)
                     .into(),
-            )),
+            ),
         }
     }
 }
 
 #[derive(Clone, Copy)]
 pub enum Value<'ctx, C> {
-    Data(DataValue<'ctx>),
+    Data(BasicValue<'ctx>),
     Function(FunctionValue<'ctx>, Option<PointerValue<'ctx>>),
     Callable(C),
 }
@@ -148,7 +91,7 @@ where
     pub fn build<B: Builder<Callable = C> + ?Sized>(
         self,
         llvm: &Context<'ctx, B>,
-    ) -> DataValue<'ctx>
+    ) -> BasicValue<'ctx>
     where
         C: mu::Typed<Base = B::Base>,
     {
@@ -171,21 +114,38 @@ where
                         llvm.function_attributes(function);
                         llvm.builder
                             .position_at_end(llvm.context.append_basic_block(function, ""));
-                        let params = DataValue(
-                            (function.count_params() == 2)
-                                .then(|| function.get_first_param().unwrap()),
-                        );
-                        let out = B::build_callable(
-                            &c,
-                            fun,
-                            params.members(fun.from(), llvm).map(|v| Value::Data(v)),
-                            llvm,
-                        );
-                        if fun.never_returns(llvm.tt) {
-                            llvm.builder.build_unreachable().unwrap();
-                        } else {
+                        let params = {
+                            let mut nth = 0;
+                            llvm.tt[fun.from()].iter().copied().enumerate().map(
+                                move |(index, t)| {
+                                    if llvm.get_type(t).nonzero_sized() {
+                                        let struc =
+                                            function.get_first_param().unwrap().into_struct_value();
+                                        let val = llvm
+                                            .builder
+                                            .build_extract_value(
+                                                struc,
+                                                nth,
+                                                llvm.tt
+                                                    .tuple_field_name(fun.from(), index as u32)
+                                                    .map(Deref::deref)
+                                                    .unwrap_or(""),
+                                            )
+                                            .unwrap();
+                                        nth += 1;
+                                        Value::Data(Some(val))
+                                    } else {
+                                        Value::Data(None)
+                                    }
+                                },
+                            )
+                        };
+                        let out = B::build_callable(&c, fun, params, llvm).build(llvm);
+                        if !fun.never_returns(llvm.tt) {
                             llvm.builder
-                                .build_return(out.0.as_ref().map(|e| e as &dyn BasicValue))
+                                .build_return(
+                                    out.as_ref().map(|e| e as &dyn inkwell::values::BasicValue),
+                                )
                                 .unwrap();
                         }
 
@@ -332,7 +292,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         &self,
         function: FunctionValue<'ctx>,
         closure: Option<PointerValue<'ctx>>,
-    ) -> DataValue<'ctx> {
+    ) -> BasicValue<'ctx> {
         let mut array = self
             .context
             .ptr_type(AddressSpace::default())
@@ -355,10 +315,10 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 .unwrap()
                 .into_array_value();
         }
-        DataValue(Some(array.into()))
+        Some(array.into())
     }
-    fn get_closure(&self, data: DataValue<'ctx>) -> (PointerValue<'ctx>, PointerValue<'ctx>) {
-        let closure = data.0.unwrap().into_array_value();
+    fn get_closure(&self, data: BasicValue<'ctx>) -> (PointerValue<'ctx>, PointerValue<'ctx>) {
+        let closure = data.unwrap().into_array_value();
         let fptr = self
             .builder
             .build_extract_value(closure, 0, "function pointer")
@@ -395,7 +355,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     .collect::<Box<_>>();
                 let llvm_fields = fields
                     .iter()
-                    .filter_map(|f| f.get_data_type(self).0)
+                    .filter_map(|f| f.get_data_type(self))
                     .collect::<Box<_>>();
                 let struc = (!llvm_fields.is_empty()).then(|| match self.tt.tuple_name(tys) {
                     Some(name) => {
@@ -413,10 +373,8 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
         match self.tt[ty] {
             mu::TypeEnum::Base(ref base) => B::get_base_type(base, self),
-            mu::TypeEnum::Never => Type::Data(DataType(None)),
-            mu::TypeEnum::Product(tys) => {
-                Type::Data(DataType(self.get_struct(tys).map(Into::into)))
-            }
+            mu::TypeEnum::Never => Type::Data(None),
+            mu::TypeEnum::Product(tys) => Type::Data(self.get_struct(tys).map(Into::into)),
             mu::TypeEnum::Function(function) => {
                 Type::Function(self.get_function_type(function, true))
             }
@@ -434,22 +392,22 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
 
         if closure_param {
             let closure = self.context.ptr_type(AddressSpace::default());
-            let param_types = match from.0 {
+            let param_types = match from {
                 Some(f) => [f.into(), closure.into()],
                 None => [closure.into(), closure.into()],
             };
-            let param_types = match from.0 {
+            let param_types = match from {
                 Some(_) => &param_types,
                 None => &param_types[0..1],
             };
-            match to.0 {
+            match to {
                 Some(t) => t.fn_type(param_types, false),
                 None => self.context.void_type().fn_type(param_types, false),
             }
         } else {
-            let meta = from.0.map(BasicMetadataTypeEnum::from);
+            let meta = from.map(BasicMetadataTypeEnum::from);
             let param_types = meta.as_slice();
-            match to.0 {
+            match to {
                 Some(t) => t.fn_type(param_types, false),
                 None => self.context.void_type().fn_type(param_types, false),
             }
@@ -474,19 +432,16 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         let out = self
             .build_expression(
                 e,
-                &im::Vector::unit(Value::Data(DataValue(
+                &im::Vector::unit(Value::Data(
                     (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
-                ))),
+                )),
             )
             .build(self);
-        if fun.never_returns(self.tt) {
-            self.builder.build_unreachable().unwrap();
-        } else {
+        if !fun.never_returns(self.tt) {
             self.builder
                 .build_return(
-                    out.0
-                        .as_ref()
-                        .map(|e| e as &dyn BasicValue)
+                    out.as_ref()
+                        .map(|e| e as &dyn inkwell::values::BasicValue)
                         .filter(|_| function_type.get_return_type().is_some()),
                 )
                 .unwrap();
@@ -533,7 +488,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
 
                 let val = self.build_expression(e, refs).build(self);
 
-                Value::Data(DataValue(val.0.and_then(|data| {
+                Value::Data(val.and_then(|data| {
                     self.get_type(member).nonzero_sized().then(|| {
                         let nth = member_types[..index as usize]
                             .iter()
@@ -550,7 +505,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                             )
                             .unwrap()
                     })
-                })))
+                }))
             }
             mu::ExpressionEnum::Abstract(from, body) => {
                 let current_fun = {
@@ -577,7 +532,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 let mut closure_refs = Vec::new();
                 for (i, val) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
                     match *val {
-                        Value::Data(DataValue(Some(val))) => {
+                        Value::Data(Some(val)) => {
                             closure_members.push(val);
                             closure_refs.push(i);
                         }
@@ -604,7 +559,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                         .into_struct_value();
                     for (nth, i) in closure_refs.into_iter().enumerate() {
                         match &mut refs_new[i] {
-                            Value::Data(DataValue(Some(val))) => {
+                            Value::Data(Some(val)) => {
                                 *val = self
                                     .builder
                                     .build_extract_value(closure, nth as u32, "")
@@ -624,15 +579,14 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 });
 
                 // build function
-                refs_new.push_front(Value::Data(DataValue(
+                refs_new.push_front(Value::Data(
                     (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
-                )));
+                ));
                 let out = self.build_expression(body, &refs_new).build(self);
                 self.builder
                     .build_return(
-                        out.0
-                            .as_ref()
-                            .map(|e| e as &dyn BasicValue)
+                        out.as_ref()
+                            .map(|e| e as &dyn inkwell::values::BasicValue)
                             .filter(|_| function_type.get_return_type().is_some()),
                     )
                     .unwrap();
@@ -665,7 +619,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     ) -> Value<'ctx, B::Callable> {
         let members = members.into_iter().enumerate().filter_map(|(index, val)| {
             // any 'callable' will get turned into a small function
-            val.build(self).0.map(|v| {
+            val.build(self).map(|v| {
                 (
                     self.tt
                         .tuple_field_name(types, index as u32)
@@ -685,12 +639,12 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                         .unwrap()
                         .into_struct_value();
                 }
-                Value::Data(DataValue(Some(value.into())))
+                Value::Data(Some(value.into()))
             }
             None => {
                 // fully consume fields iterator
                 members.for_each(drop);
-                Value::Data(DataValue(None))
+                Value::Data(None)
             }
         }
     }
@@ -707,11 +661,11 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
 
                 let closure = closure
                     .unwrap_or_else(|| self.context.ptr_type(AddressSpace::default()).get_poison());
-                let args = match val.0 {
+                let args = match val {
                     Some(v) => [v.into(), closure.into()],
                     None => [closure.into(), closure.into()],
                 };
-                let args = match val.0 {
+                let args = match val {
                     Some(_) => &args,
                     None => &args[0..1],
                 };
@@ -721,18 +675,15 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     .unwrap()
                     .try_as_basic_value()
                     .basic();
-                Value::Data(DataValue(out))
-            }
-            Value::Callable(c) => {
-                let out = B::build_callable(&c, fun, vals, self);
                 Value::Data(out)
             }
+            Value::Callable(c) => B::build_callable(&c, fun, vals, self),
         }
     }
     pub fn build_indirect_call(
         &self,
         fun: mu::Function,
-        fval: DataValue<'ctx>,
+        fval: BasicValue<'ctx>,
         vals: impl IntoIterator<Item = Value<'ctx, B::Callable>>,
     ) -> Value<'ctx, B::Callable> {
         let val = self.build_construct(fun.from(), vals).build(self);
@@ -740,11 +691,11 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         let function_type = self.get_function_type(fun, true);
         let (fptr, closure) = self.get_closure(fval);
 
-        let args = match val.0 {
+        let args = match val {
             Some(v) => [v.into(), closure.into()],
             None => [closure.into(), closure.into()],
         };
-        let args = match val.0 {
+        let args = match val {
             Some(_) => &args,
             None => &args[0..1],
         };
@@ -754,7 +705,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             .unwrap()
             .try_as_basic_value()
             .basic();
-        Value::Data(DataValue(out))
+        Value::Data(out)
     }
     pub fn build_block(&self, name: &str) -> BasicBlock<'ctx> {
         self.context

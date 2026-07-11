@@ -7,9 +7,10 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetMachineOptions};
-use lucu::ast::Cast;
+use lucu::ast::{Cast, EqualityOp, MathOp, PredicateOp, UnOp};
 use lucu::mu::table::{ExpressionTable, TypeTable};
 use lucu::mu::{Base, Callable, Constant, Operation};
+use lucu::type_table::{IntSize, Integer};
 use mu::{ExpressionTable as _, TypeTable as _};
 
 pub(super) fn test() {
@@ -17,6 +18,7 @@ pub(super) fn test() {
     let tt = unsafe { TypeTable::new() };
     let et = unsafe { ExpressionTable::new() };
 
+    let i8_t = tt.base(Base::Integer(Integer::signed(IntSize::Exact(8))));
     let unit_t = tt.unit();
     let bool_t = tt.base(Base::Boolean);
     let uptr_t = tt.base(Base::UPTR);
@@ -35,9 +37,54 @@ pub(super) fn test() {
                             cstr_t,
                             uptr_t,
                             Cast::Transmute,
-                            et.constant(
-                                cstr_t,
-                                Constant::String(CompactString::const_new("Hello, World!\n")),
+                            et.apply_operation(
+                                Operation::Callable(Callable::IfElse { to: cstr_t }),
+                                [
+                                    et.apply_operation(
+                                        Operation::Callable(Callable::PredicateOp {
+                                            ty: i8_t,
+                                            op: PredicateOp::Equality(EqualityOp::Equals),
+                                        }),
+                                        [
+                                            // 1 % -123 == 1
+                                            et.apply_operation(
+                                                Operation::Callable(Callable::MathOp {
+                                                    ty: i8_t,
+                                                    op: MathOp::Mod,
+                                                }),
+                                                [
+                                                    et.constant(i8_t, Constant::Integer(1)),
+                                                    et.apply_operation(
+                                                        Operation::Callable(Callable::UnOp {
+                                                            ty: i8_t,
+                                                            op: UnOp::Negate,
+                                                        }),
+                                                        [et.constant(i8_t, Constant::Integer(123))],
+                                                    ),
+                                                ],
+                                            ),
+                                            et.constant(i8_t, Constant::Integer(1)),
+                                        ],
+                                    ),
+                                    et.lambda(
+                                        unit_tuple,
+                                        et.constant(
+                                            cstr_t,
+                                            Constant::String(CompactString::const_new(
+                                                "Hello, World!\n",
+                                            )),
+                                        ),
+                                    ),
+                                    et.lambda(
+                                        unit_tuple,
+                                        et.constant(
+                                            cstr_t,
+                                            Constant::String(CompactString::const_new(
+                                                "Wrong value?!\n",
+                                            )),
+                                        ),
+                                    ),
+                                ],
                             ),
                         ),
                         et.constant(uptr_t, Constant::Integer(14)),

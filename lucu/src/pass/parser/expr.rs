@@ -98,10 +98,12 @@ impl<'a> Parser<'a> {
         self.expression_left_recurse(
             &|p| p.expression_inequality(allow_lambda),
             &|t| match t {
-                TokenEnum::Symbol(Symbol::Equality(op)) => Some(ast::BinOp::Equality(op.into())),
+                TokenEnum::Symbol(Symbol::Equality(op)) => {
+                    Some(ast::PredicateOp::Equality(op.into()))
+                }
                 _ => None,
             },
-            &ast::Expression::BinOp,
+            &ast::Expression::PredicateOp,
         )
     }
 
@@ -110,11 +112,11 @@ impl<'a> Parser<'a> {
             &|p| p.expression_addition(allow_lambda),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Inequality(op)) => {
-                    Some(ast::BinOp::Inequality(op.into()))
+                    Some(ast::PredicateOp::Inequality(op.into()))
                 }
                 _ => None,
             },
-            &ast::Expression::BinOp,
+            &ast::Expression::PredicateOp,
         )
     }
 
@@ -122,11 +124,11 @@ impl<'a> Parser<'a> {
         self.expression_left_recurse(
             &|p| p.expression_multiplication(allow_lambda),
             &|t| match t {
-                TokenEnum::Symbol(Symbol::Plus) => Some(ast::BinOp::Math(ast::MathOp::Add)),
-                TokenEnum::Symbol(Symbol::Dash) => Some(ast::BinOp::Math(ast::MathOp::Sub)),
+                TokenEnum::Symbol(Symbol::Plus) => Some(ast::MathOp::Add),
+                TokenEnum::Symbol(Symbol::Dash) => Some(ast::MathOp::Sub),
                 _ => None,
             },
-            &ast::Expression::BinOp,
+            &ast::Expression::MathOp,
         )
     }
 
@@ -134,12 +136,12 @@ impl<'a> Parser<'a> {
         self.expression_left_recurse(
             &|p| p.expression_typed(allow_lambda),
             &|t| match t {
-                TokenEnum::Symbol(Symbol::Star) => Some(ast::BinOp::Math(ast::MathOp::Mul)),
-                TokenEnum::Symbol(Symbol::Slash) => Some(ast::BinOp::Math(ast::MathOp::Div)),
-                TokenEnum::Symbol(Symbol::Percent) => Some(ast::BinOp::Math(ast::MathOp::Mod)),
+                TokenEnum::Symbol(Symbol::Star) => Some(ast::MathOp::Mul),
+                TokenEnum::Symbol(Symbol::Slash) => Some(ast::MathOp::Div),
+                TokenEnum::Symbol(Symbol::Percent) => Some(ast::MathOp::Mod),
                 _ => None,
             },
-            &ast::Expression::BinOp,
+            &ast::Expression::MathOp,
         )
     }
 

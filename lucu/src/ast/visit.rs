@@ -453,7 +453,9 @@ impl Ast for ast::Expression {
                 visitor.visit(&*branch_true.1),
                 visit_option(branch_false, visitor, |v, (_, e)| v.visit(&**e)),
             ]),
-            ast::Expression::AssignOp(_, lhs, _, rhs) | ast::Expression::BinOp(_, lhs, _, rhs) => {
+            ast::Expression::AssignOp(_, lhs, _, rhs)
+            | ast::Expression::PredicateOp(_, lhs, _, rhs)
+            | ast::Expression::MathOp(_, lhs, _, rhs) => {
                 V::Output::combine([visitor.visit(&**lhs), visitor.visit(&**rhs)])
             }
             ast::Expression::Index { array, index } => {

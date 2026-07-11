@@ -55,8 +55,14 @@ pub enum Type<'ctx> {
     Function(FunctionType<'ctx>),
 }
 
+impl<'ctx, T: inkwell::types::BasicType<'ctx>> From<T> for Type<'ctx> {
+    fn from(value: T) -> Self {
+        Self::Data(Some(value.as_basic_type_enum()))
+    }
+}
+
 impl<'ctx> Type<'ctx> {
-    fn nonzero_sized(self) -> bool {
+    pub fn nonzero_sized(self) -> bool {
         match self {
             Type::Data(data_type) => data_type.is_some(),
             Type::Function(_) => true,
@@ -91,6 +97,12 @@ impl<B: Builder + ?Sized> Clone for Value<'_, B> {
     }
 }
 
+impl<'ctx, B: Builder + ?Sized, T: inkwell::values::BasicValue<'ctx>> From<T> for Value<'ctx, B> {
+    fn from(value: T) -> Self {
+        Self::Data(Some(value.as_basic_value_enum()))
+    }
+}
+
 impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
     pub fn basic_value(self, llvm: &Context<'ctx, B>) -> BasicValue<'ctx> {
         match self {
@@ -101,8 +113,13 @@ impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
                 let function = match llvm.callables.read().unwrap().get(&c).copied() {
                     Some(function) => function,
                     None => {
-                        // build function
                         let current_block = llvm.builder.get_insert_block().unwrap();
+                        let current_fun = {
+                            let guard = llvm.function.read().unwrap();
+                            guard.unwrap()
+                        };
+
+                        // build function
                         let fun = c.get_type(llvm.tt).into_function(llvm.tt);
 
                         let function_type = llvm.get_function_type(fun, true);
@@ -151,6 +168,7 @@ impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
 
                         // return
                         llvm.builder.position_at_end(current_block);
+                        *llvm.function.write().unwrap() = Some(current_fun);
                         llvm.callables.write().unwrap().insert(c.clone(), function);
                         function
                     }

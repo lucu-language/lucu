@@ -1,14 +1,30 @@
 use std::num::NonZeroU32;
 
-use inkwell::AddressSpace;
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
-use lucu::ast::Cast;
+use inkwell::{AddressSpace, IntPredicate};
+use lucu::ast::{self, Cast};
 use lucu::mu::table::{ExpressionTable, TypeTable};
 use lucu::mu::{Base, Callable, Constant, Operation};
 use lucu::type_table::{IntSize, Integer};
 
 pub struct Builder;
+
+impl Builder {
+    pub fn is_signed<'ctx>(ty: mu::Type, llvm: &mu_llvm::Context<'ctx, Self>) -> bool {
+        match llvm.tt[ty] {
+            mu::TypeEnum::Base(Base::Integer(i)) => {
+                match i {
+                    Integer::Integer(signed, _) => signed,
+                    // TODO: is 'char' signed?
+                    Integer::CChar => true,
+                }
+            }
+            mu::TypeEnum::Base(Base::Boolean) => false,
+            _ => panic!(),
+        }
+    }
+}
 
 impl mu_llvm::Builder for Builder {
     type Base = Base;
@@ -23,33 +39,47 @@ impl mu_llvm::Builder for Builder {
         mu_llvm::Type::Data(match base {
             Base::Boolean => Some(llvm.context.bool_type().into()),
             Base::Integer(integer) => match *integer {
-                Integer::Integer(_, int_size) => match int_size {
-                    IntSize::Exact(n) => NonZeroU32::new(n)
-                        .map(|bits| llvm.context.custom_width_int_type(bits).unwrap().into()),
-                    IntSize::Index => {
-                        // TODO
-                        Some(
-                            llvm.context
-                                .ptr_sized_int_type(&llvm.target_data, None)
-                                .into(),
-                        )
-                    }
-                    IntSize::Address => Some(
+                Integer::Integer(_, IntSize::Exact(n)) => NonZeroU32::new(n)
+                    .map(|bits| llvm.context.custom_width_int_type(bits).unwrap().into()),
+                Integer::Integer(_, IntSize::Index) => {
+                    // TODO
+                    Some(
                         llvm.context
                             .ptr_sized_int_type(&llvm.target_data, None)
                             .into(),
-                    ),
-                    IntSize::Register => {
-                        // TODO
-                        Some(llvm.context.i64_type().into())
-                    }
-                    IntSize::CChar => todo!(),
-                    IntSize::CShort => todo!(),
-                    IntSize::CInt => todo!(),
-                    IntSize::CLong => todo!(),
-                    IntSize::CLongLong => todo!(),
-                },
-                Integer::CChar => todo!(),
+                    )
+                }
+                Integer::Integer(_, IntSize::Address) => Some(
+                    llvm.context
+                        .ptr_sized_int_type(&llvm.target_data, None)
+                        .into(),
+                ),
+                Integer::Integer(_, IntSize::Register) => {
+                    // TODO
+                    // NOTE: this assumes a 64-bit system
+                    Some(llvm.context.i64_type().into())
+                }
+                Integer::Integer(_, IntSize::CChar) | Integer::CChar => {
+                    // TODO
+                    Some(llvm.context.i8_type().into())
+                }
+                Integer::Integer(_, IntSize::CShort) => {
+                    // TODO
+                    Some(llvm.context.i16_type().into())
+                }
+                Integer::Integer(_, IntSize::CInt) => {
+                    // TODO
+                    Some(llvm.context.i32_type().into())
+                }
+                Integer::Integer(_, IntSize::CLong) => {
+                    // TODO
+                    // NOTE: on windows this is i32
+                    Some(llvm.context.i64_type().into())
+                }
+                Integer::Integer(_, IntSize::CLongLong) => {
+                    // TODO
+                    Some(llvm.context.i64_type().into())
+                }
             },
             Base::CString => Some(llvm.context.ptr_type(AddressSpace::default()).into()),
         })
@@ -112,25 +142,21 @@ impl mu_llvm::Builder for Builder {
             Callable::Cast { to, op, .. } => {
                 let param = params.next().unwrap().build(llvm).basic_value(llvm);
                 let ty = llvm.get_type(to).basic_type(llvm);
-                mu_llvm::Value::Data(ty.map(|llvm_ty| match op {
-                    Cast::Truncate => {
-                        let val = param.unwrap();
-                        llvm.builder
-                            .build_int_truncate_or_bit_cast(
-                                val.into_int_value(),
-                                llvm_ty.into_int_type(),
-                                "",
-                            )
-                            .unwrap()
-                            .into()
-                    }
-                    Cast::Extend => match param {
-                        Some(val) => {
-                            let mu::TypeEnum::Base(Base::Integer(i)) = llvm.tt[to] else {
-                                panic!()
-                            };
-                            // TODO: is 'char' signed
-                            if i.is_signed(true) {
+                mu_llvm::Value::Data(ty.map(|llvm_ty| {
+                    match op {
+                        Cast::Truncate => {
+                            let val = param.unwrap();
+                            llvm.builder
+                                .build_int_truncate_or_bit_cast(
+                                    val.into_int_value(),
+                                    llvm_ty.into_int_type(),
+                                    "",
+                                )
+                                .unwrap()
+                                .into()
+                        }
+                        Cast::Extend => match param {
+                            Some(val) => if Self::is_signed(to, llvm) {
                                 llvm.builder.build_int_s_extend_or_bit_cast(
                                     val.into_int_value(),
                                     llvm_ty.into_int_type(),
@@ -144,40 +170,123 @@ impl mu_llvm::Builder for Builder {
                                 )
                             }
                             .unwrap()
-                            .into()
-                        }
-                        None => llvm_ty.const_zero(),
-                    },
-                    Cast::Transmute => {
-                        // NOTE: do we want to do ptrtoint here?
-                        // maybe we should not allow transmuting from integers back to pointers
-                        let val = param.unwrap();
-                        if val.is_pointer_value() && llvm_ty.is_int_type() {
-                            llvm.builder
-                                .build_ptr_to_int(
-                                    val.into_pointer_value(),
-                                    llvm_ty.into_int_type(),
-                                    "",
-                                )
-                                .unwrap()
-                                .into()
-                        } else if val.is_int_value() && llvm_ty.is_pointer_type() {
-                            llvm.builder
-                                .build_int_to_ptr(
-                                    val.into_int_value(),
-                                    llvm_ty.into_pointer_type(),
-                                    "",
-                                )
-                                .unwrap()
-                                .into()
-                        } else {
-                            llvm.builder.build_bit_cast(val, llvm_ty, "").unwrap()
+                            .into(),
+                            None => llvm_ty.const_zero(),
+                        },
+                        Cast::Transmute => {
+                            // NOTE: do we want to do ptrtoint here?
+                            // maybe we should not allow transmuting from integers back to pointers
+                            let val = param.unwrap();
+                            if val.is_pointer_value() && llvm_ty.is_int_type() {
+                                llvm.builder
+                                    .build_ptr_to_int(
+                                        val.into_pointer_value(),
+                                        llvm_ty.into_int_type(),
+                                        "",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else if val.is_int_value() && llvm_ty.is_pointer_type() {
+                                llvm.builder
+                                    .build_int_to_ptr(
+                                        val.into_int_value(),
+                                        llvm_ty.into_pointer_type(),
+                                        "",
+                                    )
+                                    .unwrap()
+                                    .into()
+                            } else {
+                                llvm.builder.build_bit_cast(val, llvm_ty, "").unwrap()
+                            }
                         }
                     }
                 }))
             }
-            Callable::UnOp { ty, op } => todo!(),
-            Callable::BinOp { ty, op } => todo!(),
+            Callable::UnOp { op, .. } => {
+                let param = params.next().unwrap().build(llvm).basic_value(llvm);
+                mu_llvm::Value::Data(param.map(|v| {
+                    match op {
+                        ast::UnOp::Negate => {
+                            // TODO: non-int values
+                            llvm.builder
+                                .build_int_neg(v.into_int_value(), "")
+                                .unwrap()
+                                .into()
+                        }
+                        ast::UnOp::Plus => v,
+                    }
+                }))
+            }
+            Callable::PredicateOp { ty, op } => {
+                let lhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let rhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let zip = lhs.zip(rhs);
+                zip.map(|(vl, vr)| {
+                    // TODO: non-int values
+                    let il = vl.into_int_value();
+                    let ir = vr.into_int_value();
+                    let predicate = match op {
+                        ast::PredicateOp::Equality(op) => match op {
+                            ast::EqualityOp::Equals => IntPredicate::EQ,
+                            ast::EqualityOp::NotEquals => IntPredicate::NE,
+                        },
+                        ast::PredicateOp::Inequality(op) => match (op, Self::is_signed(ty, llvm)) {
+                            (ast::InequalityOp::Greater, true) => IntPredicate::SGT,
+                            (ast::InequalityOp::Greater, false) => IntPredicate::UGT,
+                            (ast::InequalityOp::GreaterEquals, true) => IntPredicate::SGE,
+                            (ast::InequalityOp::GreaterEquals, false) => IntPredicate::UGE,
+                            (ast::InequalityOp::Less, true) => IntPredicate::SLT,
+                            (ast::InequalityOp::Less, false) => IntPredicate::ULT,
+                            (ast::InequalityOp::LessEquals, true) => IntPredicate::SLE,
+                            (ast::InequalityOp::LessEquals, false) => IntPredicate::ULE,
+                        },
+                    };
+                    llvm.builder
+                        .build_int_compare(predicate, il, ir, "")
+                        .unwrap()
+                })
+                .unwrap_or_else(|| {
+                    // unit equals itself
+                    llvm.context
+                        .bool_type()
+                        .const_int(op.equals() as u64, false)
+                })
+                .into()
+            }
+            Callable::MathOp { ty, op } => {
+                let lhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let rhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let zip = lhs.zip(rhs);
+                mu_llvm::Value::Data(zip.map(|(vl, vr)| {
+                    // TODO: non-int values
+                    let il = vl.into_int_value();
+                    let ir = vr.into_int_value();
+                    match op {
+                        ast::MathOp::Add => llvm.builder.build_int_add(il, ir, ""),
+                        ast::MathOp::Sub => llvm.builder.build_int_sub(il, ir, ""),
+                        ast::MathOp::Div => {
+                            if Self::is_signed(ty, llvm) {
+                                llvm.builder.build_int_signed_div(il, ir, "")
+                            } else {
+                                llvm.builder.build_int_unsigned_div(il, ir, "")
+                            }
+                        }
+                        ast::MathOp::Mul => llvm.builder.build_int_mul(il, ir, ""),
+                        ast::MathOp::Mod => {
+                            if Self::is_signed(ty, llvm) {
+                                // NOTE: this is NOT the euclidian remainder
+                                // we take the more "programmer"-y one because that satisfies:
+                                // (quotient * rhs) + remainder == lhs
+                                llvm.builder.build_int_signed_rem(il, ir, "")
+                            } else {
+                                llvm.builder.build_int_unsigned_rem(il, ir, "")
+                            }
+                        }
+                    }
+                    .unwrap()
+                    .into()
+                }))
+            }
             Callable::If => {
                 let types = op_ty.from();
                 let branch_sig = llvm.tt[types][1].into_function(llvm.tt);

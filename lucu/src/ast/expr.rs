@@ -68,13 +68,21 @@ impl From<SymbolInequality> for InequalityOp {
     }
 }
 
-// NOTE: Should we seperate the (in)equality ops from the math ops?
-// they act a bit different: (in)equality returns bool, while math returns the same type
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
-pub enum BinOp {
+pub enum PredicateOp {
     Equality(EqualityOp),
     Inequality(InequalityOp),
-    Math(MathOp),
+}
+
+impl PredicateOp {
+    pub fn equals(self) -> bool {
+        matches!(
+            self,
+            Self::Inequality(InequalityOp::GreaterEquals)
+                | Self::Inequality(InequalityOp::LessEquals)
+                | Self::Equality(EqualityOp::Equals)
+        )
+    }
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
@@ -152,7 +160,8 @@ pub enum Expression {
         expr: Box<Self>,
     },
     AssignOp(AssignOp, Box<Self>, Token, Box<Self>),
-    BinOp(BinOp, Box<Self>, Token, Box<Self>),
+    PredicateOp(PredicateOp, Box<Self>, Token, Box<Self>),
+    MathOp(MathOp, Box<Self>, Token, Box<Self>),
     UnOp {
         op: UnOp,
         tk_op: Token,
@@ -218,9 +227,9 @@ impl HasSpan for Expression {
             Expression::Discard { tk_discard, expr } => {
                 Span::new(tk_discard.span().start, expr.span().end)
             }
-            Expression::AssignOp(_, lhs, _, rhs) | Expression::BinOp(_, lhs, _, rhs) => {
-                Span::new(lhs.span().start, rhs.span().end)
-            }
+            Expression::AssignOp(_, lhs, _, rhs)
+            | Expression::PredicateOp(_, lhs, _, rhs)
+            | Expression::MathOp(_, lhs, _, rhs) => Span::new(lhs.span().start, rhs.span().end),
             Expression::UnOp { tk_op, expr, .. } => Span::new(tk_op.span().start, expr.span().end),
             Expression::Dereference { expr, tk_caret } => {
                 Span::new(expr.span().start, tk_caret.span().end)

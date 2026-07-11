@@ -151,12 +151,6 @@ impl Integer {
             (Integer::CChar, Integer::CChar) => true,
         }
     }
-    pub const fn is_signed(self, signed_char: bool) -> bool {
-        match self {
-            Integer::Integer(signed, _) => signed,
-            Integer::CChar => signed_char,
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]

@@ -44,8 +44,10 @@ pub enum Callable {
     },
     /// a -> a
     UnOp { ty: mu::Type, op: ast::UnOp },
-    /// (a x a) -> a OR (a x a) -> bool
-    BinOp { ty: mu::Type, op: ast::BinOp },
+    /// (a x a) -> bool
+    PredicateOp { ty: mu::Type, op: ast::PredicateOp },
+    /// (a x a) -> a
+    MathOp { ty: mu::Type, op: ast::MathOp },
     /// (Bool x (() -> ())) -> ()
     If,
     /// (Bool x (() -> a) x (() -> a)) -> a
@@ -68,13 +70,8 @@ impl mu::Typed for Callable {
         match *self {
             Callable::Cast { from, to, .. } => tt.function([from], to),
             Callable::UnOp { ty, .. } => tt.function([ty], ty),
-            Callable::BinOp { ty, op } => {
-                let output = match op {
-                    ast::BinOp::Equality(_) | ast::BinOp::Inequality(_) => tt.base(Base::Boolean),
-                    ast::BinOp::Math(_) => ty,
-                };
-                tt.function([ty, ty], output)
-            }
+            Callable::PredicateOp { ty, .. } => tt.function([ty, ty], tt.base(Base::Boolean)),
+            Callable::MathOp { ty, .. } => tt.function([ty, ty], ty),
             Callable::If => {
                 let bool = tt.base(Base::Boolean);
                 let unit = tt.unit();

@@ -62,7 +62,7 @@ fun print_int(n int) = {
 fun print_str(buf ^[]u8)
 	= #intrinsic
 
--- divergence
+-- control flow
 
 effect Div
 	= #intrinsic
@@ -91,7 +91,13 @@ fun for(from usize, to usize, fun body(n usize)) = {
 	}
 }
 
+fun unreachable !
+	= #intrinsic
+
 -- other utils
+
+fun len[T](slice ^[]T) usize
+	= #intrinsic
 
 -- USAGE:
 -- ```

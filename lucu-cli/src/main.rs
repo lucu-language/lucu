@@ -114,7 +114,7 @@ fn watch(cmd: CheckCommand) {
     let mut dirs = LibraryDir::stdlib(cmd.stdlib);
     dirs.insert(
         Library::MAIN,
-        LibraryDir::new(cmd.main).with_preamble(Module::CORE),
+        LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
     );
 
     let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));

@@ -83,7 +83,7 @@ impl Workspace {
         let mut libraries = LibraryDir::stdlib(stdlib_path);
         libraries.insert(
             Library::MAIN,
-            LibraryDir::new(root.clone()).with_preamble(Module::CORE),
+            LibraryDir::new(root.clone()).with_preamble(Module::BUILTIN),
         );
 
         Self {

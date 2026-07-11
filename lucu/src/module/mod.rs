@@ -101,10 +101,6 @@ impl Module {
         library: Library::LIBC,
         relative_path: CompactString::const_new("types"),
     };
-    pub const CORE: Module = Self {
-        library: Library::CORE,
-        relative_path: CompactString::const_new("core"),
-    };
     pub fn new(library: Library, path: impl AsRef<Path>) -> Self {
         let relative_path = clean(path)
             .into_os_string()

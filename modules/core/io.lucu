@@ -16,16 +16,16 @@ effect StdIo = {
    fun stderr(fun body with Sink)
 }
 
-effect Buffered[E effect] = {
-   fun buffered(buffer ^mut []u8, fun handled(fun body with E), fun body with E)
-}
+-- effect Buffered[E effect] = {
+--    fun buffered(buffer ^mut []u8, fun handled(fun body with E), fun body with E)
+-- }
 
-handle Buffered[Source] {
-   fun buffered(buffer ^mut []u8, fun handled(fun body with Source), fun body with Source) = {
-   }
-}
+-- handle Buffered[Source] {
+--    fun buffered(buffer ^mut []u8, fun handled(fun body with Source), fun body with Source) = {
+--    }
+-- }
 
-handle Buffered[Sink] {
-   fun buffered(buffer ^mut []u8, fun handled(fun body with Sink), fun body with Sink) = {
-   }
-}
+-- handle Buffered[Sink] {
+--    fun buffered(buffer ^mut []u8, fun handled(fun body with Sink), fun body with Sink) = {
+--    }
+-- }

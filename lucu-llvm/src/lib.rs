@@ -58,14 +58,14 @@ impl mu_llvm::Builder for Builder {
     fn build_operation<'ctx>(
         op: &Operation,
         llvm: &mu_llvm::Context<'ctx, Self>,
-    ) -> mu_llvm::Value<'ctx, Callable> {
+    ) -> mu_llvm::Value<'ctx, Self> {
         match op {
             Operation::Unreachable => {
                 let _ = llvm.builder.build_unreachable().unwrap();
                 mu_llvm::Value::Data(None)
             }
             Operation::Constant(ty, constant) => {
-                mu_llvm::Value::Data(llvm.get_type(*ty).get_data_type(llvm).map(
+                mu_llvm::Value::Data(llvm.get_type(*ty).basic_type(llvm).map(
                     |ty| match *constant {
                         Constant::Integer(i) => ty.into_int_type().const_int(i, false).into(),
                         Constant::Zero => ty.const_zero(),
@@ -104,14 +104,14 @@ impl mu_llvm::Builder for Builder {
     fn build_callable<'ctx>(
         op: &Callable,
         op_ty: mu::Function,
-        params: impl IntoIterator<Item = mu_llvm::Value<'ctx, Callable>>,
+        params: impl IntoIterator<Item = mu_llvm::ValueOrExpression<'ctx, Self>>,
         llvm: &mu_llvm::Context<'ctx, Self>,
-    ) -> mu_llvm::Value<'ctx, Callable> {
+    ) -> mu_llvm::Value<'ctx, Self> {
         let mut params = params.into_iter();
         match *op {
             Callable::Cast { to, op, .. } => {
-                let param = params.next().unwrap().build(llvm);
-                let ty = llvm.get_type(to).get_data_type(llvm);
+                let param = params.next().unwrap().build(llvm).basic_value(llvm);
+                let ty = llvm.get_type(to).basic_type(llvm);
                 mu_llvm::Value::Data(ty.map(|llvm_ty| match op {
                     Cast::Truncate => {
                         let val = param.unwrap();
@@ -182,7 +182,7 @@ impl mu_llvm::Builder for Builder {
                 let types = op_ty.from();
                 let branch_sig = llvm.tt[types][1].into_function(llvm.tt);
 
-                let bool = params.next().unwrap().build(llvm);
+                let bool = params.next().unwrap().build(llvm).basic_value(llvm);
                 let branch = params.next().unwrap();
 
                 let then_block = llvm.build_block("");
@@ -195,7 +195,7 @@ impl mu_llvm::Builder for Builder {
                     )
                     .unwrap();
                 llvm.builder.position_at_end(then_block);
-                llvm.build_call(branch_sig, branch, [mu_llvm::Value::Data(None)]);
+                branch.build_call(branch_sig, [mu_llvm::Value::Data(None).into()], llvm);
                 llvm.builder.build_unconditional_branch(next_block).unwrap();
                 llvm.builder.position_at_end(next_block);
                 mu_llvm::Value::Data(None)
@@ -204,7 +204,7 @@ impl mu_llvm::Builder for Builder {
                 let types = op_ty.from();
                 let branch_sig = llvm.tt[types][1].into_function(llvm.tt);
 
-                let bool = params.next().unwrap().build(llvm);
+                let bool = params.next().unwrap().build(llvm).basic_value(llvm);
                 let branch_true = params.next().unwrap();
                 let branch_false = params.next().unwrap();
 
@@ -220,25 +220,31 @@ impl mu_llvm::Builder for Builder {
                     .unwrap();
                 llvm.builder.position_at_end(then_block);
                 let val_true =
-                    llvm.build_call(branch_sig, branch_true, [mu_llvm::Value::Data(None)]);
+                    branch_true.build_call(branch_sig, [mu_llvm::Value::Data(None).into()], llvm);
                 llvm.builder.build_unconditional_branch(next_block).unwrap();
                 llvm.builder.position_at_end(else_block);
                 let val_false =
-                    llvm.build_call(branch_sig, branch_false, [mu_llvm::Value::Data(None)]);
+                    branch_false.build_call(branch_sig, [mu_llvm::Value::Data(None).into()], llvm);
                 llvm.builder.build_unconditional_branch(next_block).unwrap();
                 llvm.builder.position_at_end(next_block);
-                mu_llvm::Value::Data(llvm.get_type(to).get_data_type(llvm).map(|ty| {
-                    let val_true = val_true.build(llvm).unwrap();
-                    let val_false = val_false.build(llvm).unwrap();
+                mu_llvm::Value::Data(llvm.get_type(to).basic_type(llvm).map(|ty| {
+                    let val_true = val_true.basic_value(llvm).unwrap();
+                    let val_false = val_false.basic_value(llvm).unwrap();
                     let phi = llvm.builder.build_phi(ty, "").unwrap();
                     phi.add_incoming(&[(&val_true, then_block), (&val_false, else_block)]);
                     phi.as_basic_value()
                 }))
             }
             Callable::Syscall { .. } => {
-                let nr = params.next().unwrap().build(llvm).unwrap().into_int_value();
+                let nr = params
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
                 let args = params
-                    .map(|arg| arg.build(llvm).unwrap().into_int_value())
+                    .map(|arg| arg.build(llvm).basic_value(llvm).unwrap().into_int_value())
                     .collect::<Box<_>>();
                 mu_llvm::Value::Data(Some(llvm.build_syscall(nr, args)))
             }

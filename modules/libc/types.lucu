@@ -28,8 +28,8 @@ type string[r] = c.string[r]
 type size_t = types.usize
 type ptrdiff_t = types.isize
 
--- type nullptr_t = ?^types.void
--- const NULL nullptr_t = ...
+type nullptr_t = types.nullptr
+const NULL nullptr_t = 0
 
 -- type max_align_t = ...
 

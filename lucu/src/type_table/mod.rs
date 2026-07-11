@@ -172,6 +172,8 @@ pub enum TypeEnum {
     Boolean,
     Unit,
     Never,
+    /// Pointer-sized unit type
+    NullPointer,
     Pointer(Type, Region),
     PointerSlice(Type, Region, Option<Sentinel>),
     Array(Type, Constant, Option<Sentinel>),

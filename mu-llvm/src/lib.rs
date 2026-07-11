@@ -915,7 +915,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 .unwrap(),
             BasicValueEnum::PointerValue(ptr) => self
                 .builder
-                .build_int_compare(IntPredicate::EQ, ptr, ptr.get_type().const_null(), "")
+                .build_int_compare(IntPredicate::EQ, ptr, ptr.get_type().const_zero(), "")
                 .unwrap(),
             BasicValueEnum::StructValue(struc) => {
                 // TODO: do bitwise compare with 0 if struct is simply comparable

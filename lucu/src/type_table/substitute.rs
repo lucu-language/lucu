@@ -366,7 +366,11 @@ impl Substitute for Type {
                 // TODO: substitute when we allow more sentinels
                 sentinel,
             ),
-            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit | TypeEnum::Never => {
+            TypeEnum::Integer(_)
+            | TypeEnum::Boolean
+            | TypeEnum::Unit
+            | TypeEnum::Never
+            | TypeEnum::NullPointer => {
                 return self;
             }
         };
@@ -394,7 +398,11 @@ impl Substitute for Type {
                 // TODO: shift when we allow more sentinels
                 sentinel,
             ),
-            TypeEnum::Integer(_) | TypeEnum::Boolean | TypeEnum::Unit | TypeEnum::Never => {
+            TypeEnum::Integer(_)
+            | TypeEnum::Boolean
+            | TypeEnum::Unit
+            | TypeEnum::Never
+            | TypeEnum::NullPointer => {
                 return self;
             }
         };
@@ -436,6 +444,7 @@ impl Substitute for Type {
             (TypeEnum::Boolean, TypeEnum::Boolean) => Some(()),
             (TypeEnum::Unit, TypeEnum::Unit) => Some(()),
             (TypeEnum::Never, TypeEnum::Never) => Some(()),
+            (TypeEnum::NullPointer, TypeEnum::NullPointer) => Some(()),
             (&TypeEnum::Maybe(a), &TypeEnum::Maybe(b)) => a.infer(b, tt, start, args),
             (&TypeEnum::Pointer(ta, ra), &TypeEnum::Pointer(tb, rb))
             | (&TypeEnum::PointerSlice(ta, ra, None), &TypeEnum::PointerSlice(tb, rb, None))
@@ -463,6 +472,7 @@ impl Substitute for Type {
             (TypeEnum::Boolean, _) => None,
             (TypeEnum::Unit, _) => None,
             (TypeEnum::Never, _) => None,
+            (TypeEnum::NullPointer, _) => None,
             (TypeEnum::Maybe(_), _) => None,
             (TypeEnum::Pointer(_, _), _) => None,
             (TypeEnum::PointerSlice(_, _, _), _) => None,

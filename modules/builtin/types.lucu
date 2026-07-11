@@ -25,3 +25,5 @@ type unit = #intrinsic
 
 const true bool = #intrinsic
 const false bool = #intrinsic
+
+type nullptr = #intrinsic

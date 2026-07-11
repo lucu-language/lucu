@@ -105,6 +105,7 @@ impl fmt::Display for Interned<'_, Type> {
             TypeEnum::Boolean => write!(f, "Bool"),
             TypeEnum::Unit => write!(f, "()"),
             TypeEnum::Never => write!(f, "Void"),
+            TypeEnum::NullPointer => write!(f, "c.nullptr_t"),
             TypeEnum::Integer(size) => write!(f, "{size}"),
             TypeEnum::Pointer(ty, region) => {
                 write!(f, "^(@{}){}", region.display(self.1), ty.display(self.1))

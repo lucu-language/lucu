@@ -269,7 +269,7 @@ type StructCache<'ctx> = HashMap<mu::Tuple, (Box<[Type<'ctx>]>, Option<StructTyp
 
 #[derive(Clone, Copy, Debug)]
 pub enum Enum<'ctx> {
-    Never,
+    Empty,
     Units(IntType<'ctx>),
     Single(Option<BasicTypeEnum<'ctx>>),
     ZeroNiche(Option<BasicTypeEnum<'ctx>>, bool),
@@ -279,7 +279,7 @@ pub enum Enum<'ctx> {
 impl<'ctx> From<Enum<'ctx>> for Type<'ctx> {
     fn from(value: Enum<'ctx>) -> Self {
         Type::Data(match value {
-            Enum::Never => None,
+            Enum::Empty => None,
             Enum::Units(repr) => Some(repr.into()),
             Enum::Single(repr) => repr,
             Enum::ZeroNiche(repr, _) => repr,
@@ -500,7 +500,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         match self.tt[ty] {
             mu::TypeEnum::Base(ref base) => B::has_zero_niche(base, self),
             mu::TypeEnum::Sum(tys) => match self.get_enum(tys) {
-                Enum::Never => true,
+                Enum::Empty => true,
                 Enum::Units(_) | Enum::ZeroNiche(_, _) => false,
                 Enum::Single(_) | Enum::TaggedUnion(_) => self.has_zero_niche(self.tt[tys][0]),
             },
@@ -531,10 +531,10 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 };
                 let e = match self.tt[tys] {
                     // no variants
-                    [] => Enum::Never,
+                    [] => Enum::Empty,
                     // single variant
                     [_] => Enum::Single(variants[0].basic_type(self)),
-                    // only unit variant
+                    // only unit variants
                     _ if variants.iter().all(|v| !v.nonzero_sized()) => Enum::Units(tag_ty()),
                     // unit variant and variant with zero niche
                     [value, _] if self.has_zero_niche(value) && !variants[1].nonzero_sized() => {
@@ -676,7 +676,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 let variant = self.build_expression(e, refs);
 
                 match self.get_enum(variants) {
-                    Enum::Never => panic!(),
+                    Enum::Empty => panic!(),
                     Enum::Units(int) => int.const_int(i as u64, false).into(),
                     Enum::Single(_) => variant,
                     Enum::ZeroNiche(ty, zero_index) => {
@@ -697,7 +697,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                     .get_type(self.et[es][0].get_type(self.tt, self.et))
                     .basic_type(self);
                 match self.get_enum(sum) {
-                    Enum::Never => Value::Data(None),
+                    Enum::Empty => Value::Data(None),
                     Enum::Units(int) => {
                         // TODO: simplify in the case of exactly 2 units
 
@@ -990,7 +990,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             })
         }))
     }
-    fn build_construct(
+    pub fn build_construct(
         &self,
         types: mu::Tuple,
         members: impl IntoIterator<Item = Value<'ctx, B>>,

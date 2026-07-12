@@ -30,6 +30,9 @@ const false bool = types.false
 effect Read[r] = regions.Read[r]
 effect Write[r] = regions.Write[r]
 
+-- fun ref[T, U](val T, fun body(ptr ^mut T) U) U
+-- 	= regions.ref[T, U](val, body)
+
 -- printing
 
 fun print_int(n int) = {
@@ -37,7 +40,7 @@ fun print_int(n int) = {
 
 	let remaining = use ref(abs(n))
 
-	let start = perform {
+	let start = catch {
 		for(21, 1) { current ->
 			let digit u8 = '0' + #trunc (remaining^ % 10)
 			remaining^ /= 10
@@ -45,7 +48,7 @@ fun print_int(n int) = {
 			buf[current]^ = digit
 
 			if remaining^ == 0 {
-				return current
+				raise current
 			}
 		}
 		unreachable
@@ -76,17 +79,17 @@ fun unfounded[T](fun body T with Div) T
 fun for(from usize, to usize, fun body(n usize)) = {
 	if to >= from {
 		let current = use ref(from)
-		perform unfounded loop {
-			if current^ == to then return
+		catch unfounded loop {
+			if current^ == to then raise
 			body(current^)
 			current^ += 1
 		}
 	} else {
 		let current = use ref(from - 1)
-		perform unfounded loop {
+		catch unfounded loop {
 			body(current^)
 			current^ -= 1
-			if current^ == to then return
+			if current^ == to then raise
 		}
 	}
 }
@@ -99,13 +102,16 @@ fun unreachable !
 fun len[T](slice ^[]T) usize
 	= #intrinsic
 
--- USAGE:
--- ```
--- use defer(...)
--- ...
--- ```
-fun defer[T](fun deferred unit, fun body T) T = {
-	let t = body
-	deferred
-	t
-}
+fun abs(n int) int
+	= #intrinsic
+
+-- -- USAGE:
+-- -- ```
+-- -- use defer(...)
+-- -- ...
+-- -- ```
+-- fun defer[T](fun deferred unit, fun body T) T = {
+-- 	let t = body
+-- 	deferred
+-- 	t
+-- }

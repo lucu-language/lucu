@@ -122,6 +122,25 @@ pub enum Cast {
     Transmute,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct Call {
+    pub fun: Path,
+    pub args: Option<Grouped<Separated<Box<Expression>>>>,
+    pub block: Option<Box<Expression>>,
+    pub with_effects: Option<WithEffects>,
+}
+
+impl From<Path> for Call {
+    fn from(value: Path) -> Self {
+        Self {
+            fun: value,
+            args: None,
+            block: None,
+            with_effects: None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "Expression::")]
 pub enum Expression {
@@ -177,28 +196,37 @@ pub enum Expression {
     },
     Array(Grouped<Separated<Box<Self>>>),
     /// Call, type constructor
-    Call {
-        fun: Path,
-        args: Option<Grouped<Separated<Box<Self>>>>,
-        block: Option<Box<Self>>,
-        with_effects: Option<WithEffects>,
-    },
+    Call(Call),
     Use {
         params: Option<(Token, Separated<LambdaParameter>, Token)>,
         tk_use: Token,
-        fun: Path,
-        args: Option<Grouped<Separated<Box<Self>>>>,
+        call: Call,
         tk_newline: Token,
         block: Separated<Box<Self>>,
     },
-    Perform {
-        tk_perform: Token,
+    Catch {
+        tk_catch: Token,
         expr: Box<Self>,
     },
-    Return {
-        tk_return: Token,
+    Raise {
+        tk_raise: Token,
         expr: Option<Box<Self>>,
     },
+}
+
+impl HasSpan for Call {
+    fn span(&self) -> Span {
+        let start = self.fun.span().start;
+        let end = self
+            .with_effects
+            .as_ref()
+            .map(HasSpan::span)
+            .or_else(|| self.block.as_ref().map(HasSpan::span))
+            .or_else(|| self.args.as_ref().map(HasSpan::span))
+            .unwrap_or_else(|| self.fun.span())
+            .end;
+        Span::new(start, end)
+    }
 }
 
 impl HasSpan for Expression {
@@ -236,22 +264,7 @@ impl HasSpan for Expression {
             }
             Expression::Index { array, index } => Span::new(array.span().start, index.span().end),
             Expression::Array(group) => group.span(),
-            Expression::Call {
-                fun,
-                args,
-                block,
-                with_effects,
-            } => {
-                let start = fun.span().start;
-                let end = with_effects
-                    .as_ref()
-                    .map(HasSpan::span)
-                    .or_else(|| block.as_ref().map(HasSpan::span))
-                    .or_else(|| args.as_ref().map(HasSpan::span))
-                    .unwrap_or_else(|| fun.span())
-                    .end;
-                Span::new(start, end)
-            }
+            Expression::Call(call) => call.span(),
             Expression::Use {
                 params,
                 tk_use,
@@ -266,12 +279,12 @@ impl HasSpan for Expression {
                 let end = block.span().end;
                 Span::new(start, end)
             }
-            Expression::Perform {
-                tk_perform: tk_try,
+            Expression::Catch {
+                tk_catch: tk_try,
                 expr,
             } => Span::new(tk_try.span().start, expr.span().end),
-            Expression::Return {
-                tk_return: tk_break,
+            Expression::Raise {
+                tk_raise: tk_break,
                 expr,
             } => match expr {
                 Some(expr) => Span::new(tk_break.span().start, expr.span().end),

@@ -228,6 +228,7 @@ pub(super) fn test() {
 
     eprintln!(" --- LLVM --- ");
     llvm.eprint();
+    llvm.verify().unwrap();
     llvm.optimize().unwrap();
     eprintln!(" --- LLVM O3 --- ");
     llvm.eprint();

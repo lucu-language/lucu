@@ -418,6 +418,22 @@ impl Ast for ast::Index {
     }
 }
 
+impl Ast for ast::Call {
+    fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
+        V::Output::combine([
+            visitor.visit_path(&self.fun),
+            visit_option(&self.args, visitor, |v, g| {
+                visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
+            }),
+            visit_option(&self.block, visitor, |v, e| v.visit(&**e)),
+            visit_option(&self.with_effects, visitor, |v, es| v.visit(es)),
+        ])
+    }
+    fn node_name(&self) -> &'static str {
+        "Call"
+    }
+}
+
 impl Ast for ast::Expression {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
@@ -436,10 +452,10 @@ impl Ast for ast::Expression {
                 visit_option(ty, visitor, |v, t| v.visit_type(t)),
                 visitor.visit(&**value),
             ]),
-            ast::Expression::Return { expr, .. } => {
+            ast::Expression::Raise { expr, .. } => {
                 visit_option(expr, visitor, |v, e| v.visit(&**e))
             }
-            ast::Expression::Perform { expr, .. }
+            ast::Expression::Catch { expr, .. }
             | ast::Expression::Discard { expr, .. }
             | ast::Expression::UnOp { expr, .. }
             | ast::Expression::Dereference { expr, .. }
@@ -465,33 +481,17 @@ impl Ast for ast::Expression {
             ast::Expression::Array(grouped) => {
                 visit_vec(&grouped.inner.elements, visitor, |v, (e, _)| v.visit(&**e))
             }
-            ast::Expression::Call {
-                fun,
-                args,
-                block,
-                with_effects,
-            } => V::Output::combine([
-                visitor.visit_path(fun),
-                visit_option(args, visitor, |v, g| {
-                    visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
-                }),
-                visit_option(block, visitor, |v, e| v.visit(&**e)),
-                visit_option(with_effects, visitor, |v, es| v.visit(es)),
-            ]),
+            ast::Expression::Call(call) => visitor.visit(call),
             ast::Expression::Use {
                 params,
-                fun,
-                args,
+                call,
                 block,
                 ..
             } => V::Output::combine([
                 visit_option(params, visitor, |v, (_, p, _)| {
                     visit_vec(&p.elements, v, |v, (p, _)| v.visit(p))
                 }),
-                visitor.visit_path(fun),
-                visit_option(args, visitor, |v, g| {
-                    visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
-                }),
+                visitor.visit(call),
                 visit_vec(&block.elements, visitor, |v, (e, _)| v.visit(&**e)),
             ]),
         }

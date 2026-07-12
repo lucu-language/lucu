@@ -8,7 +8,70 @@ use crate::tokens::{Group, Keyword, Symbol, SymbolAssign, TokenEnum};
 
 type Expr = Result<Box<ast::Expression>>;
 
+#[derive(PartialEq, Eq)]
+enum AllowLambda {
+    No,
+    Yes,
+    Force,
+}
+
+impl From<bool> for AllowLambda {
+    fn from(value: bool) -> Self {
+        if value { Self::Yes } else { Self::No }
+    }
+}
+
 impl<'a> Parser<'a> {
+    pub fn call(&mut self, allow_lambda: bool) -> Result<ast::Call> {
+        m! {
+            fun <- self.path(false);
+            call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+            return call.unwrap_or_else(Into::into);
+        }
+    }
+
+    fn call_suffix(
+        &mut self,
+        fun: ast::Path,
+        allow_lambda: AllowLambda,
+    ) -> Result<std::result::Result<ast::Call, ast::Path>> {
+        m! {
+            args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true)));
+            block <- if allow_lambda != AllowLambda::No
+                && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
+                if self.is_next(TokenEnum::Identifier) {
+                    // we allow identifiers here to make this possible:
+                    // `unfounded loop { ... }`
+                    let p = &mut *self;
+                    m! {
+                        fun <- p.path(false);
+                        call <- p.call_suffix(fun, AllowLambda::Force);
+                        let call = call.unwrap_or_else(Into::into);
+                        return Some(Box::new(ast::Expression::Call(call)));
+                    }
+                } else {
+                    self.expression_top(true).map(Some)
+                }
+            } else if allow_lambda != AllowLambda::Force {
+                Result::new(None)
+            } else {
+                // NOTE: do we maybe want a more specific error here?
+                self.error(Expected::Token(TokenEnum::Open(Group::Brace)))
+            };
+            with_effects <- self.when_next(Keyword::With, Parser::with_effects);
+            return if args.is_some() || block.is_some() || with_effects.is_some() {
+                Ok(ast::Call {
+                    fun,
+                    args,
+                    block,
+                    with_effects,
+                })
+            } else {
+                Err(fun)
+            };
+        }
+    }
+
     pub fn statement(&mut self) -> Expr {
         match self.next().token {
             TokenEnum::Keyword(Keyword::Discard) => {
@@ -26,20 +89,16 @@ impl<'a> Parser<'a> {
                     let end = self.last_token_end;
                     tk_equals <- self.consume(Symbol::Assign(SymbolAssign::Equals));
                     match self.next().token {
+                        // FIXME: allow multiple values
                         TokenEnum::Keyword(Keyword::Use) => m! {
                             let tk_use = self.skip();
-                            fun <- self.path(false);
-                            args <- self.when_next(
-                                TokenEnum::Open(Group::Parenthesis),
-                                |parser| parser.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true))
-                            );
+                            call <- self.call(true);
                             tk_newline <- self.consume(Symbol::Semicolon);
                             block <- self.many(Symbol::Semicolon, Self::statement);
                             return Box::new(ast::Expression::Use {
                                 params: Some((tk_let, ast::Separated { elements: vec![(LambdaParameter { var, ty }, None)], end }, tk_equals)),
                                 tk_use,
-                                fun,
-                                args,
+                                call,
                                 tk_newline,
                                 block,
                             });
@@ -53,18 +112,13 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Use) => {
                 m! {
                     let tk_use = self.skip();
-                    fun <- self.path(false);
-                    args <- self.when_next(
-                        TokenEnum::Open(Group::Parenthesis),
-                        |parser| parser.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true))
-                    );
+                    call <- self.call(true);
                     tk_newline <- self.consume(Symbol::Semicolon);
                     block <- self.many(Symbol::Semicolon, Self::statement);
                     return Box::new(ast::Expression::Use {
                         params: None,
                         tk_use,
-                        fun,
-                        args,
+                        call,
                         tk_newline,
                         block,
                     });
@@ -270,18 +324,18 @@ impl<'a> Parser<'a> {
             TokenEnum::Open(Group::Bracket) => self
                 .many_grouped(Group::Bracket, Symbol::Comma, |p| p.expression(true))
                 .map(|exprs| Box::new(ast::Expression::Array(exprs))),
-            TokenEnum::Keyword(Keyword::Perform) => {
+            TokenEnum::Keyword(Keyword::Catch) => {
                 m! {
-                    let tk_perform = self.skip();
+                    let tk_catch = self.skip();
                     expr <- self.expression(allow_lambda);
-                    return Box::new(ast::Expression::Perform { tk_perform, expr });
+                    return Box::new(ast::Expression::Catch { tk_catch, expr });
                 }
             }
-            TokenEnum::Keyword(Keyword::Return) => {
+            TokenEnum::Keyword(Keyword::Raise) => {
                 m! {
-                    let tk_return = self.skip();
+                    let tk_raise = self.skip();
                     expr <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Semicolon)], |p| p.expression(allow_lambda));
-                    return Box::new(ast::Expression::Return { tk_return, expr });
+                    return Box::new(ast::Expression::Raise { tk_raise, expr });
                 }
             }
             TokenEnum::Symbol(Symbol::TripleDash) => {
@@ -335,24 +389,8 @@ impl<'a> Parser<'a> {
                         }
                     };
                     let (fun, default) = fundefault;
-                    args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true)));
-                    block <- if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
-                        // TODO: if it is an identifier, force it to have lambda args?
-                        self.expression_top(true).map(Some)
-                    } else {
-                        Result::new(None)
-                    };
-                    with_effects <- self.when_next(Keyword::With, Parser::with_effects);
-                    return Box::new(if args.is_none() && block.is_none() && with_effects.is_none() {
-                        default
-                    } else {
-                        ast::Expression::Call {
-                            fun,
-                            args,
-                            block,
-                            with_effects,
-                        }
-                    });
+                    call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+                    return Box::new(call.map_or(default, ast::Expression::Call));
                 }
             }
             _ if self.starts_constant() => self

@@ -33,6 +33,7 @@ pub enum IntSize {
     Index,
     /// The size of a memory address
     /// At least 16 bits
+    /// At most IntSize::Register
     Address,
     /// The size of the largest general purpose integer register
     /// At least 16 bits
@@ -95,8 +96,8 @@ impl IntSize {
             (IntSize::Exact(a), IntSize::Exact(b)) => a <= b,
             (IntSize::Exact(n), IntSize::Index | IntSize::Address | IntSize::Register) => n <= 16,
 
-            (IntSize::Index, IntSize::Index | IntSize::Address) => true,
-            (IntSize::Address, IntSize::Address) => true,
+            (IntSize::Index, IntSize::Index | IntSize::Address | IntSize::Register) => true,
+            (IntSize::Address, IntSize::Address | IntSize::Register) => true,
             (IntSize::Register, IntSize::Register) => true,
 
             (IntSize::Exact(n), IntSize::CChar) => n <= 8,
@@ -201,6 +202,7 @@ impl Type {
 pub enum RegionEnum {
     Generic(GenericParameter),
     Static,
+    Heap,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -211,6 +213,7 @@ pub enum EffectEnum {
     Read(Region),
     Write(Region),
     Divergent,
+    World,
 }
 
 impl EffectEnum {

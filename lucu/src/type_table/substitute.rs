@@ -497,7 +497,7 @@ impl Substitute for Region {
                     RegionEnum::Generic(generic)
                 }
             }
-            RegionEnum::Static => return self,
+            RegionEnum::Static | RegionEnum::Heap => return self,
         };
         tt.insert_region(changed)
     }
@@ -506,7 +506,7 @@ impl Substitute for Region {
             RegionEnum::Generic(ref generic) => {
                 RegionEnum::Generic(generic.clone().shift(tt, start, offset))
             }
-            RegionEnum::Static => return self,
+            RegionEnum::Static | RegionEnum::Heap => return self,
         };
         tt.insert_region(changed)
     }
@@ -542,9 +542,11 @@ impl Substitute for Region {
                 a.clone().infer(b.clone(), tt, start, args)
             }
             (RegionEnum::Static, RegionEnum::Static) => Some(()),
+            (RegionEnum::Heap, RegionEnum::Heap) => Some(()),
 
             (RegionEnum::Generic(_), _) => None,
             (RegionEnum::Static, _) => None,
+            (RegionEnum::Heap, _) => None,
         }
     }
 }
@@ -571,7 +573,7 @@ impl Substitute for Effect {
             }
             EffectEnum::Read(region) => EffectEnum::Read(region.subst(tt, start, args)),
             EffectEnum::Write(region) => EffectEnum::Write(region.subst(tt, start, args)),
-            EffectEnum::Divergent => return self,
+            EffectEnum::Divergent | EffectEnum::World => return self,
         };
         tt.insert_effect(changed)
     }
@@ -584,7 +586,7 @@ impl Substitute for Effect {
             EffectEnum::Row(ref row) => EffectEnum::Row(row.clone().shift(tt, start, offset)),
             EffectEnum::Read(region) => EffectEnum::Read(region.shift(tt, start, offset)),
             EffectEnum::Write(region) => EffectEnum::Write(region.shift(tt, start, offset)),
-            EffectEnum::Divergent => return self,
+            EffectEnum::Divergent | EffectEnum::World => return self,
         };
         tt.insert_effect(changed)
     }
@@ -626,6 +628,7 @@ impl Substitute for Effect {
             (&EffectEnum::Read(a), &EffectEnum::Read(b)) => a.infer(b, tt, start, args),
             (&EffectEnum::Write(a), &EffectEnum::Write(b)) => a.infer(b, tt, start, args),
             (EffectEnum::Divergent, EffectEnum::Divergent) => Some(()),
+            (EffectEnum::World, EffectEnum::World) => Some(()),
 
             (EffectEnum::Generic(_), _) => None,
             (EffectEnum::Item(_), _) => None,
@@ -633,6 +636,7 @@ impl Substitute for Effect {
             (EffectEnum::Read(_), _) => None,
             (EffectEnum::Write(_), _) => None,
             (EffectEnum::Divergent, _) => None,
+            (EffectEnum::World, _) => None,
 
             (EffectEnum::Row(_), _) => {
                 // This is the one reason why we can't completely accept or deny a generics inference...

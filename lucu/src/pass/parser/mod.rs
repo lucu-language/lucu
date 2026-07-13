@@ -120,6 +120,14 @@ impl<'a> Parser<'a> {
                     return ast::Item::Effect(token, name, definition);
                 }
             }
+            TokenEnum::Keyword(Keyword::Region) => {
+                m! {
+                    let token = self.skip();
+                    name <- self.name(false);
+                    definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::region_definition);
+                    return ast::Item::Region(token, name, definition);
+                }
+            }
             TokenEnum::Keyword(Keyword::Const) => {
                 m! {
                     let token = self.skip();
@@ -176,6 +184,14 @@ impl<'a> Parser<'a> {
                 })
                 .require(|v| !v.is_empty(), |_| self.problem(Expected::Effect))
                 .map(ast::EffectDefinition::Alias),
+        }
+    }
+    pub fn region_definition(&mut self) -> Result<ast::RegionDefinition> {
+        match self.next().token {
+            TokenEnum::Keyword(Keyword::Intrinsic) => {
+                Result::new(ast::RegionDefinition::Intrinsic(self.skip()))
+            }
+            _ => self.path(false).map(ast::RegionDefinition::Alias),
         }
     }
     pub fn constant_definition(&mut self) -> Result<ast::ConstantDefinition> {
@@ -250,6 +266,7 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
+        // TODO: array constants
         match self.next().token {
             TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
@@ -578,6 +595,29 @@ impl<'a> Parser<'a> {
             let token = parser.skip();
             parse(parser).map(|t| (token, t))
         })
+    }
+    fn group_contains(&self, token: impl Into<TokenEnum>) -> bool {
+        let token = token.into();
+        let mut p = Parser {
+            module: self.module,
+            source: self.source,
+            last_token_end: self.last_token_end,
+            tokens: self.tokens,
+        };
+        p.skip();
+        loop {
+            match p.next().token {
+                TokenEnum::Eof | TokenEnum::Close(_) => break false,
+                TokenEnum::Open(group) => {
+                    p.skip();
+                    p.skip_group(group)
+                }
+                t if t == token => break true,
+                _ => {
+                    p.skip();
+                }
+            }
+        }
     }
     fn skip_group(&mut self, group: Group) {
         loop {

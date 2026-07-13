@@ -79,6 +79,7 @@ pub enum Item {
     Function(FunctionDeclaration, Option<(Token, FunctionDefinition)>),
     Type(Token, Name, Option<(Token, TypeDefinition)>),
     Effect(Token, Name, Option<(Token, EffectDefinition)>),
+    Region(Token, Name, Option<(Token, RegionDefinition)>),
     Constant(Token, Name, Box<Type>, Option<(Token, ConstantDefinition)>),
     Handle(Token, Option<GenericParameters>, Handler),
 }
@@ -300,6 +301,13 @@ pub enum EffectDefinition {
     Intrinsic(Token),
 }
 
+#[derive(Debug, PartialEq, Eq, IntoStaticStr)]
+#[strum(prefix = "RegionDefinition::")]
+pub enum RegionDefinition {
+    Alias(Path),
+    Intrinsic(Token),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct EffectBody {
     pub items: Grouped<Separated<Item>>,
@@ -406,6 +414,15 @@ impl HasSpan for Item {
                     .end;
                 Span { start, end }
             }
+            Item::Region(token, name, def) => {
+                let start = token.span().start;
+                let end = def
+                    .as_ref()
+                    .map(|(_, def)| def.span())
+                    .unwrap_or_else(|| name.span())
+                    .end;
+                Span { start, end }
+            }
             Item::Effect(token, name, def) => {
                 let start = token.span().start;
                 let end = def
@@ -420,6 +437,15 @@ impl HasSpan for Item {
                 let end = handler.span().end;
                 Span { start, end }
             }
+        }
+    }
+}
+
+impl HasSpan for RegionDefinition {
+    fn span(&self) -> Span {
+        match self {
+            RegionDefinition::Alias(path) => path.span(),
+            RegionDefinition::Intrinsic(token) => token.span(),
         }
     }
 }
@@ -759,18 +785,20 @@ impl Item {
     pub fn name(&self) -> Option<&Name> {
         match self {
             Item::Function(fun, _) => Some(&fun.name),
-            Item::Type(_, name, _) => Some(name),
-            Item::Effect(_, name, _) => Some(name),
-            Item::Constant(_, name, _, _) => Some(name),
+            Item::Type(_, name, _)
+            | Item::Effect(_, name, _)
+            | Item::Region(_, name, _)
+            | Item::Constant(_, name, _, _) => Some(name),
             Item::Handle(_, _, _) => None,
         }
     }
     pub fn generics(&self) -> Option<&GenericParameters> {
         match self {
             Item::Function(fun, _) => fun.name.generics.as_ref(),
-            Item::Type(_, name, _) => name.generics.as_ref(),
-            Item::Effect(_, name, _) => name.generics.as_ref(),
-            Item::Constant(_, name, _, _) => name.generics.as_ref(),
+            Item::Type(_, name, _)
+            | Item::Effect(_, name, _)
+            | Item::Region(_, name, _)
+            | Item::Constant(_, name, _, _) => name.generics.as_ref(),
             Item::Handle(_, params, _) => params.as_ref(),
         }
     }

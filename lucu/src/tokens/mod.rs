@@ -154,6 +154,7 @@ impl TokenEnum {
                 | TokenEnum::Symbol(Symbol::Equality(_))
                 | TokenEnum::Symbol(Symbol::Inequality(_))
                 | TokenEnum::Keyword(Keyword::Intrinsic)
+                | TokenEnum::Keyword(Keyword::With)
         )
     }
 }
@@ -260,9 +261,12 @@ pub enum Literal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Group {
-    Parenthesis, // ()
-    Brace,       // {}
-    Bracket,     // []
+    /// ()
+    Parenthesis,
+    /// {}
+    Brace,
+    /// []
+    Bracket,
 }
 
 impl From<Keyword> for TokenEnum {

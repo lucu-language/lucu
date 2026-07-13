@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::RwLock;
 
-use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;

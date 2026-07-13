@@ -135,7 +135,8 @@ impl fmt::Display for Interned<'_, Region> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.1[self.0] {
             RegionEnum::Generic(ref param) => write!(f, "{}", param.display(self.1)),
-            RegionEnum::Static => write!(f, "'static"),
+            RegionEnum::Static => write!(f, "static"),
+            RegionEnum::Heap => write!(f, "heap"),
         }
     }
 }
@@ -157,6 +158,7 @@ impl fmt::Display for Interned<'_, Effect> {
             EffectEnum::Read(region) => write!(f, "read {}", region.display(self.1)),
             EffectEnum::Write(region) => write!(f, "write {}", region.display(self.1)),
             EffectEnum::Divergent => write!(f, "div"),
+            EffectEnum::World => write!(f, "world"),
         }
     }
 }
@@ -283,6 +285,7 @@ impl Region {
         match &tt[self] {
             RegionEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
             RegionEnum::Static => false,
+            RegionEnum::Heap => false,
         }
     }
 }
@@ -298,6 +301,7 @@ impl Effect {
             EffectEnum::Read(_) => true,
             EffectEnum::Write(_) => true,
             EffectEnum::Divergent => false,
+            EffectEnum::World => false,
         }
     }
 }

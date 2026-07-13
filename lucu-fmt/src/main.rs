@@ -234,6 +234,7 @@ fn is_heavy(def: &ast::Item) -> bool {
             ast::EffectDefinition::Alias(_) => false,
             ast::EffectDefinition::Intrinsic(_) => true,
         }),
+        ast::Item::Region(_, _, _) => false,
         ast::Item::Constant(_, _, _, _) => false,
         ast::Item::Handle(_, _, _) => true,
     }
@@ -437,6 +438,24 @@ impl Definition for ast::ConstantDefinition {
     }
 }
 
+impl Ast for ast::RegionDefinition {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::RegionDefinition::Alias(path) => path.push_nodes(nodes),
+            ast::RegionDefinition::Intrinsic(token) => nodes.token(*token),
+        }
+    }
+}
+
+impl Definition for ast::RegionDefinition {
+    fn placement(&self) -> Placement {
+        match self {
+            ast::RegionDefinition::Alias(_) => Placement::Inline,
+            ast::RegionDefinition::Intrinsic(_) => Placement::Inline,
+        }
+    }
+}
+
 impl Ast for ast::Item {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
@@ -457,6 +476,15 @@ impl Ast for ast::Item {
                 }
             }
             ast::Item::Effect(token, name, def) => {
+                nodes.token(*token);
+                nodes.space();
+                name.push_nodes(nodes);
+
+                if let Some((equals, def)) = def {
+                    def.push_definition(nodes, *equals);
+                }
+            }
+            ast::Item::Region(token, name, def) => {
                 nodes.token(*token);
                 nodes.space();
                 name.push_nodes(nodes);

@@ -359,30 +359,36 @@ impl<'a> Parser<'a> {
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });
                 }
             }
-            // FIXME: allow for generic arguments
+            // TODO: better way of handling generics
             TokenEnum::Identifier => {
                 m! {
                     ident <- self.ident();
                     fundefault <- match self.next().token {
                         TokenEnum::Symbol(Symbol::Dot) => {
                             let tk_dot = self.skip();
-                            self.ident().map(|member| (
-                                ast::Path {
-                                    origin: ast::PathOrigin::Package(ident.clone(), tk_dot, member.clone()),
-                                    generics: None
-                                },
-                                ast::Expression::MemberOrItem {
-                                    lhs: ident,
-                                    tk_dot,
-                                    rhs: member,
-                                }
-                            ))
+                            self.ident().and_then(|member| {
+                                self.when(Parser::starts_multiple_generics, |parser|
+                                    parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                                ).map(|generics| (
+                                    ast::Path {
+                                        origin: ast::PathOrigin::Package(ident.clone(), tk_dot, member.clone()),
+                                        generics,
+                                    },
+                                    ast::Expression::MemberOrItem {
+                                        lhs: ident,
+                                        tk_dot,
+                                        rhs: member,
+                                    }
+                                ))
+                            })
                         }
                         _ => {
-                            Result::new((
+                            self.when(Parser::starts_multiple_generics, |parser|
+                                parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                            ).map(|generics| (
                                 ast::Path {
                                     origin: ast::PathOrigin::Local(ident.clone()),
-                                    generics: None
+                                    generics,
                                 },
                                 ast::Expression::Local(ident),
                             ))
@@ -406,6 +412,9 @@ impl<'a> Parser<'a> {
                 self.tokens[1].token,
                 TokenEnum::Symbol(Symbol::Comma) | TokenEnum::Symbol(Symbol::Arrow)
             )
+    }
+    fn starts_multiple_generics(&self) -> bool {
+        self.is_next(TokenEnum::Open(Group::Bracket)) && self.group_contains(Symbol::Comma)
     }
 
     pub fn lambda_parameter(&mut self) -> Result<ast::LambdaParameter> {

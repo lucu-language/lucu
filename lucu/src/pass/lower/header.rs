@@ -13,7 +13,7 @@ use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, GenericParameter, IntSize, Integer, Item,
+    Constant, ConstantEnum, Effect, EffectEnum, GenericParameter, IntSize, Integer, Item, Region,
     RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
 };
 
@@ -138,6 +138,41 @@ impl<'a, 'b> Lower<'a, 'b> {
         let mut problems = Problems::ok();
 
         match item {
+            ast::Item::Region(_, name, def) => {
+                if let Some(parent) = parent {
+                    todo!("error")
+                }
+
+                let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type));
+
+                match def {
+                    Some((_, ast::RegionDefinition::Alias(path))) => {
+                        if let Some(kind) = kind {
+                            let decl = self.with_name(
+                                0,
+                                self.tt[kind].params.as_ref(),
+                                name.generics.as_ref(),
+                                |l| {
+                                    problems.append(l.region(path)).map(|region| {
+                                        let item = ItemDecl::Alias(kind, Term::Region(region));
+                                        Decl::Item(name.ident.as_str().into(), item)
+                                    })
+                                },
+                            );
+                            return problems.with(decl);
+                        }
+                    }
+                    Some((_, ast::RegionDefinition::Intrinsic(_))) => {
+                        let region = problems.append(self.intrinsic_region(name));
+                        if let (Some(kind), Some(region)) = (kind, region) {
+                            let item = ItemDecl::Alias(kind, Term::Region(region));
+                            return problems
+                                .with(Some(Decl::Item(name.ident.as_str().into(), item)));
+                        }
+                    }
+                    None => todo!("error"),
+                }
+            }
             ast::Item::Type(_, name, def) => {
                 if let Some(parent) = parent {
                     todo!("error")
@@ -449,6 +484,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
             ast::Item::Function(_, _) => {}
             ast::Item::Constant(_, _, _, _) => {}
+            ast::Item::Region(_, _, _) => {}
             ast::Item::Handle(_, _, _) => {}
         }
 
@@ -461,6 +497,19 @@ impl<'a, 'b> Lower<'a, 'b> {
                 ty,
             }),
         }
+    }
+    fn intrinsic_region(&mut self, name: &ast::Name) -> Result<Region> {
+        let module = self.module.to_compact_string();
+        let region = match (module.as_str(), name.ident.as_str()) {
+            ("builtin:regions", "static") => RegionEnum::Static,
+            ("builtin:regions", "heap") => RegionEnum::Heap,
+            _ => todo!(
+                "error: unknown intrinsic {}.{}",
+                module.as_str(),
+                name.ident.as_str()
+            ),
+        };
+        Result::new(self.tt.insert_region(region))
     }
     fn intrinsic_type(&mut self, name: &ast::Name) -> Result<Type> {
         let module = self.module.to_compact_string();
@@ -505,6 +554,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         let module = self.module.to_compact_string();
         let effect = match (module.as_str(), name.ident.as_str()) {
             ("builtin:builtin", "Div") => EffectEnum::Divergent,
+            ("builtin:builtin", "World") => EffectEnum::World,
             ("builtin:regions", "Read") => {
                 let region = self.tt.insert_region(RegionEnum::Generic(GenericParameter {
                     index: 0,

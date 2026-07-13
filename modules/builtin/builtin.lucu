@@ -25,13 +25,83 @@ type unit = types.unit
 const true bool = types.true
 const false bool = types.false
 
+type nullptr = types.nullptr
+
+type static_str = ^@static []u8
+
 -- regions
+
+region static = regions.static
+region heap = regions.heap
 
 effect Read[r] = regions.Read[r]
 effect Write[r] = regions.Write[r]
 
 -- fun ref[T, U](val T, fun body(ptr ^mut T) U) U
 -- 	= regions.ref[T, U](val, body)
+
+-- source location
+
+effect Location = {
+	fun path static_str
+	fun line uint
+	fun column uint
+}
+
+handle Location {
+	fun path static_str = #intrinsic
+	fun line uint = #intrinsic
+	fun column uint = #intrinsic
+}
+
+-- world
+
+effect World
+	= #intrinsic
+
+fun link[LIB static_str, E effect](fun body with E) with World
+	= #intrinsic
+
+fun asm[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U with World
+	= #intrinsic
+
+fun asm_pure[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U
+	= #intrinsic
+
+fun syscall0(nr uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},~{rcx},~{r11},~{memory}", [1]uptr, uptr]([nr])
+fun syscall1(nr uptr, arg1 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},~{rcx},~{r11},~{memory}", [2]uptr, uptr]([nr, arg1])
+fun syscall2(nr uptr, arg1 uptr, arg2 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},~{rcx},~{r11},~{memory}", [3]uptr, uptr]([nr, arg1, arg2])
+fun syscall3(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", [4]uptr, uptr]([nr, arg1, arg2, arg3])
+fun syscall4(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},~{rcx},~{r11},~{memory}", [5]uptr, uptr]([nr, arg1, arg2, arg3, arg4])
+fun syscall5(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr, arg5 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},~{rcx},~{r11},~{memory}", [6]uptr, uptr]([nr, arg1, arg2, arg3, arg4, arg5])
+fun syscall6(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr, arg5 uptr, arg6 uptr) uptr
+	with World
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]uptr, uptr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
+
+fun syscall_read(file uptr, buf ^mut []u8) usize with World = {
+	#trunc syscall3(0, file, #transmute text[0], #ext len(text))
+}
+
+fun syscall_write(file uptr, buf ^[]u8) usize with World = {
+	#trunc syscall3(1, file, #transmute buf[0], #ext len(buf))
+}
+
+fun syscall_exit(code uptr) ! with World = {
+	syscall1(60, code)
+	unreachable
+}
 
 -- printing
 
@@ -99,7 +169,7 @@ fun unreachable !
 
 -- other utils
 
-fun len[T](slice ^[]T) usize
+fun len[R region, T](slice ^@R []T) usize
 	= #intrinsic
 
 fun abs(n int) int

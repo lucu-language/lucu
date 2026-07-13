@@ -767,6 +767,7 @@ dependencies = [
 name = "lucu-llvm"
 version = "0.1.0"
 dependencies = [
+ "compact_str",
  "inkwell",
  "lucu",
  "mu",

@@ -37,7 +37,16 @@ pub enum Constant {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Item {
+    pub module: CompactString,
+    pub item: CompactString,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Callable {
+    /// ? -> ?
+    ModuleFunction { item: Item, ty: mu::Function },
+
     /// a -> b
     Cast {
         from: mu::Type,
@@ -93,6 +102,7 @@ impl mu::Typed for Callable {
     type Base = Base;
     fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
+            Callable::ModuleFunction { ty, .. } => tt.insert_type(mu::TypeEnum::Function(ty)),
             Callable::Cast { from, to, .. } => tt.function(tt.insert_tuple([from]), to),
             Callable::UnOp { ty, .. } => tt.function(tt.insert_tuple([ty]), ty),
             Callable::PredicateOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), tt.bool()),

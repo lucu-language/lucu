@@ -20,7 +20,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate};
 use mu::{TypeTable as _, Typed as _};
 
-pub trait Builder
+pub trait Builder<'ctx>: Sized
 where
     <Self::TT as mu::TypeTable>::Name: Deref<Target = str>,
 {
@@ -29,19 +29,15 @@ where
     type ET: mu::ExpressionTable<Base = Self::Base> + ?Sized;
     type Callable: mu::Typed<Base = Self::Base> + Clone + Hash + Eq;
 
-    fn has_zero_niche<'ctx>(
-        base: &<Self::TT as mu::TypeTable>::Base,
-        llvm: &Context<'ctx, Self>,
-    ) -> bool;
-    fn get_type<'ctx>(
-        base: &<Self::TT as mu::TypeTable>::Base,
-        llvm: &Context<'ctx, Self>,
-    ) -> Type<'ctx>;
-    fn build_operation<'ctx>(
+    fn has_zero_niche(base: &<Self::TT as mu::TypeTable>::Base, llvm: &Context<'ctx, Self>)
+    -> bool;
+    fn get_type(base: &<Self::TT as mu::TypeTable>::Base, llvm: &Context<'ctx, Self>)
+    -> Type<'ctx>;
+    fn build_operation(
         op: &<Self::ET as mu::ExpressionTable>::Operation,
         llvm: &Context<'ctx, Self>,
     ) -> Value<'ctx, Self>;
-    fn build_callable<'ctx>(
+    fn build_callable(
         op: &Self::Callable,
         op_ty: mu::Function,
         params: impl IntoIterator<Item = ValueOrExpression<'ctx, Self>>,
@@ -72,7 +68,7 @@ impl<'ctx> Type<'ctx> {
             Type::Function(_) => true,
         }
     }
-    pub fn basic_type<B: Builder + ?Sized>(self, llvm: &Context<'ctx, B>) -> BasicType<'ctx> {
+    pub fn basic_type<B: Builder<'ctx>>(self, llvm: &Context<'ctx, B>) -> BasicType<'ctx> {
         match self {
             Type::Data(data_type) => data_type,
             Type::Function(_) => Some(
@@ -85,13 +81,13 @@ impl<'ctx> Type<'ctx> {
     }
 }
 
-pub enum Value<'ctx, B: Builder + ?Sized> {
+pub enum Value<'ctx, B: Builder<'ctx>> {
     Data(BasicValue<'ctx>),
     Function(FunctionValue<'ctx>, Option<PointerValue<'ctx>>),
     Callable(B::Callable),
 }
 
-impl<B: Builder + ?Sized> Clone for Value<'_, B> {
+impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
     fn clone(&self) -> Self {
         match *self {
             Self::Data(arg0) => Self::Data(arg0),
@@ -101,13 +97,13 @@ impl<B: Builder + ?Sized> Clone for Value<'_, B> {
     }
 }
 
-impl<'ctx, B: Builder + ?Sized, T: inkwell::values::BasicValue<'ctx>> From<T> for Value<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>, T: inkwell::values::BasicValue<'ctx>> From<T> for Value<'ctx, B> {
     fn from(value: T) -> Self {
         Self::Data(Some(value.as_basic_value_enum()))
     }
 }
 
-impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
     pub fn basic_value(self, llvm: &Context<'ctx, B>) -> BasicValue<'ctx> {
         match self {
             Value::Data(data) => data,
@@ -156,12 +152,12 @@ impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
     }
 }
 
-pub struct Expression<'ctx, B: Builder + ?Sized> {
+pub struct Expression<'ctx, B: Builder<'ctx>> {
     expr: mu::Expression,
     bound: im::Vector<Value<'ctx, B>>,
 }
 
-impl<'ctx, B: Builder + ?Sized> Clone for Expression<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> Clone for Expression<'ctx, B> {
     fn clone(&self) -> Self {
         Self {
             expr: self.expr,
@@ -170,7 +166,7 @@ impl<'ctx, B: Builder + ?Sized> Clone for Expression<'ctx, B> {
     }
 }
 
-impl<'ctx, B: Builder + ?Sized> Expression<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> Expression<'ctx, B> {
     pub fn build(self, llvm: &Context<'ctx, B>) -> Value<'ctx, B> {
         llvm.build_expression(self.expr, &self.bound)
     }
@@ -196,12 +192,12 @@ impl<'ctx, B: Builder + ?Sized> Expression<'ctx, B> {
     }
 }
 
-pub enum ValueOrExpression<'ctx, B: Builder + ?Sized> {
+pub enum ValueOrExpression<'ctx, B: Builder<'ctx>> {
     Value(Value<'ctx, B>),
     Expression(Expression<'ctx, B>),
 }
 
-impl<'ctx, B: Builder + ?Sized> Clone for ValueOrExpression<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> Clone for ValueOrExpression<'ctx, B> {
     fn clone(&self) -> Self {
         match self {
             Self::Value(arg0) => Self::Value(arg0.clone()),
@@ -210,7 +206,7 @@ impl<'ctx, B: Builder + ?Sized> Clone for ValueOrExpression<'ctx, B> {
     }
 }
 
-impl<'ctx, B: Builder + ?Sized> ValueOrExpression<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> ValueOrExpression<'ctx, B> {
     pub fn build(self, llvm: &Context<'ctx, B>) -> Value<'ctx, B> {
         match self {
             ValueOrExpression::Value(value) => value,
@@ -230,7 +226,7 @@ impl<'ctx, B: Builder + ?Sized> ValueOrExpression<'ctx, B> {
     }
 }
 
-impl<'ctx, B: Builder + ?Sized> From<Value<'ctx, B>> for ValueOrExpression<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> From<Value<'ctx, B>> for ValueOrExpression<'ctx, B> {
     fn from(value: Value<'ctx, B>) -> Self {
         Self::Value(value)
     }
@@ -261,11 +257,11 @@ impl<'ctx> From<Enum<'ctx>> for Type<'ctx> {
     }
 }
 
-pub struct Context<'ctx, B: Builder + ?Sized> {
+pub struct Context<'ctx, B: Builder<'ctx>> {
     pub context: &'ctx inkwell::context::Context,
     pub tt: &'ctx B::TT,
     pub et: &'ctx B::ET,
-    pub base: &'ctx B,
+    pub base: B,
     pub module: inkwell::module::Module<'ctx>,
     pub builder: inkwell::builder::Builder<'ctx>,
     pub target_machine: TargetMachine,
@@ -279,7 +275,7 @@ pub struct Context<'ctx, B: Builder + ?Sized> {
     syscalls: Box<[(FunctionType<'ctx>, PointerValue<'ctx>)]>,
 }
 
-impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
+impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     // TODO: remove this from here
     pub fn build_syscall<I>(&self, nr: IntValue<'ctx>, args: I) -> BasicValueEnum<'ctx>
     where
@@ -306,7 +302,7 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         context: &'ctx inkwell::context::Context,
         tt: &'ctx B::TT,
         et: &'ctx B::ET,
-        base: &'ctx B,
+        base: B,
         target_machine: TargetMachine,
         module_name: &str,
     ) -> Self {
@@ -585,35 +581,29 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
     }
     pub fn build_function(
         &self,
-        abstraction: mu::Expression,
-        name: &str,
-        linkage: Option<Linkage>,
-    ) -> FunctionValue<'ctx> {
-        let mu::ExpressionEnum::Abstract(from, e) = self.et[abstraction] else {
-            panic!();
-        };
-        let fun = mu::Function::new(from, e.get_type(self.tt, self.et), self.tt);
-        let function = self.add_function(fun, false, Some(name), linkage);
+        fun: mu::Function,
+        val: FunctionValue<'ctx>,
+        expression: mu::Expression,
+    ) {
         self.builder
-            .position_at_end(self.context.append_basic_block(function, ""));
-        *self.function.write().unwrap() = Some(function);
+            .position_at_end(self.context.append_basic_block(val, ""));
+        *self.function.write().unwrap() = Some(val);
         let mut refs = im::Vector::new();
-        for arg in self.function_arguments(fun, function) {
+        for arg in self.function_arguments(fun, val) {
             refs.push_front(arg);
         }
-        let out = self.build_expression(e, &refs).basic_value(self);
+        let out = self.build_expression(expression, &refs).basic_value(self);
         if !fun.never_returns(self.tt) {
             self.builder
                 .build_return(
                     out.as_ref()
                         .map(|e| e as &dyn inkwell::values::BasicValue)
-                        .filter(|_| function.get_type().get_return_type().is_some()),
+                        .filter(|_| val.get_type().get_return_type().is_some()),
                 )
                 .unwrap();
         }
         self.builder.clear_insertion_position();
         *self.function.write().unwrap() = None;
-        function
     }
     pub fn function_arguments(
         &self,
@@ -1033,22 +1023,33 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             Value::Function(function, closure) => {
                 let closure = closure
                     .unwrap_or_else(|| self.context.ptr_type(AddressSpace::default()).get_poison());
-                let args = vals
-                    .into_iter()
-                    .filter_map(|v| v.build(self).basic_value(self))
-                    .map(BasicMetadataValueEnum::from)
-                    .chain(iter::once(closure.into()))
-                    .collect::<Box<_>>();
-                let out = self
-                    .builder
-                    .build_call(function, &args, "")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .basic();
-                Value::Data(out)
+                self.build_direct_call(
+                    function,
+                    vals.into_iter()
+                        .map(|v| v.build(self))
+                        .chain(iter::once(Value::Data(Some(closure.into())))),
+                )
             }
             Value::Callable(c) => B::build_callable(&c, fun, vals, self),
         }
+    }
+    pub fn build_direct_call(
+        &self,
+        fval: FunctionValue<'ctx>,
+        vals: impl IntoIterator<Item = Value<'ctx, B>>,
+    ) -> Value<'ctx, B> {
+        let args = vals
+            .into_iter()
+            .filter_map(|v| v.basic_value(self))
+            .map(BasicMetadataValueEnum::from)
+            .collect::<Box<_>>();
+        let out = self
+            .builder
+            .build_call(fval, &args, "")
+            .unwrap()
+            .try_as_basic_value()
+            .basic();
+        Value::Data(out)
     }
     pub fn build_indirect_call(
         &self,

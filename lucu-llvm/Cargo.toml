@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 lucu = { path = "../lucu" }
 inkwell = { workspace = true }
+compact_str = { workspace = true }
 mu = { path = "../mu" }
 mu-llvm = { path = "../mu-llvm" }

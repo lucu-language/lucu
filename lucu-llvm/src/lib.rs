@@ -1,18 +1,70 @@
+use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::OnceLock;
 
 use inkwell::module::Linkage;
+use inkwell::targets::TargetMachine;
 use inkwell::types::{BasicType as _, BasicTypeEnum};
+use inkwell::values::FunctionValue;
 use inkwell::{AddressSpace, IntPredicate};
 use lucu::ast::{self, Cast};
 use lucu::mu::table::{ExpressionTable, TypeTable};
-use lucu::mu::{Base, Callable, Constant, Operation};
+use lucu::mu::{Base, Callable, Constant, Item, Operation};
 use lucu::type_table::{IntSize, Integer};
 use mu::TypeTable as _;
 
-pub struct Builder;
+pub struct Builder<'ctx> {
+    functions: OnceLock<HashMap<Item, FunctionValue<'ctx>>>,
+}
 
-impl Builder {
-    pub fn is_signed<'ctx>(ty: mu::Type, llvm: &mu_llvm::Context<'ctx, Self>) -> bool {
+pub struct Function {
+    pub item: Item,
+    pub ty: mu::Function,
+    pub body: mu::Expression,
+    pub linkage: Option<Linkage>,
+}
+
+impl<'ctx> Builder<'ctx> {
+    pub fn build(
+        context: &'ctx inkwell::context::Context,
+        tt: &'ctx TypeTable,
+        et: &'ctx ExpressionTable,
+        target_machine: TargetMachine,
+        module_name: &str,
+        funs: &[Function],
+    ) -> mu_llvm::Context<'ctx, Self> {
+        let llvm = mu_llvm::Context::new(
+            context,
+            tt,
+            et,
+            Builder {
+                functions: OnceLock::new(),
+            },
+            target_machine,
+            module_name,
+        );
+
+        let mut map = HashMap::new();
+        for fun in funs.iter() {
+            let fval = llvm.add_function(
+                fun.ty,
+                false,
+                None,
+                Some(fun.linkage.unwrap_or(Linkage::Private)),
+            );
+            map.insert(fun.item.clone(), fval);
+        }
+        let Ok(_) = llvm.base.functions.set(map) else {
+            panic!()
+        };
+        for fun in funs.iter() {
+            let fval = llvm.base.functions.get().unwrap()[&fun.item];
+            llvm.build_function(fun.ty, fval, fun.body);
+        }
+
+        llvm
+    }
+    pub fn is_signed(ty: mu::Type, llvm: &mu_llvm::Context<'ctx, Self>) -> bool {
         match llvm.tt[ty] {
             mu::TypeEnum::Base(Base::Integer(i)) => {
                 match i {
@@ -26,13 +78,13 @@ impl Builder {
     }
 }
 
-impl mu_llvm::Builder for Builder {
+impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
     type Base = Base;
     type TT = TypeTable;
     type ET = ExpressionTable;
     type Callable = Callable;
 
-    fn has_zero_niche<'ctx>(
+    fn has_zero_niche(
         base: &<Self::TT as mu::TypeTable>::Base,
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> bool {
@@ -43,7 +95,7 @@ impl mu_llvm::Builder for Builder {
         }
     }
 
-    fn get_type<'ctx>(base: &Base, llvm: &mu_llvm::Context<'ctx, Self>) -> mu_llvm::Type<'ctx> {
+    fn get_type(base: &Base, llvm: &mu_llvm::Context<'ctx, Self>) -> mu_llvm::Type<'ctx> {
         mu_llvm::Type::Data(match *base {
             Base::Integer(integer) => match integer {
                 Integer::Integer(_, IntSize::Exact(n)) => NonZeroU32::new(n)
@@ -113,7 +165,7 @@ impl mu_llvm::Builder for Builder {
         })
     }
 
-    fn build_operation<'ctx>(
+    fn build_operation(
         op: &Operation,
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> mu_llvm::Value<'ctx, Self> {
@@ -194,7 +246,7 @@ impl mu_llvm::Builder for Builder {
         }
     }
 
-    fn build_callable<'ctx>(
+    fn build_callable(
         op: &Callable,
         _op_ty: mu::Function,
         params: impl IntoIterator<Item = mu_llvm::ValueOrExpression<'ctx, Self>>,
@@ -202,6 +254,10 @@ impl mu_llvm::Builder for Builder {
     ) -> mu_llvm::Value<'ctx, Self> {
         let mut params = params.into_iter();
         match *op {
+            Callable::ModuleFunction { ref item, .. } => {
+                let fun = llvm.base.functions.get().unwrap()[item];
+                llvm.build_direct_call(fun, params.map(|v| v.build(llvm)))
+            }
             Callable::Cast { to, op, .. } => {
                 let param = params.next().unwrap().build(llvm).basic_value(llvm);
                 let ty = llvm.get_type(to).basic_type(llvm);

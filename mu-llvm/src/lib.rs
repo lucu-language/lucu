@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::RwLock;
 
-use inkwell::attributes::AttributeLoc;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;
@@ -126,41 +126,14 @@ impl<'ctx, B: Builder + ?Sized> Value<'ctx, B> {
                         // build function
                         let fun = c.get_type(llvm.tt).into_function(llvm.tt);
 
-                        let function_type = llvm.get_function_type(fun, true);
-                        let function =
-                            llvm.module
-                                .add_function("", function_type, Some(Linkage::Private));
-                        llvm.function_attributes(function);
+                        let function = llvm.add_function(fun, true, None, Some(Linkage::Private));
                         llvm.builder
                             .position_at_end(llvm.context.append_basic_block(function, ""));
-                        let params = {
-                            let mut nth = 0;
-                            llvm.tt[fun.from()].iter().copied().enumerate().map(
-                                move |(index, t)| {
-                                    ValueOrExpression::Value(Value::Data(
-                                        llvm.get_type(t).nonzero_sized().then(|| {
-                                            let struc = function
-                                                .get_first_param()
-                                                .unwrap()
-                                                .into_struct_value();
-                                            let val = llvm
-                                                .builder
-                                                .build_extract_value(
-                                                    struc,
-                                                    nth,
-                                                    llvm.tt
-                                                        .tuple_field_name(fun.from(), index as u32)
-                                                        .map(Deref::deref)
-                                                        .unwrap_or(""),
-                                                )
-                                                .unwrap();
-                                            nth += 1;
-                                            val
-                                        }),
-                                    ))
-                                },
-                            )
-                        };
+                        *llvm.function.write().unwrap() = Some(function);
+
+                        let params = llvm
+                            .function_arguments(fun, function)
+                            .map(ValueOrExpression::Value);
                         let out = B::build_callable(&c, fun, params, llvm).basic_value(llvm);
                         if !fun.never_returns(llvm.tt) {
                             llvm.builder
@@ -209,10 +182,10 @@ impl<'ctx, B: Builder + ?Sized> Expression<'ctx, B> {
     ) -> Value<'ctx, B> {
         match llvm.et[self.expr] {
             mu::ExpressionEnum::Abstract(_, e) => {
-                let value =
-                    llvm.build_construct(fun.from(), vals.into_iter().map(|v| v.build(llvm)));
                 let mut refs = self.bound;
-                refs.push_front(value);
+                for val in vals {
+                    refs.push_front(val.build(llvm));
+                }
                 llvm.build_expression(e, &refs)
             }
             _ => {
@@ -413,7 +386,6 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         self.target_machine
             .write_to_file(&self.module, FileType::Object, path)
     }
-
     fn build_closure(
         &self,
         function: FunctionValue<'ctx>,
@@ -457,7 +429,35 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             .into_pointer_value();
         (fptr, cptr)
     }
-    fn function_attributes(&self, function: FunctionValue<'ctx>) {
+    pub fn add_function(
+        &self,
+        fun: mu::Function,
+        closure_param: bool,
+        name: Option<&str>,
+        linkage: Option<Linkage>,
+    ) -> FunctionValue<'ctx> {
+        let function_type = self.get_function_type(fun, closure_param);
+        let function = self.module.add_function(
+            name.or_else(|| self.tt.tuple_name(fun.from()).map(Deref::deref))
+                .unwrap_or(""),
+            function_type,
+            linkage,
+        );
+
+        // set parameter names
+        let params = Iterator::zip(
+            self.function_arguments(fun, function)
+                .map(|v| v.basic_value(self)),
+            (0..self.tt[fun.from()].len() as u32)
+                .map(|index| self.tt.tuple_field_name(fun.from(), index)),
+        );
+        for (param, name) in params.filter_map(|(a, b)| a.zip(b)) {
+            param.set_name(name);
+        }
+        if closure_param {
+            function.get_last_param().unwrap().set_name("closure");
+        }
+
         // do not probe the stack
         // TODO: link with a library on windows that has a stack prober
         function.add_attribute(
@@ -465,8 +465,9 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             self.context
                 .create_string_attribute("no-stack-arg-probe", ""),
         );
-    }
 
+        function
+    }
     pub fn get_struct(&self, tys: mu::Tuple) -> Option<StructType<'ctx>> {
         let read = self.structs.read().unwrap();
         match read.get(&tys) {
@@ -566,32 +567,20 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         function: mu::Function,
         closure_param: bool,
     ) -> FunctionType<'ctx> {
-        let from = self
-            .get_type(self.tt.insert_type(mu::TypeEnum::Product(function.from())))
-            .basic_type(self);
+        let mut param_types = self.tt[function.from()]
+            .iter()
+            .filter_map(|&ty| self.get_type(ty).basic_type(self))
+            .map(BasicMetadataTypeEnum::from)
+            .collect::<Vec<_>>();
         let to = self.get_type(function.to()).basic_type(self);
 
         if closure_param {
-            let closure = self.context.ptr_type(AddressSpace::default());
-            let param_types = match from {
-                Some(f) => [f.into(), closure.into()],
-                None => [closure.into(), closure.into()],
-            };
-            let param_types = match from {
-                Some(_) => &param_types,
-                None => &param_types[0..1],
-            };
-            match to {
-                Some(t) => t.fn_type(param_types, false),
-                None => self.context.void_type().fn_type(param_types, false),
-            }
-        } else {
-            let meta = from.map(BasicMetadataTypeEnum::from);
-            let param_types = meta.as_slice();
-            match to {
-                Some(t) => t.fn_type(param_types, false),
-                None => self.context.void_type().fn_type(param_types, false),
-            }
+            param_types.push(self.context.ptr_type(AddressSpace::default()).into());
+        }
+
+        match to {
+            Some(t) => t.fn_type(&param_types, false),
+            None => self.context.void_type().fn_type(&param_types, false),
         }
     }
     pub fn build_function(
@@ -604,32 +593,41 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
             panic!();
         };
         let fun = mu::Function::new(from, e.get_type(self.tt, self.et), self.tt);
-        let function_type = self.get_function_type(fun, false);
-        let function = self.module.add_function(name, function_type, linkage);
-        self.function_attributes(function);
+        let function = self.add_function(fun, false, Some(name), linkage);
         self.builder
             .position_at_end(self.context.append_basic_block(function, ""));
         *self.function.write().unwrap() = Some(function);
-        let out = self
-            .build_expression(
-                e,
-                &im::Vector::unit(Value::Data(
-                    (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
-                )),
-            )
-            .basic_value(self);
+        let mut refs = im::Vector::new();
+        for arg in self.function_arguments(fun, function) {
+            refs.push_front(arg);
+        }
+        let out = self.build_expression(e, &refs).basic_value(self);
         if !fun.never_returns(self.tt) {
             self.builder
                 .build_return(
                     out.as_ref()
                         .map(|e| e as &dyn inkwell::values::BasicValue)
-                        .filter(|_| function_type.get_return_type().is_some()),
+                        .filter(|_| function.get_type().get_return_type().is_some()),
                 )
                 .unwrap();
         }
         self.builder.clear_insertion_position();
         *self.function.write().unwrap() = None;
         function
+    }
+    pub fn function_arguments(
+        &self,
+        fun: mu::Function,
+        val: FunctionValue<'ctx>,
+    ) -> impl Iterator<Item = Value<'ctx, B>> {
+        let mut nth = 0;
+        self.tt[fun.from()].iter().map(move |&t| {
+            Value::Data(self.get_type(t).nonzero_sized().then(|| {
+                let param = val.get_nth_param(nth).unwrap();
+                nth += 1;
+                param
+            }))
+        })
     }
     fn build_expression(
         &self,
@@ -810,18 +808,14 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
 
                 // create function
                 let fun = mu::Function::new(from, body.get_type(self.tt, self.et), self.tt);
-                let function_type = self.get_function_type(fun, true);
-                let function = self
-                    .module
-                    .add_function("", function_type, Some(Linkage::Private));
-                self.function_attributes(function);
+                let function = self.add_function(fun, true, None, Some(Linkage::Private));
                 self.builder
                     .position_at_end(self.context.append_basic_block(function, ""));
                 *self.function.write().unwrap() = Some(function);
 
                 // build closure
                 let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
-                e.get_captures(self.et, &mut captures);
+                e.get_captures(self.tt, self.et, &mut captures);
                 let mut closure_members = Vec::new();
                 let mut closure_refs = Vec::new();
                 for (i, val) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
@@ -873,15 +867,15 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 });
 
                 // build function
-                refs_new.push_front(Value::Data(
-                    (function.count_params() == 2).then(|| function.get_first_param().unwrap()),
-                ));
+                for arg in self.function_arguments(fun, function) {
+                    refs_new.push_front(arg);
+                }
                 let out = self.build_expression(body, &refs_new).basic_value(self);
                 self.builder
                     .build_return(
                         out.as_ref()
                             .map(|e| e as &dyn inkwell::values::BasicValue)
-                            .filter(|_| function_type.get_return_type().is_some()),
+                            .filter(|_| function.get_type().get_return_type().is_some()),
                     )
                     .unwrap();
 
@@ -1037,22 +1031,17 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
                 self.build_indirect_call(fun, data, vals.into_iter().map(|v| v.build(self)))
             }
             Value::Function(function, closure) => {
-                let val = self
-                    .build_construct(fun.from(), vals.into_iter().map(|v| v.build(self)))
-                    .basic_value(self);
                 let closure = closure
                     .unwrap_or_else(|| self.context.ptr_type(AddressSpace::default()).get_poison());
-                let args = match val {
-                    Some(v) => [v.into(), closure.into()],
-                    None => [closure.into(), closure.into()],
-                };
-                let args = match val {
-                    Some(_) => &args,
-                    None => &args[0..1],
-                };
+                let args = vals
+                    .into_iter()
+                    .filter_map(|v| v.build(self).basic_value(self))
+                    .map(BasicMetadataValueEnum::from)
+                    .chain(iter::once(closure.into()))
+                    .collect::<Box<_>>();
                 let out = self
                     .builder
-                    .build_call(function, args, "")
+                    .build_call(function, &args, "")
                     .unwrap()
                     .try_as_basic_value()
                     .basic();
@@ -1067,22 +1056,17 @@ impl<'ctx, B: Builder + ?Sized> Context<'ctx, B> {
         fval: BasicValue<'ctx>,
         vals: impl IntoIterator<Item = Value<'ctx, B>>,
     ) -> Value<'ctx, B> {
-        let val = self.build_construct(fun.from(), vals).basic_value(self);
-
         let function_type = self.get_function_type(fun, true);
         let (fptr, closure) = self.get_closure(fval);
-
-        let args = match val {
-            Some(v) => [v.into(), closure.into()],
-            None => [closure.into(), closure.into()],
-        };
-        let args = match val {
-            Some(_) => &args,
-            None => &args[0..1],
-        };
+        let args = vals
+            .into_iter()
+            .filter_map(|v| v.basic_value(self))
+            .map(BasicMetadataValueEnum::from)
+            .chain(iter::once(closure.into()))
+            .collect::<Box<_>>();
         let out = self
             .builder
-            .build_indirect_call(function_type, fptr, args, "")
+            .build_indirect_call(function_type, fptr, &args, "")
             .unwrap()
             .try_as_basic_value()
             .basic();

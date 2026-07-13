@@ -49,12 +49,8 @@ pub trait TypeTable:
     fn never(&self) -> Type {
         self.insert_type(TypeEnum::Sum(self.insert_enum([])))
     }
-    fn function(&self, from: impl IntoIterator<Item = Type>, to: Type) -> Type {
-        self.insert_type(TypeEnum::Function(Function::new(
-            self.insert_tuple(from),
-            to,
-            self,
-        )))
+    fn function(&self, from: Tuple, to: Type) -> Type {
+        self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
     }
     fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
@@ -329,12 +325,18 @@ impl Expression {
             ExpressionEnum::Variant(types, _, _) => tt.insert_type(TypeEnum::Sum(types)),
         }
     }
-    pub fn get_captures(self, et: &(impl ExpressionTable + ?Sized), captures: &mut [bool]) {
-        self.get_captures_inner(et, 0, captures);
-    }
-    fn get_captures_inner(
+    pub fn get_captures<B>(
         self,
-        et: &(impl ExpressionTable + ?Sized),
+        tt: &(impl TypeTable<Base = B> + ?Sized),
+        et: &(impl ExpressionTable<Base = B> + ?Sized),
+        captures: &mut [bool],
+    ) {
+        self.get_captures_inner(tt, et, 0, captures);
+    }
+    fn get_captures_inner<B>(
+        self,
+        tt: &(impl TypeTable<Base = B> + ?Sized),
+        et: &(impl ExpressionTable<Base = B> + ?Sized),
         offset: u32,
         captures: &mut [bool],
     ) {
@@ -346,37 +348,40 @@ impl Expression {
                 }
             }
             ExpressionEnum::Let(e1, e2) => {
-                e1.get_captures_inner(et, offset, captures);
-                e2.get_captures_inner(et, offset + 1, captures);
+                e1.get_captures_inner(tt, et, offset, captures);
+                e2.get_captures_inner(tt, et, offset + 1, captures);
             }
             ExpressionEnum::Sequence(es, en) => {
                 for e in et[es].iter() {
-                    e.get_captures_inner(et, offset, captures);
+                    e.get_captures_inner(tt, et, offset, captures);
                 }
-                en.get_captures_inner(et, offset, captures);
+                en.get_captures_inner(tt, et, offset, captures);
             }
             ExpressionEnum::Construct(_, es) => {
                 for e in et[es].iter() {
-                    e.get_captures_inner(et, offset, captures);
+                    e.get_captures_inner(tt, et, offset, captures);
                 }
             }
             ExpressionEnum::Apply(e1, es) => {
-                e1.get_captures_inner(et, offset, captures);
+                e1.get_captures_inner(tt, et, offset, captures);
                 for &e2 in et[es].iter() {
-                    e2.get_captures_inner(et, offset, captures);
+                    e2.get_captures_inner(tt, et, offset, captures);
                 }
             }
             ExpressionEnum::Member(e, _) | ExpressionEnum::Variant(_, _, e) => {
-                e.get_captures_inner(et, offset, captures);
+                e.get_captures_inner(tt, et, offset, captures);
             }
             ExpressionEnum::Match(e, es) => {
-                e.get_captures_inner(et, offset, captures);
+                e.get_captures_inner(tt, et, offset, captures);
                 for e in et[es].iter() {
-                    e.get_captures_inner(et, offset + 1, captures);
+                    e.get_captures_inner(tt, et, offset + 1, captures);
                 }
             }
-            ExpressionEnum::Abstract(_, e) | ExpressionEnum::Try(_, e) => {
-                e.get_captures_inner(et, offset + 1, captures);
+            ExpressionEnum::Abstract(t, e) => {
+                e.get_captures_inner(tt, et, offset + tt[t].len() as u32, captures);
+            }
+            ExpressionEnum::Try(_, e) => {
+                e.get_captures_inner(tt, et, offset + 1, captures);
             }
         }
     }

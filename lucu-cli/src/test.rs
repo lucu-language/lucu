@@ -29,9 +29,16 @@ pub(super) fn test() {
     let uptr_array_t = tt.base(Base::Array(uptr_t, array_size));
     let uptr_array_ptr_t = tt.base(Base::Pointer(uptr_array_t));
     let uptr_array_ptr_tuple = tt.insert_tuple([uptr_array_ptr_t]);
-    let uptr_array_ptr_tuple_t = tt.insert_type(mu::TypeEnum::Product(uptr_array_ptr_tuple));
     let str_t = tt.base(Base::PointerSlice(i8_t));
     let unit_tuple = tt.insert_tuple([unit_t]);
+    let i8_pair = tt.push_named_tuple(
+        [
+            (CompactString::const_new("a"), i8_t),
+            (CompactString::const_new("b"), i8_t),
+        ],
+        CompactString::const_new("mod"),
+    );
+    let i8_math_ty = tt.function(i8_pair, i8_t);
 
     // let
     let abstraction = et.lambda(
@@ -40,6 +47,16 @@ pub(super) fn test() {
             [
                 et.let_chain(
                     [
+                        et.lambda(
+                            i8_pair,
+                            et.call(
+                                Callable::MathOp {
+                                    ty: i8_t,
+                                    op: MathOp::Mod,
+                                },
+                                [et.reference(i8_t, 1), et.reference(i8_t, 0)],
+                            ),
+                        ),
                         et.if_else(
                             et.call(
                                 Callable::PredicateOp {
@@ -48,11 +65,8 @@ pub(super) fn test() {
                                 },
                                 [
                                     // 1 % -123 == 1
-                                    et.call(
-                                        Callable::MathOp {
-                                            ty: i8_t,
-                                            op: MathOp::Mod,
-                                        },
+                                    et.apply(
+                                        et.reference(i8_math_ty, 0),
                                         [
                                             et.constant(i8_t, Constant::Integer(1)),
                                             et.call(
@@ -93,10 +107,7 @@ pub(super) fn test() {
                                                     size: array_size,
                                                 },
                                                 [
-                                                    et.member(
-                                                        et.reference(uptr_array_ptr_tuple_t, 0),
-                                                        0,
-                                                    ),
+                                                    et.reference(uptr_array_ptr_t, 0),
                                                     et.constant(usize_t, Constant::Zero),
                                                     et.constant(
                                                         usize_t,

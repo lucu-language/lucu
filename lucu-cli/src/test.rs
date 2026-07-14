@@ -5,11 +5,11 @@ use compact_str::CompactString;
 use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
-use inkwell::module::Linkage;
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetMachineOptions};
 use lucu::ast::{Cast, EqualityOp, MathOp, PredicateOp, UnOp};
+use lucu::module::Module;
 use lucu::mu::table::{ExpressionTable, TypeTable};
-use lucu::mu::{Base, Callable, Constant, Item, Operation};
+use lucu::mu::{Base, Callable, Constant, Function, Item, Linkage, Operation};
 use lucu::type_table::{IntSize, Integer};
 use mu::{ExpressionTable as _, TypeTable as _};
 
@@ -30,7 +30,7 @@ pub(super) fn test() {
     let uptr_array_ptr_tuple = tt.insert_tuple([uptr_array_ptr_t]);
     let str_t = tt.base(Base::PointerSlice(i8_t));
 
-    let mod_fun = mu::Function::new(
+    let mod_fun = mu::FunctionType::new(
         tt.push_named_tuple(
             [
                 (CompactString::const_new("a"), i8_t),
@@ -41,7 +41,7 @@ pub(super) fn test() {
         i8_t,
         &tt,
     );
-    let start_fun = mu::Function::new(
+    let start_fun = mu::FunctionType::new(
         tt.push_named_tuple([], CompactString::const_new("_start")),
         tt.never(),
         &tt,
@@ -69,7 +69,7 @@ pub(super) fn test() {
                                 et.call(
                                     Callable::ModuleFunction {
                                         item: Item {
-                                            module: "main".into(),
+                                            module: Module::MAIN,
                                             item: "mod".into(),
                                         },
                                         ty: mod_fun,
@@ -232,18 +232,18 @@ pub(super) fn test() {
         machine,
         "main",
         &[
-            lucu_llvm::Function {
+            Function {
                 item: Item {
-                    module: "main".into(),
+                    module: Module::MAIN,
                     item: "mod".into(),
                 },
                 ty: mod_fun,
                 body: mod_body,
                 linkage: None,
             },
-            lucu_llvm::Function {
+            Function {
                 item: Item {
-                    module: "main".into(),
+                    module: Module::MAIN,
                     item: "_start".into(),
                 },
                 ty: start_fun,

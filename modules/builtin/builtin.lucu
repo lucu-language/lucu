@@ -91,48 +91,53 @@ fun syscall6(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr, arg5 uptr, arg
 	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]uptr, uptr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
 
 fun syscall_read(file uptr, buf ^mut []u8) usize with World = {
-	#trunc syscall3(0, file, #transmute text[0], #ext len(text))
+	#trunc syscall3(0, file, #transmute buf[0], #ext len[u8,](buf))
 }
 
 fun syscall_write(file uptr, buf ^[]u8) usize with World = {
-	#trunc syscall3(1, file, #transmute buf[0], #ext len(buf))
+	#trunc syscall3(1, file, #transmute buf[0], #ext len[u8,](buf))
 }
 
 fun syscall_exit(code uptr) ! with World = {
-	syscall1(60, code)
+	discard syscall1(60, code)
 	unreachable
 }
 
 -- printing
 
+fun apply(val usize, fun body(val usize)) = body(val)
+
 fun print_int(n int) = {
-	let buf = use ref[[21]u8](---)
+	let buf = use regions.ref[[21]u8, unit](---)
 
-	let remaining = use ref(abs(n))
+	let remaining = use regions.ref[int, unit](abs(n))
 
-	let start = catch {
-		for(21, 1) { current ->
-			let digit u8 = '0' + #trunc (remaining^ % 10)
+	let start = use apply(catch {
+		let current = use regions.ref[usize, usize](20)
+		unfounded loop {
+			buf[current^]^ = '0' + #trunc (remaining^ % 10)
 			remaining^ /= 10
-
-			buf[current]^ = digit
-
 			if remaining^ == 0 {
-				raise current
+				raise current^
 			}
+			current^ -= 1
 		}
-		unreachable
-	}
+	})
 
-	if n < 0 {
-		buf[start - 1] = '-'
-		print_str(buf[start - 1..21])
+	print_str(if n < 0 {
+		buf[start - 1]^ = '-'
+		buf[start - 1..]
 	} else {
-		print_str(buf[start..21])
-	}
+		buf[start..]
+	})
 }
 
-fun print_str(buf ^[]u8)
+fun print_str(buf ^[]u8) = {
+	trace(buf)
+	trace("\n")
+}
+
+fun trace(buf ^[]u8)
 	= #intrinsic
 
 -- control flow
@@ -143,19 +148,19 @@ effect Div
 fun loop(fun body) ! with Div
 	= #intrinsic
 
-fun unfounded[T](fun body T with Div) T
+fun unfounded(fun body ! with Div) !
 	= #intrinsic
 
 fun for(from usize, to usize, fun body(n usize)) = {
 	if to >= from {
-		let current = use ref(from)
+		let current = use regions.ref[usize, unit](from)
 		catch unfounded loop {
 			if current^ == to then raise
 			body(current^)
 			current^ += 1
 		}
 	} else {
-		let current = use ref(from - 1)
+		let current = use regions.ref[usize, unit](from - 1)
 		catch unfounded loop {
 			body(current^)
 			current^ -= 1
@@ -169,11 +174,10 @@ fun unreachable !
 
 -- other utils
 
-fun len[R region, T](slice ^@R []T) usize
+fun len[T](slice ^[]T) usize
 	= #intrinsic
 
-fun abs(n int) int
-	= #intrinsic
+fun abs(n int) int = if n >= 0 then n else -n
 
 -- -- USAGE:
 -- -- ```

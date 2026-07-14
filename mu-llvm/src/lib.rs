@@ -39,7 +39,7 @@ where
     ) -> Value<'ctx, Self>;
     fn build_callable(
         op: &Self::Callable,
-        op_ty: mu::Function,
+        op_ty: mu::FunctionType,
         params: impl IntoIterator<Item = ValueOrExpression<'ctx, Self>>,
         llvm: &Context<'ctx, Self>,
     ) -> Value<'ctx, Self>;
@@ -85,6 +85,11 @@ pub enum Value<'ctx, B: Builder<'ctx>> {
     Data(BasicValue<'ctx>),
     Function(FunctionValue<'ctx>, Option<PointerValue<'ctx>>),
     Callable(B::Callable),
+    Raise(
+        FunctionValue<'ctx>,
+        BasicBlock<'ctx>,
+        Option<PhiValue<'ctx>>,
+    ),
 }
 
 impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
@@ -93,6 +98,7 @@ impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
             Self::Data(arg0) => Self::Data(arg0),
             Self::Function(arg0, arg1) => Self::Function(arg0, arg1),
             Self::Callable(ref arg0) => Self::Callable(arg0.clone()),
+            Self::Raise(arg0, arg1, arg2) => Self::Raise(arg0, arg1, arg2),
         }
     }
 }
@@ -148,6 +154,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                 };
                 llvm.build_closure(function, None)
             }
+            Value::Raise(_, _, _) => todo!(),
         }
     }
 }
@@ -172,7 +179,7 @@ impl<'ctx, B: Builder<'ctx>> Expression<'ctx, B> {
     }
     pub fn build_call(
         self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         vals: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
         llvm: &Context<'ctx, B>,
     ) -> Value<'ctx, B> {
@@ -215,7 +222,7 @@ impl<'ctx, B: Builder<'ctx>> ValueOrExpression<'ctx, B> {
     }
     pub fn build_call(
         self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         vals: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
         llvm: &Context<'ctx, B>,
     ) -> Value<'ctx, B> {
@@ -427,7 +434,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn add_function(
         &self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         closure_param: bool,
         name: Option<&str>,
         linkage: Option<Linkage>,
@@ -560,7 +567,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn get_function_type(
         &self,
-        function: mu::Function,
+        function: mu::FunctionType,
         closure_param: bool,
     ) -> FunctionType<'ctx> {
         let mut param_types = self.tt[function.from()]
@@ -581,7 +588,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn build_function(
         &self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         val: FunctionValue<'ctx>,
         expression: mu::Expression,
     ) {
@@ -607,7 +614,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn function_arguments(
         &self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         val: FunctionValue<'ctx>,
     ) -> impl Iterator<Item = Value<'ctx, B>> {
         let mut nth = 0;
@@ -644,16 +651,19 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     .iter()
                     .map(|&e| self.build_expression(e, refs)),
             ),
-            mu::ExpressionEnum::Apply(f, e) => {
+            mu::ExpressionEnum::Apply(f, es) => {
                 let fun = f.get_type(self.tt, self.et).into_function(self.tt);
-                let fval = self.build_expression(f, refs);
-                let vals = self.et[e].iter().map(|&e| {
+                let vals = self.et[es].iter().map(|&e| {
                     ValueOrExpression::Expression(Expression {
                         expr: e,
                         bound: refs.clone(),
                     })
                 });
-                self.build_call(fun, fval, vals)
+                Expression {
+                    expr: f,
+                    bound: refs.clone(),
+                }
+                .build_call(fun, vals, self)
             }
             mu::ExpressionEnum::Member(e, index) => {
                 let types = e.get_type(self.tt, self.et).into_product(self.tt);
@@ -727,7 +737,9 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                             if let Some(phi) = phi {
                                 phi.add_incoming(&[(
-                                    &val.basic_value(self).unwrap(),
+                                    &val.basic_value(self).unwrap_or_else(|| {
+                                        phi.as_basic_value().get_type().const_zero()
+                                    }),
                                     self.builder.get_insert_block().unwrap(),
                                 )]);
                             }
@@ -773,9 +785,16 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                             self.builder.position_at_end(next_block);
                             Value::Data(out.map(|ty| {
-                                let then_val = then_val.basic_value(self).unwrap();
-                                let else_val = else_val.basic_value(self).unwrap();
                                 let phi = self.builder.build_phi(ty, "").unwrap();
+                                self.builder.position_at_end(then_block);
+                                let then_val = then_val.basic_value(self).unwrap_or_else(|| {
+                                    phi.as_basic_value().get_type().const_zero()
+                                });
+                                self.builder.position_at_end(else_block);
+                                let else_val = else_val.basic_value(self).unwrap_or_else(|| {
+                                    phi.as_basic_value().get_type().const_zero()
+                                });
+                                self.builder.position_at_end(next_block);
                                 phi.add_incoming(&[(&then_val, then_end), (&else_val, else_end)]);
                                 phi.as_basic_value()
                             }))
@@ -797,7 +816,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 let current_block = self.builder.get_insert_block().unwrap();
 
                 // create function
-                let fun = mu::Function::new(from, body.get_type(self.tt, self.et), self.tt);
+                let fun = mu::FunctionType::new(from, body.get_type(self.tt, self.et), self.tt);
                 let function = self.add_function(fun, true, None, Some(Linkage::Private));
                 self.builder
                     .position_at_end(self.context.append_basic_block(function, ""));
@@ -887,7 +906,36 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 });
                 Value::Function(function, closure_pointer)
             }
-            mu::ExpressionEnum::Try(ty, e) => todo!(),
+            mu::ExpressionEnum::Try(ty, e) => {
+                let next = self.build_block("");
+                let phi = self.get_type(ty).basic_type(self).map(|ty| {
+                    let current_block = self.builder.get_insert_block().unwrap();
+                    self.builder.position_at_end(next);
+                    let phi = self.builder.build_phi(ty, "").unwrap();
+                    self.builder.position_at_end(current_block);
+                    phi
+                });
+
+                let mut refs_new = refs.clone();
+                refs_new.push_front(Value::Raise(
+                    self.function.read().unwrap().unwrap(),
+                    next,
+                    phi,
+                ));
+                let val = self.build_expression(e, &refs_new);
+                let old_block = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(next).unwrap();
+
+                self.builder.position_at_end(next);
+                if let Some(phi) = phi {
+                    phi.add_incoming(&[(
+                        &val.basic_value(self)
+                            .unwrap_or_else(|| phi.as_basic_value().get_type().const_zero()),
+                        old_block,
+                    )]);
+                }
+                Value::Data(phi.map(PhiValue::as_basic_value))
+            }
         }
     }
     fn build_is_zero(&self, v: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
@@ -1012,7 +1060,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn build_call(
         &self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         fval: Value<'ctx, B>,
         vals: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
     ) -> Value<'ctx, B> {
@@ -1031,7 +1079,30 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 )
             }
             Value::Callable(c) => B::build_callable(&c, fun, vals, self),
+            Value::Raise(f, block, phi) => {
+                if self.current_function() == Some(f) {
+                    let val = vals.into_iter().next().unwrap().build(self);
+                    let current_block = self.builder.get_insert_block().unwrap();
+                    self.builder.build_unconditional_branch(block).unwrap();
+                    if let Some(phi) = phi {
+                        phi.add_incoming(&[(
+                            &val.basic_value(self)
+                                .unwrap_or_else(|| phi.as_basic_value().get_type().const_zero()),
+                            current_block,
+                        )]);
+                    }
+
+                    let next = self.build_block("");
+                    self.builder.position_at_end(next);
+                    Value::Data(None)
+                } else {
+                    todo!()
+                }
+            }
         }
+    }
+    fn current_function(&self) -> Option<FunctionValue<'ctx>> {
+        *self.function.read().unwrap()
     }
     pub fn build_direct_call(
         &self,
@@ -1053,7 +1124,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn build_indirect_call(
         &self,
-        fun: mu::Function,
+        fun: mu::FunctionType,
         fval: BasicValue<'ctx>,
         vals: impl IntoIterator<Item = Value<'ctx, B>>,
     ) -> Value<'ctx, B> {

@@ -6,7 +6,8 @@ use petgraph::graph::NodeIndex;
 use crate::ast;
 use crate::error::{Problems, Result};
 use crate::header::{
-    EffectDecl, EffectMember, HandlerDecl, Header, ItemDecl, StructDecl, StructMember,
+    EffectDecl, EffectMember, FunctionDefinition, HandlerDecl, Header, IntrinsicFunction, ItemDecl,
+    StructDecl, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -24,11 +25,11 @@ struct HeaderWIP<'a> {
 }
 
 impl HeaderQuery for HeaderWIP<'_> {
-    fn header(&self, module: &Module) -> Option<&Header> {
+    fn header(&self, module: &Module, tt: &TypeTable) -> Option<&Header> {
         if module == self.module {
             Some(self.header)
         } else {
-            self.query.header(module)
+            self.query.header(module, tt)
         }
     }
 }
@@ -41,7 +42,7 @@ impl Header {
         imports: &Imports,
         definitions: &Definitions,
         tt: &TypeTable,
-    ) -> Option<Result<Self>> {
+    ) -> Result<Self> {
         let mut used_underscore = false;
         let mut lower = Lower {
             tt,
@@ -55,7 +56,7 @@ impl Header {
             implicit_region_offset: 0,
             implicit_effects: None,
         };
-        Some(lower.header(ast, definitions))
+        lower.header(ast, definitions)
     }
 }
 
@@ -218,49 +219,61 @@ impl<'a, 'b> Lower<'a, 'b> {
                     None => todo!("error"),
                 }
             }
-            ast::Item::Function(decl, def) => match parent {
-                Some(parent) => {
-                    // TODO: is there a way to get this without looking it up again?
-                    let Some(name) = parent.name() else { todo!() };
-                    let Some(item) = header.get(name.ident.as_str()) else {
-                        todo!()
-                    };
-                    let &ItemDecl::Effect(kind, _) = item else {
-                        todo!("error")
-                    };
+            ast::Item::Function(decl, def) => {
+                let def = match def {
+                    Some((_, ast::FunctionDefinition::Intrinsic(_)))
+                        if let Some(i) = self.intrinsic_function(&decl.name) =>
+                    {
+                        FunctionDefinition::Intrinsic(i)
+                    }
+                    _ => FunctionDefinition::Other(node),
+                };
+                match parent {
+                    Some(parent) => {
+                        // TODO: is there a way to get this without looking it up again?
+                        let Some(parent_name) = parent.name() else {
+                            todo!()
+                        };
+                        let Some(item) = header.get(parent_name.ident.as_str()) else {
+                            todo!()
+                        };
+                        let &ItemDecl::Effect(kind, _) = item else {
+                            todo!("error")
+                        };
 
-                    let decl = self.with_name(
-                        0,
-                        self.tt[kind].params.as_ref(),
-                        name.generics.as_ref(),
-                        |l| {
-                            let sig = problems.append(l.function_signature(decl));
-                            if let Some(sig) = sig {
-                                let apply = l.dummy_args(kind);
-                                let effect = l.tt.insert_effect(EffectEnum::Item(Item {
-                                    module: l.module.clone(),
-                                    name: name.ident.as_str().to_compact_string(),
-                                    apply,
-                                }));
+                        let decl = self.with_name(
+                            0,
+                            self.tt[kind].params.as_ref(),
+                            parent_name.generics.as_ref(),
+                            |l| {
+                                let sig = problems.append(l.function_signature(decl));
+                                if let Some(sig) = sig {
+                                    let apply = l.dummy_args(kind);
+                                    let effect = l.tt.insert_effect(EffectEnum::Item(Item {
+                                        module: l.module.clone(),
+                                        name: parent_name.ident.as_str().to_compact_string(),
+                                        apply,
+                                    }));
 
-                                let item = ItemDecl::Function(sig, Some(effect), node);
-                                Some(Decl::Item(decl.name.ident.as_str().into(), item))
-                            } else {
-                                None
-                            }
-                        },
-                    );
-                    return problems.with(decl);
-                }
-                None => {
-                    let sig = problems.append(self.function_signature(decl));
-                    if let Some(sig) = sig {
-                        let item = ItemDecl::Function(sig, None, node);
-                        return problems
-                            .with(Some(Decl::Item(decl.name.ident.as_str().into(), item)));
+                                    let item = ItemDecl::Function(sig, Some(effect), def);
+                                    Some(Decl::Item(decl.name.ident.as_str().into(), item))
+                                } else {
+                                    None
+                                }
+                            },
+                        );
+                        return problems.with(decl);
+                    }
+                    None => {
+                        let sig = problems.append(self.function_signature(decl));
+                        if let Some(sig) = sig {
+                            let item = ItemDecl::Function(sig, None, def);
+                            return problems
+                                .with(Some(Decl::Item(decl.name.ident.as_str().into(), item)));
+                        }
                     }
                 }
-            },
+            }
             ast::Item::Effect(_, name, def) => {
                 if let Some(parent) = parent {
                     todo!("error")
@@ -498,7 +511,27 @@ impl<'a, 'b> Lower<'a, 'b> {
             }),
         }
     }
-    fn intrinsic_region(&mut self, name: &ast::Name) -> Result<Region> {
+    fn intrinsic_function(&self, name: &ast::Name) -> Option<IntrinsicFunction> {
+        // TODO: also provide expected signature
+        let module = self.module.to_compact_string();
+        match (module.as_str(), name.ident.as_str()) {
+            ("builtin:regions", "ref") => Some(IntrinsicFunction::Ref),
+            ("builtin:regions", "alloca") => Some(IntrinsicFunction::Alloca),
+            ("builtin:builtin", "path") => Some(IntrinsicFunction::LocationPath),
+            ("builtin:builtin", "line") => Some(IntrinsicFunction::LocationLine),
+            ("builtin:builtin", "column") => Some(IntrinsicFunction::LocationColumn),
+            ("builtin:builtin", "link") => Some(IntrinsicFunction::Link),
+            ("builtin:builtin", "asm") => Some(IntrinsicFunction::Asm),
+            ("builtin:builtin", "asm_pure") => Some(IntrinsicFunction::AsmPure),
+            ("builtin:builtin", "trace") => Some(IntrinsicFunction::Trace),
+            ("builtin:builtin", "loop") => Some(IntrinsicFunction::Loop),
+            ("builtin:builtin", "unfounded") => Some(IntrinsicFunction::Unfounded),
+            ("builtin:builtin", "unreachable") => Some(IntrinsicFunction::Unreachable),
+            ("builtin:builtin", "len") => Some(IntrinsicFunction::Len),
+            _ => None,
+        }
+    }
+    fn intrinsic_region(&self, name: &ast::Name) -> Result<Region> {
         let module = self.module.to_compact_string();
         let region = match (module.as_str(), name.ident.as_str()) {
             ("builtin:regions", "static") => RegionEnum::Static,
@@ -511,7 +544,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         };
         Result::new(self.tt.insert_region(region))
     }
-    fn intrinsic_type(&mut self, name: &ast::Name) -> Result<Type> {
+    fn intrinsic_type(&self, name: &ast::Name) -> Result<Type> {
         let module = self.module.to_compact_string();
         let ty = match (module.as_str(), name.ident.as_str()) {
             ("builtin:types", "u8") => TypeEnum::Integer(Integer::unsigned(IntSize::Exact(8))),
@@ -550,7 +583,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         };
         Result::new(self.tt.insert_type(ty))
     }
-    fn intrinsic_effect(&mut self, name: &ast::Name) -> Result<Effect> {
+    fn intrinsic_effect(&self, name: &ast::Name) -> Result<Effect> {
         let module = self.module.to_compact_string();
         let effect = match (module.as_str(), name.ident.as_str()) {
             ("builtin:builtin", "Div") => EffectEnum::Divergent,
@@ -577,7 +610,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         };
         Result::new(self.tt.insert_effect(effect))
     }
-    fn intrinsic_constant(&mut self, name: &ast::Name) -> Result<Constant> {
+    fn intrinsic_constant(&self, name: &ast::Name) -> Result<Constant> {
         let module = self.module.to_compact_string();
         let constant = match (module.as_str(), name.ident.as_str()) {
             ("builtin:types", "true") => ConstantEnum::True,

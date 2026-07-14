@@ -42,7 +42,7 @@ impl Character {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Identifier {
     pub token: Token,
     pub value: CompactString,
@@ -54,7 +54,7 @@ impl Identifier {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Integer {
     pub token: Token,
     pub value: u64,
@@ -257,6 +257,15 @@ pub enum Returns {
 pub enum Parameter {
     Data(Identifier, Box<Type>),
     Lambda(FunctionDeclaration),
+}
+
+impl Parameter {
+    pub fn name(&self) -> &Identifier {
+        match self {
+            Parameter::Data(ident, _) => ident,
+            Parameter::Lambda(decl) => &decl.name.ident,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

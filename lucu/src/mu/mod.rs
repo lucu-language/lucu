@@ -6,6 +6,7 @@ use crate::ast;
 use crate::type_table::Integer;
 
 pub mod table;
+pub use mu::*;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Base {
@@ -33,19 +34,49 @@ pub enum Constant {
     Zero,
     Uninit,
     String(CompactString),
-    // TODO: string / char
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Item {
-    pub module: CompactString,
+    pub module: crate::module::Module,
     pub item: CompactString,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Linkage {
+    Internal,
+    External,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Function {
+    pub item: Item,
+    pub ty: mu::FunctionType,
+    pub body: mu::Expression,
+    pub linkage: Option<Linkage>,
+}
+
+#[derive(Debug)]
+pub struct Module {
+    pub functions: Box<[Function]>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Callable {
     /// ? -> ?
-    ModuleFunction { item: Item, ty: mu::Function },
+    ModuleFunction { item: Item, ty: mu::FunctionType },
+    /// (a x a x a x ...) -> [N]a
+    ArrayConstruct { ty: mu::Type, size: u32 },
+    /// a -> b
+    Asm {
+        assembly: CompactString,
+        constraints: CompactString,
+        side_effects: bool,
+        from: mu::Type,
+        to: mu::Type,
+    },
+    /// (() -> ()) -> !
+    Loop,
 
     /// a -> b
     Cast {
@@ -74,6 +105,8 @@ pub enum Callable {
 
     /// ([N]a x USize) -> a
     ArrayIndex { ty: mu::Type, size: u32 },
+    /// (^[N]a x USize) -> ^a
+    PointerArrayIndex { ty: mu::Type, size: u32 },
     /// (^[]a x USize) -> ^a
     PointerSliceIndex { ty: mu::Type },
     /// Unsafe operation:
@@ -103,6 +136,15 @@ impl mu::Typed for Callable {
     fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
             Callable::ModuleFunction { ty, .. } => tt.insert_type(mu::TypeEnum::Function(ty)),
+            Callable::ArrayConstruct { ty, size } => {
+                let arr = tt.base(Base::Array(ty, size));
+                tt.function(tt.insert_tuple(iter::repeat_n(ty, size as usize)), arr)
+            }
+            Callable::Asm { from, to, .. } => tt.function(tt.insert_tuple([from]), to),
+            Callable::Loop => tt.function(
+                tt.insert_tuple([tt.function(tt.insert_tuple([]), tt.unit())]),
+                tt.never(),
+            ),
             Callable::Cast { from, to, .. } => tt.function(tt.insert_tuple([from]), to),
             Callable::UnOp { ty, .. } => tt.function(tt.insert_tuple([ty]), ty),
             Callable::PredicateOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), tt.bool()),
@@ -146,6 +188,12 @@ impl mu::Typed for Callable {
                 tt.function(tt.insert_tuple([ptr_slice, usize]), ptr)
             }
             Callable::ArrayIndex { ty, size } => {
+                let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
+                let usize = tt.base(Base::USIZE);
+                let ptr = tt.base(Base::Pointer(ty));
+                tt.function(tt.insert_tuple([ptr_array, usize]), ptr)
+            }
+            Callable::PointerArrayIndex { ty, size } => {
                 let arr = tt.base(Base::Array(ty, size));
                 let usize = tt.base(Base::USIZE);
                 tt.function(tt.insert_tuple([arr, usize]), ty)

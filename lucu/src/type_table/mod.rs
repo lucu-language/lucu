@@ -190,6 +190,12 @@ impl TypeEnum {
 }
 
 impl Type {
+    pub fn is_unit(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::Unit
+    }
+    pub fn is_never(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::Never
+    }
     pub fn is_u8(self, tt: &TypeTable) -> bool {
         tt[self] == TypeEnum::U8
     }

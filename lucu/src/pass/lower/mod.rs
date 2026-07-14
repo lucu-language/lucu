@@ -55,11 +55,11 @@ impl<'a, 'scope> Lower<'a, 'scope> {
 }
 
 pub trait HeaderQuery {
-    fn header(&self, module: &Module) -> Option<&Header>;
+    fn header(&self, module: &Module, tt: &TypeTable) -> Option<&Header>;
 }
 
 impl<'a, 'b> Lower<'a, 'b> {
-    fn with_arity<T>(&mut self, kinds: &[Kind], inner: impl FnOnce(&mut Lower<'a, '_>) -> T)-> T {
+    fn with_arity<T>(&mut self, kinds: &[Kind], inner: impl FnOnce(&mut Lower<'a, '_>) -> T) -> T {
         let mut lower = self.reborrow();
         if !kinds.is_empty() {
             lower.generics = lower.generics.into_iter().map(|(ident, (index, kind))| (ident, (index + kinds.len(), kind))).collect();
@@ -100,7 +100,15 @@ impl<'a, 'b> Lower<'a, 'b> {
                      inner,
                  )
             }
-            (None, None) => inner(self),
+            (None, None) => {
+                let mut lower = self.reborrow();
+                if implicit_regions > 0 {
+                    lower.generics = lower.generics.into_iter().map(|(ident, (index, kind))| (ident, (index + implicit_regions, kind))).collect();
+                    lower.generics.remove("_");
+                    
+                }
+                inner(&mut lower)
+            },
             _ => unreachable!(),
         }
     }
@@ -130,17 +138,17 @@ impl<'a, 'b> Lower<'a, 'b> {
     ) -> std::result::Result<(&Module, &'ast str, &ItemDecl), Problems> {
         let (module, preamble, name) = match &path.origin {
             ast::PathOrigin::Package(pkg, _, name) => match self.imports.get(pkg.as_str()) {
-                Some(module) => match self.query.header(module) {
+                Some(module) => match self.query.header(module, self.tt) {
                     Some(ir) => ((module, ir), None, name.as_str()),
                     None => todo!("recover"),
                 },
                 None => todo!("error"),
             },
             ast::PathOrigin::Local(name) => (
-                (self.module, self.query.header(self.module).expect("ICE: cannot get own header")),
+                (self.module, self.query.header(self.module, self.tt).expect("ICE: cannot get own header")),
                 self.imports
                     .preamble()
-                    .and_then(|module| self.query.header(module).map(|ir| (module, ir))),
+                    .and_then(|module| self.query.header(module, self.tt).map(|ir| (module, ir))),
                 name.as_str(),
             ),
             ast::PathOrigin::Underscore(_) => todo!("error"),
@@ -159,11 +167,40 @@ impl<'a, 'b> Lower<'a, 'b> {
             preamble.map(|t| t.0)
         )
     }
+    fn apply_sig(&mut self, sig: FunctionSignature, effect: Option<Effect>, ast: Option<&ast::GenericArguments>) -> Result<(FunctionSignature, Option<Effect>, Arc<[GenericArgument]>)> {
+        match ast {
+            Some(ast) => {
+                let sig_val = self.tt[sig].clone();
+                let Some(params) = &sig_val.type_params else {
+                    todo!("error");
+                };
+                if params.len() != ast.inner.elements.len() {
+                    todo!("error");
+                }
+                Iterator::zip(params.iter().copied(), ast.inner.iter())
+                    .map(|(param, arg)| {
+                        self.generic_argument(param, arg)
+                    })
+                    .collect::<Result<Arc<_>>>()
+                    .map(|args| (self.tt.insert_function_signature(FunctionSignatureValue {
+                        type_params: None,
+                        implicit_regions: sig_val.implicit_regions,
+                        params: sig_val.params.subst(self.tt, 0, &args),
+                        thunk: sig_val.thunk.subst(self.tt, 0, &args),
+                    }), effect.map(|e| {
+                        let EffectEnum::Item(i) = &self.tt[e] else { panic!("ICE: function's parent effect is not an item") };
+                        let effect_arg_count = i.apply.as_ref().map(|args| args.len()).unwrap_or(0);
+                        e.subst(self.tt, 0, &args[0..effect_arg_count])
+                    }), args))
+            },
+            None => Result::new((sig, effect, Arc::new([]))),
+        }
+    }
     fn apply(
         &mut self,
         kind: Kind,
         term: Term,
-        ast: Option<& ast::GenericArguments>,
+        ast: Option<&ast::GenericArguments>,
     ) -> Result<(Kind, Term)> {
         match ast {
             Some(ast) => {
@@ -228,7 +265,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn term_path(
         &mut self,
-        path: & ast::Path,
+        path: &ast::Path,
     ) -> Result<(Kind, Term)> {
         let (item_kind, term) = {
             if let ast::PathOrigin::Underscore(_) = path.origin {
@@ -299,7 +336,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn generic_argument(
         &mut self,
         param: Kind,
-        arg: & ast::GenericArgument,
+        arg: &ast::GenericArgument,
     ) -> Result<GenericArgument> {
         let kinds = self.tt[param].params.as_deref().unwrap_or_default();
         let arity = self.tt[param].params.as_ref().map(|kinds| kinds.len());
@@ -421,7 +458,27 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }
                     })
                 }
-                ast::GenericArgument::Constant(constant) => todo!(),
+                ast::GenericArgument::Constant(constant) => {
+                    // TODO: if we have dependent kinds then we also need to subst `ty` here
+                    let SimpleKind::Constant(ty) = l.tt[param].output else {
+                        todo!("error")
+                    };
+                    l.constant(constant, ty).and_then(|constant| {
+                        let expected = if arity == Some(1) && l.used_underscore() {
+                            l.tt.insert_kind(KindEnum {
+                                params: None,
+                                output: l.tt[param].output,
+                            })
+                        } else {
+                            param
+                        };
+                        if l.tt[expected] == KindEnum::constant(ty) {
+                            Result::new(Term::Constant(constant))
+                        } else {
+                            todo!("error")
+                        }
+                    })
+                },
             }
             .map(|term| GenericArgument { term, arity })           
         })
@@ -429,7 +486,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn region(
         &mut self,
-        region: & ast::Path,
+        region: &ast::Path,
     ) -> Result<Region> {
         self.term_path(region)
             .and_then(|(kind, path)| match path {
@@ -439,7 +496,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn effect(
         &mut self,
-        effect: & ast::Path,
+        effect: &ast::Path,
     ) -> Result<Effect> {
         self.term_path(effect)
             .and_then(|(kind, path)| match path {
@@ -516,7 +573,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn r#type(
         &mut self,
-        ty: & ast::Type,
+        ty: &ast::Type,
     ) -> Result<Type> {
         match ty {
             ast::Type::Path(path) => {
@@ -566,7 +623,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn constant(
         &mut self,
-        constant: & ast::Constant,
+        constant: &ast::Constant,
         ty: Type,
     ) -> Result<Constant> {
         match constant {
@@ -583,6 +640,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 self.tt
                     .insert_constant(ConstantEnum::Integer(integer.value)),
             ),
+            // TODO: escaping!
             ast::Constant::String(string) => Result::new(
                 self.tt
                     .insert_constant(ConstantEnum::String(string.value.clone())),
@@ -594,7 +652,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             ast::Constant::Zero(_) => Result::new(self.tt.insert_constant(ConstantEnum::Zero)),
         }
     }
-    fn simple_kind(&mut self, kind: & ast::Kind) -> Result<SimpleKind> {
+    fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {
         match kind {
             ast::Kind::Type(_) => Result::new(SimpleKind::Type),
             ast::Kind::Effect(_) => Result::new(SimpleKind::Effect),
@@ -614,7 +672,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn kind_params(
         &mut self,
-        name: Option<& ast::GenericParameters>,
+        name: Option<&ast::GenericParameters>,
     ) -> Result<Option<Arc<[Kind]>>> {
         match name {
             Some(params) => params
@@ -643,7 +701,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn kind(
         &mut self,
-        name: Option<& ast::GenericParameters>,
+        name: Option<&ast::GenericParameters>,
         output: SimpleKind,
     ) -> Result<Kind> {
         self.kind_params(name)
@@ -692,7 +750,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn thunk(
         &mut self,
-        returns: Option<& ast::Returns>,
+        returns: Option<&ast::Returns>,
     ) -> Result<Thunk> {
         match returns {
             Some(returns) => match returns {

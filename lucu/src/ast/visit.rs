@@ -455,8 +455,7 @@ impl Ast for ast::Expression {
         match self {
             ast::Expression::Constant(constant) => visitor.visit(&**constant),
             ast::Expression::Uninit(_) => V::Output::default(),
-            ast::Expression::Local(_) => V::Output::default(),
-            ast::Expression::MemberOrItem { .. } => V::Output::default(),
+            ast::Expression::Path(path) => visitor.visit_path(path),
             ast::Expression::Block(g) => V::Output::combine([
                 visit_option(&g.inner.params, visitor, |v, (params, _)| {
                     visit_vec(&params.elements, v, |v, (t, _)| v.visit(t))

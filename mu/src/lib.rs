@@ -50,7 +50,7 @@ pub trait TypeTable:
         self.insert_type(TypeEnum::Sum(self.insert_enum([])))
     }
     fn function(&self, from: Tuple, to: Type) -> Type {
-        self.insert_type(TypeEnum::Function(Function::new(from, to, self)))
+        self.insert_type(TypeEnum::Function(FunctionType::new(from, to, self)))
     }
     fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
@@ -143,6 +143,7 @@ pub trait ExpressionTable:
     ) -> Expression {
         self.if_else(
             condition,
+            // TODO: this sequence can be removed after testing
             self.sequence([body], self.construct_unit(tt)),
             self.construct_unit(tt),
         )
@@ -218,12 +219,12 @@ impl Expressions {
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct Function(Tuple, Type);
+pub struct FunctionType(Tuple, Type);
 
-impl Function {
+impl FunctionType {
     pub fn new(from: Tuple, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
         assert!(to.is_first_order(tt));
-        Function(from, to)
+        FunctionType(from, to)
     }
     pub fn from(self) -> Tuple {
         self.0
@@ -241,7 +242,7 @@ pub enum TypeEnum<B> {
     Base(B),
     Sum(Enum),
     Product(Tuple),
-    Function(Function),
+    Function(FunctionType),
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -290,7 +291,7 @@ impl Type {
             _ => panic!(),
         }
     }
-    pub fn into_function(self, tt: &(impl TypeTable + ?Sized)) -> Function {
+    pub fn into_function(self, tt: &(impl TypeTable + ?Sized)) -> FunctionType {
         match tt[self] {
             TypeEnum::Function(function) => function,
             _ => panic!(),
@@ -319,7 +320,7 @@ impl Expression {
             }
             ExpressionEnum::Abstract(from, e) => {
                 let to = e.get_type(tt, et);
-                tt.insert_type(TypeEnum::Function(Function::new(from, to, tt)))
+                tt.insert_type(TypeEnum::Function(FunctionType::new(from, to, tt)))
             }
             ExpressionEnum::Match(_, es) => et[es][0].get_type(tt, et),
             ExpressionEnum::Variant(types, _, _) => tt.insert_type(TypeEnum::Sum(types)),

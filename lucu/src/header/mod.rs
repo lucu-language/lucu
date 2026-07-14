@@ -44,7 +44,30 @@ pub enum ItemDecl {
     Alias(Kind, Term),
     Struct(Kind, Arc<OnceLock<StructDecl>>),
     Effect(Kind, Arc<OnceLock<EffectDecl>>),
-    Function(FunctionSignature, Option<Effect>, NodeIndex),
+    Function(FunctionSignature, Option<Effect>, FunctionDefinition),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicFunction {
+    Ref,
+    Alloca,
+    Link,
+    Asm,
+    AsmPure,
+    LocationPath,
+    LocationLine,
+    LocationColumn,
+    Len,
+    Unreachable,
+    Loop,
+    Unfounded,
+    Trace,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FunctionDefinition {
+    Intrinsic(IntrinsicFunction),
+    Other(NodeIndex),
 }
 
 #[derive(Debug, Clone)]

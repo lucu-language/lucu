@@ -4,10 +4,16 @@ use std::time::Duration;
 use asta_annotate::Annotate;
 use facet::Facet;
 use facet_args as args;
+use inkwell::OptimizationLevel;
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::context::Context;
+use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetMachineOptions};
 use lucu::annotate::AnnotateExt;
+use lucu::error::HasProblems;
 use lucu::error::print::PrintProblems;
 use lucu::module::watcher::FileWatcher;
 use lucu::module::{Library, LibraryDir, Module};
+use lucu::mu;
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
 
@@ -123,12 +129,15 @@ fn watch(cmd: CheckCommand) {
     graph.insert_or_update(watcher.modules(), Module::MAIN);
 
     let tt = TypeTable::new();
+    let mu_tt = unsafe { mu::table::TypeTable::new() };
+    let mu_et = unsafe { mu::table::ExpressionTable::new() };
 
     loop {
         if cmd.debug {
             println!("{}", graph.dot());
         }
 
+        let mut functions = Vec::new();
         for module in graph.postorder().unwrap() {
             if let Some(stages) = graph.stages(module) {
                 if cmd.debug && stages.source().is_some() {
@@ -159,6 +168,11 @@ fn watch(cmd: CheckCommand) {
                     }
                 }
 
+                if let Some(mu) = stages.mu(&graph, &tt, &mu_tt, &mu_et) {
+                    println!("MU OF {}", module);
+                    functions.extend(mu.functions.iter().cloned())
+                }
+
                 stages.print_problems(watcher.modules(), true);
 
                 if cmd.debug {
@@ -168,6 +182,58 @@ fn watch(cmd: CheckCommand) {
         }
         if cmd.debug {
             tt.eprint_lengths();
+        }
+
+        if !graph.problems().next().is_some() {
+            // owo no problems
+            // COMPILE
+            Target::initialize_native(&InitializationConfig::default()).unwrap();
+
+            let triple = TargetMachine::get_default_triple();
+            let machine = Target::from_triple(&triple)
+                .unwrap()
+                .create_target_machine_from_options(
+                    &triple,
+                    TargetMachineOptions::new().set_level(OptimizationLevel::Aggressive),
+                )
+                .unwrap();
+
+            let context = Context::create();
+            let llvm =
+                lucu_llvm::Builder::build(&context, &mu_tt, &mu_et, machine, "main", &functions);
+
+            if let Some(fun) = llvm.module.get_function("_start") {
+                fun.add_attribute(
+                    AttributeLoc::Function,
+                    context
+                        .create_enum_attribute(Attribute::get_named_enum_kind_id("sspstrong"), 0),
+                );
+                fun.add_attribute(
+                    AttributeLoc::Function,
+                    context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),
+                );
+                fun.add_attribute(
+                    AttributeLoc::Function,
+                    context.create_string_attribute("stackrealign", ""),
+                );
+            }
+
+            eprintln!(" --- LLVM --- ");
+            llvm.eprint();
+            llvm.verify().unwrap();
+            llvm.optimize().unwrap();
+            eprintln!(" --- LLVM O3 --- ");
+            llvm.eprint();
+
+            llvm.write_asm(Path::new("out.asm")).unwrap();
+            llvm.write_object(Path::new("out.o")).unwrap();
+            std::process::Command::new("ld")
+                .arg("out.o")
+                .arg("-o")
+                .arg("out")
+                .arg("-e_start")
+                .status()
+                .unwrap();
         }
 
         // wait for changes

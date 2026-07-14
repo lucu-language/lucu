@@ -232,6 +232,15 @@ impl<T> Result<T> {
             },
         }
     }
+    pub fn recover_with(self, f: impl FnOnce() -> T) -> Self {
+        match self.value {
+            Some(_) => self,
+            None => Result {
+                value: Some(f()),
+                problems: self.problems,
+            },
+        }
+    }
     pub fn and_then<U>(self, f: impl FnOnce(T) -> Result<U>) -> Result<U> {
         match self.value {
             Some(t) => {

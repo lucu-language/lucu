@@ -7,8 +7,8 @@ effect Sink = {
    fun flush()
 }
 
-fun read_line with Source Sink = {
-}
+-- fun read_line with Source Sink = {
+-- }
 
 effect StdIo = {
    fun stdin(fun body with Source)

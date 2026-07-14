@@ -363,40 +363,29 @@ impl<'a> Parser<'a> {
             TokenEnum::Identifier => {
                 m! {
                     ident <- self.ident();
-                    fundefault <- match self.next().token {
+                    fun <- match self.next().token {
                         TokenEnum::Symbol(Symbol::Dot) => {
                             let tk_dot = self.skip();
                             self.ident().and_then(|member| {
                                 self.when(Parser::starts_multiple_generics, |parser|
                                     parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
-                                ).map(|generics| (
-                                    ast::Path {
-                                        origin: ast::PathOrigin::Package(ident.clone(), tk_dot, member.clone()),
-                                        generics,
-                                    },
-                                    ast::Expression::MemberOrItem {
-                                        lhs: ident,
-                                        tk_dot,
-                                        rhs: member,
-                                    }
-                                ))
+                                ).map(|generics| ast::Path {
+                                    origin: ast::PathOrigin::Package(ident, tk_dot, member),
+                                    generics,
+                                })
                             })
                         }
                         _ => {
                             self.when(Parser::starts_multiple_generics, |parser|
                                 parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
-                            ).map(|generics| (
-                                ast::Path {
-                                    origin: ast::PathOrigin::Local(ident.clone()),
-                                    generics,
-                                },
-                                ast::Expression::Local(ident),
-                            ))
+                            ).map(|generics| ast::Path {
+                                origin: ast::PathOrigin::Local(ident),
+                                generics,
+                            })
                         }
                     };
-                    let (fun, default) = fundefault;
                     call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
-                    return Box::new(call.map_or(default, ast::Expression::Call));
+                    return Box::new(call.map_or_else(ast::Expression::Path, ast::Expression::Call));
                 }
             }
             _ if self.starts_constant() => self

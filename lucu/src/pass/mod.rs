@@ -26,6 +26,7 @@ use crate::pass::lower::HeaderQuery;
 use crate::pass::parser::Parser;
 use crate::tokens::Token;
 use crate::type_table::TypeTable;
+use crate::{ast, mu};
 
 #[derive(Debug, Default)]
 pub struct Stages {
@@ -33,11 +34,12 @@ pub struct Stages {
     source: Option<String>,
 
     tokens: Lazy<Box<[Token]>>,
-    ast: Lazy<crate::ast::Module>,
+    ast: Lazy<ast::Module>,
     imports: Lazy<Imports>,
     definitions: Lazy<Definitions>,
 
     header: Lazy<Header>,
+    mu: Lazy<mu::Module>,
 }
 
 impl HasProblems for Stages {
@@ -124,7 +126,7 @@ impl Stages {
             })
             .map(Deref::deref)
     }
-    pub fn ast(&self) -> Option<&crate::ast::Module> {
+    pub fn ast(&self) -> Option<&ast::Module> {
         self.ast.get_or_init(|| {
             let source = self.source()?;
             let tokens = self.tokens()?;
@@ -142,11 +144,48 @@ impl Stages {
     }
 
     pub fn header(&self, graph: &ModuleGraph, tt: &TypeTable) -> Option<&Header> {
-        let ast = self.ast()?;
-        let imports = self.imports()?;
-        let definitions = self.definitions()?;
-        self.header
-            .get_or_init(|| Header::from(graph, &self.module, ast, imports, definitions, tt))
+        self.header.get_or_init(|| {
+            // TODO: evaluate headers of parent modules first
+            // currently, we could go arbitrarily deep into the stack while resolving headers
+
+            let ast = self.ast()?;
+            let imports = self.imports()?;
+            let definitions = self.definitions()?;
+            Some(Header::from(
+                graph,
+                &self.module,
+                ast,
+                imports,
+                definitions,
+                tt,
+            ))
+        })
+    }
+    pub fn mu(
+        &self,
+        graph: &ModuleGraph,
+        tt: &TypeTable,
+        mu_tt: &mu::table::TypeTable,
+        mu_et: &mu::table::ExpressionTable,
+    ) -> Option<&mu::Module> {
+        self.mu.get_or_init(|| {
+            // TODO: evaluate headers of parent modules first
+            // currently, we could go arbitrarily deep into the stack while resolving headers
+
+            let ast = self.ast()?;
+            let imports = self.imports()?;
+            let definitions = self.definitions()?;
+            Some(mu::Module::from(
+                graph,
+                &self.module,
+                ast,
+                imports,
+                definitions,
+                tt,
+                mu_tt,
+                mu_et,
+            ))
+        })
     }
 }
 
@@ -180,8 +219,9 @@ pub struct ModuleGraph {
 }
 
 impl HeaderQuery for ModuleGraph {
-    fn header(&self, module: &Module) -> Option<&Header> {
-        self.stages(module).and_then(|stages| stages.header.get())
+    fn header(&self, module: &Module, tt: &TypeTable) -> Option<&Header> {
+        self.stages(module)
+            .and_then(|stages| stages.header(self, tt))
     }
 }
 

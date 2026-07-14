@@ -4,24 +4,17 @@ use std::sync::OnceLock;
 
 use inkwell::module::Linkage;
 use inkwell::targets::TargetMachine;
-use inkwell::types::{BasicType as _, BasicTypeEnum};
-use inkwell::values::FunctionValue;
+use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue};
 use inkwell::{AddressSpace, IntPredicate};
 use lucu::ast::{self, Cast};
 use lucu::mu::table::{ExpressionTable, TypeTable};
-use lucu::mu::{Base, Callable, Constant, Item, Operation};
+use lucu::mu::{Base, Callable, Constant, Function, Item, Operation};
 use lucu::type_table::{IntSize, Integer};
 use mu::TypeTable as _;
 
 pub struct Builder<'ctx> {
     functions: OnceLock<HashMap<Item, FunctionValue<'ctx>>>,
-}
-
-pub struct Function {
-    pub item: Item,
-    pub ty: mu::Function,
-    pub body: mu::Expression,
-    pub linkage: Option<Linkage>,
 }
 
 impl<'ctx> Builder<'ctx> {
@@ -50,7 +43,14 @@ impl<'ctx> Builder<'ctx> {
                 fun.ty,
                 false,
                 None,
-                Some(fun.linkage.unwrap_or(Linkage::Private)),
+                Some(
+                    fun.linkage
+                        .map(|l| match l {
+                            lucu::mu::Linkage::Internal => Linkage::Private,
+                            lucu::mu::Linkage::External => Linkage::External,
+                        })
+                        .unwrap_or(Linkage::Private),
+                ),
             );
             map.insert(fun.item.clone(), fval);
         }
@@ -248,18 +248,110 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
 
     fn build_callable(
         op: &Callable,
-        _op_ty: mu::Function,
-        params: impl IntoIterator<Item = mu_llvm::ValueOrExpression<'ctx, Self>>,
+        _op_ty: mu::FunctionType,
+        args: impl IntoIterator<Item = mu_llvm::ValueOrExpression<'ctx, Self>>,
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> mu_llvm::Value<'ctx, Self> {
-        let mut params = params.into_iter();
+        let mut args = args.into_iter();
         match *op {
             Callable::ModuleFunction { ref item, .. } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
-                llvm.build_direct_call(fun, params.map(|v| v.build(llvm)))
+                llvm.build_direct_call(fun, args.map(|v| v.build(llvm)))
+            }
+            Callable::ArrayConstruct { ty, size } => match llvm.get_type(ty).basic_type(llvm) {
+                Some(ty) => {
+                    let mut array = ty.array_type(size).get_poison();
+                    for (index, param) in args.enumerate() {
+                        array = llvm
+                            .builder
+                            .build_insert_value(
+                                array,
+                                param.build(llvm).basic_value(llvm).unwrap(),
+                                index as u32,
+                                "",
+                            )
+                            .unwrap()
+                            .into_array_value();
+                    }
+                    mu_llvm::Value::Data(Some(array.into()))
+                }
+                None => {
+                    args.map(|v| v.build(llvm)).for_each(drop);
+                    mu_llvm::Value::Data(None)
+                }
+            },
+            Callable::Asm {
+                ref assembly,
+                ref constraints,
+                side_effects,
+                from,
+                to,
+            } => {
+                // TODO: support more from types
+                let from = llvm
+                    .get_type(from)
+                    .basic_type(llvm)
+                    .unwrap()
+                    .into_array_type();
+                let params = std::iter::repeat_n(
+                    BasicMetadataTypeEnum::from(from.get_element_type()),
+                    from.len() as usize,
+                )
+                .collect::<Box<_>>();
+                let arg_array = args
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_array_value();
+                let args = (0..from.len())
+                    .map(|n| {
+                        BasicMetadataValueEnum::from(
+                            llvm.builder.build_extract_value(arg_array, n, "").unwrap(),
+                        )
+                    })
+                    .collect::<Box<_>>();
+
+                let to = llvm.get_type(to).basic_type(llvm);
+                let ty = match to {
+                    Some(to) => to.fn_type(&params, false),
+                    None => llvm.context.void_type().fn_type(&params, false),
+                };
+                let asm = llvm.context.create_inline_asm(
+                    ty,
+                    assembly.as_str().into(),
+                    constraints.as_str().into(),
+                    side_effects,
+                    false,
+                    None,
+                    false,
+                );
+                mu_llvm::Value::Data(
+                    llvm.builder
+                        .build_indirect_call(ty, asm, &args, "")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .basic(),
+                )
+            }
+            Callable::Loop => {
+                let block = llvm.build_block("");
+                llvm.builder.build_unconditional_branch(block).unwrap();
+                llvm.builder.position_at_end(block);
+                args.next().unwrap().build_call(
+                    mu::FunctionType::new(llvm.tt.insert_tuple([]), llvm.tt.unit(), llvm.tt),
+                    [],
+                    llvm,
+                );
+                llvm.builder.build_unconditional_branch(block).unwrap();
+
+                let next = llvm.build_block("");
+                llvm.builder.position_at_end(next);
+                mu_llvm::Value::Data(None)
             }
             Callable::Cast { to, op, .. } => {
-                let param = params.next().unwrap().build(llvm).basic_value(llvm);
+                let param = args.next().unwrap().build(llvm).basic_value(llvm);
                 let ty = llvm.get_type(to).basic_type(llvm);
                 mu_llvm::Value::Data(ty.map(|llvm_ty| {
                     match op {
@@ -322,7 +414,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 }))
             }
             Callable::UnOp { op, .. } => {
-                let param = params.next().unwrap().build(llvm).basic_value(llvm);
+                let param = args.next().unwrap().build(llvm).basic_value(llvm);
                 mu_llvm::Value::Data(param.map(|v| {
                     match op {
                         ast::UnOp::Negate => {
@@ -337,8 +429,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 }))
             }
             Callable::PredicateOp { ty, op } => {
-                let lhs = params.next().unwrap().build(llvm).basic_value(llvm);
-                let rhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let lhs = args.next().unwrap().build(llvm).basic_value(llvm);
+                let rhs = args.next().unwrap().build(llvm).basic_value(llvm);
                 let zip = lhs.zip(rhs);
                 zip.map(|(vl, vr)| {
                     // TODO: non-int values
@@ -373,8 +465,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 .into()
             }
             Callable::MathOp { ty, op } => {
-                let lhs = params.next().unwrap().build(llvm).basic_value(llvm);
-                let rhs = params.next().unwrap().build(llvm).basic_value(llvm);
+                let lhs = args.next().unwrap().build(llvm).basic_value(llvm);
+                let rhs = args.next().unwrap().build(llvm).basic_value(llvm);
                 let zip = lhs.zip(rhs);
                 mu_llvm::Value::Data(zip.map(|(vl, vr)| {
                     // TODO: non-int values
@@ -407,36 +499,36 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 }))
             }
             Callable::Syscall { .. } => {
-                let nr = params
+                let nr = args
                     .next()
                     .unwrap()
                     .build(llvm)
                     .basic_value(llvm)
                     .unwrap()
                     .into_int_value();
-                let args = params
+                let args = args
                     .map(|arg| arg.build(llvm).basic_value(llvm).unwrap().into_int_value())
                     .collect::<Box<_>>();
                 mu_llvm::Value::Data(Some(llvm.build_syscall(nr, args)))
             }
             Callable::LetReference { ty, to } => {
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
                 let ptr = val.map(|val| {
                     let alloc = llvm.builder.build_alloca(val.get_type(), "").unwrap();
                     let _ = llvm.builder.build_store(alloc, val).unwrap();
                     alloc.into()
                 });
 
-                let fun = mu::Function::new(
+                let fun = mu::FunctionType::new(
                     llvm.tt.insert_tuple([llvm.tt.base(Base::Pointer(ty))]),
                     to,
                     llvm.tt,
                 );
-                let fval = params.next().unwrap();
+                let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(ptr).into()], llvm)
             }
             Callable::Read { ty } => {
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
                 mu_llvm::Value::Data(val.map(|val| {
                     let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
                     llvm.builder
@@ -445,8 +537,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 }))
             }
             Callable::Write { .. } => {
-                let ptr = params.next().unwrap().build(llvm).basic_value(llvm);
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
+                let ptr = args.next().unwrap().build(llvm).basic_value(llvm);
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
                 if let Some((ptr, val)) = ptr.zip(val) {
                     llvm.builder
                         .build_store(ptr.into_pointer_value(), val)
@@ -455,12 +547,13 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 mu_llvm::Value::Data(None)
             }
             Callable::PointerMember { tys, member } => {
-                let val = params.next().unwrap().build(llvm);
+                let val = args.next().unwrap().build(llvm);
                 llvm.build_member_pointer(tys, member, val)
             }
-            Callable::MultiPointerIndex { ty } => {
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
-                let index = params
+            Callable::MultiPointerIndex { ty } | Callable::PointerArrayIndex { ty, .. } => {
+                // TODO: do a bounds check
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
+                let index = args
                     .next()
                     .unwrap()
                     .build(llvm)
@@ -479,14 +572,14 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             }
             Callable::PointerSliceIndex { ty } => {
                 // TODO: do a bounds check
-                let val = params
+                let val = args
                     .next()
                     .unwrap()
                     .build(llvm)
                     .basic_value(llvm)
                     .unwrap()
                     .into_struct_value();
-                let index = params
+                let index = args
                     .next()
                     .unwrap()
                     .build(llvm)
@@ -507,8 +600,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             }
             Callable::ArrayIndex { ty, size } => {
                 // TODO: do a bounds check
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
-                let index = params
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
+                let index = args
                     .next()
                     .unwrap()
                     .build(llvm)
@@ -531,21 +624,21 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             }
             Callable::PointerSliceSlice { ty } => {
                 // TODO: do a bounds check
-                let val = params
+                let val = args
                     .next()
                     .unwrap()
                     .build(llvm)
                     .basic_value(llvm)
                     .unwrap()
                     .into_struct_value();
-                let from = params
+                let from = args
                     .next()
                     .unwrap()
                     .build(llvm)
                     .basic_value(llvm)
                     .unwrap()
                     .into_int_value();
-                let to = params
+                let to = args
                     .next()
                     .unwrap()
                     .build(llvm)
@@ -582,15 +675,15 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             }
             Callable::PointerArraySlice { ty, .. } | Callable::MultiPointerSlice { ty } => {
                 // TODO: do a bounds check
-                let val = params.next().unwrap().build(llvm).basic_value(llvm);
-                let from = params
+                let val = args.next().unwrap().build(llvm).basic_value(llvm);
+                let from = args
                     .next()
                     .unwrap()
                     .build(llvm)
                     .basic_value(llvm)
                     .unwrap()
                     .into_int_value();
-                let to = params
+                let to = args
                     .next()
                     .unwrap()
                     .build(llvm)
@@ -607,9 +700,15 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     .into_struct_type()
                     .get_poison();
                 if let Some(ptr) = val {
+                    let llvm_ty = llvm.get_type(ty).basic_type(llvm).unwrap();
+                    let ptr = unsafe {
+                        llvm.builder
+                            .build_gep(llvm_ty, ptr.into_pointer_value(), &[from], "")
+                    }
+                    .unwrap();
                     out = llvm
                         .builder
-                        .build_insert_value(out, ptr.into_pointer_value(), 0, "")
+                        .build_insert_value(out, ptr, 0, "")
                         .unwrap()
                         .into_struct_value();
                 }
@@ -621,7 +720,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 mu_llvm::Value::Data(Some(out.into()))
             }
             Callable::Len { .. } => {
-                let val = params
+                let val = args
                     .next()
                     .unwrap()
                     .build(llvm)

@@ -130,6 +130,23 @@ pub struct Call {
     pub with_effects: Option<WithEffects>,
 }
 
+impl Call {
+    pub fn count_args(&self) -> usize {
+        self.args
+            .as_ref()
+            .map(|args| args.inner.elements.len())
+            .unwrap_or(0)
+            + self.block.is_some() as usize
+    }
+    pub fn args(&self) -> impl Iterator<Item = &Expression> {
+        self.args
+            .iter()
+            .flat_map(|args| args.inner.iter())
+            .chain(self.block.iter())
+            .map(|expr| &**expr)
+    }
+}
+
 impl From<Path> for Call {
     fn from(value: Path) -> Self {
         Self {
@@ -146,14 +163,8 @@ impl From<Path> for Call {
 pub enum Expression {
     Constant(Box<Constant>),
     Uninit(Token),
-    /// Local variable, local item, local function call without args
-    Local(Identifier),
-    /// Local variable member, module item, module function call without args
-    MemberOrItem {
-        lhs: Identifier,
-        tk_dot: Token,
-        rhs: Identifier,
-    },
+    /// Could also be a member access
+    Path(Path),
     Block(Grouped<Block>),
     Enclosed(Grouped<Box<Self>>),
     Let {
@@ -233,7 +244,6 @@ impl HasSpan for Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Constant(c) => c.span(),
-            Expression::Local(i) => i.span(),
             Expression::Block(group) => group.span(),
             Expression::Enclosed(group) => group.span(),
             Expression::Uninit(token) => token.span(),
@@ -290,9 +300,7 @@ impl HasSpan for Expression {
                 Some(expr) => Span::new(tk_break.span().start, expr.span().end),
                 None => tk_break.span(),
             },
-            Expression::MemberOrItem { lhs, rhs, .. } => {
-                Span::new(lhs.span().start, rhs.span().end)
-            }
+            Expression::Path(path) => path.span(),
         }
     }
 }

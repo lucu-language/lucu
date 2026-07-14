@@ -212,6 +212,9 @@ impl ExpressionTable {
     ) -> mu::Expression {
         self.apply_operation(Operation::Callable(c), vals)
     }
+    pub fn unreachable(&self) -> mu::Expression {
+        self.operation(Operation::Unreachable)
+    }
 }
 
 impl Index<mu::Expression> for ExpressionTable {

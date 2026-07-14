@@ -20,4 +20,13 @@ type Slice[T, r] = ^@r []T
 fun test(param ^u8) = {
 }
 
+fun _start ! with World = {
+   print_int(420)
+   print_int(69)
+   print_int(-10)
+   print_str("Hello, World!")
+   syscall_exit(0)
+   unreachable
+}
+
 type Maybe[T] = ?T

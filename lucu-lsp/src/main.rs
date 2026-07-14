@@ -184,7 +184,7 @@ impl Backend {
 }
 
 fn byte(s: &str, pos: Position) -> usize {
-    line_column::char_index(s, pos.line + 1, pos.character + 1)
+    line_column::index(s, pos.line + 1, pos.character + 1)
 }
 
 fn position(s: &str, byte: u32) -> Position {

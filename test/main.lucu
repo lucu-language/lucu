@@ -1,5 +1,6 @@
 import "core:io"
 import "libc:types" c
+import "conway"
 
 type Id[T] = T
 type Test1 = Id[u32]
@@ -28,6 +29,7 @@ fun _start ! with World = {
    print_int(69)
    print_int(-10)
    print_str("Hello, World!")
+   conway.main
    syscall_exit(0)
    unreachable
 }

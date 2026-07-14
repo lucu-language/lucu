@@ -3,8 +3,8 @@ name = "lucu"
 scope = "source.lucu"
 injection-regex = "lucu"
 file-types = ["lucu"]
-comment-tokens = "--"
-indent = { tab-width = 3, unit = "   " }
+comment-tokens = ["--", "--#"]
+indent = { tab-width = 4, unit = "    " }
 formatter = { command = "cargo", args = ["run", "--bin", "lucu-fmt"] }
 language-servers = ["lucu-lsp"]
 roots = ["main.lucu"]

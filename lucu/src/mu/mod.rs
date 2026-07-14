@@ -96,6 +96,8 @@ pub enum Callable {
 
     /// (a x (^a -> b)) -> b
     LetReference { ty: mu::Type, to: mu::Type },
+    /// (USize x (^[]a -> b)) -> b
+    LetAlloca { ty: mu::Type, to: mu::Type },
     /// ^a -> a
     Read { ty: mu::Type },
     /// (^a x a) -> ()
@@ -160,6 +162,12 @@ impl mu::Typed for Callable {
                 let ptr = tt.base(Base::Pointer(ty));
                 let fun = tt.function(tt.insert_tuple([ptr]), to);
                 tt.function(tt.insert_tuple([ty, fun]), to)
+            }
+            Callable::LetAlloca { ty, to } => {
+                let usize = tt.base(Base::USIZE);
+                let ptr_slice = tt.base(Base::PointerSlice(ty));
+                let fun = tt.function(tt.insert_tuple([ptr_slice]), to);
+                tt.function(tt.insert_tuple([usize, fun]), to)
             }
             Callable::Read { ty } => {
                 let ptr = tt.base(Base::Pointer(ty));

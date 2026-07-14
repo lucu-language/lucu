@@ -1,0 +1,89 @@
+import "builtin:regions"
+
+fun dec(n usize, stride usize) usize = if n == 0 then stride - 1 else n - 1
+fun inc(n usize, stride usize) usize = if n == stride - 1 then 0 else n + 1
+
+fun print_state(state ^[]bool, stride usize) = {
+    trace("-")
+    for(0, stride) { x ->
+        trace("--")
+    }
+    trace("-")
+	print_ln
+
+    for(0, stride) { y ->
+        trace("|")
+        for(0, stride) { x ->
+            trace(if state[x + y * stride]^ then "[]" else "  ")
+        }
+        trace("|")
+    	print_ln
+    }
+
+    trace("-")
+    for(0, stride) { x ->
+        trace("--")
+    }
+    trace("-")
+	print_ln
+}
+
+fun clear_state(state ^mut []bool, stride usize) = {
+    for(0, stride) { y ->
+        for(0, stride) { x ->
+            state[x + y * stride]^ = false
+        }
+    }
+}
+
+fun next_state(old ^[]bool, new ^[]bool, stride usize) = {
+    for(0, stride) { y ->
+        for(0, stride) { x ->
+            let neighbors = use regions.ref[usize, unit](0)
+
+            if old[dec(x, stride) + dec(y, stride) * stride]^ then neighbors^ += 1
+            if old[    x          + dec(y, stride) * stride]^ then neighbors^ += 1
+            if old[inc(x, stride) + dec(y, stride) * stride]^ then neighbors^ += 1
+            if old[dec(x, stride) +     y          * stride]^ then neighbors^ += 1
+            if old[inc(x, stride) +     y          * stride]^ then neighbors^ += 1
+            if old[dec(x, stride) + inc(y, stride) * stride]^ then neighbors^ += 1
+            if old[    x          + inc(y, stride) * stride]^ then neighbors^ += 1
+            if old[inc(x, stride) + inc(y, stride) * stride]^ then neighbors^ += 1
+
+            new[x + y * stride]^ = if old[x + y * stride]^ {
+                if neighbors^ == 2 {
+                    true
+                } else {
+                    neighbors^ == 3
+                }
+            } else {
+                neighbors^ == 3
+            }
+        }
+    }
+}
+
+fun main with World = {
+    let stride = use apply(32)
+
+    -- create buffers
+    let board_a = use regions.alloca[bool, unit](stride * stride)
+    let board_b = use regions.alloca[bool, unit](stride * stride)
+
+    -- init state
+    clear_state(#transmute board_a, stride)
+    board_a[0 + 0 * stride]^ = true
+    board_a[1 + 1 * stride]^ = true
+    board_a[2 + 1 * stride]^ = true
+    board_a[0 + 2 * stride]^ = true
+    board_a[1 + 2 * stride]^ = true
+
+    loop {
+        print_state(#transmute board_a, stride)
+        wait
+        next_state(#transmute board_a, #transmute board_b, stride)
+        print_state(#transmute board_b, stride)
+        wait
+        next_state(#transmute board_b, #transmute board_a, stride)
+    }
+}

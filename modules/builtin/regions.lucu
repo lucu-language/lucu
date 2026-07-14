@@ -13,5 +13,8 @@ effect Write[r]
 fun ref[T, U](val T, fun body(ptr ^mut T) U) U
    = #intrinsic
 
+fun alloca[T, U](len usize, fun body(slice ^mut []T) U) U
+   = #intrinsic
+
 -- fun alloca[T, U](fill T, len usize, fun body(slice ^mut []T) U) U
 --   = #intrinsic

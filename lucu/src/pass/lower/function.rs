@@ -127,22 +127,27 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     decl.parameters
                         .iter()
                         .flat_map(|params| params.inner.iter())
-                        .map(|param| param.name()),
+                        .map(|param| (param.name(), None)),
                     iter::once(&**body),
                 )
-                .map(|body| mu::Function {
-                    item: mu::Item {
-                        module: self.lower.module.clone(),
-                        item: name.into(),
-                    },
-                    ty,
-                    body,
-                    // TODO: specify this in the language
-                    linkage: if name == "_start" {
-                        Some(mu::Linkage::External)
-                    } else {
-                        None
-                    },
+                .map(|lambda| {
+                    let mu::ExpressionEnum::Abstract(_, body) = self.et[lambda] else {
+                        panic!("ICE: abstraction did not give lambda expression")
+                    };
+                    mu::Function {
+                        item: mu::Item {
+                            module: self.lower.module.clone(),
+                            item: name.into(),
+                        },
+                        ty,
+                        body,
+                        // TODO: specify this in the language
+                        linkage: if name == "_start" {
+                            Some(mu::Linkage::External)
+                        } else {
+                            None
+                        },
+                    }
                 })
             }
             ast::FunctionDefinition::Intrinsic(_) => todo!("error"),
@@ -151,14 +156,29 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn abstraction(
         &mut self,
         sig: FunctionSignature,
-        params: impl IntoIterator<Item = &'a ast::Identifier>,
+        params: impl IntoIterator<Item = (&'a ast::Identifier, Option<&'a ast::Type>)>,
         body: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
     ) -> Result<mu::Expression> {
         let mut me = self.reborrow();
         let sig_val = &me.lower.tt[sig];
+        let from = me.tt.insert_tuple(Iterator::chain(
+            sig_val
+                .params
+                .iter()
+                .flat_map(|params| params.iter().copied())
+                .map(|param| me.function_param(param)),
+            sig_val
+                .thunk
+                .effect
+                .effects(me.lower.tt)
+                .map(|e| me.effect(e).1),
+        ));
         let params = Iterator::chain(
             Iterator::zip(
-                params.into_iter().map(|param| param.as_str()),
+                params.into_iter().map(|(param, _ty)| {
+                    // TODO: check user given type
+                    param.as_str()
+                }),
                 sig_val
                     .params
                     .iter()
@@ -171,7 +191,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             me.vars.push_front(param);
         }
         me.statements(body, Some(sig_val.thunk.returns))
-            .map(|(expr, _)| expr)
+            .map(|(expr, _)| self.et.lambda(from, expr))
     }
     fn find_named(&self, name: &str) -> Option<(u32, FunctionParameter)> {
         self.vars
@@ -207,7 +227,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         if let ast::PathOrigin::Local(local) = &path.origin
             && let Some((index, ty)) = self.find_named(local.as_str())
         {
-            if let Some(_) = &path.generics {
+            if let Some(_generics) = &path.generics {
                 todo!("generic local function")
             }
             let mu_ty = self.function_param(ty);
@@ -221,7 +241,26 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 ItemDecl::Alias(kind, term) => self
                     .lower
                     .apply(kind, term, path.generics.as_ref())
-                    .and_then(|(kind, term)| todo!()),
+                    .and_then(|(kind, term)| {
+                        self.lower
+                            .apply(kind, term, path.generics.as_ref())
+                            .and_then(|(kind, term)| {
+                                let kind_enum = &self.lower.tt[kind];
+                                if kind_enum.params.is_some() {
+                                    todo!("error")
+                                }
+                                let SimpleKind::Constant(ty) = kind_enum.output else {
+                                    todo!("error")
+                                };
+                                let Term::Constant(c) = term else {
+                                    panic!("ICE: constant kind but not constant term")
+                                };
+                                Result::new((
+                                    Either::Left(self.constant(ty, c)),
+                                    PathType::Data(ty),
+                                ))
+                            })
+                    }),
                 ItemDecl::Struct(_, _) => todo!("struct constructor"),
                 ItemDecl::Effect(_, _) => todo!("error"),
                 ItemDecl::Function(sig, effect, def) => {
@@ -235,28 +274,24 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     Some(index) => todo!(),
                                     None => todo!("error: effect not on stack"),
                                 },
-                                None => match def {
-                                    FunctionDefinition::Intrinsic(i) => {
-                                        Result::new((Either::Right(i), ty))
-                                    }
-                                    FunctionDefinition::Other(_) => {
-                                        let mu_ty = self.function_type(sig, None);
-                                        Result::new((
+                                None => Result::new((
+                                    match def {
+                                        FunctionDefinition::Intrinsic(i) => Either::Right(i),
+                                        FunctionDefinition::Other(_) => {
+                                            let item = mu::Item {
+                                                module,
+                                                item: name.to_compact_string(),
+                                            };
+                                            let ty = self.function_type(sig, None);
                                             Either::Left(self.et.operation(
                                                 mu::Operation::Callable(
-                                                    mu::Callable::ModuleFunction {
-                                                        item: mu::Item {
-                                                            module,
-                                                            item: name.to_compact_string(),
-                                                        },
-                                                        ty: mu_ty,
-                                                    },
+                                                    mu::Callable::ModuleFunction { item, ty },
                                                 ),
-                                            )),
-                                            ty,
-                                        ))
-                                    }
-                                },
+                                            ))
+                                        }
+                                    },
+                                    ty,
+                                )),
                             }
                         })
                 }
@@ -276,6 +311,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             if let Some(_generics) = &sig_val.type_params {
                 todo!("error: must specify generics right now")
             }
+            // FIXME: we need to infer region generics
             if let Some(params) = &sig_val.params {
                 if params.len() != call.count_args() + use_arg.is_some() as usize {
                     todo!("error: incorrect amount of arguments")
@@ -289,22 +325,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     self.expression(arg, Some(ty)).map(|(mu, _)| mu)
                                 }
                                 FunctionParameter::Lambda(sig) => {
-                                    let mut self_inner = self.reborrow();
-                                    let sig_val = &self_inner.lower.tt[sig];
+                                    let sig_val = &self.lower.tt[sig];
                                     if sig_val.type_params.as_ref().is_some_and(|ps| {
-                                        ps.iter().any(|&k| {
-                                            self_inner.lower.tt[k].output != SimpleKind::Region
-                                        })
+                                        ps.iter()
+                                            .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
                                     }) {
                                         todo!("error: no support for generics yet")
                                     }
-                                    let from = self_inner.tt.insert_tuple(
-                                        sig_val
-                                            .params
-                                            .iter()
-                                            .flat_map(|params| params.iter().copied())
-                                            .map(|param| self_inner.function_param(param)),
-                                    );
                                     if let ast::Expression::Block(block) = arg {
                                         if block
                                             .inner
@@ -315,88 +342,59 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         {
                                             todo!("error")
                                         }
-                                        if let Some(((lambda, _), params)) =
-                                            block.inner.params.as_ref().zip(sig_val.params.as_ref())
-                                        {
-                                            for (lambda, param) in
-                                                lambda.iter().zip(params.iter().copied())
-                                            {
-                                                // TODO: check user given type
-                                                self_inner.vars.push_front(Var::Named(
-                                                    lambda.var.as_str(),
-                                                    param,
-                                                ));
-                                            }
-                                        }
-                                        for effect in
-                                            sig_val.thunk.effect.effects(self_inner.lower.tt)
-                                        {
-                                            self_inner.vars.push_front(Var::Effect(effect));
-                                        }
-                                        self_inner.statements(
+                                        self.abstraction(
+                                            sig,
+                                            block
+                                                .inner
+                                                .params
+                                                .iter()
+                                                .flat_map(|(lambda, _)| lambda.iter())
+                                                .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
                                             block.inner.stmts.iter().map(|e| &**e),
-                                            Some(sig_val.thunk.returns),
                                         )
                                     } else if sig_val.params.is_some() {
                                         todo!("error")
                                     } else {
-                                        for effect in
-                                            sig_val.thunk.effect.effects(self_inner.lower.tt)
-                                        {
-                                            self_inner.vars.push_front(Var::Effect(effect));
-                                        }
-                                        self_inner.statements([arg], Some(sig_val.thunk.returns))
+                                        self.abstraction(sig, [], [arg])
                                     }
-                                    .map(|(body, _)| self_inner.et.lambda(from, body))
                                 }
                             })
                             .unwrap_or_else(|| self.et.unreachable())
                     })
                     .collect::<Vec<_>>();
                 if let Some(arg) = use_arg {
-                    let mut self_inner = self.reborrow();
                     args.push({
                         let param = params.last().copied().unwrap();
                         let FunctionParameter::Lambda(sig) = param else {
                             todo!("error")
                         };
-                        let sig_val = &self_inner.lower.tt[sig];
+                        let sig_val = &self.lower.tt[sig];
                         if sig_val.type_params.as_ref().is_some_and(|ps| {
                             ps.iter()
-                                .any(|&k| self_inner.lower.tt[k].output != SimpleKind::Region)
+                                .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
                         }) {
                             todo!("error: no support for generics yet")
                         }
-                        let from = self_inner.tt.insert_tuple(
-                            sig_val
-                                .params
-                                .iter()
-                                .flat_map(|params| params.iter().copied())
-                                .map(|param| self_inner.function_param(param)),
-                        );
                         if arg.params.map(|params| params.elements.len())
                             != sig_val.params.as_ref().map(|params| params.len())
                         {
                             todo!("error")
                         }
-                        if let Some((lambda, params)) = arg.params.zip(sig_val.params.as_ref()) {
-                            for (lambda, param) in lambda.iter().zip(params.iter().copied()) {
-                                // TODO: check user given type
-                                self_inner
-                                    .vars
-                                    .push_front(Var::Named(lambda.var.as_str(), param));
-                            }
-                        }
-                        // FIXME: effects
                         problems
-                            .append(self_inner.statements(
-                                arg.block.iter().map(|e| &**e),
-                                Some(sig_val.thunk.returns),
-                            ))
-                            .map(|(body, _)| self_inner.et.lambda(from, body))
-                            .unwrap_or_else(|| self_inner.et.unreachable())
+                            .append(
+                                self.abstraction(
+                                    sig,
+                                    arg.params
+                                        .into_iter()
+                                        .flat_map(|lambda| lambda.iter())
+                                        .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
+                                    arg.block.iter().map(|e| &**e),
+                                ),
+                            )
+                            .unwrap_or_else(|| self.et.unreachable())
                     });
                 }
+                // FIXME: supply effect handlers too
                 let mu = match fun {
                     Either::Left(fun) => self.et.apply(fun, args),
                     Either::Right(i) => self.intrinsic(i, generics, args),
@@ -428,15 +426,65 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Term::Type(to) = generics[1].term else {
                     panic!()
                 };
+                let mut args = args.into_iter();
+                let val = args.next().unwrap();
+                let mu::ExpressionEnum::Abstract(_, body) = self.et[args.next().unwrap()] else {
+                    panic!("ICE: ref arg is not a function")
+                };
+                let ty = self.r#type(ty);
+                let to = self.r#type(to);
                 self.et.call(
-                    mu::Callable::LetReference {
-                        ty: self.r#type(ty),
-                        to: self.r#type(to),
-                    },
-                    args,
+                    mu::Callable::LetReference { ty, to },
+                    [
+                        val,
+                        self.et.lambda(
+                            self.tt.insert_tuple([self.tt.base(mu::Base::Pointer(ty))]),
+                            self.et.let_chain(
+                                [
+                                    // Read
+                                    self.et.construct_unit(self.tt),
+                                    // Write
+                                    self.et.construct_unit(self.tt),
+                                ],
+                                body,
+                            ),
+                        ),
+                    ],
                 )
             }
-            IntrinsicFunction::Alloca => todo!(),
+            IntrinsicFunction::Alloca => {
+                let Term::Type(ty) = generics[0].term else {
+                    panic!()
+                };
+                let Term::Type(to) = generics[1].term else {
+                    panic!()
+                };
+                let mut args = args.into_iter();
+                let val = args.next().unwrap();
+                let mu::ExpressionEnum::Abstract(_, body) = self.et[args.next().unwrap()] else {
+                    panic!("ICE: alloca arg is not a function")
+                };
+                let ty = self.r#type(ty);
+                let to = self.r#type(to);
+                self.et.call(
+                    mu::Callable::LetAlloca { ty, to },
+                    [
+                        val,
+                        self.et.lambda(
+                            self.tt.insert_tuple([self.tt.base(mu::Base::Pointer(ty))]),
+                            self.et.let_chain(
+                                [
+                                    // Read
+                                    self.et.construct_unit(self.tt),
+                                    // Write
+                                    self.et.construct_unit(self.tt),
+                                ],
+                                body,
+                            ),
+                        ),
+                    ],
+                )
+            }
             IntrinsicFunction::Link => todo!(),
             IntrinsicFunction::Asm | IntrinsicFunction::AsmPure => {
                 let Term::Constant(assembly) = generics[0].term else {
@@ -483,14 +531,30 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 )
             }
             IntrinsicFunction::Unreachable => self.et.operation(mu::Operation::Unreachable),
-            IntrinsicFunction::Loop => self.et.call(mu::Callable::Loop, args),
-            IntrinsicFunction::Unfounded => self.et.apply(
-                args.into_iter().next().unwrap(),
-                // Div effect
-                [self.et.construct_unit(self.tt)],
-            ),
+            IntrinsicFunction::Loop => {
+                let mut args = args.into_iter();
+                let body = args.next().unwrap();
+                // let _div = args.next().unwrap();
+                self.et.call(mu::Callable::Loop, [body])
+            }
+            IntrinsicFunction::Unfounded => {
+                let mu::ExpressionEnum::Abstract(_, body) =
+                    self.et[args.into_iter().next().unwrap()]
+                else {
+                    panic!("ICE: unfounded arg is not a function")
+                };
+                self.et.let_chain(
+                    [
+                        // Div
+                        self.et.construct_unit(self.tt),
+                    ],
+                    body,
+                )
+            }
             IntrinsicFunction::Trace => {
-                let slice = args.into_iter().next().unwrap();
+                let mut args = args.into_iter();
+                let slice = args.next().unwrap();
+                // let _read = args.next().unwrap();
                 let mu_usize = self.tt.base(mu::Base::USIZE);
                 let mu_uptr = self.tt.base(mu::Base::UPTR);
                 let mu_u8 = self.tt.base(mu::Base::U8);
@@ -530,6 +594,37 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
         }
     }
+    fn constant(&self, ty: Type, c: Constant) -> mu::Expression {
+        match self.lower.tt[c] {
+            ConstantEnum::Generic(_) => todo!(),
+            ConstantEnum::True => {
+                let bool = self.tt.bool();
+                self.et.push_expression(mu::ExpressionEnum::Variant(
+                    bool.into_sum(self.tt),
+                    1,
+                    self.et.construct_unit(self.tt),
+                ))
+            }
+            ConstantEnum::False => {
+                let bool = self.tt.bool();
+                self.et.push_expression(mu::ExpressionEnum::Variant(
+                    bool.into_sum(self.tt),
+                    0,
+                    self.et.construct_unit(self.tt),
+                ))
+            }
+            ConstantEnum::Integer(int) => self
+                .et
+                .constant(self.r#type(ty), mu::Constant::Integer(int)),
+            ConstantEnum::String(ref str) => {
+                // FIXME: if the type has a sentinel we need to add that to the end
+                self.et
+                    .constant(self.r#type(ty), mu::Constant::String(str.clone()))
+            }
+            ConstantEnum::Character(ref _str) => todo!(),
+            ConstantEnum::Zero => self.et.constant(self.r#type(ty), mu::Constant::Zero),
+        }
+    }
     fn expression(
         &mut self,
         expr: &'a ast::Expression,
@@ -543,6 +638,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };
+                // TODO: why are we matching on the ast constant??
+                // we should use Self::constant instead
                 match **constant {
                     ast::Constant::Path(_) => {
                         panic!("ICE: constant path expression found instead of path expression")
@@ -976,9 +1073,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     .map(|(e, ty)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
             }
             ast::Expression::Raise { expr, .. } => {
-                let Some(outer_ty) = expected else {
-                    todo!("error: not enough info")
-                };
+                let never = self.lower.tt.insert_type(TypeEnum::Never);
                 let Some((index, ty)) = self.find_raise() else {
                     todo!("error")
                 };
@@ -990,11 +1085,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 match expr {
                     Some(expr) => self
                         .expression(expr, Some(ty))
-                        .map(|(e, _)| (self.et.apply(f, [e]), outer_ty)),
-                    None if ty.is_unit(self.lower.tt) => Result::new((
-                        self.et.apply(f, [self.et.construct_unit(self.tt)]),
-                        outer_ty,
-                    )),
+                        .map(|(e, _)| (self.et.apply(f, [e]), never)),
+                    None if ty.is_unit(self.lower.tt) => {
+                        Result::new((self.et.apply(f, [self.et.construct_unit(self.tt)]), never))
+                    }
                     None => todo!("error"),
                 }
             }

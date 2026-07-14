@@ -527,6 +527,45 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(ptr).into()], llvm)
             }
+            Callable::LetAlloca { ty, to } => {
+                let size = args
+                    .next()
+                    .unwrap()
+                    .build(llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                let ptr = llvm
+                    .get_type(ty)
+                    .basic_type(llvm)
+                    .map(|ty| llvm.builder.build_array_alloca(ty, size, "").unwrap());
+
+                let ptr_slice = llvm.tt.base(Base::PointerSlice(ty));
+                let llvm_ptr_slice = llvm
+                    .get_type(ptr_slice)
+                    .basic_type(llvm)
+                    .unwrap()
+                    .into_struct_type();
+                let count_fields = llvm_ptr_slice.count_fields();
+
+                let mut out = llvm_ptr_slice.get_poison();
+                if let Some(ptr) = ptr {
+                    out = llvm
+                        .builder
+                        .build_insert_value(out, ptr, 0, "")
+                        .unwrap()
+                        .into_struct_value();
+                }
+                out = llvm
+                    .builder
+                    .build_insert_value(out, size, count_fields - 1, "")
+                    .unwrap()
+                    .into_struct_value();
+
+                let fun = mu::FunctionType::new(llvm.tt.insert_tuple([ptr_slice]), to, llvm.tt);
+                let fval = args.next().unwrap();
+                fval.build_call(fun, [mu_llvm::Value::Data(Some(out.into())).into()], llvm)
+            }
             Callable::Read { ty } => {
                 let val = args.next().unwrap().build(llvm).basic_value(llvm);
                 mu_llvm::Value::Data(val.map(|val| {

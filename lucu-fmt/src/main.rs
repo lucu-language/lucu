@@ -1,3 +1,4 @@
+use std::any::TypeId;
 use std::collections::VecDeque;
 use std::env;
 use std::fs::read_to_string;
@@ -45,7 +46,7 @@ fn main() -> Result<(), io::Error> {
     ast.push_nodes(&mut nodes);
     let text = Text {
         nodes: &nodes.nodes,
-        indent_size: 3,
+        indent_size: 4,
         maximum_width: 100,
     };
     let formatted = format!("{}", text);
@@ -194,12 +195,20 @@ impl<'a> Nodes<'a> {
             .take_while(|s| s.end <= span.end)
             .any(|s| s.start >= span.start)
     }
-    fn optional_line(&mut self, next: Span) {
+    fn user_lines(&self, next: Span) -> usize {
         // count the amount of lines the user put between these
         let between = &self.source[Span::new(self.last_token, next.start)];
-        let user_lines = between.bytes().filter(|&c| c == b'\n').count();
-        if user_lines > 1 {
+        between.bytes().filter(|&c| c == b'\n').count()
+    }
+    fn optional_empty_line(&mut self, next: Span) -> bool {
+        if self.was_just_empty_line() {
+            return false;
+        }
+        if self.user_lines(next) > 1 {
             self.line();
+            true
+        } else {
+            false
         }
     }
     fn comments(&mut self, next: Span) {
@@ -207,20 +216,28 @@ impl<'a> Nodes<'a> {
             .comments
             .pop_front_if(|s| s.start >= self.last_token && s.end <= next.start)
         {
-            let comment_str = &self.source[comment][2..];
-            let comment_str = comment_str.strip_prefix(' ').unwrap_or(comment_str);
+            let mut comment_str = &self.source[comment][2..];
+            let doc = comment_str.starts_with('#');
+            if doc {
+                comment_str = &comment_str[1..];
+            }
+            comment_str = comment_str.strip_prefix(' ').unwrap_or(comment_str);
 
             // allow an extra line before this comment starts,
             // unless we just indented, then it needs to hug the line above
-            if !self.was_just_indented() && !self.was_just_empty_line() {
-                self.optional_line(comment)
+            if !self.was_just_indented() {
+                self.optional_empty_line(comment);
             }
             // add a space if we currently don't end in a space
             if !self.ends_in_whitespace() {
                 self.space();
             }
 
-            self.nodes.push(Node::text("--"));
+            if doc {
+                self.nodes.push(Node::text("--#"));
+            } else {
+                self.nodes.push(Node::text("--"));
+            }
             if !comment_str.is_empty() {
                 self.space();
             }
@@ -243,12 +260,17 @@ trait Ast {
 
 fn is_heavy(def: &ast::Item) -> bool {
     match def {
-        ast::Item::Function(_, def) => def.is_some(),
+        ast::Item::Function(_, def) => def.as_ref().is_some_and(|(_, def)| match def {
+            ast::FunctionDefinition::Expression(body) => {
+                matches!(**body, ast::Expression::Block(_))
+            }
+            ast::FunctionDefinition::Intrinsic(_) => false,
+        }),
         ast::Item::Type(_, _, _) => false,
         ast::Item::Effect(_, _, def) => def.as_ref().is_some_and(|(_, def)| match def {
             ast::EffectDefinition::Body(_) => true,
             ast::EffectDefinition::Alias(_) => false,
-            ast::EffectDefinition::Intrinsic(_) => true,
+            ast::EffectDefinition::Intrinsic(_) => false,
         }),
         ast::Item::Region(_, _, _) => false,
         ast::Item::Constant(_, _, _, _) => false,
@@ -279,13 +301,14 @@ impl Ast for ast::Module {
                     nodes.line();
                 }
                 nodes.comments(def.span());
-                nodes.optional_line(def.span());
+                nodes.optional_empty_line(def.span());
             }
             last_heavy = this_heavy;
             def.push_nodes(nodes);
         }
 
         nodes.line();
+        nodes.comments(Span::new(u32::MAX, u32::MAX));
     }
 }
 
@@ -301,7 +324,69 @@ impl Ast for ast::Import {
     }
 }
 
-impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>> {
+impl Ast for ast::Index {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        match self {
+            ast::Index::Single(expr) => expr.push_nodes(nodes),
+            ast::Index::Range {
+                from,
+                range,
+                to,
+                sentinel,
+            } => {
+                from.push_nodes(nodes);
+                nodes.token(*range);
+                to.push_nodes(nodes);
+                sentinel.push_nodes(nodes);
+            }
+        }
+    }
+}
+
+impl Ast for ast::Grouped<ast::Index> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if !nodes.contains_comments(self.span()) {
+            nodes.token(self.open);
+            self.inner.push_nodes(nodes);
+            nodes.token(self.close);
+        } else {
+            nodes.group(true, |nodes| {
+                nodes.token(self.open);
+                nodes.indent_on_wrap(|nodes| {
+                    nodes.line_on_wrap();
+                    self.inner.push_nodes(nodes);
+                    nodes.comments(self.close.span());
+                });
+                nodes.token(self.close);
+            });
+        }
+    }
+}
+
+impl Ast for ast::Grouped<Box<ast::Expression>> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if !nodes.contains_comments(self.span()) {
+            nodes.token(self.open);
+            self.inner.push_nodes(nodes);
+            nodes.token(self.close);
+        } else {
+            nodes.group(true, |nodes| {
+                nodes.token(self.open);
+                nodes.indent_on_wrap(|nodes| {
+                    nodes.line_on_wrap();
+                    self.inner.push_nodes(nodes);
+                    nodes.comments(self.close.span());
+                });
+                nodes.token(self.close);
+            });
+        }
+    }
+}
+
+impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>>
+where
+    T: 'static,
+{
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         if &nodes.source[self.open.0] == "{" {
             nodes.token(self.open);
@@ -319,6 +404,9 @@ impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>> {
             for param in self.inner.iter() {
                 param.push_nodes(nodes);
             }
+            if TypeId::of::<T>() == TypeId::of::<ast::GenericArgument>() {
+                nodes.push(Node::Text(Chunk::COMMA));
+            }
             nodes.token(self.close);
         } else {
             nodes.group(true, |nodes| {
@@ -331,7 +419,14 @@ impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>> {
                         }
                         param.push_nodes(nodes);
                     }
-                    nodes.trailing_comma();
+                    if TypeId::of::<T>() == TypeId::of::<ast::GenericArgument>()
+                        && self.inner.elements.len() < 2
+                    {
+                        nodes.push(Node::Text(Chunk::COMMA));
+                        nodes.line_on_wrap();
+                    } else {
+                        nodes.trailing_comma();
+                    }
                     nodes.comments(self.close.span());
                 });
                 nodes.token(self.close);
@@ -340,6 +435,7 @@ impl<T: Ast + HasSpan> Ast for ast::Grouped<ast::Separated<T>> {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum Placement {
     Newline,
     Inline,
@@ -418,9 +514,49 @@ impl Ast for ast::Item {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
             ast::Item::Function(decl, def) => {
-                decl.push_nodes(nodes);
+                nodes.token(decl.fun);
+                nodes.space();
+                decl.name.push_nodes(nodes);
 
-                if let Some((equals, def)) = def {
+                if let Some(params) = &decl.parameters {
+                    params.push_nodes(nodes);
+                }
+
+                if let Some(returns) = &decl.returns {
+                    nodes.space();
+                    returns.push_nodes(nodes);
+                }
+
+                if let Some(with_effects) = &decl.effects {
+                    if nodes.user_lines(with_effects.span()) > 0 {
+                        nodes.indent(|nodes| {
+                            nodes.line();
+                            with_effects.push_nodes(nodes);
+                            if let Some((equals, def)) = def
+                                && def.placement() != Placement::Inline
+                            {
+                                def.push_definition(nodes, *equals);
+                            }
+                        });
+                    } else {
+                        nodes.group(false, |nodes| {
+                            nodes.indent_on_wrap(|nodes| {
+                                nodes.line_or_space();
+                                with_effects.push_nodes(nodes);
+                                if let Some((equals, def)) = def
+                                    && def.placement() != Placement::Inline
+                                {
+                                    def.push_definition(nodes, *equals);
+                                }
+                            });
+                        });
+                    }
+                    if let Some((equals, def)) = def
+                        && def.placement() == Placement::Inline
+                    {
+                        def.push_definition(nodes, *equals);
+                    }
+                } else if let Some((equals, def)) = def {
                     def.push_definition(nodes, *equals);
                 }
             }
@@ -516,9 +652,9 @@ impl Ast for ast::FunctionDeclaration {
             returns.push_nodes(nodes);
         }
 
-        if let Some(effects) = &self.effects {
+        if let Some(with_effects) = &self.effects {
             nodes.space();
-            effects.push_nodes(nodes);
+            with_effects.push_nodes(nodes);
         }
     }
 }
@@ -575,18 +711,198 @@ impl Ast for ast::FunctionDefinition {
     }
 }
 
+impl Ast for ast::Call {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        self.fun.push_nodes(nodes);
+        self.args.push_nodes(nodes);
+        if let Some(block) = &self.block {
+            nodes.space();
+            block.push_nodes(nodes);
+        }
+        if let Some(with_effects) = &self.with_effects {
+            nodes.space();
+            with_effects.push_nodes(nodes);
+        }
+    }
+}
+
+impl<T> Ast for Option<T>
+where
+    T: Ast,
+{
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        if let Some(t) = self {
+            t.push_nodes(nodes);
+        }
+    }
+}
+
+impl<T> Ast for Box<T>
+where
+    T: Ast,
+{
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        (**self).push_nodes(nodes);
+    }
+}
+
+impl Ast for ast::Separated<ast::LambdaParameter> {
+    fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
+        for (i, param) in self.iter().enumerate() {
+            if i > 0 {
+                nodes.comma();
+                nodes.space();
+            }
+            nodes.token(param.var.token);
+            if let Some(ty) = &param.ty {
+                nodes.space();
+                ty.push_nodes(nodes);
+            }
+        }
+    }
+}
+
 impl Ast for ast::Expression {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
+            ast::Expression::Constant(constant) => constant.push_nodes(nodes),
+            ast::Expression::Uninit(token) => nodes.token(*token),
+            ast::Expression::Path(path) => path.push_nodes(nodes),
             ast::Expression::Block(group) => {
                 nodes.token(group.open);
-                // nodes.indent(|nodes| {
-                // });
-                nodes.line();
+                if let Some((ref lambda, tk_arrow)) = group.inner.params {
+                    nodes.space();
+                    lambda.push_nodes(nodes);
+                    nodes.space();
+                    nodes.token(tk_arrow);
+                }
+                match group.inner.stmts.elements.as_slice() {
+                    [] if !nodes.contains_comments(group.span()) => {}
+                    // [(single, _)] if !matches!(**single, ast::Expression::Use { .. }) => {
+                    //     nodes.group(false, |nodes| {
+                    //         nodes.indent_on_wrap(|nodes| {
+                    //             nodes.line_or_space();
+                    //             single.push_nodes(nodes);
+                    //             nodes.space();
+                    //             nodes.comments(group.close.span())
+                    //         });
+                    //     });
+                    // }
+                    _ => {
+                        nodes.indent(|nodes| {
+                            for expr in group.inner.stmts.iter() {
+                                nodes.line();
+                                nodes.comments(expr.span());
+                                nodes.optional_empty_line(expr.span());
+                                expr.push_nodes(nodes);
+                            }
+                            nodes.line();
+                            nodes.comments(group.close.span())
+                        });
+                    }
+                }
                 nodes.token(group.close);
             }
-            _ => {
-                // todo!()
+            ast::Expression::Enclosed(grouped) => {
+                grouped.push_nodes(nodes);
+            }
+            ast::Expression::Let {
+                tk_let,
+                var,
+                ty,
+                tk_equals,
+                value,
+            } => todo!(),
+            ast::Expression::If {
+                tk_if,
+                condition,
+                branch_true,
+                branch_false,
+            } => {
+                nodes.token(*tk_if);
+                nodes.space();
+                condition.push_nodes(nodes);
+                if let Some(tk_then) = branch_true.0 {
+                    nodes.space();
+                    nodes.token(tk_then);
+                }
+                nodes.space();
+                branch_true.1.push_nodes(nodes);
+                if let Some(branch_false) = branch_false {
+                    nodes.space();
+                    nodes.token(branch_false.0);
+                    nodes.space();
+                    branch_false.1.push_nodes(nodes);
+                }
+            }
+            ast::Expression::AssignOp(_, lhs, tk_op, rhs)
+            | ast::Expression::PredicateOp(_, lhs, tk_op, rhs)
+            | ast::Expression::MathOp(_, lhs, tk_op, rhs) => {
+                lhs.push_nodes(nodes);
+                nodes.space();
+                nodes.token(*tk_op);
+                nodes.space();
+                rhs.push_nodes(nodes);
+            }
+            ast::Expression::UnOp { tk_op, expr, .. } => {
+                nodes.token(*tk_op);
+                expr.push_nodes(nodes);
+            }
+            ast::Expression::Dereference { expr, tk_caret } => {
+                expr.push_nodes(nodes);
+                nodes.token(*tk_caret);
+            }
+            ast::Expression::Index { array, index } => {
+                array.push_nodes(nodes);
+                index.push_nodes(nodes);
+            }
+            ast::Expression::Array(group) => {
+                group.push_nodes(nodes);
+            }
+            ast::Expression::Call(call) => {
+                call.push_nodes(nodes);
+            }
+            ast::Expression::Use {
+                params,
+                tk_use,
+                call,
+                block,
+                ..
+            } => {
+                if let Some((tk_let, params, tk_equals)) = params {
+                    nodes.token(*tk_let);
+                    nodes.space();
+                    params.push_nodes(nodes);
+                    nodes.space();
+                    nodes.token(*tk_equals);
+                    nodes.space();
+                }
+                nodes.token(*tk_use);
+                nodes.space();
+                call.push_nodes(nodes);
+                for expr in block.iter() {
+                    nodes.line();
+                    nodes.comments(expr.span());
+                    nodes.optional_empty_line(expr.span());
+                    expr.push_nodes(nodes);
+                }
+            }
+            ast::Expression::Catch { tk_catch: tk, expr }
+            | ast::Expression::Discard {
+                tk_discard: tk,
+                expr,
+            }
+            | ast::Expression::Cast {
+                tk_cast: tk, expr, ..
+            } => {
+                nodes.token(*tk);
+                nodes.space();
+                expr.push_nodes(nodes);
+            }
+            ast::Expression::Raise { tk_raise, expr } => {
+                nodes.token(*tk_raise);
+                nodes.space();
+                expr.push_nodes(nodes);
             }
         }
     }

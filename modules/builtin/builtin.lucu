@@ -132,9 +132,22 @@ fun print_int(n int) = {
 	})
 }
 
+fun wait with World = {
+	let buf = use regions.ref[[1]u8, unit](---)
+	catch unfounded loop {
+		if syscall_read(0, buf[..]) == 0 then raise
+		if buf[0]^ == 10 then raise
+	}
+}
+
 fun print_str(buf ^[]u8) = {
 	trace(buf)
-	trace("\n")
+	print_ln
+}
+
+fun print_ln = {
+	let buf = use regions.ref[[1]u8, unit]([10])
+	trace(buf[..])
 }
 
 fun trace(buf ^[]u8)
@@ -179,11 +192,11 @@ fun len[T](slice ^[]T) usize
 
 fun abs(n int) int = if n >= 0 then n else -n
 
--- -- USAGE:
--- -- ```
--- -- use defer(...)
--- -- ...
--- -- ```
+-- --# USAGE:
+-- --# ```
+-- --# use defer(...)
+-- --# ...
+-- --# ```
 -- fun defer[T](fun deferred unit, fun body T) T = {
 -- 	let t = body
 -- 	deferred

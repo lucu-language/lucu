@@ -1148,4 +1148,93 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         self.context
             .append_basic_block(self.function.read().unwrap().unwrap(), name)
     }
+    pub fn build_functions_that_llvm_tries_to_call_for_some_reason(&self) {
+        let u8_ptr = self.context.ptr_type(AddressSpace::default());
+        let uptr = self.context.ptr_sized_int_type(&self.target_data, None);
+
+        let memset = self.module.add_function(
+            "memset",
+            u8_ptr.fn_type(
+                &[
+                    u8_ptr.into(),
+                    self.context.i64_type().into(), // TODO: C int
+                    uptr.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::Internal),
+        );
+
+        let start = memset.get_nth_param(0).unwrap().into_pointer_value();
+        let char = memset.get_nth_param(1).unwrap().into_int_value();
+        let size = memset.get_nth_param(2).unwrap().into_int_value();
+
+        let memset_entry = self.context.append_basic_block(memset, "");
+        let memset_init = self.context.append_basic_block(memset, "init");
+        let memset_loop = self.context.append_basic_block(memset, "loop");
+        let memset_ret = self.context.append_basic_block(memset, "end");
+
+        self.builder.position_at_end(memset_entry);
+        let char = self
+            .builder
+            .build_int_truncate(char, self.context.i8_type(), "")
+            .unwrap();
+        let end = unsafe {
+            self.builder
+                .build_gep(self.context.i8_type(), start, &[size], "end")
+                .unwrap()
+        };
+        self.builder
+            .build_unconditional_branch(memset_init)
+            .unwrap();
+
+        self.builder.position_at_end(memset_init);
+        let phi = self.builder.build_phi(u8_ptr, "current").unwrap();
+        let current = phi.as_basic_value().into_pointer_value();
+        let lhs = self.builder.build_ptr_to_int(current, uptr, "lhs").unwrap();
+        let rhs = self.builder.build_ptr_to_int(end, uptr, "rhs").unwrap();
+        let cmp = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, lhs, rhs, "cmp")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, memset_ret, memset_loop)
+            .unwrap();
+
+        self.builder.position_at_end(memset_loop);
+        self.builder.build_store(current, char).unwrap();
+        let next = unsafe {
+            self.builder
+                .build_gep(
+                    self.context.i8_type(),
+                    current,
+                    &[uptr.const_int(1, false)],
+                    "next",
+                )
+                .unwrap()
+        };
+        phi.add_incoming(&[(&start, memset_entry), (&next, memset_loop)]);
+        self.builder
+            .build_unconditional_branch(memset_init)
+            .unwrap();
+
+        self.builder.position_at_end(memset_ret);
+        self.builder.build_return(Some(&start)).unwrap();
+
+        let used_const = u8_ptr.const_array(&[
+            // guard.as_pointer_value().const_cast(u8_ptr),
+            // fail.as_global_value().as_pointer_value().const_cast(u8_ptr),
+            memset
+                .as_global_value()
+                .as_pointer_value()
+                .const_cast(u8_ptr),
+        ]);
+
+        let used = self
+            .module
+            .add_global(used_const.get_type(), None, "llvm.compiler.used");
+        used.set_linkage(Linkage::Appending);
+        used.set_section(Some("llvm.metadata"));
+        used.set_initializer(&used_const);
+    }
 }

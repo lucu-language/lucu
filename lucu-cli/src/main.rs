@@ -218,6 +218,8 @@ fn watch(cmd: CheckCommand) {
                 );
             }
 
+            llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
+
             eprintln!(" --- LLVM --- ");
             llvm.eprint();
             llvm.verify().unwrap();
@@ -234,6 +236,8 @@ fn watch(cmd: CheckCommand) {
                 .arg("-e_start")
                 .status()
                 .unwrap();
+
+            eprintln!("COMPILED");
         }
 
         // wait for changes

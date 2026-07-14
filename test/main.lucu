@@ -2,22 +2,25 @@ import "core:io"
 import "libc:types" c
 
 type Id[T] = T
-
 type Test1 = Id[u32]
 
 type Apply[M[_], T] = M[T]
-
-type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T]
-
+type ApplyApply[MM[_[_], _], M[_], T] = MM[M, T--test
+]
 type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]
 
 type Test2 = Apply[Id, u32]
-
 type CString[r] = c.string[r]
-
 type Slice[T, r] = ^@r []T
+-- test
+fun test(
 
-fun test(param ^u8) = {
+--comment
+param ^u8
+-- wha
+-- 
+) = {
+-- bababooey
 }
 
 fun _start ! with World = {

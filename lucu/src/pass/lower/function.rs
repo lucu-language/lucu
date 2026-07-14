@@ -547,7 +547,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     ast::Constant::Path(_) => {
                         panic!("ICE: constant path expression found instead of path expression")
                     }
-                    ast::Constant::Integer(int) => {
+                    ast::Constant::Integer(ref int) => {
                         let TypeEnum::Integer(_) = self.lower.tt[ty] else {
                             todo!("error")
                         };

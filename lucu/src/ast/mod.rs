@@ -54,7 +54,7 @@ impl Identifier {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Integer {
     pub token: Token,
     pub value: u64,

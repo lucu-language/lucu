@@ -188,15 +188,15 @@ impl mu::Typed for Callable {
                 tt.function(tt.insert_tuple([ptr_slice, usize]), ptr)
             }
             Callable::ArrayIndex { ty, size } => {
+                let arr = tt.base(Base::Array(ty, size));
+                let usize = tt.base(Base::USIZE);
+                tt.function(tt.insert_tuple([arr, usize]), ty)
+            }
+            Callable::PointerArrayIndex { ty, size } => {
                 let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
                 let usize = tt.base(Base::USIZE);
                 let ptr = tt.base(Base::Pointer(ty));
                 tt.function(tt.insert_tuple([ptr_array, usize]), ptr)
-            }
-            Callable::PointerArrayIndex { ty, size } => {
-                let arr = tt.base(Base::Array(ty, size));
-                let usize = tt.base(Base::USIZE);
-                tt.function(tt.insert_tuple([arr, usize]), ty)
             }
             Callable::MultiPointerSlice { ty } => {
                 let multi_ptr = tt.base(Base::MultiPointer(ty));

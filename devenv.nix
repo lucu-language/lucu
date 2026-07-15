@@ -24,14 +24,14 @@
 
   env.LLVM_SYS_211_PREFIX = "${pkgs.llvmPackages_21.libllvm.dev}";
 
-  git-hooks.hooks = {
-    # rustfmt.enable = true;
-    # clippy.enable = true;
-    tests = {
-      enable = true;
-      entry = "cargo test";
-      files = "\\.(rs|lucu)$";
-      pass_filenames = false;
-    };
-  };
+  # git-hooks.hooks = {
+  #   # rustfmt.enable = true;
+  #   # clippy.enable = true;
+  #   tests = {
+  #     enable = true;
+  #     entry = "cargo test";
+  #     files = "\\.(rs|lucu)$";
+  #     pass_filenames = false;
+  #   };
+  # };
 }

@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "lucu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "lucu-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstream",
  "asta-annotate",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "lucu-fmt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "asta-pretty",
  "lucu",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "lucu-llvm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "compact_str",
  "inkwell",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "lucu-lsp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "line-column 0.3.1",
  "lucu",
@@ -804,11 +804,11 @@ dependencies = [
 
 [[package]]
 name = "mu"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "mu-llvm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "im",
  "inkwell",

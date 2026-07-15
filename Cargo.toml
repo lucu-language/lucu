@@ -1,6 +1,22 @@
 [workspace]
 resolver = "3"
-members = ["lucu", "lucu-cli", "asta-annotate", "asta-pretty", "lucu-fmt", "lucu-lsp", "asta-handle-map", "mu", "mu-llvm", "lucu-llvm"]
+members = [
+  # packages using a unified version
+  "lucu",
+  "lucu-llvm",
+  "lucu-cli",
+  "lucu-fmt",
+  "lucu-lsp",
+  "mu",
+  "mu-llvm",
+  # libraries using their own versioning scheme
+  "asta-annotate",
+  "asta-pretty",
+  "asta-handle-map",
+]
+
+[workspace.package]
+version = "0.2.0"
 
 [workspace.dependencies]
 inkwell = { version = "0.9.0", features = ["llvm21-1"] }

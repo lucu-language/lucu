@@ -231,10 +231,10 @@ impl ModuleGraph {
             .iter()
             .map(|v| match v.as_slice() {
                 &[v] if self.graph.contains_edge(v, v) => {
-                    todo!("Cyclic graph: self-referential!")
+                    todo!("error: cyclic graph: self-referential")
                 }
                 &[v] => Result::new(&self.graph[v]),
-                _ => todo!("Cyclic graph!"),
+                _vs => todo!("error: cyclic graph"),
             })
             .collect()
     }

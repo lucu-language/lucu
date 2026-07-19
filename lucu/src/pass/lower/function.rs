@@ -118,7 +118,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         decl: &'a ast::FunctionDeclaration,
         def: &'a ast::FunctionDefinition,
     ) -> Result<mu::Function> {
-        println!("{name} :: {}", sig.display(self.lower.tt));
         match def {
             ast::FunctionDefinition::Expression(body) => {
                 let ty = self.function_type(sig, Some(decl));

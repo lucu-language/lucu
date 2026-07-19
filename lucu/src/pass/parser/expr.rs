@@ -269,7 +269,7 @@ impl<'a> Parser<'a> {
             );
             match (from, to) {
                 (None, None) =>
-                    todo!("error"),
+                    self.error(Expected::Index),
                 (Some(single), None) =>
                     Result::new(ast::Index::Single(single)),
                 (from, Some((range, to))) => self
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
                         TokenEnum::Open(Group::Brace) => self
                             .grouped(Group::Brace, Self::block)
                             .map(|block| (None, Box::new(ast::Expression::Block(block)))),
-                        _ => todo!("error")
+                        _ => self.error(Expected::IfBlock),
                     };
                     branch_false <- self.consume_next(Keyword::Else, |p| p.expression(true));
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });

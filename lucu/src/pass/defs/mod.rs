@@ -213,10 +213,10 @@ impl Definitions {
         for compound in kosaraju_scc(&graph) {
             match compound.as_slice() {
                 &[v] if graph.contains_edge(v, v) => {
-                    todo!("Cyclic graph: self-referential!")
+                    todo!("error: cyclic graph: self-referential")
                 }
                 [_] => {}
-                _ => todo!("Cyclic graph!"),
+                _vs => todo!("error: cyclic graph!"),
             }
         }
 

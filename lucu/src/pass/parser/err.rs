@@ -19,6 +19,8 @@ pub enum Expected {
     PointerRegion,
     Effect,
     Expression,
+    Index,
+    IfBlock,
 }
 
 impl Diagnostic for Expected {
@@ -38,6 +40,8 @@ impl Diagnostic for Expected {
             Expected::PointerRegion => Some("expected '@', 'mut', or a type".into()),
             Expected::Effect => Some("expected an effect".into()),
             Expected::Expression => Some("expected an expression".into()),
+            Expected::Index => Some("expected '..' or an expression".into()),
+            Expected::IfBlock => Some("expected 'then' or '{'".into()),
         }
     }
 }

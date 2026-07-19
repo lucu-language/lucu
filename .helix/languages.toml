@@ -6,9 +6,9 @@ file-types = ["lucu"]
 comment-tokens = ["--", "--#"]
 indent = { tab-width = 4, unit = "    " }
 formatter = { command = "cargo", args = ["run", "--bin", "lucu-fmt"] }
-language-servers = ["lucu-lsp"]
+# language-servers = ["lucu-lsp"]
 roots = ["main.lucu"]
 
-[language-server.lucu-lsp]
-command = "cargo"
-args = ["run", "--bin", "lucu-lsp"]
+# [language-server.lucu-lsp]
+# command = "cargo"
+# args = ["run", "--bin", "lucu-lsp"]

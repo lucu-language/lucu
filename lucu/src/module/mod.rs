@@ -9,7 +9,7 @@ use path_clean::{PathClean, clean};
 #[cfg(feature = "watcher")]
 pub mod watcher;
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]
 pub struct Library(CompactString);
 
 impl Library {
@@ -44,7 +44,7 @@ impl fmt::Display for Library {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub struct Module {
     pub library: Library,
     pub relative_path: CompactString,

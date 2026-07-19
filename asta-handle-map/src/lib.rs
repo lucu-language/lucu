@@ -160,6 +160,26 @@ impl<T, const BITS: u32, const CHUNKS: usize, S> HandleSet<T, BITS, CHUNKS, S> {
     {
         self.0.get_or_insert(value, |_| ()).0
     }
+    pub fn intern_cloned<'a>(&'a self, value: &T) -> &'a T
+    where
+        T: Hash + Equivalent<T> + Clone,
+        S: BuildHasher,
+    {
+        let idx = self
+            .get_index_of(value)
+            .unwrap_or_else(|| self.insert(value.clone()));
+        unsafe { self.get_unchecked(idx) }
+    }
+    pub fn intern(&self, value: T) -> &T
+    where
+        T: Hash + Equivalent<T>,
+        S: BuildHasher,
+    {
+        let idx = self
+            .get_index_of(&value)
+            .unwrap_or_else(|| self.insert(value));
+        unsafe { self.get_unchecked(idx) }
+    }
     pub fn get_index_of<Q>(&self, key: &Q) -> Option<u32>
     where
         Q: ?Sized + Hash + Equivalent<T>,

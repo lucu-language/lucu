@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use asta_annotate::Annotate;
+use asta_handle_map::HandleSet;
 use facet::Facet;
 use facet_args as args;
 use inkwell::OptimizationLevel;
@@ -125,17 +126,21 @@ fn watch(cmd: CheckCommand) {
 
     let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));
 
+    let modules = HandleSet::<Module>::new();
     let mut graph = ModuleGraph::new();
-    graph.insert_or_update(watcher.modules(), Module::MAIN);
+    graph.insert_or_update(watcher.modules(), const { &Module::MAIN }, |m| {
+        modules.intern_cloned(m)
+    });
 
     let tt = TypeTable::new();
     let mu_tt = unsafe { mu::table::TypeTable::new() };
     let mu_et = unsafe { mu::table::ExpressionTable::new() };
 
     loop {
-        if cmd.debug {
-            println!("{}", graph.dot());
-        }
+        // if cmd.debug {
+        println!("---");
+        println!("{}", graph.dot());
+        // }
 
         let mut functions = Vec::new();
         for module in graph.postorder().unwrap() {
@@ -169,7 +174,6 @@ fn watch(cmd: CheckCommand) {
                 }
 
                 if let Some(mu) = stages.mu(&graph, &tt, &mu_tt, &mu_et) {
-                    println!("MU OF {}", module);
                     functions.extend(mu.functions.iter().cloned())
                 }
 
@@ -184,7 +188,7 @@ fn watch(cmd: CheckCommand) {
             tt.eprint_lengths();
         }
 
-        if !graph.problems().next().is_some() {
+        if cmd.debug && !graph.problems().next().is_some() {
             // owo no problems
             // COMPILE
             Target::initialize_native(&InitializationConfig::default()).unwrap();
@@ -244,9 +248,11 @@ fn watch(cmd: CheckCommand) {
         let changes = watcher.await_change();
         for changed in changes {
             if graph.contains(&changed) {
-                graph.insert_or_update(watcher.modules(), changed);
+                graph.insert_or_update(watcher.modules(), modules.intern(changed), |m| {
+                    modules.intern_cloned(m)
+                });
             }
         }
-        // graph.retain_connected(&Module::MAIN);
+        graph.retain_connected(&Module::MAIN);
     }
 }

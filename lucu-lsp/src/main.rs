@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
+use asta_handle_map::HandleSet;
 use lucu::error::{Diagnostic as _, HasProblems, ProblemLevel, Problems};
 use lucu::module::{Libraries, Library, LibraryDir, Module, Modules, UnknownModule, import_name};
 use lucu::pass::ModuleGraph;
@@ -68,10 +69,12 @@ impl Modules for WorkspaceFiles {
     }
 }
 
+static MODULES: LazyLock<HandleSet<Module>> = LazyLock::new(Default::default);
+
 #[derive(Debug)]
 struct Workspace {
     files: WorkspaceFiles,
-    graph: ModuleGraph,
+    graph: ModuleGraph<'static>,
     order: OnceLock<std::result::Result<Vec<Module>, Problems>>,
 }
 
@@ -286,7 +289,11 @@ impl LanguageServer for Backend {
             self.log(&format!("opened {}", module)).await;
 
             // update module
-            workspace.graph.insert_or_update(&workspace.files, module);
+            workspace.graph.insert_or_update(
+                &workspace.files,
+                MODULES.intern_cloned(&module),
+                |m| MODULES.intern_cloned(m),
+            );
             workspace.order = OnceLock::new();
             drop(write);
 
@@ -317,7 +324,11 @@ impl LanguageServer for Backend {
             self.log(&format!("edited {}", module)).await;
 
             // update module
-            workspace.graph.insert_or_update(&workspace.files, module);
+            workspace.graph.insert_or_update(
+                &workspace.files,
+                MODULES.intern_cloned(&module),
+                |m| MODULES.intern_cloned(m),
+            );
             workspace.order = OnceLock::new();
             drop(write);
 
@@ -336,7 +347,11 @@ impl LanguageServer for Backend {
             self.log(&format!("closed {}", module)).await;
 
             // update module
-            workspace.graph.insert_or_update(&workspace.files, module);
+            workspace.graph.insert_or_update(
+                &workspace.files,
+                MODULES.intern_cloned(&module),
+                |m| MODULES.intern_cloned(m),
+            );
             workspace.order = OnceLock::new();
             drop(write);
 

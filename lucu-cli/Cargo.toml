@@ -11,6 +11,7 @@ mu = { path = "../mu" }
 mu-llvm = { path = "../mu-llvm" }
 inkwell = { workspace = true }
 asta-annotate = { path = "../asta-annotate" }
+asta-handle-map = { path = "../asta-handle-map" }
 
 anstream = "0.6.21"
 facet = "0.43.2"

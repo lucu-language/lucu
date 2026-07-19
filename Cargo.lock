@@ -745,6 +745,7 @@ version = "0.2.0"
 dependencies = [
  "anstream",
  "asta-annotate",
+ "asta-handle-map",
  "compact_str",
  "facet",
  "facet-args",
@@ -778,6 +779,7 @@ dependencies = [
 name = "lucu-lsp"
 version = "0.2.0"
 dependencies = [
+ "asta-handle-map",
  "line-column 0.3.1",
  "lucu",
  "tokio",

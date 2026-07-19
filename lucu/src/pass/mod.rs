@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
 use petgraph::dot::Dot;
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graphmap::DiGraphMap;
 use petgraph::visit::{
     Data, EdgeRef, GraphProp, IntoEdgeReferences, IntoNodeReferences, NodeIndexable,
 };
@@ -52,7 +52,7 @@ impl HasProblems for Stages {
     }
 }
 
-impl HasProblems for ModuleGraph {
+impl<'a> HasProblems for ModuleGraph<'a> {
     fn problems(&self) -> impl Iterator<Item = &Problem> {
         self.cache.0.values().flat_map(HasProblems::problems)
     }
@@ -212,34 +212,33 @@ impl ModuleCache {
 }
 
 #[derive(Debug, Default)]
-pub struct ModuleGraph {
-    nodes: HashMap<Module, NodeIndex>,
+pub struct ModuleGraph<'a> {
     cache: ModuleCache,
-    graph: DiGraph<Module, Import>,
+    graph: DiGraphMap<&'a Module, Import>,
 }
 
-impl HeaderQuery for ModuleGraph {
+impl<'a> HeaderQuery for ModuleGraph<'a> {
     fn header(&self, module: &Module, tt: &TypeTable) -> Option<&Header> {
         self.stages(module)
             .and_then(|stages| stages.header(self, tt))
     }
 }
 
-impl ModuleGraph {
-    pub fn postorder(&self) -> Result<Vec<&Module>> {
+impl<'a> ModuleGraph<'a> {
+    pub fn postorder(&self) -> Result<Vec<&'a Module>> {
         kosaraju_scc(&self.graph)
             .iter()
             .map(|v| match v.as_slice() {
                 &[v] if self.graph.contains_edge(v, v) => {
                     todo!("error: cyclic graph: self-referential")
                 }
-                &[v] => Result::new(&self.graph[v]),
+                &[v] => Result::new(v),
                 _vs => todo!("error: cyclic graph"),
             })
             .collect()
     }
-    pub fn modules(&self) -> impl Iterator<Item = &Module> {
-        self.graph.node_weights()
+    pub fn modules(&self) -> impl Iterator<Item = &'a Module> {
+        self.graph.nodes()
     }
     pub fn stages(&self, module: &Module) -> Option<&Stages> {
         self.cache.0.get(module)
@@ -261,109 +260,124 @@ impl ModuleGraph {
         Self::default()
     }
     pub fn contains(&self, module: &Module) -> bool {
-        self.nodes.contains_key(module)
+        self.graph.contains_node(module)
     }
     pub fn retain_connected(&mut self, main: &Module) {
         // FIXME: Node indices get changed when a node gets removed!
 
-        let Some(&root) = self.nodes.get(main) else {
+        if !self.contains(main) {
             // we don't even contain the main module
             // so we can reset all state
             *self = Self::new();
             return;
-        };
+        }
 
         let mut space = DfsSpace::new(&self.graph);
         let unconnected = self
             .graph
-            .node_indices()
-            .filter(|&node| !has_path_connecting(&self.graph, root, node, Some(&mut space)))
+            .nodes()
+            .filter(|&node| !has_path_connecting(&self.graph, main, node, Some(&mut space)))
             .collect::<Vec<_>>();
         for node in unconnected {
-            let module = self
-                .graph
-                .remove_node(node)
-                .expect("ICE: graph node index has no node");
-            self.nodes.remove(&module);
-            self.cache.0.remove(&module);
+            self.graph.remove_node(node);
+            self.cache.0.remove(node);
         }
     }
-    pub fn insert_or_update(&mut self, resolver: &impl Modules, module: Module) {
+    pub fn insert_or_update(
+        &mut self,
+        resolver: &impl Modules,
+        module: &'a Module,
+        interner: impl Fn(&Module) -> &'a Module,
+    ) {
         let mut reimport_nodes = Vec::new();
 
-        let exists = resolver.exists(&module).is_ok();
+        let exists = resolver.exists(module).is_ok();
 
         // reset our cache accordingly
-        match self.nodes.get(&module).copied() {
-            Some(node) => {
-                if self.cache.exists(&module) != exists {
-                    // reset the imports of modules importing this
-                    let parent_nodes = self
-                        .graph
-                        .edges_directed(node, petgraph::Direction::Incoming)
-                        .map(|edge| edge.source());
-                    for parent_node in parent_nodes {
-                        let parent = &self.graph[parent_node];
-                        let stages = self
-                            .cache
-                            .get_mut(parent)
-                            .expect("ICE: module is in node map but has no cache");
-                        stages.reset_imports();
-                        reimport_nodes.push(parent_node);
-                    }
-                }
-
-                if exists {
-                    // check if the import list changed
+        if self.contains(module) {
+            if self.cache.exists(module) != exists {
+                // reset the imports of modules importing this
+                let parent_nodes = self
+                    .graph
+                    .edges_directed(module, petgraph::Direction::Incoming)
+                    .map(|edge| edge.source());
+                for parent in parent_nodes {
                     let stages = self
                         .cache
-                        .get_mut(&module)
+                        .get_mut(parent)
                         .expect("ICE: module is in node map but has no cache");
-
-                    let old_imports = stages.resolve_imports(resolver).cloned();
-                    stages.reset(resolver);
-                    let new_imports = stages.resolve_imports(resolver);
-
-                    if old_imports.as_ref() != new_imports {
-                        reimport_nodes.push(node);
-                    }
-                } else {
-                    // remove from graph
-                    // if modules actually depend on this, it will be reimported again
-                    self.nodes.remove(&module);
-                    self.cache.remove(&module);
-                    self.graph.remove_node(node);
+                    stages.reset_imports();
+                    reimport_nodes.push(parent);
                 }
             }
-            None if exists => {
-                let node = self.graph.add_node(module.clone());
-                self.nodes.insert(module, node);
-                reimport_nodes.push(node)
+
+            if exists {
+                // check if the import list changed
+                let stages = self
+                    .cache
+                    .get_mut(module)
+                    .expect("ICE: module is in node map but has no cache");
+
+                let old_imports = stages.resolve_imports(resolver).cloned();
+                stages.reset(resolver);
+                let new_imports = stages.resolve_imports(resolver);
+
+                if old_imports.as_ref() != new_imports {
+                    reimport_nodes.push(module);
+                }
+            } else {
+                // remove from graph
+                // if modules actually depend on this, it will be reimported again
+                self.cache.remove(module);
+                self.graph.remove_node(module);
             }
-            None => {}
+        } else if exists {
+            let node = self.graph.add_node(module);
+            reimport_nodes.push(node)
         }
 
         // (re)import changed nodes
-        while let Some(parent_node) = reimport_nodes.pop() {
-            self.clear_edges(parent_node);
+        while let Some(parent) = reimport_nodes.pop() {
+            self.clear_edges(parent);
 
-            let parent = self.graph.node_weight(parent_node).unwrap().clone();
-            let stages = self.cache.get_or_insert(resolver, &parent);
+            let stages = self.cache.get_or_insert(resolver, parent);
             let imports = stages.resolve_imports(resolver);
 
             for (import, child) in imports.into_iter().flatten() {
-                let child_node = *self.nodes.entry(child.clone()).or_insert_with(|| {
-                    let child_node = self.graph.add_node(child.clone());
-                    reimport_nodes.push(child_node);
-                    child_node
-                });
-                self.graph.add_edge(parent_node, child_node, import.clone());
+                let child = interner(child);
+                if !self.graph.contains_node(child) {
+                    reimport_nodes.push(child);
+                }
+                if let Some(edge) = self.graph.edge_weight_mut(parent, child) {
+                    match (&edge, import.clone()) {
+                        (
+                            Import::Implicit,
+                            Import::Named(compact_string) | Import::Both(compact_string),
+                        ) => *edge = Import::Both(compact_string),
+                        (
+                            Import::Named(compact_string) | Import::Both(compact_string),
+                            Import::Implicit,
+                        ) => {
+                            // TODO: can this be done without cloning?
+                            *edge = Import::Both(compact_string.clone())
+                        }
+                        (Import::Implicit, Import::Implicit) => {
+                            todo!("ICE: imported same module implicitly twice")
+                        }
+                        (
+                            Import::Named(_) | Import::Both(_),
+                            Import::Named(_) | Import::Both(_),
+                        ) => todo!("ICE: imported same module twice"),
+                    }
+                } else {
+                    self.graph.add_edge(parent, child, import.clone());
+                }
             }
         }
     }
-    fn clear_edges(&mut self, node: NodeIndex) {
-        while let Some(edge) = self.graph.edges(node).next() {
-            self.graph.remove_edge(edge.id());
+    fn clear_edges(&mut self, node: &'a Module) {
+        while let Some((a, b, _)) = self.graph.edges(node).next() {
+            self.graph.remove_edge(a, b);
         }
     }
 }

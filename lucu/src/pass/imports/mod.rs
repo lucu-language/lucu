@@ -13,13 +13,14 @@ use crate::tokens::is_valid_identifier;
 pub enum Import {
     Implicit,
     Named(CompactString),
+    Both(CompactString),
 }
 
 impl Display for Import {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Import::Implicit => Ok(()),
-            Import::Named(compact_string) => compact_string.fmt(f),
+            Import::Named(compact_string) | Import::Both(compact_string) => compact_string.fmt(f),
         }
     }
 }

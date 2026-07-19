@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 line-column = "0.3.1"
 lucu = { path = "../lucu" }
+asta-handle-map = { path = "../asta-handle-map" }
 tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros", "io-std", "sync"] }
 tower-lsp-server = "0.23.0"

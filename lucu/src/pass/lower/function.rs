@@ -30,6 +30,7 @@ struct MuLower<'a, 'scope> {
     tt: &'a mu::table::TypeTable,
     et: &'a mu::table::ExpressionTable,
     vars: im::Vector<Var<'a>>,
+    markers: im::Vector<Effect>,
 }
 
 impl<'a, 'scope> MuLower<'a, 'scope> {
@@ -39,6 +40,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             tt: self.tt,
             et: self.et,
             vars: self.vars.clone(),
+            markers: self.markers.clone(),
         }
     }
 }
@@ -71,6 +73,7 @@ impl mu::Module {
             tt: mu_tt,
             et: mu_et,
             vars: im::Vector::new(),
+            markers: im::Vector::new(),
         };
         query
             .header(module, tt)
@@ -170,24 +173,28 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 .thunk
                 .effect
                 .effects(me.lower.tt)
-                .map(|e| me.effect(e).1),
+                .filter_map(|e| me.effect(e).map(|(_, t)| t)),
         ));
-        let params = Iterator::chain(
-            Iterator::zip(
-                params.into_iter().map(|(param, _ty)| {
-                    // TODO: check user given type
-                    param.as_str()
-                }),
-                sig_val
-                    .params
-                    .iter()
-                    .flat_map(|params| params.iter().copied()),
-            )
-            .map(|(name, param)| Var::Named(name, param)),
-            sig_val.thunk.effect.effects(me.lower.tt).map(Var::Effect),
-        );
+        let params = Iterator::zip(
+            params.into_iter().map(|(param, _ty)| {
+                // TODO: check user given type
+                param.as_str()
+            }),
+            sig_val
+                .params
+                .iter()
+                .flat_map(|params| params.iter().copied()),
+        )
+        .map(|(name, param)| Var::Named(name, param));
         for param in params {
             me.vars.push_front(param);
+        }
+        for effect in sig_val.thunk.effect.effects(me.lower.tt) {
+            if effect.is_marker(me.lower.tt) {
+                me.markers.push_front(effect);
+            } else {
+                me.vars.push_front(Var::Effect(effect));
+            }
         }
         me.statements(body, Some(sig_val.thunk.returns))
             .map(|(expr, _)| self.et.lambda(from, expr))
@@ -200,6 +207,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Var::Named(n, ty) if n == name => Some((index as u32, ty)),
                 _ => None,
             })
+    }
+    fn has_marker_effect(&self, effect: Effect) -> bool {
+        self.markers.contains(&effect)
     }
     fn find_effect(&self, effect: Effect) -> Option<u32> {
         self.vars
@@ -270,7 +280,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             let ty = PathType::Function(sig, generics);
                             match effect {
                                 Some(e) => match self.find_effect(e) {
-                                    Some(index) => todo!(),
+                                    Some(_index) => todo!(),
                                     None => todo!("error: effect not on stack"),
                                 },
                                 None => Result::new((
@@ -427,29 +437,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 let mut args = args.into_iter();
                 let val = args.next().unwrap();
-                let mu::ExpressionEnum::Abstract(_, body) = self.et[args.next().unwrap()] else {
-                    panic!("ICE: ref arg is not a function")
-                };
+                let lambda = args.next().unwrap();
                 let ty = self.r#type(ty);
                 let to = self.r#type(to);
-                self.et.call(
-                    mu::Callable::LetReference { ty, to },
-                    [
-                        val,
-                        self.et.lambda(
-                            self.tt.insert_tuple([self.tt.base(mu::Base::Pointer(ty))]),
-                            self.et.let_chain(
-                                [
-                                    // Read
-                                    self.et.construct_unit(self.tt),
-                                    // Write
-                                    self.et.construct_unit(self.tt),
-                                ],
-                                body,
-                            ),
-                        ),
-                    ],
-                )
+                self.et
+                    .call(mu::Callable::LetReference { ty, to }, [val, lambda])
             }
             IntrinsicFunction::Alloca => {
                 let Term::Type(ty) = generics[0].term else {
@@ -460,29 +452,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 let mut args = args.into_iter();
                 let val = args.next().unwrap();
-                let mu::ExpressionEnum::Abstract(_, body) = self.et[args.next().unwrap()] else {
-                    panic!("ICE: alloca arg is not a function")
-                };
+                let lambda = args.next().unwrap();
                 let ty = self.r#type(ty);
                 let to = self.r#type(to);
-                self.et.call(
-                    mu::Callable::LetAlloca { ty, to },
-                    [
-                        val,
-                        self.et.lambda(
-                            self.tt.insert_tuple([self.tt.base(mu::Base::Pointer(ty))]),
-                            self.et.let_chain(
-                                [
-                                    // Read
-                                    self.et.construct_unit(self.tt),
-                                    // Write
-                                    self.et.construct_unit(self.tt),
-                                ],
-                                body,
-                            ),
-                        ),
-                    ],
-                )
+                self.et
+                    .call(mu::Callable::LetAlloca { ty, to }, [val, lambda])
             }
             IntrinsicFunction::Link => todo!(),
             IntrinsicFunction::Asm | IntrinsicFunction::AsmPure => {
@@ -542,13 +516,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 else {
                     panic!("ICE: unfounded arg is not a function")
                 };
-                self.et.let_chain(
-                    [
-                        // Div
-                        self.et.construct_unit(self.tt),
-                    ],
-                    body,
-                )
+                body
             }
             IntrinsicFunction::Trace => {
                 let mut args = args.into_iter();
@@ -1164,7 +1132,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .thunk
             .effect
             .effects(self.lower.tt)
-            .map(|e| self.effect(e));
+            .filter_map(|e| self.effect(e));
 
         let params = val
             .params
@@ -1198,21 +1166,21 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
         mu::FunctionType::new(from, to, self.tt)
     }
-    fn effect(&self, e: Effect) -> (&'a str, mu::Type) {
+    fn effect(&self, e: Effect) -> Option<(&'a str, mu::Type)> {
         match self.lower.tt[e] {
             EffectEnum::Generic(_) => todo!(),
-            EffectEnum::Item(ref item) => todo!(),
-            EffectEnum::Read(_) => ("read", self.tt.unit()),
-            EffectEnum::Write(_) => ("write", self.tt.unit()),
-            EffectEnum::Divergent => ("div", self.tt.unit()),
-            EffectEnum::World => ("world", self.tt.unit()),
+            EffectEnum::Item(ref _item) => todo!(),
+            EffectEnum::Read(_)
+            | EffectEnum::Write(_)
+            | EffectEnum::Divergent
+            | EffectEnum::World => None,
             EffectEnum::Row(_) => panic!("ICE: trying to get type of effect ROW"),
         }
     }
     fn r#type(&self, ty: Type) -> mu::Type {
         match self.lower.tt[ty] {
             TypeEnum::Generic(_) => todo!(),
-            TypeEnum::Item(ref item) => todo!(),
+            TypeEnum::Item(ref _item) => todo!(),
             TypeEnum::Integer(integer) => self.tt.base(mu::Base::Integer(integer)),
             TypeEnum::Boolean => self.tt.bool(),
             TypeEnum::Unit => self.tt.unit(),

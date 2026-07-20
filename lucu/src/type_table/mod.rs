@@ -355,6 +355,14 @@ impl Effect {
             _ => slice::from_ref(self).iter().copied()
         }
     }
+    pub fn is_marker(&self , tt: &TypeTable) -> bool {
+        match &tt[*self] {
+            EffectEnum::Item(_) => false,
+            EffectEnum::Read(_) | EffectEnum::Write(_) | EffectEnum::Divergent | EffectEnum::World => true,
+            EffectEnum::Generic(_) => panic!("ICE: asked if effect generic is a marker"),
+            EffectEnum::Row(_) => panic!("ICE: asked if effect row is a marker"),
+        }
+    }
 }
 
 impl Index<Type> for TypeTable {

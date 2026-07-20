@@ -1,4 +1,5 @@
 use std::iter;
+use std::path::Path;
 use std::sync::Arc;
 
 use compact_str::{CompactString, ToCompactString};
@@ -36,6 +37,7 @@ struct MuLower<'a, 'scope> {
     vars: im::Vector<Var<'a>>,
     markers: im::Vector<Effect>,
 
+    path: Option<&'a Path>,
     source: &'a str,
     caller_location: Effect,
 }
@@ -44,11 +46,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn reborrow<'short>(&'short mut self) -> MuLower<'a, 'short> {
         MuLower {
             lower: self.lower.reborrow(),
-            source: self.source,
+
             tt: self.tt,
             et: self.et,
             vars: self.vars.clone(),
             markers: self.markers.clone(),
+
+            path: self.path,
+            source: self.source,
             caller_location: self.caller_location,
         }
     }
@@ -58,6 +63,7 @@ impl mu::Module {
     pub fn from(
         query: &impl HeaderQuery,
         module: &Module,
+        path: Option<&Path>,
         source: &str,
         ast: &ast::Module,
         imports: &Imports,
@@ -80,11 +86,14 @@ impl mu::Module {
                 implicit_region_offset: 0,
                 implicit_effects: None,
             },
-            source,
+
             tt: mu_tt,
             et: mu_et,
             vars: im::Vector::new(),
             markers: im::Vector::new(),
+
+            path,
+            source,
             caller_location: tt.insert_effect(EffectEnum::Item(Item {
                 module: Module::BUILTIN,
                 name: CompactString::const_new("CallerLocation"),
@@ -359,8 +368,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             panic!("ICE: caller location effect function does not return a mu product")
         };
 
-        // TODO: we need access to Modules here to get the proper path
-        let path = self.lower.module.path_with_extension();
+        let path = match self.path {
+            Some(path) => path.to_string_lossy().to_compact_string(),
+            None => self.lower.module.to_compact_string(),
+        };
         let (line, column) = line_column::line_column(self.source, call.span().start as usize);
 
         self.et.construct(

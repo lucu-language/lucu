@@ -7,6 +7,7 @@ pub mod parser;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use petgraph::algo::{DfsSpace, has_path_connecting, kosaraju_scc};
@@ -31,6 +32,7 @@ use crate::{ast, mu};
 #[derive(Debug, Default)]
 pub struct Stages {
     module: Module,
+    path: Option<PathBuf>,
     source: Option<String>,
 
     tokens: Lazy<Box<[Token]>>,
@@ -95,6 +97,7 @@ impl Stages {
     pub fn new(module: Module, resolver: &impl Modules) -> Self {
         Self {
             source: resolver.contents(&module),
+            path: resolver.relative_path(&module),
             module,
             ..Self::default()
         }
@@ -179,6 +182,7 @@ impl Stages {
             Some(mu::Module::from(
                 graph,
                 &self.module,
+                self.path.as_deref(),
                 source,
                 ast,
                 imports,

@@ -41,8 +41,8 @@ impl fmt::Display for Integer {
                 match (signed, size) {
                     (_, IntSize::Exact(size)) => write!(f, "{prefix}{size}"),
 
-                    (_, IntSize::Size) => write!(f, "{prefix}Size"),
-                    (_, IntSize::Address) => write!(f, "{prefix}Ptr"),
+                    (_, IntSize::Size) => write!(f, "{c_prefix}Size"),
+                    (_, IntSize::Address) => write!(f, "{c_prefix}Addr"),
                     (_, IntSize::Register) => write!(f, "{c_prefix}Int"),
 
                     (true, IntSize::CChar) => write!(f, "c.SChar"),

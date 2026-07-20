@@ -115,8 +115,6 @@ fun wait with World = {
 
 -- printing
 
-fun apply(val size, fun body(val size)) = body(val)
-
 fun trace(buf ^[]u8)
 	= #intrinsic
 
@@ -133,7 +131,7 @@ fun trace_int(n int) = {
 
 	let remaining = use regions.ref[int, unit](abs(n))
 
-	let start = use apply(handle {
+	let start size = handle {
 		let current = use regions.ref[size, size](20)
 		unfounded loop {
 			buf[current^]^ = '0' + #trunc (remaining^ % 10)
@@ -143,7 +141,7 @@ fun trace_int(n int) = {
 			}
 			current^ -= 1
 		}
-	})
+	}
 
 	trace(if n < 0 {
 		buf[start - 1]^ = '-'

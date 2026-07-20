@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use compact_str::{CompactString, ToCompactString};
+use do_notation::m;
 use itertools::Either;
 
 use crate::ast;
@@ -221,8 +222,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 me.vars.push_front(Var::Effect(effect));
             }
         }
-        me.statements(body, Some(sig_val.thunk.returns))
-            .map(|(expr, _)| self.et.lambda(from, expr))
+        me.statements(
+            &mut body.into_iter().peekable(),
+            Some(sig_val.thunk.returns),
+        )
+        .map(|(expr, _)| self.et.lambda(from, expr))
     }
     fn find_named(&self, name: &str) -> Option<(u32, FunctionParameter)> {
         self.vars
@@ -328,7 +332,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                                 self.et.member(mu_effect, function_index as u32);
                                             Either::Left(mu_function)
                                         }
-                                        None => todo!("error: effect not on stack"),
+                                        None => {
+                                            // TODO: global handlers
+                                            todo!("{}", e.display(self.lower.tt))
+                                        }
                                     },
                                     None => match def {
                                         FunctionDefinition::Intrinsic(i) => Either::Right(i),
@@ -810,7 +817,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     todo!("error")
                 }
                 let stmts = block.inner.stmts.iter().map(|e| &**e);
-                self.reborrow().statements(stmts, expected)
+                self.reborrow().statements(&mut stmts.peekable(), expected)
             }
             ast::Expression::Enclosed(expr) => self.expression(&expr.inner, expected),
             ast::Expression::Cast { op, expr, .. } => {
@@ -1176,30 +1183,51 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     }
     fn statements(
         &mut self,
-        stmts: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
+        stmts: &mut iter::Peekable<impl Iterator<Item = &'a ast::Expression>>,
         expected: Option<Type>,
     ) -> Result<(mu::Expression, Type)> {
-        // TODO: manage Let expressions from here
         let unit_t = self.lower.tt.insert_type(TypeEnum::Unit);
-        let stmts = stmts.into_iter();
-        let len = stmts.len();
-        stmts
-            .enumerate()
-            .map(|(i, expr)| {
-                let expected = if i == len - 1 { expected } else { Some(unit_t) };
-                self.expression(expr, expected)
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(|mut exprs| {
-                let (last, ty) = exprs
-                    .pop()
-                    .unwrap_or_else(|| (self.et.construct_unit(self.tt), unit_t));
-                (
-                    self.et
-                        .sequence(exprs.into_iter().map(|(expr, _)| expr), last),
-                    ty,
-                )
-            })
+
+        let mut problems = Problems::ok();
+        let mut exprs = Vec::new();
+        while let Some(next) = stmts.next() {
+            let expected = if stmts.peek().is_some() {
+                Some(unit_t)
+            } else {
+                expected
+            };
+            let expr = problems.append(if let ast::Expression::Let { var, ty, value, .. } = next {
+                let self_ = &mut *self;
+                let stmts_ = &mut *stmts;
+                m! {
+                    ty <- ty.as_ref().map_or(Result::new(None), |ty| self_.lower.r#type(ty).map(Some));
+                    outer <- self_.expression(value, ty);
+                    inner <- {
+                        let mut self_inner = self_.reborrow();
+                        self_inner.vars.push_front(Var::Named(var.as_str(), FunctionParameter::Data(outer.1)));
+                        self_inner.statements(stmts_, expected)
+                    };
+                    return (
+                        self_.et.push_expression(mu::ExpressionEnum::Let(outer.0, inner.0)),
+                        inner.1,
+                    );
+                }
+            } else {
+                self.expression(next, expected)
+            });
+            if let Some(e) = expr {
+                exprs.push(e);
+            }
+        }
+
+        let (last, ty) = exprs
+            .pop()
+            .unwrap_or_else(|| (self.et.construct_unit(self.tt), unit_t));
+        problems.with((
+            self.et
+                .sequence(exprs.into_iter().map(|(expr, _)| expr), last),
+            ty,
+        ))
     }
     // TODO: cache these ?
     fn function_param(&self, param: FunctionParameter) -> mu::Type {

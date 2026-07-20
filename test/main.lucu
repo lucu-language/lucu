@@ -28,7 +28,7 @@ fun test(
 }
 
 fun _start ! with World = {
-    assert(2 + 2 == 5, "damn")
+    -- assert(2 + 2 == 5, "damn")
     trace_int(420)
     traceln
     trace_int(69)

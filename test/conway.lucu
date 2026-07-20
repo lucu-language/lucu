@@ -64,7 +64,7 @@ fun next_state(old ^[]bool, new ^[]bool, stride size) = {
 }
 
 fun main with World = {
-    let stride = use apply(32)
+    let stride size = 32
 
     -- create buffers
     let board_a = use regions.alloca[bool, unit](stride * stride)

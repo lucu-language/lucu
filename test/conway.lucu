@@ -3,13 +3,13 @@ import "builtin:regions"
 fun dec(n size, stride size) size = if n == 0 then stride - 1 else n - 1
 fun inc(n size, stride size) size = if n == stride - 1 then 0 else n + 1
 
-fun print_state(state ^[]bool, stride size) = {
+fun trace_state(state ^[]bool, stride size) = {
     trace("-")
     for(0, stride) { x ->
         trace("--")
     }
     trace("-")
-	print_ln
+    traceln
 
     for(0, stride) { y ->
         trace("|")
@@ -17,7 +17,7 @@ fun print_state(state ^[]bool, stride size) = {
             trace(if state[x + y * stride]^ then "[]" else "  ")
         }
         trace("|")
-    	print_ln
+        traceln
     }
 
     trace("-")
@@ -25,7 +25,7 @@ fun print_state(state ^[]bool, stride size) = {
         trace("--")
     }
     trace("-")
-	print_ln
+    traceln
 }
 
 fun clear_state(state ^mut []bool, stride size) = {
@@ -79,10 +79,10 @@ fun main with World = {
     board_a[1 + 2 * stride]^ = true
 
     loop {
-        print_state(#transrights board_a, stride)
+        trace_state(#transrights board_a, stride)
         wait
         next_state(#transrights board_a, #transrights board_b, stride)
-        print_state(#transrights board_b, stride)
+        trace_state(#transrights board_b, stride)
         wait
         next_state(#transrights board_b, #transrights board_a, stride)
     }

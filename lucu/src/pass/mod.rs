@@ -172,12 +172,14 @@ impl Stages {
             // TODO: evaluate headers of parent modules first
             // currently, we could go arbitrarily deep into the stack while resolving headers
 
+            let source = self.source()?;
             let ast = self.ast()?;
             let imports = self.imports()?;
             let definitions = self.definitions()?;
             Some(mu::Module::from(
                 graph,
                 &self.module,
+                source,
                 ast,
                 imports,
                 definitions,

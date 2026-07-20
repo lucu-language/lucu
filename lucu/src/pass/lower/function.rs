@@ -1,20 +1,23 @@
 use std::iter;
 use std::sync::Arc;
 
-use compact_str::ToCompactString;
+use compact_str::{CompactString, ToCompactString};
 use itertools::Either;
 
 use crate::ast;
 use crate::error::{Problems, Result};
-use crate::header::{FunctionDefinition, IntrinsicFunction, ItemDecl};
+use crate::header::{EffectDecl, FunctionDefinition, IntrinsicFunction, ItemDecl, StructDecl};
 use crate::module::Module;
 use crate::mu::{self, ExpressionTable as _, TypeTable as _};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::pass::lower::{HeaderQuery, Lower};
+use crate::span::HasSpan;
+use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    GenericArgument, IntSize, Integer, SimpleKind, Term, Type, TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, SimpleKind, Term, Type,
+    TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -27,20 +30,26 @@ enum Var<'a> {
 
 struct MuLower<'a, 'scope> {
     lower: Lower<'a, 'scope>,
+
     tt: &'a mu::table::TypeTable,
     et: &'a mu::table::ExpressionTable,
     vars: im::Vector<Var<'a>>,
     markers: im::Vector<Effect>,
+
+    source: &'a str,
+    caller_location: Effect,
 }
 
 impl<'a, 'scope> MuLower<'a, 'scope> {
     fn reborrow<'short>(&'short mut self) -> MuLower<'a, 'short> {
         MuLower {
             lower: self.lower.reborrow(),
+            source: self.source,
             tt: self.tt,
             et: self.et,
             vars: self.vars.clone(),
             markers: self.markers.clone(),
+            caller_location: self.caller_location,
         }
     }
 }
@@ -49,6 +58,7 @@ impl mu::Module {
     pub fn from(
         query: &impl HeaderQuery,
         module: &Module,
+        source: &str,
         ast: &ast::Module,
         imports: &Imports,
         defs: &Definitions,
@@ -70,10 +80,16 @@ impl mu::Module {
                 implicit_region_offset: 0,
                 implicit_effects: None,
             },
+            source,
             tt: mu_tt,
             et: mu_et,
             vars: im::Vector::new(),
             markers: im::Vector::new(),
+            caller_location: tt.insert_effect(EffectEnum::Item(Item {
+                module: Module::BUILTIN,
+                name: CompactString::const_new("CallerLocation"),
+                apply: None,
+            })),
         };
         query
             .header(module, tt)
@@ -278,13 +294,34 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .apply_sig(sig, effect, path.generics.as_ref())
                         .and_then(|(sig, effect, generics)| {
                             let ty = PathType::Function(sig, generics);
-                            match effect {
-                                Some(e) => match self.find_effect(e) {
-                                    Some(_index) => todo!(),
-                                    None => todo!("error: effect not on stack"),
-                                },
-                                None => Result::new((
-                                    match def {
+                            Result::new((
+                                match effect {
+                                    Some(e) => match self.find_effect(e) {
+                                        Some(index) => {
+                                            let effect_ty = self
+                                                .effect(e)
+                                                .expect("ICE: effect with body with no type")
+                                                .1;
+                                            let mu_effect = self.et.reference(effect_ty, index);
+
+                                            let EffectEnum::Item(item) = &self.lower.tt[e] else {
+                                                panic!("ICE: effect with body is not an item");
+                                            };
+                                            let effect_decl = self.effect_decl(item);
+                                            let function_index = effect_decl
+                                                .members
+                                                .iter()
+                                                .enumerate()
+                                                .find(|(_, m)| m.name.as_str() == name)
+                                                .expect("ICE: effect function not part of effect")
+                                                .0;
+                                            let mu_function =
+                                                self.et.member(mu_effect, function_index as u32);
+                                            Either::Left(mu_function)
+                                        }
+                                        None => todo!("error: effect not on stack"),
+                                    },
+                                    None => match def {
                                         FunctionDefinition::Intrinsic(i) => Either::Right(i),
                                         FunctionDefinition::Other(_) => {
                                             let item = mu::Item {
@@ -299,13 +336,50 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                             ))
                                         }
                                     },
-                                    ty,
-                                )),
-                            }
+                                },
+                                ty,
+                            ))
                         })
                 }
             }
         }
+    }
+    fn caller_location_effect(&self, call: &'a ast::Call) -> mu::Expression {
+        let ty = self
+            .effect(self.caller_location)
+            .expect("ICE: caller location effect has no type")
+            .1;
+        let mu::TypeEnum::Product(tup) = self.tt[ty] else {
+            panic!("ICE: caller location effect is not a mu product type")
+        };
+        let mu::TypeEnum::Function(fun_ty) = self.tt[self.tt[tup][0]] else {
+            panic!("ICE: caller location effect has no mu function type")
+        };
+        let mu::TypeEnum::Product(loc_tup) = self.tt[fun_ty.to()] else {
+            panic!("ICE: caller location effect function does not return a mu product")
+        };
+
+        // TODO: we need access to Modules here to get the proper path
+        let path = self.lower.module.path_with_extension();
+        let (line, column) = line_column::line_column(self.source, call.span().start as usize);
+
+        self.et.construct(
+            tup,
+            [self.et.lambda(
+                fun_ty.from(),
+                self.et.construct(
+                    loc_tup,
+                    [
+                        self.et
+                            .constant(self.tt[loc_tup][0], mu::Constant::String(path)),
+                        self.et
+                            .constant(self.tt[loc_tup][1], mu::Constant::Integer(line as u64)),
+                        self.et
+                            .constant(self.tt[loc_tup][2], mu::Constant::Integer(column as u64)),
+                    ],
+                ),
+            )],
+        )
     }
     fn call(
         &mut self,
@@ -403,7 +477,22 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             .unwrap_or_else(|| self.et.unreachable())
                     });
                 }
-                // FIXME: supply effect handlers too
+                for effect in sig_val.thunk.effect.effects(self.lower.tt) {
+                    if effect.is_marker(self.lower.tt) {
+                        // TODO: check if in scope
+                    } else if let Some(idx) = self.find_effect(effect) {
+                        let effect_ty = self
+                            .effect(effect)
+                            .expect("ICE: non-marker effect has no type")
+                            .1;
+                        args.push(self.et.reference(effect_ty, idx));
+                    } else if effect == self.caller_location {
+                        args.push(self.caller_location_effect(call));
+                    } else {
+                        // TODO: global handlers
+                        todo!("{}", effect.display(self.lower.tt))
+                    }
+                }
                 let mu = match fun {
                     Either::Left(fun) => self.et.apply(fun, args),
                     Either::Right(i) => self.intrinsic(i, generics, args),
@@ -522,8 +611,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let mut args = args.into_iter();
                 let slice = args.next().unwrap();
                 // let _read = args.next().unwrap();
-                let mu_usize = self.tt.base(mu::Base::SIZE);
-                let mu_uptr = self.tt.base(mu::Base::ADDR);
+                let mu_size = self.tt.base(mu::Base::SIZE);
+                let mu_addr = self.tt.base(mu::Base::ADDR);
                 let mu_u8 = self.tt.base(mu::Base::U8);
                 let mu_u8_ptr = self.tt.base(mu::Base::Pointer(mu_u8));
                 let mu_u8_slice = self.tt.base(mu::Base::PointerSlice(mu_u8));
@@ -532,23 +621,23 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     self.et.call(
                         mu::Callable::Syscall { args: 3 },
                         [
-                            self.et.constant(mu_uptr, mu::Constant::Integer(1)),
-                            self.et.constant(mu_uptr, mu::Constant::Integer(0)),
+                            self.et.constant(mu_addr, mu::Constant::Integer(1)),
+                            self.et.constant(mu_addr, mu::Constant::Integer(0)),
                             self.et.cast(
                                 mu_u8_ptr,
-                                mu_uptr,
+                                mu_addr,
                                 ast::Cast::Transmute,
                                 self.et.call(
                                     mu::Callable::PointerSliceIndex { ty: mu_u8 },
                                     [
                                         self.et.reference(mu_u8_slice, 0),
-                                        self.et.constant(mu_usize, mu::Constant::Zero),
+                                        self.et.constant(mu_size, mu::Constant::Zero),
                                     ],
                                 ),
                             ),
                             self.et.cast(
-                                mu_usize,
-                                mu_uptr,
+                                mu_size,
+                                mu_addr,
                                 ast::Cast::Extend,
                                 self.et.call(
                                     mu::Callable::Len { ty: mu_u8 },
@@ -557,6 +646,19 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             ),
                         ],
                     ),
+                )
+            }
+            IntrinsicFunction::Trap => {
+                let mu_addr = self.tt.base(mu::Base::ADDR);
+                self.et.sequence(
+                    [self.et.call(
+                        mu::Callable::Syscall { args: 1 },
+                        [
+                            self.et.constant(mu_addr, mu::Constant::Integer(60)),
+                            self.et.constant(mu_addr, mu::Constant::Integer(1)),
+                        ],
+                    )],
+                    self.et.unreachable(),
                 )
             }
         }
@@ -627,7 +729,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 panic!("ICE: let expressions should be managed by MuLower::statements")
             }
             ast::Expression::Constant(constant) => {
-                let Some(ty) = expected else {
+                // TODO: default types for ast constants
+                // should be done within Lower::constant probably
+                let Some(ty) = expected.or_else(|| {
+                    (matches!(**constant, ast::Constant::Integer(_)))
+                        .then(|| self.lower.tt.insert_type(TypeEnum::INT))
+                }) else {
                     todo!("error: not enough info")
                 };
                 self.lower
@@ -641,6 +748,24 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 Result::new((self.et.constant(self.r#type(ty), mu::Constant::Uninit), ty))
             }
+            ast::Expression::Member { lhs, rhs, .. } => {
+                self.expression(lhs, None).and_then(|(val, ty)| {
+                    // FIXME: member access through pointer
+                    let TypeEnum::Item(item) = &self.lower.tt[ty] else {
+                        todo!("error")
+                    };
+                    let decl = self.struct_decl(item);
+                    let Some((idx, member)) = decl
+                        .members
+                        .iter()
+                        .enumerate()
+                        .find(|(_, m)| m.name.as_str() == rhs.as_str())
+                    else {
+                        todo!("error")
+                    };
+                    Result::new((self.et.member(val, idx as u32), member.ty))
+                })
+            }
             ast::Expression::Path(path) => {
                 if let ast::PathOrigin::Package(lhs, _, _rhs) = &path.origin
                     && let Some((_index, _ty)) = self.find_named(lhs.as_str())
@@ -648,7 +773,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     if let Some(_generics) = &path.generics {
                         todo!("error")
                     }
-                    // TODO: this does not include member access of local constant right now
+                    // TODO: this does not include member access of local constant / function output right now
                     todo!("member access")
                 } else {
                     self.path(path).and_then(|(e, p)| match p {
@@ -824,6 +949,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::Expression::Index { array, index } => {
                 self.expression(array, None).and_then(|(array, ty)| {
                     match (&self.lower.tt[ty], &index.inner) {
+                        // ^[]T
                         (
                             &TypeEnum::PointerSlice(ty, region, sentinel_ty),
                             ast::Index::Single(expr),
@@ -855,6 +981,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 from, to, sentinel, ..
                             },
                         ) => todo!("slice slice"),
+
+                        // [N]T
                         (
                             &TypeEnum::Array(ty, size, sentinel_ty),
                             ast::Index::Single(expression),
@@ -867,6 +995,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 from, to, sentinel, ..
                             },
                         ) => todo!("slice array"),
+
+                        // ^[N]T
                         (&TypeEnum::Pointer(pointee, region), ast::Index::Single(expr))
                             if let TypeEnum::Array(ty, size, sentinel_ty) =
                                 self.lower.tt[pointee] =>
@@ -936,6 +1066,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 })
                             })
                         }
+
+                        // ???
                         _ => todo!("error"),
                     }
                 })
@@ -1123,7 +1255,34 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn effect(&self, e: Effect) -> Option<(&'a str, mu::Type)> {
         match self.lower.tt[e] {
             EffectEnum::Generic(_) => todo!(),
-            EffectEnum::Item(ref _item) => todo!(),
+            EffectEnum::Item(ref item) => {
+                // TODO: make these named, and cache results
+                let name = item.name.as_str();
+                let decl = self.effect_decl(item);
+                let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
+                let members = decl.members.iter().map(|member| {
+                    let sig_val = self.lower.tt[member.signature].clone();
+                    let partial = self
+                        .lower
+                        .tt
+                        .insert_function_signature(FunctionSignatureValue {
+                            // TODO: if we have dependent kinds these need to be substituted too
+                            type_params: sig_val
+                                .type_params
+                                .map(|params| params.iter().copied().skip(args.len()).collect()),
+                            implicit_regions: sig_val.implicit_regions,
+                            params: sig_val.params.subst(self.lower.tt, 0, args),
+                            thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
+                        });
+                    self.tt
+                        .insert_type(mu::TypeEnum::Function(self.function_type(partial, None)))
+                });
+                Some((
+                    name,
+                    self.tt
+                        .insert_type(mu::TypeEnum::Product(self.tt.insert_tuple(members))),
+                ))
+            }
             EffectEnum::Read(_)
             | EffectEnum::Write(_)
             | EffectEnum::Divergent
@@ -1134,7 +1293,17 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn r#type(&self, ty: Type) -> mu::Type {
         match self.lower.tt[ty] {
             TypeEnum::Generic(_) => todo!(),
-            TypeEnum::Item(ref _item) => todo!(),
+            TypeEnum::Item(ref item) => {
+                // TODO: make these named, and cache results
+                let decl = self.struct_decl(item);
+                let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
+                let members = decl
+                    .members
+                    .iter()
+                    .map(|member| self.r#type(member.ty.subst(self.lower.tt, 0, args)));
+                self.tt
+                    .insert_type(mu::TypeEnum::Product(self.tt.insert_tuple(members)))
+            }
             TypeEnum::Integer(integer) => self.tt.base(mu::Base::Integer(integer)),
             TypeEnum::Boolean => self.tt.bool(),
             TypeEnum::Unit => self.tt.unit(),
@@ -1156,6 +1325,28 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             )),
             TypeEnum::Maybe(ty) => self.tt.optional(self.r#type(ty)),
         }
+    }
+    fn struct_decl(&self, item: &Item) -> &'scope StructDecl {
+        let header = self
+            .lower
+            .query
+            .header(&item.module, self.lower.tt)
+            .expect("ICE: cannot get header of item module");
+        let Some(ItemDecl::Struct(_, decl)) = header.get(&item.name) else {
+            panic!("ICE: type item does not have struct item decl")
+        };
+        decl.get().expect("ICE: struct decl is uninitialized")
+    }
+    fn effect_decl(&self, item: &Item) -> &'scope EffectDecl {
+        let header = self
+            .lower
+            .query
+            .header(&item.module, self.lower.tt)
+            .expect("ICE: cannot get header of item module");
+        let Some(ItemDecl::Effect(_, decl)) = header.get(&item.name) else {
+            panic!("ICE: effect item does not have effect item decl")
+        };
+        decl.get().expect("ICE: effect decl is uninitialized")
     }
     fn array_size(&self, c: Constant) -> u32 {
         match self.lower.tt[c] {

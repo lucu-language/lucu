@@ -305,7 +305,16 @@ impl<'a> Parser<'a> {
                     };
                 }
                 TokenEnum::Symbol(Symbol::Dot) => {
-                    todo!()
+                    expr = m! {
+                        lhs <- expr;
+                        let tk_dot = s.skip();
+                        rhs <- s.ident();
+                        return Box::new(ast::Expression::Member {
+                            lhs,
+                            tk_dot,
+                            rhs
+                        });
+                    }
                 }
                 _ => return expr,
             }

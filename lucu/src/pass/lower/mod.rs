@@ -626,6 +626,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         constant: &ast::Constant,
         ty: Type,
     ) -> Result<Constant> {
+        // TODO: make 'ty' optional, return real type
         match constant {
             ast::Constant::Path(path) => {
                 let expected = self.tt.insert_kind(KindEnum::constant(ty));

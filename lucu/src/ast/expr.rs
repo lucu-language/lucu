@@ -165,6 +165,11 @@ pub enum Expression {
     Uninit(Token),
     /// Could also be a member access
     Path(Path),
+    Member {
+        lhs: Box<Expression>,
+        tk_dot: Token,
+        rhs: Identifier,
+    },
     Block(Grouped<Block>),
     Enclosed(Grouped<Box<Self>>),
     Let {
@@ -297,6 +302,11 @@ impl HasSpan for Expression {
                 None => tk_raise.span(),
             },
             Expression::Path(path) => path.span(),
+            Expression::Member { lhs, rhs, .. } => {
+                let start = lhs.span().start;
+                let end = rhs.span().end;
+                Span::new(start, end)
+            }
         }
     }
 }

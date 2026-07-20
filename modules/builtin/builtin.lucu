@@ -42,16 +42,18 @@ effect Write[r] = regions.Write[r]
 
 -- source location
 
-effect Location = {
-	fun path static_str
-	fun line uint
-	fun column uint
+type SourceLocation = struct(
+	path static_str,
+	line int,
+	column int,
+)
+
+effect CallerLocation = {
+	fun caller SourceLocation
 }
 
-handle Location {
-	fun path static_str = #intrinsic
-	fun line uint = #intrinsic
-	fun column uint = #intrinsic
+handle CallerLocation {
+	fun caller SourceLocation = #intrinsic
 }
 
 -- world
@@ -103,11 +105,30 @@ fun syscall_exit(code addr) ! with World = {
 	unreachable
 }
 
+fun wait with World = {
+	let buf = use regions.ref[[1]u8, unit](---)
+	handle unfounded loop {
+		if syscall_read(0, buf[..]) == 0 then raise
+		if buf[0]^ == 10 then raise
+	}
+}
+
 -- printing
 
 fun apply(val size, fun body(val size)) = body(val)
 
-fun print_int(n int) = {
+fun trace(buf ^[]u8)
+	= #intrinsic
+
+fun trap !
+	= #intrinsic
+
+fun traceln = {
+	let buf = use regions.ref[[1]u8, unit]([10])
+	trace(buf[..])
+}
+
+fun trace_int(n int) = {
 	let buf = use regions.ref[[21]u8, unit](---)
 
 	let remaining = use regions.ref[int, unit](abs(n))
@@ -124,7 +145,7 @@ fun print_int(n int) = {
 		}
 	})
 
-	print_str(if n < 0 {
+	trace(if n < 0 {
 		buf[start - 1]^ = '-'
 		buf[start - 1..]
 	} else {
@@ -132,26 +153,36 @@ fun print_int(n int) = {
 	})
 }
 
-fun wait with World = {
-	let buf = use regions.ref[[1]u8, unit](---)
-	handle unfounded loop {
-		if syscall_read(0, buf[..]) == 0 then raise
-		if buf[0]^ == 10 then raise
+fun assert(all bool, msg ^[]u8) with CallerLocation = {
+	if all {
+	} else { -- fails
+		panic(msg)
 	}
 }
 
-fun print_str(buf ^[]u8) = {
-	trace(buf)
-	print_ln
+fun panic(msg ^[]u8) ! with CallerLocation = {
+	trace(#transmute (caller).path)
+	trace(":")
+	trace_int((caller).line)
+	trace(":")
+	trace_int((caller).column)
+	trace(": PANIC: ")
+	trace(msg)
+	traceln
+	trap
 }
 
-fun print_ln = {
-	let buf = use regions.ref[[1]u8, unit]([10])
-	trace(buf[..])
+fun todo(msg ^[]u8) ! with CallerLocation = {
+	trace(#transmute (caller).path)
+	trace(":")
+	trace_int((caller).line)
+	trace(":")
+	trace_int((caller).column)
+	trace(": TODO: ")
+	trace(msg)
+	traceln
+	trap
 }
-
-fun trace(buf ^[]u8)
-	= #intrinsic
 
 -- control flow
 

@@ -907,6 +907,11 @@ impl Ast for ast::Expression {
                 nodes.space();
                 expr.push_nodes(nodes);
             }
+            ast::Expression::Member { lhs, tk_dot, rhs } => {
+                lhs.push_nodes(nodes);
+                nodes.token(*tk_dot);
+                nodes.token(rhs.token);
+            }
         }
     }
 }

@@ -509,6 +509,7 @@ impl Ast for ast::Expression {
                 visitor.visit(call),
                 visit_vec(&block.elements, visitor, |v, (e, _)| v.visit(&**e)),
             ]),
+            ast::Expression::Member { lhs, .. } => visitor.visit(&**lhs),
         }
     }
     fn node_name(&self) -> &'static str {

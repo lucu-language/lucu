@@ -524,6 +524,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             ("builtin:builtin", "asm") => Some(IntrinsicFunction::Asm),
             ("builtin:builtin", "asm_pure") => Some(IntrinsicFunction::AsmPure),
             ("builtin:builtin", "trace") => Some(IntrinsicFunction::Trace),
+            ("builtin:builtin", "trap") => Some(IntrinsicFunction::Trap),
             ("builtin:builtin", "loop") => Some(IntrinsicFunction::Loop),
             ("builtin:builtin", "unfounded") => Some(IntrinsicFunction::Unfounded),
             ("builtin:builtin", "unreachable") => Some(IntrinsicFunction::Unreachable),

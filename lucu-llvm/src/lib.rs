@@ -100,7 +100,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             Base::Integer(integer) => match integer {
                 Integer::Integer(_, IntSize::Exact(n)) => NonZeroU32::new(n)
                     .map(|bits| llvm.context.custom_width_int_type(bits).unwrap().into()),
-                Integer::Integer(_, IntSize::Index) => {
+                Integer::Integer(_, IntSize::Size) => {
                     // TODO
                     Some(
                         llvm.context
@@ -145,13 +145,12 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 .nonzero_sized()
                 .then(|| llvm.context.ptr_type(AddressSpace::default()).into()),
             Base::PointerSlice(inner) => llvm
-                .get_type(
-                    llvm.tt
-                        .insert_type(mu::TypeEnum::Product(llvm.tt.insert_tuple([
-                            llvm.tt.base(Base::Pointer(inner)),
-                            llvm.tt.base(Base::USIZE),
-                        ]))),
-                )
+                .get_type(llvm.tt.insert_type(mu::TypeEnum::Product(
+                    llvm.tt.insert_tuple([
+                        llvm.tt.base(Base::Pointer(inner)),
+                        llvm.tt.base(Base::SIZE),
+                    ]),
+                )))
                 .basic_type(llvm),
             Base::Array(inner, size) => {
                 if size == 0 {

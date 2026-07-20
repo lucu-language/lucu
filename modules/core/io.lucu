@@ -1,9 +1,9 @@
 effect Source = {
-   fun read() usize with Sink
+   fun read() size with Sink
 }
 
 effect Sink = {
-   fun write(bytes ^[]u8) usize
+   fun write(bytes ^[]u8) size
    fun flush()
 }
 

@@ -522,8 +522,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let mut args = args.into_iter();
                 let slice = args.next().unwrap();
                 // let _read = args.next().unwrap();
-                let mu_usize = self.tt.base(mu::Base::USIZE);
-                let mu_uptr = self.tt.base(mu::Base::UPTR);
+                let mu_usize = self.tt.base(mu::Base::SIZE);
+                let mu_uptr = self.tt.base(mu::Base::ADDR);
                 let mu_u8 = self.tt.base(mu::Base::U8);
                 let mu_u8_ptr = self.tt.base(mu::Base::Pointer(mu_u8));
                 let mu_u8_slice = self.tt.base(mu::Base::PointerSlice(mu_u8));
@@ -828,7 +828,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             &TypeEnum::PointerSlice(ty, region, sentinel_ty),
                             ast::Index::Single(expr),
                         ) => self
-                            .expression(expr, Some(self.lower.tt.insert_type(TypeEnum::USIZE)))
+                            .expression(expr, Some(self.lower.tt.insert_type(TypeEnum::SIZE)))
                             .map(|(index, _)| match sentinel_ty {
                                 Some(_) => (
                                     self.et.call(
@@ -871,7 +871,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             if let TypeEnum::Array(ty, size, sentinel_ty) =
                                 self.lower.tt[pointee] =>
                         {
-                            self.expression(expr, Some(self.lower.tt.insert_type(TypeEnum::USIZE)))
+                            self.expression(expr, Some(self.lower.tt.insert_type(TypeEnum::SIZE)))
                                 .map(|(index, _)| {
                                     let size = self.array_size(size) + sentinel_ty.is_some() as u32;
                                     (
@@ -896,7 +896,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         {
                             let max = self.array_size(size);
                             let size = max + sentinel_ty.is_some() as u32;
-                            let usize_t = self.lower.tt.insert_type(TypeEnum::USIZE);
+                            let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
                             let mu_usize = self.r#type(usize_t);
                             let from_index = from
                                 .as_ref()

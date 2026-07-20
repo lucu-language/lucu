@@ -611,7 +611,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     todo!("error: naked slice")
                 };
 
-                let usize_ty = self.tt.insert_type(TypeEnum::USIZE);
+                let usize_ty = self.tt.insert_type(TypeEnum::SIZE);
                 m! {
                     size <- self.constant(size, usize_ty);
                     let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);

@@ -7,7 +7,7 @@ type u32 = types.u32
 type u64 = types.u64
 
 type uint = types.uint
-type uptr = types.uptr
+type uaddr = types.uaddr
 type usize = types.usize
 
 type i8 = types.i8
@@ -16,8 +16,8 @@ type i32 = types.i32
 type i64 = types.i64
 
 type int = types.int
-type iptr = types.iptr
-type isize = types.isize
+type addr = types.addr
+type size = types.size
 
 type bool = types.bool
 type unit = types.unit
@@ -68,44 +68,44 @@ fun asm[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U with World
 fun asm_pure[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U
 	= #intrinsic
 
-fun syscall0(nr uptr) uptr
+fun syscall0(nr addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},~{rcx},~{r11},~{memory}", [1]uptr, uptr]([nr])
-fun syscall1(nr uptr, arg1 uptr) uptr
+	= asm["syscall", "={rax},{rax},~{rcx},~{r11},~{memory}", [1]addr, addr]([nr])
+fun syscall1(nr addr, arg1 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},~{rcx},~{r11},~{memory}", [2]uptr, uptr]([nr, arg1])
-fun syscall2(nr uptr, arg1 uptr, arg2 uptr) uptr
+	= asm["syscall", "={rax},{rax},{rdi},~{rcx},~{r11},~{memory}", [2]addr, addr]([nr, arg1])
+fun syscall2(nr addr, arg1 addr, arg2 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},~{rcx},~{r11},~{memory}", [3]uptr, uptr]([nr, arg1, arg2])
-fun syscall3(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr) uptr
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},~{rcx},~{r11},~{memory}", [3]addr, addr]([nr, arg1, arg2])
+fun syscall3(nr addr, arg1 addr, arg2 addr, arg3 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", [4]uptr, uptr]([nr, arg1, arg2, arg3])
-fun syscall4(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr) uptr
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", [4]addr, addr]([nr, arg1, arg2, arg3])
+fun syscall4(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},~{rcx},~{r11},~{memory}", [5]uptr, uptr]([nr, arg1, arg2, arg3, arg4])
-fun syscall5(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr, arg5 uptr) uptr
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},~{rcx},~{r11},~{memory}", [5]addr, addr]([nr, arg1, arg2, arg3, arg4])
+fun syscall5(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},~{rcx},~{r11},~{memory}", [6]uptr, uptr]([nr, arg1, arg2, arg3, arg4, arg5])
-fun syscall6(nr uptr, arg1 uptr, arg2 uptr, arg3 uptr, arg4 uptr, arg5 uptr, arg6 uptr) uptr
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},~{rcx},~{r11},~{memory}", [6]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5])
+fun syscall6(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
 	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]uptr, uptr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
+	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
 
-fun syscall_read(file uptr, buf ^mut []u8) usize with World = {
+fun syscall_read(file addr, buf ^mut []u8) size with World = {
 	#trunc syscall3(0, file, #transmute buf[0], #ext len[u8,](buf))
 }
 
-fun syscall_write(file uptr, buf ^[]u8) usize with World = {
+fun syscall_write(file addr, buf ^[]u8) size with World = {
 	#trunc syscall3(1, file, #transmute buf[0], #ext len[u8,](buf))
 }
 
-fun syscall_exit(code uptr) ! with World = {
+fun syscall_exit(code addr) ! with World = {
 	discard syscall1(60, code)
 	unreachable
 }
 
 -- printing
 
-fun apply(val usize, fun body(val usize)) = body(val)
+fun apply(val size, fun body(val size)) = body(val)
 
 fun print_int(n int) = {
 	let buf = use regions.ref[[21]u8, unit](---)
@@ -113,7 +113,7 @@ fun print_int(n int) = {
 	let remaining = use regions.ref[int, unit](abs(n))
 
 	let start = use apply(catch {
-		let current = use regions.ref[usize, usize](20)
+		let current = use regions.ref[size, size](20)
 		unfounded loop {
 			buf[current^]^ = '0' + #trunc (remaining^ % 10)
 			remaining^ /= 10
@@ -164,16 +164,16 @@ fun loop(fun body) ! with Div
 fun unfounded(fun body ! with Div) !
 	= #intrinsic
 
-fun for(from usize, to usize, fun body(n usize)) = {
+fun for(from size, to size, fun body(n size)) = {
 	if to >= from {
-		let current = use regions.ref[usize, unit](from)
+		let current = use regions.ref[size, unit](from)
 		catch unfounded loop {
 			if current^ == to then raise
 			body(current^)
 			current^ += 1
 		}
 	} else {
-		let current = use regions.ref[usize, unit](from - 1)
+		let current = use regions.ref[size, unit](from - 1)
 		catch unfounded loop {
 			body(current^)
 			current^ -= 1
@@ -187,7 +187,7 @@ fun unreachable !
 
 -- other utils
 
-fun len[T](slice ^[]T) usize
+fun len[T](slice ^[]T) size
 	= #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n

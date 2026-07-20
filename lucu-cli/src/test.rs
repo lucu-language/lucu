@@ -19,8 +19,8 @@ pub(super) fn test() {
     let et = unsafe { ExpressionTable::new() };
 
     let i8_t = tt.base(Base::Integer(Integer::signed(IntSize::Exact(8))));
-    let uptr_t = tt.base(Base::UPTR);
-    let usize_t = tt.base(Base::USIZE);
+    let uptr_t = tt.base(Base::ADDR);
+    let usize_t = tt.base(Base::SIZE);
     let array_size = 16;
     let i8_ptr_t = tt.base(Base::Pointer(i8_t));
     let uptr_ptr_t = tt.base(Base::Pointer(uptr_t));

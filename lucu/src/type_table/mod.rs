@@ -30,7 +30,7 @@ pub enum IntSize {
     /// The size of a continuous block of memory
     /// At least 16 bits
     /// At most IntSize::Address
-    Index,
+    Size,
     /// The size of a memory address
     /// At least 16 bits
     /// At most IntSize::Register
@@ -80,7 +80,7 @@ impl IntSize {
     pub const fn smaller_than(self, other: IntSize) -> bool {
         match (self, other) {
             (IntSize::Exact(a), IntSize::Exact(b)) => a < b,
-            (IntSize::Exact(n), IntSize::Index | IntSize::Address | IntSize::Register) => n < 16,
+            (IntSize::Exact(n), IntSize::Size | IntSize::Address | IntSize::Register) => n < 16,
 
             (IntSize::Exact(n), IntSize::CChar) => n < 8,
             (IntSize::Exact(n), IntSize::CShort | IntSize::CInt) => n < 16,
@@ -94,9 +94,9 @@ impl IntSize {
     pub const fn fits_inside(self, other: IntSize) -> bool {
         match (self, other) {
             (IntSize::Exact(a), IntSize::Exact(b)) => a <= b,
-            (IntSize::Exact(n), IntSize::Index | IntSize::Address | IntSize::Register) => n <= 16,
+            (IntSize::Exact(n), IntSize::Size | IntSize::Address | IntSize::Register) => n <= 16,
 
-            (IntSize::Index, IntSize::Index | IntSize::Address | IntSize::Register) => true,
+            (IntSize::Size, IntSize::Size | IntSize::Address | IntSize::Register) => true,
             (IntSize::Address, IntSize::Address | IntSize::Register) => true,
             (IntSize::Register, IntSize::Register) => true,
 
@@ -120,8 +120,8 @@ impl Integer {
     pub const U8: Self = Integer::unsigned(IntSize::Exact(8));
     pub const U32: Self = Integer::unsigned(IntSize::Exact(32));
     pub const INT: Self = Integer::signed(IntSize::Register);
-    pub const USIZE: Self = Integer::unsigned(IntSize::Index);
-    pub const UPTR: Self = Integer::unsigned(IntSize::Address);
+    pub const SIZE: Self = Integer::signed(IntSize::Size);
+    pub const ADDR: Self = Integer::signed(IntSize::Address);
 
     pub const fn signed(size: IntSize) -> Self {
         Self::Integer(true, size)
@@ -185,8 +185,8 @@ impl TypeEnum {
     pub const U8: Self = Self::Integer(Integer::U8);
     pub const U32: Self = Self::Integer(Integer::U32);
     pub const INT: Self = Self::Integer(Integer::INT);
-    pub const USIZE: Self = Self::Integer(Integer::USIZE);
-    pub const UPTR: Self = Self::Integer(Integer::UPTR);
+    pub const SIZE: Self = Self::Integer(Integer::SIZE);
+    pub const ADDR: Self = Self::Integer(Integer::ADDR);
 }
 
 impl Type {

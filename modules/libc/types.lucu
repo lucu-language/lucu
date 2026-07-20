@@ -26,7 +26,7 @@ type string[r] = c.string[r]
 -- ADDITIONAL BASIC TYPES --
 
 type size_t = types.usize
-type ptrdiff_t = types.isize
+type ptrdiff_t = types.size
 
 type nullptr_t = types.nullptr
 const NULL nullptr_t = 0
@@ -58,7 +58,7 @@ type int64_t = types.i64
 -- type int_least64_t = ...
 
 -- type intmax_t = ...
-type intptr_t = types.iptr
+type intptr_t = types.addr
 
 type uint8_t = types.u8
 type uint16_t = types.u16
@@ -76,4 +76,4 @@ type uint64_t = types.u64
 -- type uint_least64_t = ...
 
 -- type uintmax_t = ...
-type uintptr_t = types.uptr
+type uintptr_t = types.uaddr

@@ -25,8 +25,8 @@ impl Base {
     pub const U8: Self = Self::Integer(Integer::U8);
     pub const U32: Self = Self::Integer(Integer::U32);
     pub const INT: Self = Self::Integer(Integer::INT);
-    pub const USIZE: Self = Self::Integer(Integer::USIZE);
-    pub const UPTR: Self = Self::Integer(Integer::UPTR);
+    pub const SIZE: Self = Self::Integer(Integer::SIZE);
+    pub const ADDR: Self = Self::Integer(Integer::ADDR);
 }
 
 pub enum Constant {
@@ -152,7 +152,7 @@ impl mu::Typed for Callable {
             Callable::PredicateOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), tt.bool()),
             Callable::MathOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), ty),
             Callable::Syscall { args } => {
-                let uptr = tt.base(Base::UPTR);
+                let uptr = tt.base(Base::ADDR);
                 tt.function(
                     tt.insert_tuple(iter::repeat_n(uptr, args as usize + 1)),
                     uptr,
@@ -164,7 +164,7 @@ impl mu::Typed for Callable {
                 tt.function(tt.insert_tuple([ty, fun]), to)
             }
             Callable::LetAlloca { ty, to } => {
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
                 let fun = tt.function(tt.insert_tuple([ptr_slice]), to);
                 tt.function(tt.insert_tuple([usize, fun]), to)
@@ -185,47 +185,47 @@ impl mu::Typed for Callable {
             }
             Callable::MultiPointerIndex { ty } => {
                 let multi_ptr = tt.base(Base::MultiPointer(ty));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr = tt.base(Base::Pointer(ty));
                 tt.function(tt.insert_tuple([multi_ptr, usize]), ptr)
             }
             Callable::PointerSliceIndex { ty } => {
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr = tt.base(Base::Pointer(ty));
                 tt.function(tt.insert_tuple([ptr_slice, usize]), ptr)
             }
             Callable::ArrayIndex { ty, size } => {
                 let arr = tt.base(Base::Array(ty, size));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 tt.function(tt.insert_tuple([arr, usize]), ty)
             }
             Callable::PointerArrayIndex { ty, size } => {
                 let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr = tt.base(Base::Pointer(ty));
                 tt.function(tt.insert_tuple([ptr_array, usize]), ptr)
             }
             Callable::MultiPointerSlice { ty } => {
                 let multi_ptr = tt.base(Base::MultiPointer(ty));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
                 tt.function(tt.insert_tuple([multi_ptr, usize, usize]), ptr_slice)
             }
             Callable::PointerSliceSlice { ty } => {
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 tt.function(tt.insert_tuple([ptr_slice, usize, usize]), ptr_slice)
             }
             Callable::PointerArraySlice { ty, size } => {
                 let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
                 tt.function(tt.insert_tuple([ptr_array, usize, usize]), ptr_slice)
             }
             Callable::Len { ty } => {
                 let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::USIZE);
+                let usize = tt.base(Base::SIZE);
                 tt.function(tt.insert_tuple([ptr_slice]), usize)
             }
         }

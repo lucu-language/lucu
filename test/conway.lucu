@@ -71,7 +71,7 @@ fun main with World = {
     let board_b = use regions.alloca[bool, unit](stride * stride)
 
     -- init state
-    clear_state(#transmute board_a, stride)
+    clear_state(#transrights board_a, stride)
     board_a[0 + 0 * stride]^ = true
     board_a[1 + 1 * stride]^ = true
     board_a[2 + 1 * stride]^ = true
@@ -79,11 +79,11 @@ fun main with World = {
     board_a[1 + 2 * stride]^ = true
 
     loop {
-        print_state(#transmute board_a, stride)
+        print_state(#transrights board_a, stride)
         wait
-        next_state(#transmute board_a, #transmute board_b, stride)
-        print_state(#transmute board_b, stride)
+        next_state(#transrights board_a, #transrights board_b, stride)
+        print_state(#transrights board_b, stride)
         wait
-        next_state(#transmute board_b, #transmute board_a, stride)
+        next_state(#transrights board_b, #transrights board_a, stride)
     }
 }

@@ -184,13 +184,14 @@ pub enum Keyword {
     Region,
     Thunk,
     Handle,
+    #[strum(serialize = "raise", serialize = "yeet")]
     Raise,
     Use,
     #[strum(serialize = "#ext")]
     Extend,
     #[strum(serialize = "#trunc")]
     Truncate,
-    #[strum(serialize = "#transmute")]
+    #[strum(serialize = "#transmute", serialize = "#transrights")]
     Transmute,
     #[strum(serialize = "#intrinsic")]
     Intrinsic,

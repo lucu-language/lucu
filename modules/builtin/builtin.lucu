@@ -118,7 +118,7 @@ fun print_int(n int) = {
 			buf[current^]^ = '0' + #trunc (remaining^ % 10)
 			remaining^ /= 10
 			if remaining^ == 0 {
-				raise current^
+				yeet current^
 			}
 			current^ -= 1
 		}

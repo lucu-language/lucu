@@ -517,9 +517,6 @@ impl<'a, 'b> Lower<'a, 'b> {
         match (module.as_str(), name.ident.as_str()) {
             ("builtin:regions", "ref") => Some(IntrinsicFunction::Ref),
             ("builtin:regions", "alloca") => Some(IntrinsicFunction::Alloca),
-            ("builtin:builtin", "path") => Some(IntrinsicFunction::LocationPath),
-            ("builtin:builtin", "line") => Some(IntrinsicFunction::LocationLine),
-            ("builtin:builtin", "column") => Some(IntrinsicFunction::LocationColumn),
             ("builtin:builtin", "link") => Some(IntrinsicFunction::Link),
             ("builtin:builtin", "asm") => Some(IntrinsicFunction::Asm),
             ("builtin:builtin", "asm_pure") => Some(IntrinsicFunction::AsmPure),

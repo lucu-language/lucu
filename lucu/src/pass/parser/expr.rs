@@ -180,6 +180,8 @@ impl<'a> Parser<'a> {
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Plus) => Some(ast::MathOp::Add),
                 TokenEnum::Symbol(Symbol::Dash) => Some(ast::MathOp::Sub),
+                TokenEnum::Symbol(Symbol::Bar) => Some(ast::MathOp::Or),
+                TokenEnum::Symbol(Symbol::Tilde) => Some(ast::MathOp::Xor),
                 _ => None,
             },
             &ast::Expression::MathOp,
@@ -193,6 +195,10 @@ impl<'a> Parser<'a> {
                 TokenEnum::Symbol(Symbol::Star) => Some(ast::MathOp::Mul),
                 TokenEnum::Symbol(Symbol::Slash) => Some(ast::MathOp::Div),
                 TokenEnum::Symbol(Symbol::Percent) => Some(ast::MathOp::Mod),
+                TokenEnum::Symbol(Symbol::Ampersand) => Some(ast::MathOp::And),
+                TokenEnum::Symbol(Symbol::AmpersandTilde) => Some(ast::MathOp::AndNot),
+                TokenEnum::Symbol(Symbol::ShiftLeft) => Some(ast::MathOp::ShiftLeft),
+                TokenEnum::Symbol(Symbol::ShiftRight) => Some(ast::MathOp::ShiftRight),
                 _ => None,
             },
             &ast::Expression::MathOp,
@@ -211,6 +217,26 @@ impl<'a> Parser<'a> {
                 self.expression_prefix(allow_lambda).map(|expr| {
                     Box::new(ast::Expression::UnOp {
                         op: ast::UnOp::Plus,
+                        tk_op,
+                        expr,
+                    })
+                })
+            }
+            TokenEnum::Symbol(Symbol::Bang) => {
+                let tk_op = self.skip();
+                self.expression_prefix(allow_lambda).map(|expr| {
+                    Box::new(ast::Expression::UnOp {
+                        op: ast::UnOp::Not,
+                        tk_op,
+                        expr,
+                    })
+                })
+            }
+            TokenEnum::Symbol(Symbol::Tilde) => {
+                let tk_op = self.skip();
+                self.expression_prefix(allow_lambda).map(|expr| {
+                    Box::new(ast::Expression::UnOp {
+                        op: ast::UnOp::Complement,
                         tk_op,
                         expr,
                     })

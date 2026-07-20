@@ -51,11 +51,15 @@ impl Display for TokenEnum {
                     Symbol::TripleDash => "---",
                     Symbol::Plus => "+",
                     Symbol::Ampersand => "&",
+                    Symbol::AmpersandTilde => "&~",
                     Symbol::Slash => "/",
                     Symbol::Star => "*",
                     Symbol::Percent => "%",
                     Symbol::Bang => "!",
                     Symbol::Pipe => "|>",
+                    Symbol::Bar => "|",
+                    Symbol::ShiftLeft => "<<",
+                    Symbol::ShiftRight => ">>",
                     Symbol::Equality(equality) => match equality {
                         SymbolEquality::EqualsEquals => "==",
                         SymbolEquality::BangEquals => "!=",
@@ -73,6 +77,12 @@ impl Display for TokenEnum {
                         SymbolAssign::SlashEquals => "/=",
                         SymbolAssign::StarEquals => "*=",
                         SymbolAssign::PercentEquals => "%=",
+                        SymbolAssign::AmpersandEquals => "&=",
+                        SymbolAssign::AmpersandTildeEquals => "&~=",
+                        SymbolAssign::BarEquals => "|=",
+                        SymbolAssign::TildeEquals => "~=",
+                        SymbolAssign::ShiftLeftEquals => "<<=",
+                        SymbolAssign::ShiftRightEquals => ">>=",
                     },
                 }
             ),
@@ -217,11 +227,15 @@ pub enum Symbol {
     TripleDash,     // ---
     Plus,           // +
     Ampersand,      // &
+    AmpersandTilde, // &~
     Slash,          // /
     Star,           // *
     Percent,        // %
     Bang,           // !
     Pipe,           // |>
+    Bar,            // |
+    ShiftLeft,      // <<
+    ShiftRight,     // >>
     Equality(SymbolEquality),
     Inequality(SymbolInequality),
     Assign(SymbolAssign),
@@ -243,12 +257,18 @@ pub enum SymbolInequality {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolAssign {
-    Equals,        // =
-    DashEquals,    // -=
-    PlusEquals,    // +=
-    SlashEquals,   // /=
-    StarEquals,    // *=
-    PercentEquals, // %=
+    Equals,               // =
+    DashEquals,           // -=
+    PlusEquals,           // +=
+    SlashEquals,          // /=
+    StarEquals,           // *=
+    PercentEquals,        // %=
+    AmpersandEquals,      // &=
+    AmpersandTildeEquals, // &~=
+    BarEquals,            // |=
+    TildeEquals,          // ~=
+    ShiftLeftEquals,      // <<=
+    ShiftRightEquals,     // >>=
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

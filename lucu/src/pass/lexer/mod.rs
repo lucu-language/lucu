@@ -155,18 +155,22 @@ fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) 
         b'@' => Symbol(At),
         b';' => Symbol(Semicolon),
         b':' => Symbol(Colon),
-        b'~' => Symbol(Tilde),
         b',' => Symbol(Comma),
         b'^' => Symbol(Caret),
-        b'&' => Symbol(Ampersand),
 
         b'/' => equals!(Slash, Assign(SlashEquals)),
         b'*' => equals!(Star, Assign(StarEquals)),
         b'%' => equals!(Percent, Assign(PercentEquals)),
-        b'<' => equals!(Inequality(Less), Inequality(LessEquals)),
-        b'>' => equals!(Inequality(Greater), Inequality(GreaterEquals)),
         b'!' => equals!(Bang, Equality(BangEquals)),
+        b'~' => equals!(Tilde, Assign(TildeEquals)),
 
+        b'&' => {
+            if next!(b'~') {
+                equals!(AmpersandTilde, Assign(AmpersandTildeEquals))
+            } else {
+                equals!(Ampersand, Assign(AmpersandEquals))
+            }
+        }
         b'?' => {
             if next!(b'?') {
                 if next!(b'?') {
@@ -212,7 +216,21 @@ fn next_token(mut src: &str, pos: usize, comments: Option<&mut VecDeque<Span>>) 
             if next!(b'>') {
                 Symbol(Pipe)
             } else {
-                Unknown
+                equals!(Bar, Assign(BarEquals))
+            }
+        }
+        b'<' => {
+            if next!(b'<') {
+                equals!(ShiftLeft, Assign(ShiftLeftEquals))
+            } else {
+                equals!(Inequality(Less), Inequality(LessEquals))
+            }
+        }
+        b'>' => {
+            if next!(b'>') {
+                equals!(ShiftRight, Assign(ShiftRightEquals))
+            } else {
+                equals!(Inequality(Greater), Inequality(GreaterEquals))
             }
         }
 

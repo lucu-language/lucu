@@ -151,9 +151,8 @@ fun trace_int(n int) = {
 	})
 }
 
-fun assert(all bool, msg ^[]u8) with CallerLocation = {
-	if all {} else {
- 		-- fails
+fun assert(condition bool, msg ^[]u8) with CallerLocation = {
+	if !condition {
 		panic(msg)
 	}
 }

@@ -1,6 +1,7 @@
 import "core:io"
 import "libc:types" c
 import "conway"
+import "builtin:regions"
 
 type Id[T] = T
 type Test1 = Id[u32,]
@@ -27,8 +28,16 @@ fun test(
     -- bababooey
 }
 
+fun hoohaa = {
+    let n = use regions.ref[int, unit](1)
+    n^ <<= 3
+    trace_int(n^)
+    traceln
+}
+
 fun _start ! with World = {
-    -- assert(2 + 2 == 5, "damn")
+    hoohaa
+    assert(2 + 2 == 5, "damn")
     trace_int(420)
     traceln
     trace_int(69)

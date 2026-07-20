@@ -423,6 +423,11 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                                 .unwrap()
                                 .into()
                         }
+                        ast::UnOp::Complement | ast::UnOp::Not => llvm
+                            .builder
+                            .build_not(v.into_int_value(), "")
+                            .unwrap()
+                            .into(),
                         ast::UnOp::Plus => v,
                     }
                 }))
@@ -491,6 +496,18 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                             } else {
                                 llvm.builder.build_int_unsigned_rem(il, ir, "")
                             }
+                        }
+                        ast::MathOp::And => llvm.builder.build_and(il, ir, ""),
+                        ast::MathOp::Or => llvm.builder.build_or(il, ir, ""),
+                        ast::MathOp::Xor => llvm.builder.build_xor(il, ir, ""),
+                        ast::MathOp::ShiftLeft => llvm.builder.build_left_shift(il, ir, ""),
+                        ast::MathOp::ShiftRight => {
+                            llvm.builder
+                                .build_right_shift(il, ir, Self::is_signed(ty, llvm), "")
+                        }
+                        ast::MathOp::AndNot => {
+                            let not = llvm.builder.build_not(ir, "").unwrap();
+                            llvm.builder.build_and(il, not, "")
                         }
                     }
                     .unwrap()

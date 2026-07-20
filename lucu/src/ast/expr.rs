@@ -13,6 +13,12 @@ pub enum MathOp {
     Div,
     Mul,
     Mod,
+    And,
+    AndNot,
+    Or,
+    Xor,
+    ShiftLeft,
+    ShiftRight,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
@@ -30,6 +36,12 @@ impl From<SymbolAssign> for AssignOp {
             SymbolAssign::SlashEquals => Self::Math(MathOp::Div),
             SymbolAssign::StarEquals => Self::Math(MathOp::Mul),
             SymbolAssign::PercentEquals => Self::Math(MathOp::Mul),
+            SymbolAssign::AmpersandEquals => Self::Math(MathOp::Add),
+            SymbolAssign::BarEquals => Self::Math(MathOp::Or),
+            SymbolAssign::TildeEquals => Self::Math(MathOp::Xor),
+            SymbolAssign::ShiftLeftEquals => Self::Math(MathOp::ShiftLeft),
+            SymbolAssign::ShiftRightEquals => Self::Math(MathOp::ShiftRight),
+            SymbolAssign::AmpersandTildeEquals => Self::Math(MathOp::AndNot),
         }
     }
 }
@@ -89,6 +101,8 @@ impl PredicateOp {
 pub enum UnOp {
     Negate,
     Plus,
+    Complement,
+    Not,
 }
 
 #[derive(Debug, PartialEq, Eq)]

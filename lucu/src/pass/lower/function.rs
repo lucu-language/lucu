@@ -516,7 +516,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     Either::Right(i) => self.intrinsic(i, generics, args),
                 };
                 problems.with((mu, sig_val.thunk.returns))
-            } else if call.args.is_some() || call.block.is_some() {
+            } else if call.args.is_some() || call.block.is_some() || use_arg.is_some() {
                 todo!("error: function has no arguments")
             } else {
                 match fun {
@@ -596,9 +596,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     args,
                 )
             }
-            IntrinsicFunction::LocationPath => todo!(),
-            IntrinsicFunction::LocationLine => todo!(),
-            IntrinsicFunction::LocationColumn => todo!(),
             IntrinsicFunction::Len => {
                 let Term::Type(ty) = generics[0].term else {
                     panic!()
@@ -918,6 +915,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 })
             }
             ast::Expression::MathOp(op, lhs, _, rhs) => {
+                // TODO: check if type valid
                 self.expression(lhs, expected).and_then(|(lhs, ty)| {
                     self.expression(rhs, Some(ty)).map(|(rhs, _)| {
                         (
@@ -934,6 +932,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 })
             }
             ast::Expression::UnOp { op, expr, .. } => {
+                // TODO: check if type valid
                 self.expression(expr, expected).map(|(e, ty)| {
                     (
                         self.et.call(

@@ -112,7 +112,7 @@ fun print_int(n int) = {
 
 	let remaining = use regions.ref[int, unit](abs(n))
 
-	let start = use apply(catch {
+	let start = use apply(handle {
 		let current = use regions.ref[size, size](20)
 		unfounded loop {
 			buf[current^]^ = '0' + #trunc (remaining^ % 10)
@@ -134,7 +134,7 @@ fun print_int(n int) = {
 
 fun wait with World = {
 	let buf = use regions.ref[[1]u8, unit](---)
-	catch unfounded loop {
+	handle unfounded loop {
 		if syscall_read(0, buf[..]) == 0 then raise
 		if buf[0]^ == 10 then raise
 	}
@@ -167,14 +167,14 @@ fun unfounded(fun body ! with Div) !
 fun for(from size, to size, fun body(n size)) = {
 	if to >= from {
 		let current = use regions.ref[size, unit](from)
-		catch unfounded loop {
+		handle unfounded loop {
 			if current^ == to then raise
 			body(current^)
 			current^ += 1
 		}
 	} else {
 		let current = use regions.ref[size, unit](from - 1)
-		catch unfounded loop {
+		handle unfounded loop {
 			body(current^)
 			current^ -= 1
 			if current^ == to then raise

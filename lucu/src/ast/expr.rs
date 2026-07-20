@@ -215,8 +215,8 @@ pub enum Expression {
         tk_newline: Token,
         block: Separated<Box<Self>>,
     },
-    Catch {
-        tk_catch: Token,
+    Handle {
+        tk_handle: Token,
         expr: Box<Self>,
     },
     Raise {
@@ -289,16 +289,12 @@ impl HasSpan for Expression {
                 let end = block.span().end;
                 Span::new(start, end)
             }
-            Expression::Catch {
-                tk_catch: tk_try,
-                expr,
-            } => Span::new(tk_try.span().start, expr.span().end),
-            Expression::Raise {
-                tk_raise: tk_break,
-                expr,
-            } => match expr {
-                Some(expr) => Span::new(tk_break.span().start, expr.span().end),
-                None => tk_break.span(),
+            Expression::Handle { tk_handle, expr } => {
+                Span::new(tk_handle.span().start, expr.span().end)
+            }
+            Expression::Raise { tk_raise, expr } => match expr {
+                Some(expr) => Span::new(tk_raise.span().start, expr.span().end),
+                None => tk_raise.span(),
             },
             Expression::Path(path) => path.span(),
         }

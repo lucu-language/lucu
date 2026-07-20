@@ -324,11 +324,11 @@ impl<'a> Parser<'a> {
             TokenEnum::Open(Group::Bracket) => self
                 .many_grouped(Group::Bracket, Symbol::Comma, |p| p.expression(true))
                 .map(|exprs| Box::new(ast::Expression::Array(exprs))),
-            TokenEnum::Keyword(Keyword::Catch) => {
+            TokenEnum::Keyword(Keyword::Handle) => {
                 m! {
-                    let tk_catch = self.skip();
+                    let tk_handle = self.skip();
                     expr <- self.expression(allow_lambda);
-                    return Box::new(ast::Expression::Catch { tk_catch, expr });
+                    return Box::new(ast::Expression::Handle { tk_handle, expr });
                 }
             }
             TokenEnum::Keyword(Keyword::Raise) => {

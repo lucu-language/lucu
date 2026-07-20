@@ -184,7 +184,6 @@ pub enum Keyword {
     Region,
     Thunk,
     Handle,
-    Catch,
     Raise,
     Use,
     #[strum(serialize = "#ext")]

@@ -470,7 +470,7 @@ impl Ast for ast::Expression {
             ast::Expression::Raise { expr, .. } => {
                 visit_option(expr, visitor, |v, e| v.visit(&**e))
             }
-            ast::Expression::Catch { expr, .. }
+            ast::Expression::Handle { expr, .. }
             | ast::Expression::Discard { expr, .. }
             | ast::Expression::UnOp { expr, .. }
             | ast::Expression::Dereference { expr, .. }

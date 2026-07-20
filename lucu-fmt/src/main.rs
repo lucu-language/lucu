@@ -887,7 +887,10 @@ impl Ast for ast::Expression {
                     expr.push_nodes(nodes);
                 }
             }
-            ast::Expression::Catch { tk_catch: tk, expr }
+            ast::Expression::Handle {
+                tk_handle: tk,
+                expr,
+            }
             | ast::Expression::Discard {
                 tk_discard: tk,
                 expr,

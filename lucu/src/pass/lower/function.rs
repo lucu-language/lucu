@@ -983,7 +983,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     block,
                 }),
             ),
-            ast::Expression::Catch { expr, .. } => {
+            ast::Expression::Handle { expr, .. } => {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };

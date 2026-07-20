@@ -14,7 +14,7 @@ use crate::pass::imports::Imports;
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    GenericArgument, Integer, SimpleKind, Term, Type, TypeEnum, TypeTable,
+    GenericArgument, IntSize, Integer, SimpleKind, Term, Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -588,7 +588,32 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.et
                     .constant(self.r#type(ty), mu::Constant::String(str.clone()))
             }
-            ConstantEnum::Character(ref _str) => todo!(),
+            ConstantEnum::Character(ref str) => {
+                let TypeEnum::Integer(i) = self.lower.tt[ty] else {
+                    panic!("ICE: character constant is not of integer type");
+                };
+                let mu_ty = self.tt.base(mu::Base::Integer(i));
+                let value = match i {
+                    Integer::CChar | Integer::Integer(_, IntSize::Exact(8) | IntSize::CChar) => {
+                        let &[byte] = str.as_bytes() else {
+                            panic!("ICE: character constant is not a single byte")
+                        };
+                        byte as u64
+                    }
+                    Integer::Integer(_, IntSize::Exact(32)) => {
+                        let mut chars = str.chars();
+                        let Some(char) = chars.next() else {
+                            panic!("ICE: character constant does not contain a codepoint");
+                        };
+                        let None = chars.next() else {
+                            panic!("ICE: character constant contains multiple codepoints");
+                        };
+                        char as u64
+                    }
+                    _ => panic!("ICE: unknown character constant integer size"),
+                };
+                self.et.constant(mu_ty, mu::Constant::Integer(value))
+            }
             ConstantEnum::Zero => self.et.constant(self.r#type(ty), mu::Constant::Zero),
         }
     }
@@ -605,80 +630,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };
-                // TODO: why are we matching on the ast constant??
-                // we should use Self::constant instead
-                match **constant {
-                    ast::Constant::Path(_) => {
-                        panic!("ICE: constant path expression found instead of path expression")
-                    }
-                    ast::Constant::Integer(ref int) => {
-                        let TypeEnum::Integer(_) = self.lower.tt[ty] else {
-                            todo!("error")
-                        };
-                        Result::new((
-                            self.et
-                                .constant(self.r#type(ty), mu::Constant::Integer(int.value)),
-                            ty,
-                        ))
-                    }
-                    ast::Constant::String(ref str) => match self.lower.tt[ty] {
-                        TypeEnum::PointerSlice(inner, _, sentinel) => {
-                            if inner.is_u8(self.lower.tt) && sentinel.is_none() {
-                                Result::new((
-                                    self.et.constant(
-                                        self.tt.base(mu::Base::PointerSlice(
-                                            self.tt.base(mu::Base::U8),
-                                        )),
-                                        mu::Constant::String(str.as_str().to_compact_string()),
-                                    ),
-                                    ty,
-                                ))
-                            } else {
-                                todo!()
-                            }
-                        }
-                        TypeEnum::Array(ty, size, sentinel) => todo!(),
-                        _ => todo!("error"),
-                    },
-                    ast::Constant::Character(ref char) => match self.lower.tt[ty] {
-                        TypeEnum::Integer(int) => {
-                            if int == Integer::U8 {
-                                let &[char] = char.value.as_bytes() else {
-                                    todo!("error");
-                                };
-                                Result::new((
-                                    self.et.constant(
-                                        self.r#type(ty),
-                                        mu::Constant::Integer(char as u64),
-                                    ),
-                                    ty,
-                                ))
-                            } else if int == Integer::U32 {
-                                let mut chars = char.value.chars();
-                                let Some(first) = chars.next() else {
-                                    todo!("error")
-                                };
-                                if let Some(_more) = chars.next() {
-                                    todo!("error")
-                                }
-                                Result::new((
-                                    self.et.constant(
-                                        self.r#type(ty),
-                                        mu::Constant::Integer(first as u64),
-                                    ),
-                                    ty,
-                                ))
-                            } else {
-                                todo!("error")
-                            }
-                        }
-                        _ => todo!("error"),
-                    },
-                    ast::Constant::Zero(_) => {
-                        // TODO: check if zero is allowed for this type
-                        Result::new((self.et.constant(self.r#type(ty), mu::Constant::Zero), ty))
-                    }
-                }
+                self.lower
+                    .constant(constant, ty)
+                    .map(|c| (self.constant(ty, c), ty))
             }
             ast::Expression::Uninit(_) => {
                 // TODO: check if uninit is allowed for this type
@@ -688,7 +642,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Result::new((self.et.constant(self.r#type(ty), mu::Constant::Uninit), ty))
             }
             ast::Expression::Path(path) => {
-                if let ast::PathOrigin::Package(lhs, _, rhs) = &path.origin
+                if let ast::PathOrigin::Package(lhs, _, _rhs) = &path.origin
                     && let Some((_index, _ty)) = self.find_named(lhs.as_str())
                 {
                     if let Some(_generics) = &path.generics {
@@ -852,7 +806,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
             ast::Expression::Dereference { expr, .. } => {
                 self.expression(expr, None).and_then(|(e, ty)| {
-                    let TypeEnum::Pointer(inner, region) = self.lower.tt[ty] else {
+                    let TypeEnum::Pointer(inner, _region) = self.lower.tt[ty] else {
                         todo!("error")
                     };
                     // TODO: check for read effect

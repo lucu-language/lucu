@@ -127,6 +127,7 @@ impl fmt::Display for Interned<'_, Type> {
                 Ok(())
             }
             TypeEnum::Maybe(ty) => write!(f, "?{}", ty.display(self.1)),
+            TypeEnum::Hole => write!(f, "_"),
         }
     }
 }
@@ -137,6 +138,7 @@ impl fmt::Display for Interned<'_, Region> {
             RegionEnum::Generic(ref param) => write!(f, "{}", param.display(self.1)),
             RegionEnum::Static => write!(f, "static"),
             RegionEnum::Heap => write!(f, "heap"),
+            RegionEnum::Hole => write!(f, "_"),
         }
     }
 }
@@ -159,6 +161,7 @@ impl fmt::Display for Interned<'_, Effect> {
             EffectEnum::Write(region) => write!(f, "write {}", region.display(self.1)),
             EffectEnum::Divergent => write!(f, "div"),
             EffectEnum::World => write!(f, "world"),
+            EffectEnum::Hole => write!(f, "_"),
         }
     }
 }
@@ -175,6 +178,7 @@ impl fmt::Display for Interned<'_, Constant> {
             // TODO: unescaping
             ConstantEnum::Character(ref character) => write!(f, "'{}'", character),
             ConstantEnum::Zero => write!(f, "0"),
+            ConstantEnum::Hole => write!(f, "_"),
         }
     }
 }
@@ -198,19 +202,25 @@ impl fmt::Display for Interned<'_, Term> {
             Term::Effect(effect) => write!(f, "{}", effect.display(self.1)),
             Term::Thunk(thunk) => write!(f, "{}", thunk.display(self.1)),
             Term::Constant(constant) => write!(f, "{}", constant.display(self.1)),
+            Term::Hole => write!(f, "_"),
         }
     }
 }
 
 impl fmt::Display for Interned<'_, GenericArgument> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(arity) = self.0.arity {
-            for _ in 0..arity {
-                write!(f, "λ ")?;
+        match self.0 {
+            GenericArgument::Instance { term, arity } => {
+                if let Some(arity) = arity {
+                    for _ in 0..arity {
+                        write!(f, "λ ")?;
+                    }
+                }
+                write!(f, "{}", term.display(self.1))?;
+                Ok(())
             }
+            GenericArgument::Hole => write!(f, "_"),
         }
-        write!(f, "{}", self.0.term.display(self.1))?;
-        Ok(())
     }
 }
 
@@ -286,6 +296,7 @@ impl Region {
             RegionEnum::Generic(generic_parameter) => generic_parameter.apply.is_some(),
             RegionEnum::Static => false,
             RegionEnum::Heap => false,
+            RegionEnum::Hole => false,
         }
     }
 }
@@ -302,6 +313,7 @@ impl Effect {
             EffectEnum::Write(_) => true,
             EffectEnum::Divergent => false,
             EffectEnum::World => false,
+            EffectEnum::Hole => false,
         }
     }
 }
@@ -327,6 +339,7 @@ impl Term {
             Term::Effect(effect) => effect.enclosed(tt),
             Term::Thunk(_) => true,
             Term::Constant(constant) => constant.enclosed(tt),
+            Term::Hole => false,
         }
     }
 }
@@ -340,7 +353,12 @@ impl GenericArgument {
         Interned(self, tt)
     }
     fn enclosed(self, tt: &TypeTable) -> bool {
-        self.arity.unwrap_or(0) > 0 || self.term.enclosed(tt)
+        match self {
+            GenericArgument::Instance { term, arity } => {
+                arity.unwrap_or(0) > 0 || term.enclosed(tt)
+            }
+            GenericArgument::Hole => false,
+        }
     }
 }
 impl FunctionSignature {

@@ -63,7 +63,7 @@ fun next_state(old ^[]bool, new ^[]bool, stride size) = {
     }
 }
 
-fun main with World = {
+fun main with World Div = {
     let stride size = 32
 
     -- create buffers
@@ -71,7 +71,7 @@ fun main with World = {
     let board_b = use regions.alloca[bool, unit](stride * stride)
 
     -- init state
-    clear_state(#transrights board_a, stride)
+    clear_state(board_a, stride)
     board_a[0 + 0 * stride]^ = true
     board_a[1 + 1 * stride]^ = true
     board_a[2 + 1 * stride]^ = true
@@ -79,11 +79,11 @@ fun main with World = {
     board_a[1 + 2 * stride]^ = true
 
     loop {
-        trace_state(#transrights board_a, stride)
+        trace_state(board_a, stride)
         wait
-        next_state(#transrights board_a, #transrights board_b, stride)
-        trace_state(#transrights board_b, stride)
+        next_state(board_a, board_b, stride)
+        trace_state(board_b, stride)
         wait
-        next_state(#transrights board_b, #transrights board_a, stride)
+        next_state(board_b, board_a, stride)
     }
 }

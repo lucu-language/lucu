@@ -3,7 +3,7 @@ effect Source = {
 }
 
 effect Sink = {
-   fun write(bytes ^[]u8) size
+   fun write(bytes ^[]i8) size
    fun flush()
 }
 
@@ -17,15 +17,15 @@ effect StdIo = {
 }
 
 -- effect Buffered[E effect] = {
---    fun buffered(buffer ^mut []u8, fun handled(fun body with E), fun body with E)
+--    fun buffered(buffer ^mut []i8, fun handled(fun body with E), fun body with E)
 -- }
 
 -- handle Buffered[Source] {
---    fun buffered(buffer ^mut []u8, fun handled(fun body with Source), fun body with Source) = {
+--    fun buffered(buffer ^mut []i8, fun handled(fun body with Source), fun body with Source) = {
 --    }
 -- }
 
 -- handle Buffered[Sink] {
---    fun buffered(buffer ^mut []u8, fun handled(fun body with Sink), fun body with Sink) = {
+--    fun buffered(buffer ^mut []i8, fun handled(fun body with Sink), fun body with Sink) = {
 --    }
 -- }

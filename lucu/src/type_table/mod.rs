@@ -10,7 +10,6 @@ use crate::module::Module;
 
 pub mod display;
 pub mod substitute;
-pub mod unapply;
 
 #[derive(Default)]
 pub struct TypeTable {
@@ -117,8 +116,7 @@ impl IntSize {
 }
 
 impl Integer {
-    pub const U8: Self = Integer::unsigned(IntSize::Exact(8));
-    pub const U32: Self = Integer::unsigned(IntSize::Exact(32));
+    pub const I8: Self = Integer::signed(IntSize::Exact(8));
     pub const INT: Self = Integer::signed(IntSize::Register);
     pub const SIZE: Self = Integer::signed(IntSize::Size);
     pub const ADDR: Self = Integer::signed(IntSize::Address);
@@ -179,11 +177,11 @@ pub enum TypeEnum {
     PointerSlice(Type, Region, Option<Sentinel>),
     Array(Type, Constant, Option<Sentinel>),
     Maybe(Type),
+    Hole,
 }
 
 impl TypeEnum {
-    pub const U8: Self = Self::Integer(Integer::U8);
-    pub const U32: Self = Self::Integer(Integer::U32);
+    pub const I8: Self = Self::Integer(Integer::I8);
     pub const INT: Self = Self::Integer(Integer::INT);
     pub const SIZE: Self = Self::Integer(Integer::SIZE);
     pub const ADDR: Self = Self::Integer(Integer::ADDR);
@@ -196,11 +194,8 @@ impl Type {
     pub fn is_never(self, tt: &TypeTable) -> bool {
         tt[self] == TypeEnum::Never
     }
-    pub fn is_u8(self, tt: &TypeTable) -> bool {
-        tt[self] == TypeEnum::U8
-    }
-    pub fn is_u32(self, tt: &TypeTable) -> bool {
-        tt[self] == TypeEnum::U32
+    pub fn is_i8(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::I8
     }
 }
 
@@ -209,6 +204,7 @@ pub enum RegionEnum {
     Generic(GenericParameter),
     Static,
     Heap,
+    Hole,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -220,6 +216,7 @@ pub enum EffectEnum {
     Write(Region),
     Divergent,
     World,
+    Hole,
 }
 
 impl EffectEnum {
@@ -256,6 +253,12 @@ pub struct FunctionSignatureValue {
 
     pub params: Option<Arc<[FunctionParameter]>>,
     pub thunk: Thunk,
+}
+
+impl FunctionSignatureValue {
+    pub fn arity(&self) -> usize {
+        self.type_params.as_ref().map_or(0, |kinds| kinds.len()) + self.implicit_regions
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -298,6 +301,7 @@ pub enum ConstantEnum {
     String(CompactString),
     Character(CompactString),
     Zero,
+    Hole,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -325,12 +329,25 @@ pub enum Term {
     Effect(Effect),
     Constant(Constant),
     Thunk(Thunk),
+    Hole,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
-pub struct GenericArgument {
-    pub term: Term,
-    pub arity: Option<usize>,
+pub enum GenericArgument {
+    Instance {
+        term: Term,
+        arity: Option<usize>,
+    },
+    Hole
+}
+
+impl GenericArgument {
+    pub fn term(self) -> Term {
+        match self {
+            GenericArgument::Instance { term, .. } => term,
+            GenericArgument::Hole => Term::Hole,
+        }
+    }
 }
 
 impl Effect {
@@ -361,6 +378,7 @@ impl Effect {
             EffectEnum::Read(_) | EffectEnum::Write(_) | EffectEnum::Divergent | EffectEnum::World => true,
             EffectEnum::Generic(_) => panic!("ICE: asked if effect generic is a marker"),
             EffectEnum::Row(_) => panic!("ICE: asked if effect row is a marker"),
+            EffectEnum::Hole => todo!(),
         }
     }
 }

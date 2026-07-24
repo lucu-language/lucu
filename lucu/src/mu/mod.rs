@@ -22,8 +22,7 @@ pub enum Base {
 }
 
 impl Base {
-    pub const U8: Self = Self::Integer(Integer::U8);
-    pub const U32: Self = Self::Integer(Integer::U32);
+    pub const I8: Self = Self::Integer(Integer::I8);
     pub const INT: Self = Self::Integer(Integer::INT);
     pub const SIZE: Self = Self::Integer(Integer::SIZE);
     pub const ADDR: Self = Self::Integer(Integer::ADDR);

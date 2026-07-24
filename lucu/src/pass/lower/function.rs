@@ -18,8 +18,8 @@ use crate::span::HasSpan;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, SimpleKind, Term, Type,
-    TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, RegionEnum, SimpleKind, Term,
+    Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +101,18 @@ impl mu::Module {
                 apply: None,
             })),
         };
+
+        // global markers
+        lower
+            .markers
+            .push_front(tt.insert_effect(EffectEnum::Read(tt.insert_region(RegionEnum::Static))));
+        lower
+            .markers
+            .push_front(tt.insert_effect(EffectEnum::Read(tt.insert_region(RegionEnum::Heap))));
+        lower
+            .markers
+            .push_front(tt.insert_effect(EffectEnum::Write(tt.insert_region(RegionEnum::Heap))));
+
         query
             .header(module, tt)
             .expect("ICE: could not query own header")
@@ -187,6 +199,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         params: impl IntoIterator<Item = (&'a ast::Identifier, Option<&'a ast::Type>)>,
         body: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
     ) -> Result<mu::Expression> {
+        // FIXME: push generic arguments of sig
+        // also requires shifting all vars and markers
         let mut me = self.reborrow();
         let sig_val = &me.lower.tt[sig];
         let from = me.tt.insert_tuple(Iterator::chain(
@@ -403,28 +417,42 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         &mut self,
         call: &'a ast::Call,
         use_arg: Option<UseArg<'a>>,
+        expected: Option<Type>,
     ) -> Result<(mu::Expression, Type)> {
         self.path(&call.fun).and_then(|(fun, fun_ty)| {
+            let mut problems = Problems::ok();
+
+            // function signature with partially applied generics
             let PathType::Function(sig, generics) = fun_ty else {
                 todo!("error")
             };
             let sig_val = &self.lower.tt[sig];
-            if let Some(_generics) = &sig_val.type_params {
-                todo!("error: must specify generics right now")
-            }
-            // FIXME: we need to infer region generics
-            if let Some(params) = &sig_val.params {
-                if params.len() != call.count_args() + use_arg.is_some() as usize {
+
+            // function signature with additional generics as holes
+            let implicit_arity = sig_val.arity();
+            let sig_mono = sig.apply(
+                self.lower.tt,
+                &iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>(),
+            );
+            let sig_mono_val = &self.lower.tt[sig_mono];
+
+            // get all arguments
+            let (mut args, params) = if let Some(sig_params) = &sig_mono_val.params {
+                if sig_params.len() != call.count_args() + use_arg.is_some() as usize {
                     todo!("error: incorrect amount of arguments")
                 }
-                let mut problems = Problems::ok();
-                let mut args = Iterator::zip(params.iter().copied(), call.args())
-                    .map(|(param, arg)| {
-                        problems
-                            .append(match param {
-                                FunctionParameter::Data(ty) => {
-                                    self.expression(arg, Some(ty)).map(|(mu, _)| mu)
-                                }
+                let (mut args, mut params): (Vec<_>, Vec<_>) =
+                    Iterator::zip(sig_params.iter().copied(), call.args())
+                        .map(|(param, arg)| {
+                            match param {
+                                FunctionParameter::Data(ty) => problems
+                                    .append(
+                                        self.expression(arg, Some(ty))
+                                            .map(|(mu, ty)| (mu, FunctionParameter::Data(ty))),
+                                    )
+                                    .unwrap_or_else(|| {
+                                        (self.et.unreachable(), FunctionParameter::Data(ty))
+                                    }),
                                 FunctionParameter::Lambda(sig) => {
                                     let sig_val = &self.lower.tt[sig];
                                     if sig_val.type_params.as_ref().is_some_and(|ps| {
@@ -433,7 +461,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     }) {
                                         todo!("error: no support for generics yet")
                                     }
-                                    if let ast::Expression::Block(block) = arg {
+                                    let e = if let ast::Expression::Block(block) = arg {
                                         if block
                                             .inner
                                             .params
@@ -457,15 +485,25 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         todo!("error")
                                     } else {
                                         self.abstraction(sig, [], [arg])
-                                    }
+                                    };
+                                    (
+                                        problems.append(e).unwrap_or_else(|| self.et.unreachable()),
+                                        {
+                                            // TODO: get user given function type
+                                            assert!(sig.no_holes(self.lower.tt));
+                                            FunctionParameter::Lambda(sig)
+                                        },
+                                    )
                                 }
-                            })
-                            .unwrap_or_else(|| self.et.unreachable())
-                    })
-                    .collect::<Vec<_>>();
+                            }
+                        })
+                        .unzip();
                 if let Some(arg) = use_arg {
+                    // TODO: get user given function type
+                    assert!(sig_params.last().copied().unwrap().no_holes(self.lower.tt));
+                    params.push(sig_params.last().copied().unwrap());
                     args.push({
-                        let param = params.last().copied().unwrap();
+                        let param = sig_params.last().copied().unwrap();
                         let FunctionParameter::Lambda(sig) = param else {
                             todo!("error")
                         };
@@ -495,37 +533,79 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             .unwrap_or_else(|| self.et.unreachable())
                     });
                 }
-                for effect in sig_val.thunk.effect.effects(self.lower.tt) {
-                    if effect.is_marker(self.lower.tt) {
-                        // TODO: check if in scope
-                    } else if let Some(idx) = self.find_effect(effect) {
-                        let effect_ty = self
-                            .effect(effect)
-                            .expect("ICE: non-marker effect has no type")
-                            .1;
-                        args.push(self.et.reference(effect_ty, idx));
-                    } else if effect == self.caller_location {
-                        args.push(self.caller_location_effect(call));
-                    } else {
-                        // TODO: global handlers
-                        todo!("{}", effect.display(self.lower.tt))
-                    }
-                }
-                let mu = match fun {
-                    Either::Left(fun) => self.et.apply(fun, args),
-                    Either::Right(i) => self.intrinsic(i, generics, args),
-                };
-                problems.with((mu, sig_val.thunk.returns))
+                (args, params)
             } else if call.args.is_some() || call.block.is_some() || use_arg.is_some() {
                 todo!("error: function has no arguments")
             } else {
-                match fun {
-                    Either::Left(fun) => {
-                        Result::new((self.et.apply(fun, []), sig_val.thunk.returns))
+                (Vec::new(), Vec::new())
+            };
+
+            // infer args
+            let mut implicit_generics =
+                iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
+            let sig_mono_val = if implicit_arity > 0 {
+                if !sig.infer_params(&params, self.lower.tt, &mut implicit_generics)
+                    || !expected.is_none_or(|e| {
+                        sig_val
+                            .thunk
+                            .returns
+                            .infer(e, self.lower.tt, 0, &mut implicit_generics)
+                    })
+                {
+                    todo!(
+                        "error: cannot infer generics for {}",
+                        sig.display(self.lower.tt),
+                    )
+                }
+                let sig_mono = sig.apply(self.lower.tt, &implicit_generics);
+                let sig_mono_val = &self.lower.tt[sig_mono];
+                if !sig_mono.no_holes(self.lower.tt) {
+                    eprintln!("{}", &self.source[call.span()]);
+                    todo!(
+                        "error: ambiguous generics for {}",
+                        sig_mono.display(self.lower.tt)
+                    );
+                }
+                // FIXME: check if args are subtypes of inferred params
+                // (we need to check this because 'infer_params' allows false positives)
+                sig_mono_val
+            } else {
+                sig_val
+            };
+
+            // effects
+            for effect in sig_mono_val.thunk.effect.effects(self.lower.tt) {
+                if effect.is_marker(self.lower.tt) {
+                    if !self.has_marker_effect(effect) {
+                        eprintln!("{}", &self.source[call.span()]);
+                        todo!("error: no {}", effect.display(self.lower.tt))
                     }
-                    Either::Right(_) => todo!(),
+                } else if let Some(idx) = self.find_effect(effect) {
+                    let effect_ty = self
+                        .effect(effect)
+                        .expect("ICE: non-marker effect has no type")
+                        .1;
+                    args.push(self.et.reference(effect_ty, idx));
+                } else if effect == self.caller_location {
+                    args.push(self.caller_location_effect(call));
+                } else {
+                    // TODO: global handlers
+                    todo!("{}", effect.display(self.lower.tt))
                 }
             }
+
+            // call expression
+            let mu = match fun {
+                Either::Left(fun) => self.et.apply(fun, args),
+                Either::Right(i) => {
+                    let all_generics = implicit_generics
+                        .into_iter()
+                        .chain(generics.iter().copied())
+                        .collect();
+                    self.intrinsic(i, all_generics, args)
+                }
+            };
+            problems.with((mu, sig_mono_val.thunk.returns))
         })
     }
     fn intrinsic(
@@ -536,10 +616,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     ) -> mu::Expression {
         match i {
             IntrinsicFunction::Ref => {
-                let Term::Type(ty) = generics[0].term else {
+                let Term::Type(ty) = generics[0].term() else {
                     panic!()
                 };
-                let Term::Type(to) = generics[1].term else {
+                let Term::Type(to) = generics[1].term() else {
                     panic!()
                 };
                 let mut args = args.into_iter();
@@ -551,10 +631,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     .call(mu::Callable::LetReference { ty, to }, [val, lambda])
             }
             IntrinsicFunction::Alloca => {
-                let Term::Type(ty) = generics[0].term else {
+                let Term::Type(ty) = generics[0].term() else {
                     panic!()
                 };
-                let Term::Type(to) = generics[1].term else {
+                let Term::Type(to) = generics[1].term() else {
                     panic!()
                 };
                 let mut args = args.into_iter();
@@ -567,22 +647,22 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
             IntrinsicFunction::Link => todo!(),
             IntrinsicFunction::Asm | IntrinsicFunction::AsmPure => {
-                let Term::Constant(assembly) = generics[0].term else {
+                let Term::Constant(assembly) = generics[0].term() else {
                     panic!()
                 };
                 let ConstantEnum::String(assembly) = &self.lower.tt[assembly] else {
                     panic!()
                 };
-                let Term::Constant(constraints) = generics[1].term else {
+                let Term::Constant(constraints) = generics[1].term() else {
                     panic!()
                 };
                 let ConstantEnum::String(constraints) = &self.lower.tt[constraints] else {
                     panic!()
                 };
-                let Term::Type(from) = generics[2].term else {
+                let Term::Type(from) = generics[2].term() else {
                     panic!()
                 };
-                let Term::Type(to) = generics[3].term else {
+                let Term::Type(to) = generics[3].term() else {
                     panic!()
                 };
                 self.et.call(
@@ -597,7 +677,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 )
             }
             IntrinsicFunction::Len => {
-                let Term::Type(ty) = generics[0].term else {
+                let Term::Type(ty) = generics[1].term() else {
                     panic!()
                 };
                 self.et.call(
@@ -628,9 +708,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 // let _read = args.next().unwrap();
                 let mu_size = self.tt.base(mu::Base::SIZE);
                 let mu_addr = self.tt.base(mu::Base::ADDR);
-                let mu_u8 = self.tt.base(mu::Base::U8);
-                let mu_u8_ptr = self.tt.base(mu::Base::Pointer(mu_u8));
-                let mu_u8_slice = self.tt.base(mu::Base::PointerSlice(mu_u8));
+                let mu_i8 = self.tt.base(mu::Base::I8);
+                let mu_i8_ptr = self.tt.base(mu::Base::Pointer(mu_i8));
+                let mu_i8_slice = self.tt.base(mu::Base::PointerSlice(mu_i8));
                 self.et.let_chain(
                     [slice],
                     self.et.call(
@@ -639,13 +719,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             self.et.constant(mu_addr, mu::Constant::Integer(1)),
                             self.et.constant(mu_addr, mu::Constant::Integer(0)),
                             self.et.cast(
-                                mu_u8_ptr,
+                                mu_i8_ptr,
                                 mu_addr,
                                 ast::Cast::Transmute,
                                 self.et.call(
-                                    mu::Callable::PointerSliceIndex { ty: mu_u8 },
+                                    mu::Callable::PointerSliceIndex { ty: mu_i8 },
                                     [
-                                        self.et.reference(mu_u8_slice, 0),
+                                        self.et.reference(mu_i8_slice, 0),
                                         self.et.constant(mu_size, mu::Constant::Zero),
                                     ],
                                 ),
@@ -655,8 +735,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 mu_addr,
                                 ast::Cast::Extend,
                                 self.et.call(
-                                    mu::Callable::Len { ty: mu_u8 },
-                                    [self.et.reference(mu_u8_slice, 0)],
+                                    mu::Callable::Len { ty: mu_i8 },
+                                    [self.et.reference(mu_i8_slice, 0)],
                                 ),
                             ),
                         ],
@@ -732,6 +812,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.et.constant(mu_ty, mu::Constant::Integer(value))
             }
             ConstantEnum::Zero => self.et.constant(self.r#type(ty), mu::Constant::Zero),
+            ConstantEnum::Hole => self.et.unreachable(),
         }
     }
     fn expression(
@@ -743,19 +824,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::Expression::Let { .. } => {
                 panic!("ICE: let expressions should be managed by MuLower::statements")
             }
-            ast::Expression::Constant(constant) => {
-                // TODO: default types for ast constants
-                // should be done within Lower::constant probably
-                let Some(ty) = expected.or_else(|| {
-                    (matches!(**constant, ast::Constant::Integer(_)))
-                        .then(|| self.lower.tt.insert_type(TypeEnum::INT))
-                }) else {
-                    todo!("error: not enough info")
-                };
-                self.lower
-                    .constant(constant, ty)
-                    .map(|c| (self.constant(ty, c), ty))
-            }
+            ast::Expression::Constant(constant) => self
+                .lower
+                .constant(constant, expected)
+                .map(|(c, ty)| (self.constant(ty, c), ty)),
             ast::Expression::Uninit(_) => {
                 // TODO: check if uninit is allowed for this type
                 let Some(ty) = expected else {
@@ -821,6 +893,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Some(to) = expected else {
                     todo!("error: not enough info")
                 };
+                if !to.no_holes(self.lower.tt) {
+                    todo!("error: ambiguous info")
+                }
                 self.expression(expr, None).map(|(value, from)| {
                     (
                         self.et.cast(self.r#type(from), self.r#type(to), *op, value),
@@ -854,7 +929,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         ty,
                                     )
                                 }),
-                            None if ty != self_inner.lower.tt.insert_type(TypeEnum::Unit) => {
+                            None if !ty.subtype(
+                                self_inner.lower.tt.insert_type(TypeEnum::Unit),
+                                self_inner.lower.tt,
+                            ) =>
+                            {
                                 todo!("error")
                             }
                             None => Result::new((
@@ -1093,6 +1172,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };
+                if !ty.no_holes(self.lower.tt) {
+                    todo!("error: ambiguous info")
+                }
                 match self.lower.tt[ty] {
                     TypeEnum::PointerSlice(_, _, _) => todo!(),
                     TypeEnum::Array(inner, constant, s) => {
@@ -1119,7 +1201,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     _ => todo!("error"),
                 }
             }
-            ast::Expression::Call(call) => self.call(call, None),
+            ast::Expression::Call(call) => self.call(call, None, expected),
             ast::Expression::Use {
                 params,
                 call,
@@ -1131,11 +1213,15 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     params: params.as_ref().map(|(_, params, _)| params),
                     block,
                 }),
+                expected,
             ),
             ast::Expression::Handle { expr, .. } => {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };
+                if !ty.no_holes(self.lower.tt) {
+                    todo!("error: ambiguous info")
+                }
                 let mut self_inner = self.reborrow();
                 self_inner.vars.push_front(Var::Raise(ty));
                 self_inner
@@ -1165,16 +1251,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         }
         .and_then(|(mu, found)| {
             if let Some(expected) = expected
-                && found != expected
+                && !found.subtype(expected, self.lower.tt)
             {
-                if !found.is_never(self.lower.tt) {
-                    todo!(
-                        "error: found {} expected {} at {expr:?}",
-                        found.display(self.lower.tt),
-                        expected.display(self.lower.tt)
-                    );
-                }
-                Result::new((mu, expected))
+                todo!(
+                    "error: found {} expected {} at {expr:?}",
+                    found.display(self.lower.tt),
+                    expected.display(self.lower.tt)
+                );
+                Result::new((mu, found))
             } else {
                 Result::new((mu, found))
             }
@@ -1324,7 +1408,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             EffectEnum::Read(_)
             | EffectEnum::Write(_)
             | EffectEnum::Divergent
-            | EffectEnum::World => None,
+            | EffectEnum::World
+            | EffectEnum::Hole => None,
             EffectEnum::Row(_) => panic!("ICE: trying to get type of effect ROW"),
         }
     }
@@ -1348,9 +1433,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             TypeEnum::Never => self.tt.never(),
             TypeEnum::NullPointer => {
                 // this MUST be an actual pointer, and not removed as a zero-sized type
-                // so we do a pointer to u8
+                // so we do a pointer to i8
                 // (technically any nonzero-sized type would work)
-                self.tt.base(mu::Base::Pointer(self.tt.base(mu::Base::U8)))
+                self.tt.base(mu::Base::Pointer(self.tt.base(mu::Base::I8)))
             }
             TypeEnum::Pointer(ty, _) => self.tt.base(mu::Base::Pointer(self.r#type(ty))),
             TypeEnum::PointerSlice(ty, _, sentinel) => match sentinel {
@@ -1362,6 +1447,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.array_size(size) + sentinel.is_some() as u32,
             )),
             TypeEnum::Maybe(ty) => self.tt.optional(self.r#type(ty)),
+            TypeEnum::Hole => self.tt.never(),
         }
     }
     fn struct_decl(&self, item: &Item) -> &'scope StructDecl {

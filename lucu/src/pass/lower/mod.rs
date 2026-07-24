@@ -14,9 +14,7 @@ use crate::module::Module;
 use crate::pass::imports::Imports;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Kind,
-    KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 mod header;
@@ -258,7 +256,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }),
                         SimpleKind::Constant(_) => todo!(),
                     };
-                    GenericArgument { term, arity }
+                    GenericArgument::Instance { term, arity }
                 })
                 .collect()
         })
@@ -437,7 +435,6 @@ impl<'a, 'b> Lower<'a, 'b> {
                         } else {
                             param
                         };
-                    
                         if l.tt[expected] == KindEnum::TYPE && effects.is_none() {
                             Result::new(Term::Type(ty))
                         } else if l.tt[expected] == KindEnum::THUNK {
@@ -463,7 +460,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     let SimpleKind::Constant(ty) = l.tt[param].output else {
                         todo!("error")
                     };
-                    l.constant(constant, ty).and_then(|constant| {
+                    l.constant(constant, Some(ty)).and_then(|(constant, _)| {
                         let expected = if arity == Some(1) && l.used_underscore() {
                             l.tt.insert_kind(KindEnum {
                                 params: None,
@@ -480,7 +477,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     })
                 },
             }
-            .map(|term| GenericArgument { term, arity })           
+            .map(|term| GenericArgument::Instance { term, arity })           
         })
 
     }
@@ -613,10 +610,10 @@ impl<'a, 'b> Lower<'a, 'b> {
 
                 let usize_ty = self.tt.insert_type(TypeEnum::SIZE);
                 m! {
-                    size <- self.constant(size, usize_ty);
+                    size <- self.constant(size, Some(usize_ty));
                     let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
                     ty <- self.r#type(ty);
-                    return self.tt.insert_type(TypeEnum::Array(ty, size, sentinel));
+                    return self.tt.insert_type(TypeEnum::Array(ty, size.0, sentinel));
                 }
             }
         }
@@ -624,33 +621,68 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn constant(
         &mut self,
         constant: &ast::Constant,
-        ty: Type,
-    ) -> Result<Constant> {
-        // TODO: make 'ty' optional, return real type
+        expected: Option<Type>,
+    ) -> Result<(Constant, Type)> {
         match constant {
             ast::Constant::Path(path) => {
-                let expected = self.tt.insert_kind(KindEnum::constant(ty));
                 self.term_path(path)
-                    .and_then(|(kind, term)| match term {
-                        Term::Constant(ty) if kind == expected => Result::new(ty),
+                    .and_then(|(kind, term)| match (self.tt[kind].params.as_ref(), self.tt[kind].output, term) {
+                        (None, SimpleKind::Constant(ty), Term::Constant(c)) => {
+                            if let Some(e) = expected && ty.subtype(e, self.tt) {
+                                Result::new((c, ty))
+                            } else {
+                                todo!("error")
+                            }
+                        },
                         _ => todo!("error"),
                     })
             }
-            // TODO: mark somewhere that the type must be able to be created from these literals
-            ast::Constant::Integer(integer) => Result::new(
-                self.tt
-                    .insert_constant(ConstantEnum::Integer(integer.value)),
-            ),
+            ast::Constant::Integer(integer) => {
+                let ty = match expected {
+                    Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
+                    None => self.tt.insert_type(TypeEnum::INT),
+                    _ => todo!("error")
+                };
+                Result::new(
+                    (self.tt
+                        .insert_constant(ConstantEnum::Integer(integer.value)), ty),
+                )
+            },
             // TODO: escaping!
-            ast::Constant::String(string) => Result::new(
-                self.tt
-                    .insert_constant(ConstantEnum::String(string.value.clone())),
-            ),
-            ast::Constant::Character(character) => Result::new(
-                self.tt
-                    .insert_constant(ConstantEnum::Character(character.value.clone())),
-            ),
-            ast::Constant::Zero(_) => Result::new(self.tt.insert_constant(ConstantEnum::Zero)),
+            ast::Constant::String(string) => {
+                let ty = match expected {
+                    Some(ty) if let TypeEnum::PointerSlice(inner, _, sentinel) = self.tt[ty] && inner.is_i8(self.tt) =>
+                        self.tt.insert_type(TypeEnum::PointerSlice(inner, self.tt.insert_region(RegionEnum::Static), sentinel)),
+                    None =>
+                        self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
+                    Some(ty) => todo!("error: string for {}", ty.display(self.tt)),
+                };
+                Result::new(
+                    (self.tt
+                        .insert_constant(ConstantEnum::String(string.value.clone())), ty),
+                )
+            },
+            ast::Constant::Character(character) => {
+                let ty = match expected {
+                    Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
+                    None => self.tt.insert_type(TypeEnum::I8),
+                    _ => todo!("error")
+                };
+                Result::new(
+                    (self.tt
+                        .insert_constant(ConstantEnum::Character(character.value.clone())), ty),
+                )
+            },
+            // TODO: check if zeroable
+            ast::Constant::Zero(_) => {
+                let Some(ty) = expected else {
+                    todo!("error")
+                };
+                if !ty.no_holes(self.tt) {
+                    todo!("error")
+                }
+                Result::new((self.tt.insert_constant(ConstantEnum::Zero), ty))
+            },
         }
     }
     fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {

@@ -344,8 +344,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 self.tt[kind].params.as_ref(),
                                 name.generics.as_ref(),
                                 |l| {
-                                    let constant = problems.append(l.constant(constant, ty));
-                                    if let Some(constant) = constant {
+                                    let constant = problems.append(l.constant(constant, Some(ty)));
+                                    if let Some((constant, _)) = constant {
                                         let item = ItemDecl::Alias(kind, Term::Constant(constant));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
                                     } else {

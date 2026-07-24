@@ -1,41 +1,53 @@
 use std::sync::Arc;
 
-use crate::type_table::unapply::Unapply;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Sentinel,
-    Term, Thunk, Type, TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Term,
+    Thunk, Type, TypeEnum, TypeTable,
 };
 
 pub trait Substitute {
     fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self;
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self;
-    /// Used for inferring global handler generics from the function signatures
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()>;
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool;
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool;
+    fn no_holes(self, tt: &TypeTable) -> bool;
 }
 
 impl GenericParameter {
     fn instantiate(self, tt: &TypeTable, start: usize, arg: GenericArgument) -> Term {
-        let term = if start > 0 {
-            arg.shift(tt, 0, start).term
+        let arg = if start > 0 {
+            arg.shift(tt, 0, start)
         } else {
-            arg.term
+            arg
         };
-        match &self.apply {
-            Some(apply) => {
-                assert_eq!(arg.arity, Some(apply.len()));
-                term.subst(tt, 0, apply)
-            }
-            None => {
-                assert_eq!(arg.arity, None);
-                term
-            }
+        match arg {
+            GenericArgument::Instance { term, arity } => match &self.apply {
+                Some(apply) => {
+                    assert_eq!(arity, Some(apply.len()));
+                    term.subst(tt, 0, apply)
+                }
+                None => {
+                    assert_eq!(arity, None);
+                    term
+                }
+            },
+            GenericArgument::Hole => Term::Hole,
+        }
+    }
+    fn infer_arg(self, from: Term, tt: &TypeTable, arg: &mut GenericArgument) -> bool {
+        let arity = self.apply.as_deref().map(<[_]>::len);
+        let inner = match self.apply {
+            Some(_) => todo!(),
+            None => from,
+        };
+        let new = GenericArgument::Instance { term: inner, arity };
+        let old = *arg;
+        if old.subtype(new, tt) && new.subtype(old, tt) {
+            *arg = new;
+            true
+        } else {
+            false
         }
     }
 }
@@ -50,16 +62,16 @@ where
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         self.iter().map(|ty| ty.shift(tt, start, offset)).collect()
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        assert_eq!(self.len(), to.len());
+        Iterator::zip(self.iter(), to.iter()).all(|(&a, &b)| a.subtype(b, tt))
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         Iterator::zip(self.iter().copied(), from.iter().copied())
-            .map(|(a, b)| a.infer(b, tt, start, args))
-            .collect()
+            .all(|(a, b)| a.infer(b, tt, start, args))
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        self.iter().all(|t| t.no_holes(tt))
     }
 }
 
@@ -73,19 +85,16 @@ where
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
         self.map(|tys| tys.shift(tt, start, offset))
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        assert!(self.is_some() == to.is_some());
+        Option::zip(self, to).is_none_or(|(a, b)| a.subtype(b, tt))
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         assert!(self.is_some() == from.is_some());
-        if let (Some(a), Some(b)) = (self, from) {
-            a.infer(b, tt, start, args)
-        } else {
-            Some(())
-        }
+        Option::zip(self, from).is_none_or(|(a, b)| a.infer(b, tt, start, args))
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        self.is_none_or(|t| t.no_holes(tt))
     }
 }
 
@@ -104,18 +113,18 @@ impl Substitute for Item {
             apply: self.apply.shift(tt, start, offset),
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        (self.module == from.module).then_some(())?;
-        (self.name == from.name).then_some(())?;
-        self.apply
-            .clone()
-            .infer(from.apply.clone(), tt, start, args)
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        // FIXME: this assumes all generics are covariant
+        self.module == to.module && self.name == to.name && self.apply.subtype(to.apply, tt)
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        // FIXME: this assumes all generics are covariant
+        self.module == from.module
+            && self.name == from.name
+            && self.apply.infer(from.apply, tt, start, args)
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        self.apply.no_holes(tt)
     }
 }
 
@@ -140,43 +149,83 @@ impl Substitute for GenericParameter {
             apply: self.apply.shift(tt, start, offset),
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        (self.index == from.index).then_some(());
-        self.apply
-            .clone()
-            .infer(from.apply.clone(), tt, start, args)
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        // FIXME: this assumes all generics are covariant
+        self.index == to.index && self.apply.subtype(to.apply, tt)
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        // FIXME: this assumes all generics are covariant
+        self.index == from.index
+            && self
+                .apply
+                .clone()
+                .infer(from.apply.clone(), tt, start, args)
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        self.apply.no_holes(tt)
     }
 }
 
 impl Substitute for GenericArgument {
     fn subst(self, tt: &TypeTable, start: usize, args: &[GenericArgument]) -> Self {
-        GenericArgument {
-            term: self.term.subst(tt, start + self.arity.unwrap_or(0), args),
-            arity: self.arity,
+        match self {
+            GenericArgument::Instance { term, arity } => GenericArgument::Instance {
+                term: term.subst(tt, start + arity.unwrap_or(0), args),
+                arity,
+            },
+            GenericArgument::Hole => GenericArgument::Hole,
         }
     }
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
-        GenericArgument {
-            term: self.term.shift(tt, start + self.arity.unwrap_or(0), offset),
-            arity: self.arity,
+        match self {
+            GenericArgument::Instance { term, arity } => GenericArgument::Instance {
+                term: term.shift(tt, start + arity.unwrap_or(0), offset),
+                arity,
+            },
+            GenericArgument::Hole => GenericArgument::Hole,
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        assert!(self.arity == from.arity);
-        self.term
-            .infer(from.term, tt, start + self.arity.unwrap_or(0), args)
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        match (self, to) {
+            (
+                GenericArgument::Instance {
+                    term: term_from,
+                    arity: arity_from,
+                },
+                GenericArgument::Instance {
+                    term: term_to,
+                    arity: arity_to,
+                },
+            ) => {
+                assert_eq!(arity_from, arity_to);
+                term_from.subtype(term_to, tt)
+            }
+            _ => true,
+        }
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        match (self, from) {
+            (
+                GenericArgument::Instance {
+                    term: term_to,
+                    arity: arity_to,
+                },
+                GenericArgument::Instance {
+                    term: term_from,
+                    arity: arity_from,
+                },
+            ) => {
+                assert_eq!(arity_to, arity_from);
+                term_to.infer(term_from, tt, start + arity_to.unwrap_or(0), args)
+            }
+            _ => true,
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match self {
+            GenericArgument::Instance { term, .. } => term.no_holes(tt),
+            GenericArgument::Hole => false,
+        }
     }
 }
 
@@ -193,16 +242,15 @@ impl Substitute for Thunk {
             effect: self.effect.shift(tt, start, offset),
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        self.returns.infer(from.returns, tt, start, args)?;
-        self.effect.infer(from.effect, tt, start, args)?;
-        Some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        self.returns.subtype(to.returns, tt) && self.effect.subtype(to.effect, tt)
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        self.returns.infer(from.returns, tt, start, args)
+            && self.effect.infer(from.effect, tt, start, args)
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        self.returns.no_holes(tt) && self.effect.no_holes(tt)
     }
 }
 
@@ -214,6 +262,7 @@ impl Substitute for Term {
             Term::Effect(effect) => Term::Effect(effect.subst(tt, start, args)),
             Term::Constant(constant) => Term::Constant(constant.subst(tt, start, args)),
             Term::Thunk(thunk) => Term::Thunk(thunk.subst(tt, start, args)),
+            Term::Hole => Term::Hole,
         }
     }
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
@@ -223,22 +272,39 @@ impl Substitute for Term {
             Term::Effect(effect) => Term::Effect(effect.shift(tt, start, offset)),
             Term::Constant(constant) => Term::Constant(constant.shift(tt, start, offset)),
             Term::Thunk(thunk) => Term::Thunk(thunk.shift(tt, start, offset)),
+            Term::Hole => Term::Hole,
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        match (self, to) {
+            (Term::Type(a), Term::Type(b)) => a.subtype(b, tt),
+            (Term::Region(a), Term::Region(b)) => a.subtype(b, tt),
+            (Term::Effect(a), Term::Effect(b)) => a.subtype(b, tt),
+            (Term::Constant(a), Term::Constant(b)) => a.subtype(b, tt),
+            (Term::Thunk(a), Term::Thunk(b)) => a.subtype(b, tt),
+            (Term::Hole, _) | (_, Term::Hole) => true,
+            _ => panic!(),
+        }
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (self, from) {
             (Term::Type(a), Term::Type(b)) => a.infer(b, tt, start, args),
             (Term::Region(a), Term::Region(b)) => a.infer(b, tt, start, args),
             (Term::Effect(a), Term::Effect(b)) => a.infer(b, tt, start, args),
             (Term::Constant(a), Term::Constant(b)) => a.infer(b, tt, start, args),
             (Term::Thunk(a), Term::Thunk(b)) => a.infer(b, tt, start, args),
-            _ => unreachable!(),
+            (Term::Hole, _) | (_, Term::Hole) => true,
+            _ => panic!(),
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match self {
+            Term::Type(ty) => ty.no_holes(tt),
+            Term::Region(region) => region.no_holes(tt),
+            Term::Effect(effect) => effect.no_holes(tt),
+            Term::Constant(constant) => constant.no_holes(tt),
+            Term::Thunk(thunk) => thunk.no_holes(tt),
+            Term::Hole => false,
         }
     }
 }
@@ -253,6 +319,7 @@ impl Substitute for Constant {
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
                         Term::Constant(ty) => return ty,
+                        Term::Hole => ConstantEnum::Hole,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
@@ -264,7 +331,8 @@ impl Substitute for Constant {
             | ConstantEnum::Integer(_)
             | ConstantEnum::String(_)
             | ConstantEnum::Character(_)
-            | ConstantEnum::Zero => return self,
+            | ConstantEnum::Zero
+            | ConstantEnum::Hole => return self,
         };
         tt.insert_constant(changed)
     }
@@ -278,57 +346,51 @@ impl Substitute for Constant {
             | ConstantEnum::Integer(_)
             | ConstantEnum::String(_)
             | ConstantEnum::Character(_)
-            | ConstantEnum::Zero => return self,
+            | ConstantEnum::Zero
+            | ConstantEnum::Hole => return self,
         };
         tt.insert_constant(changed)
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        match (&tt[self], &tt[from]) {
-            (ConstantEnum::Generic(param), _) if param.index >= start => {
-                let param = param.clone();
-                let arity = param.apply.as_deref().map(<[_]>::len);
-                let inner = match param.apply {
-                    Some(self_args) => {
-                        // FIXME: unapply might fail while we can still infer
-                        // like `0 u32` and `u32` should infer the generic '0' to be `lambda u32`
-                        let (dummy, from_args) = from.unapply(tt)?;
-                        self_args.infer(from_args, tt, start, args);
-                        dummy
-                    }
-                    None => from,
-                };
-                let arg = GenericArgument {
-                    term: Term::Constant(inner),
-                    arity,
-                };
-                (*args[param.index - start].get_or_insert(arg) == arg).then_some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        self == to
+            || match (&tt[self], &tt[to]) {
+                (ConstantEnum::Generic(a), ConstantEnum::Generic(b)) => {
+                    a.clone().subtype(b.clone(), tt)
+                }
+                (ConstantEnum::Hole, _) | (_, ConstantEnum::Hole) => true,
+                _ => false,
             }
-
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        match (&tt[self], &tt[from]) {
+            (ConstantEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
+                Term::Constant(from),
+                tt,
+                &mut args[args.len() - 1 - (param.index - start)],
+            ),
             (ConstantEnum::Generic(a), ConstantEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
-            (ConstantEnum::True, ConstantEnum::True) => Some(()),
-            (ConstantEnum::False, ConstantEnum::False) => Some(()),
-            (ConstantEnum::Integer(a), ConstantEnum::Integer(b)) => (a == b).then_some(()),
-            (ConstantEnum::String(a), ConstantEnum::String(b)) => (a == b).then_some(()),
-            (ConstantEnum::Character(a), ConstantEnum::Character(b)) => (a == b).then_some(()),
-            (ConstantEnum::Integer(a), ConstantEnum::Zero)
-            | (ConstantEnum::Zero, ConstantEnum::Integer(a)) => (a == &0).then_some(()),
-            (ConstantEnum::Zero, ConstantEnum::Zero) => Some(()),
-
-            (ConstantEnum::Generic(_), _) => None,
-            (ConstantEnum::True, _) => None,
-            (ConstantEnum::False, _) => None,
-            (ConstantEnum::Integer(_), _) => None,
-            (ConstantEnum::String(_), _) => None,
-            (ConstantEnum::Character(_), _) => None,
-            (ConstantEnum::Zero, _) => None,
+            (ConstantEnum::True, ConstantEnum::True) => true,
+            (ConstantEnum::False, ConstantEnum::False) => true,
+            (ConstantEnum::Integer(a), ConstantEnum::Integer(b)) => a == b,
+            (ConstantEnum::String(a), ConstantEnum::String(b)) => a == b,
+            (ConstantEnum::Character(a), ConstantEnum::Character(b)) => a == b,
+            (ConstantEnum::Zero, ConstantEnum::Zero) => true,
+            (ConstantEnum::Hole, _) | (_, ConstantEnum::Hole) => true,
+            _ => false,
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match &tt[self] {
+            ConstantEnum::Generic(generic_parameter) => generic_parameter.clone().no_holes(tt),
+            ConstantEnum::True => true,
+            ConstantEnum::False => true,
+            ConstantEnum::Integer(_) => true,
+            ConstantEnum::String(_) => true,
+            ConstantEnum::Character(_) => true,
+            ConstantEnum::Zero => true,
+            ConstantEnum::Hole => false,
         }
     }
 }
@@ -343,6 +405,7 @@ impl Substitute for Type {
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
                         Term::Type(ty) | Term::Thunk(Thunk { returns: ty, .. }) => return ty,
+                        Term::Hole => TypeEnum::Hole,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
@@ -370,7 +433,8 @@ impl Substitute for Type {
             | TypeEnum::Boolean
             | TypeEnum::Unit
             | TypeEnum::Never
-            | TypeEnum::NullPointer => {
+            | TypeEnum::NullPointer
+            | TypeEnum::Hole => {
                 return self;
             }
         };
@@ -402,81 +466,86 @@ impl Substitute for Type {
             | TypeEnum::Boolean
             | TypeEnum::Unit
             | TypeEnum::Never
-            | TypeEnum::NullPointer => {
+            | TypeEnum::NullPointer
+            | TypeEnum::Hole => {
                 return self;
             }
         };
         tt.insert_type(changed)
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        match (&tt[self], &tt[from]) {
-            (TypeEnum::Generic(param), _) if param.index >= start => {
-                let param = param.clone();
-                let arity = param.apply.as_deref().map(<[_]>::len);
-                let inner = match param.apply {
-                    Some(self_args) => {
-                        // FIXME: unapply might fail while we can still infer
-                        // like `0 u32` and `u32` should infer the generic '0' to be `lambda u32`
-                        let (dummy, from_args) = from.unapply(tt)?;
-                        self_args.infer(from_args, tt, start, args);
-                        dummy
-                    }
-                    None => from,
-                };
-                let arg = GenericArgument {
-                    term: Term::Type(inner),
-                    arity,
-                };
-                (*args[param.index - start].get_or_insert(arg) == arg).then_some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        self == to
+            || match (&tt[self], &tt[to]) {
+                (TypeEnum::Generic(a), TypeEnum::Generic(b)) => a.clone().subtype(b.clone(), tt),
+                (TypeEnum::Item(a), TypeEnum::Item(b)) => a.clone().subtype(b.clone(), tt),
+                (TypeEnum::Maybe(a), TypeEnum::Maybe(b)) => a.subtype(*b, tt),
+                (TypeEnum::Pointer(ta, ra), TypeEnum::Pointer(tb, rb)) => {
+                    ta.subtype(*tb, tt) && ra.subtype(*rb, tt)
+                }
+                (TypeEnum::PointerSlice(ta, ra, sa), TypeEnum::PointerSlice(tb, rb, sb)) => {
+                    ta.subtype(*tb, tt) && ra.subtype(*rb, tt) && sa == sb
+                }
+                (TypeEnum::Array(ta, ca, sa), TypeEnum::Array(tb, cb, sb)) => {
+                    ta.subtype(*tb, tt) && ca.subtype(*cb, tt) && sa == sb
+                }
+                (TypeEnum::NullPointer, TypeEnum::Maybe(b))
+                    if matches!(
+                        tt[*b],
+                        TypeEnum::Pointer(_, _) | TypeEnum::PointerSlice(_, _, _)
+                    ) =>
+                {
+                    true
+                }
+                (TypeEnum::Never, _) => true,
+                (TypeEnum::Hole, _) | (_, TypeEnum::Hole) => true,
+                _ => false,
             }
-
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        match (&tt[self], &tt[from]) {
+            (TypeEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
+                Term::Type(from),
+                tt,
+                &mut args[args.len() - 1 - (param.index - start)],
+            ),
             (TypeEnum::Generic(a), TypeEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
             (TypeEnum::Item(a), TypeEnum::Item(b)) => a.clone().infer(b.clone(), tt, start, args),
-            (TypeEnum::Integer(a), TypeEnum::Integer(b)) => (a == b).then_some(()),
-            (TypeEnum::Boolean, TypeEnum::Boolean) => Some(()),
-            (TypeEnum::Unit, TypeEnum::Unit) => Some(()),
-            (TypeEnum::Never, TypeEnum::Never) => Some(()),
-            (TypeEnum::NullPointer, TypeEnum::NullPointer) => Some(()),
-            (&TypeEnum::Maybe(a), &TypeEnum::Maybe(b)) => a.infer(b, tt, start, args),
-            (&TypeEnum::Pointer(ta, ra), &TypeEnum::Pointer(tb, rb))
-            | (&TypeEnum::PointerSlice(ta, ra, None), &TypeEnum::PointerSlice(tb, rb, None))
-            | (
-                &TypeEnum::PointerSlice(ta, ra, Some(Sentinel)),
-                &TypeEnum::PointerSlice(tb, rb, Some(Sentinel)),
-            ) => {
-                ta.infer(tb, tt, start, args)?;
-                ra.infer(rb, tt, start, args)?;
-                Some(())
+            (TypeEnum::Integer(a), TypeEnum::Integer(b)) => a == b,
+            (TypeEnum::Boolean, TypeEnum::Boolean) => true,
+            (TypeEnum::Unit, TypeEnum::Unit) => true,
+            (TypeEnum::Never, TypeEnum::Never) => true,
+            (TypeEnum::NullPointer, TypeEnum::NullPointer) => true,
+            (TypeEnum::Maybe(a), TypeEnum::Maybe(b)) => a.infer(*b, tt, start, args),
+            (TypeEnum::Pointer(ta, ra), TypeEnum::Pointer(tb, rb)) => {
+                ta.infer(*tb, tt, start, args) && ra.infer(*rb, tt, start, args)
             }
-            (&TypeEnum::Array(ta, sa, None), &TypeEnum::Array(tb, sb, None))
-            | (
-                &TypeEnum::Array(ta, sa, Some(Sentinel)),
-                &TypeEnum::Array(tb, sb, Some(Sentinel)),
-            ) => {
-                ta.infer(tb, tt, start, args)?;
-                sa.infer(sb, tt, start, args)?;
-                Some(())
+            (TypeEnum::PointerSlice(ta, ra, sa), TypeEnum::PointerSlice(tb, rb, sb)) => {
+                ta.infer(*tb, tt, start, args) && ra.infer(*rb, tt, start, args) && sa == sb
             }
-
-            (TypeEnum::Generic(_), _) => None,
-            (TypeEnum::Item(_), _) => None,
-            (TypeEnum::Integer(_), _) => None,
-            (TypeEnum::Boolean, _) => None,
-            (TypeEnum::Unit, _) => None,
-            (TypeEnum::Never, _) => None,
-            (TypeEnum::NullPointer, _) => None,
-            (TypeEnum::Maybe(_), _) => None,
-            (TypeEnum::Pointer(_, _), _) => None,
-            (TypeEnum::PointerSlice(_, _, _), _) => None,
-            (TypeEnum::Array(_, _, _), _) => None,
+            (TypeEnum::Array(ta, ca, sa), TypeEnum::Array(tb, cb, sb)) => {
+                ta.infer(*tb, tt, start, args) && ca.infer(*cb, tt, start, args) && sa == sb
+            }
+            (TypeEnum::Never, _) | (_, TypeEnum::Never) => true,
+            (TypeEnum::Hole, _) | (_, TypeEnum::Hole) => true,
+            _ => false,
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match &tt[self] {
+            TypeEnum::Generic(generic_parameter) => generic_parameter.clone().no_holes(tt),
+            TypeEnum::Item(item) => item.clone().no_holes(tt),
+            TypeEnum::Integer(_) => true,
+            TypeEnum::Boolean => true,
+            TypeEnum::Unit => true,
+            TypeEnum::Never => true,
+            TypeEnum::NullPointer => true,
+            TypeEnum::Pointer(ty, region) => ty.no_holes(tt) && region.no_holes(tt),
+            TypeEnum::PointerSlice(ty, region, _) => ty.no_holes(tt) && region.no_holes(tt),
+            TypeEnum::Array(ty, constant, _) => ty.no_holes(tt) && constant.no_holes(tt),
+            TypeEnum::Maybe(ty) => ty.no_holes(tt),
+            TypeEnum::Hole => false,
         }
     }
 }
@@ -491,13 +560,14 @@ impl Substitute for Region {
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
                         Term::Region(region) => return region,
+                        Term::Hole => RegionEnum::Hole,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
                     RegionEnum::Generic(generic)
                 }
             }
-            RegionEnum::Static | RegionEnum::Heap => return self,
+            RegionEnum::Static | RegionEnum::Heap | RegionEnum::Hole => return self,
         };
         tt.insert_region(changed)
     }
@@ -506,47 +576,42 @@ impl Substitute for Region {
             RegionEnum::Generic(ref generic) => {
                 RegionEnum::Generic(generic.clone().shift(tt, start, offset))
             }
-            RegionEnum::Static | RegionEnum::Heap => return self,
+            RegionEnum::Static | RegionEnum::Heap | RegionEnum::Hole => return self,
         };
         tt.insert_region(changed)
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        match (&tt[self], &tt[from]) {
-            (RegionEnum::Generic(param), _) if param.index >= start => {
-                let param = param.clone();
-                let arity = param.apply.as_deref().map(<[_]>::len);
-                let inner = match param.apply {
-                    Some(self_args) => {
-                        // FIXME: unapply might fail while we can still infer
-                        // like `0 u32` and `u32` should infer the generic '0' to be `lambda u32`
-                        let (dummy, from_args) = from.unapply(tt)?;
-                        self_args.infer(from_args, tt, start, args);
-                        dummy
-                    }
-                    None => from,
-                };
-                let arg = GenericArgument {
-                    term: Term::Region(inner),
-                    arity,
-                };
-                (*args[param.index - start].get_or_insert(arg) == arg).then_some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        self == to
+            || match (&tt[self], &tt[to]) {
+                (RegionEnum::Generic(a), RegionEnum::Generic(b)) => {
+                    a.clone().subtype(b.clone(), tt)
+                }
+                (RegionEnum::Hole, _) | (_, RegionEnum::Hole) => true,
+                _ => false,
             }
-
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        match (&tt[self], &tt[from]) {
+            (RegionEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
+                Term::Region(from),
+                tt,
+                &mut args[args.len() - 1 - (param.index - start)],
+            ),
             (RegionEnum::Generic(a), RegionEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
-            (RegionEnum::Static, RegionEnum::Static) => Some(()),
-            (RegionEnum::Heap, RegionEnum::Heap) => Some(()),
-
-            (RegionEnum::Generic(_), _) => None,
-            (RegionEnum::Static, _) => None,
-            (RegionEnum::Heap, _) => None,
+            (RegionEnum::Static, RegionEnum::Static) => true,
+            (RegionEnum::Heap, RegionEnum::Heap) => true,
+            (RegionEnum::Hole, _) | (_, RegionEnum::Hole) => true,
+            _ => false,
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match &tt[self] {
+            RegionEnum::Generic(generic_parameter) => generic_parameter.clone().no_holes(tt),
+            RegionEnum::Static => true,
+            RegionEnum::Heap => true,
+            RegionEnum::Hole => false,
         }
     }
 }
@@ -561,6 +626,7 @@ impl Substitute for Effect {
                 if let Some(index) = index.and_then(|index| args.len().checked_sub(index + 1)) {
                     match generic.instantiate(tt, start, args[index]) {
                         Term::Effect(effect) | Term::Thunk(Thunk { effect, .. }) => return effect,
+                        Term::Hole => EffectEnum::Hole,
                         _ => panic!("ICE: unexpected kind of generic argument"),
                     }
                 } else {
@@ -573,7 +639,7 @@ impl Substitute for Effect {
             }
             EffectEnum::Read(region) => EffectEnum::Read(region.subst(tt, start, args)),
             EffectEnum::Write(region) => EffectEnum::Write(region.subst(tt, start, args)),
-            EffectEnum::Divergent | EffectEnum::World => return self,
+            EffectEnum::Divergent | EffectEnum::World | EffectEnum::Hole => return self,
         };
         tt.insert_effect(changed)
     }
@@ -586,65 +652,62 @@ impl Substitute for Effect {
             EffectEnum::Row(ref row) => EffectEnum::Row(row.clone().shift(tt, start, offset)),
             EffectEnum::Read(region) => EffectEnum::Read(region.shift(tt, start, offset)),
             EffectEnum::Write(region) => EffectEnum::Write(region.shift(tt, start, offset)),
-            EffectEnum::Divergent | EffectEnum::World => return self,
+            EffectEnum::Divergent | EffectEnum::World | EffectEnum::Hole => return self,
         };
         tt.insert_effect(changed)
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        match (&tt[self], &tt[from]) {
-            (EffectEnum::Generic(param), _) if param.index >= start => {
-                let param = param.clone();
-                let arity = param.apply.as_deref().map(<[_]>::len);
-                let inner = match param.apply {
-                    Some(self_args) => {
-                        // FIXME: unapply might fail while we can still infer
-                        // like `0 u32` and `u32` should infer the generic '0' to be `lambda u32`
-                        let (dummy, from_args) = from.unapply(tt)?;
-                        self_args.infer(from_args, tt, start, args);
-                        dummy
-                    }
-                    None => from,
-                };
-                let arg = GenericArgument {
-                    term: Term::Effect(inner),
-                    arity,
-                };
-                (*args[param.index - start].get_or_insert(arg) == arg).then_some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        self == to
+            || match (&tt[self], &tt[to]) {
+                (EffectEnum::Generic(a), EffectEnum::Generic(b)) => {
+                    a.clone().subtype(b.clone(), tt)
+                }
+                (EffectEnum::Item(a), EffectEnum::Item(b)) => a.clone().subtype(b.clone(), tt),
+                (EffectEnum::Row(_a), EffectEnum::Row(_b)) => todo!(),
+                (EffectEnum::Read(a), EffectEnum::Read(b)) => a.subtype(*b, tt),
+                (EffectEnum::Write(a), EffectEnum::Write(b)) => a.subtype(*b, tt),
+                (EffectEnum::Hole, _) | (_, EffectEnum::Hole) => true,
+                _ => false,
             }
-
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        match (&tt[self], &tt[from]) {
+            (EffectEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
+                Term::Effect(from),
+                tt,
+                &mut args[args.len() - 1 - (param.index - start)],
+            ),
             (EffectEnum::Generic(a), EffectEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
             (EffectEnum::Item(a), EffectEnum::Item(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
-            (EffectEnum::Row(a), EffectEnum::Row(b)) if a.is_empty() && b.is_empty() => Some(()),
-            (&EffectEnum::Read(a), &EffectEnum::Read(b)) => a.infer(b, tt, start, args),
-            (&EffectEnum::Write(a), &EffectEnum::Write(b)) => a.infer(b, tt, start, args),
-            (EffectEnum::Divergent, EffectEnum::Divergent) => Some(()),
-            (EffectEnum::World, EffectEnum::World) => Some(()),
-
-            (EffectEnum::Generic(_), _) => None,
-            (EffectEnum::Item(_), _) => None,
-            (EffectEnum::Row(a), _) if a.is_empty() => None,
-            (EffectEnum::Read(_), _) => None,
-            (EffectEnum::Write(_), _) => None,
-            (EffectEnum::Divergent, _) => None,
-            (EffectEnum::World, _) => None,
-
+            (EffectEnum::Row(a), EffectEnum::Row(b)) if a.is_empty() && b.is_empty() => true,
+            (EffectEnum::Read(a), EffectEnum::Read(b)) => a.infer(*b, tt, start, args),
+            (EffectEnum::Write(a), EffectEnum::Write(b)) => a.infer(*b, tt, start, args),
+            (EffectEnum::Divergent, EffectEnum::Divergent) => true,
+            (EffectEnum::World, EffectEnum::World) => true,
             (EffectEnum::Row(_), _) => {
                 // This is the one reason why we can't completely accept or deny a generics inference...
                 // If we don't have enough information to accept or deny, we accept *without* inferring.
                 // Feel free to be super duper smart and add more code here later if you dare,
                 // but we should probably not do it like this and use a sort of Hindley-Milner with row types.
-                Some(())
+                true
             }
+            (EffectEnum::Hole, _) | (_, EffectEnum::Hole) => true,
+            _ => false,
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match &tt[self] {
+            EffectEnum::Generic(generic_parameter) => generic_parameter.clone().no_holes(tt),
+            EffectEnum::Item(item) => item.clone().no_holes(tt),
+            EffectEnum::Row(effects) => effects.iter().all(|e| e.no_holes(tt)),
+            EffectEnum::Read(region) | EffectEnum::Write(region) => region.no_holes(tt),
+            EffectEnum::Divergent => true,
+            EffectEnum::World => true,
+            EffectEnum::Hole => false,
         }
     }
 }
@@ -664,19 +727,26 @@ impl Substitute for FunctionParameter {
             }
         }
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        match (self, to) {
+            (FunctionParameter::Data(a), FunctionParameter::Data(b)) => a.subtype(b, tt),
+            (FunctionParameter::Lambda(a), FunctionParameter::Lambda(b)) => a.subtype(b, tt),
+            _ => panic!(),
+        }
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (self, from) {
             (FunctionParameter::Data(a), FunctionParameter::Data(b)) => a.infer(b, tt, start, args),
             (FunctionParameter::Lambda(a), FunctionParameter::Lambda(b)) => {
                 a.infer(b, tt, start, args)
             }
-            _ => unreachable!(),
+            _ => panic!(),
+        }
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        match self {
+            FunctionParameter::Data(ty) => ty.no_holes(tt),
+            FunctionParameter::Lambda(function_signature) => function_signature.no_holes(tt),
         }
     }
 }
@@ -691,6 +761,16 @@ impl FunctionSignature {
             implicit_regions: 0,
             params,
             thunk,
+        })
+    }
+    pub fn infer_params(
+        self,
+        from: &[FunctionParameter],
+        tt: &TypeTable,
+        args: &mut [GenericArgument],
+    ) -> bool {
+        tt[self].params.as_ref().is_none_or(|p| {
+            Iterator::zip(p.iter(), from.iter()).all(|(a, b)| a.infer(*b, tt, 0, args))
         })
     }
 }
@@ -725,29 +805,23 @@ impl Substitute for FunctionSignature {
             thunk,
         })
     }
-    fn infer(
-        self,
-        from: Self,
-        tt: &TypeTable,
-        start: usize,
-        args: &mut Vec<Option<GenericArgument>>,
-    ) -> Option<()> {
-        let a = tt[self].clone();
-        let b = tt[from].clone();
-
-        // NOTE: if we eventually have dependent kinds this might fail
-        assert_eq!(a.type_params, b.type_params);
-        assert_eq!(a.implicit_regions, b.implicit_regions);
-        let arity = a
-            .type_params
-            .as_ref()
-            .map(|params| params.len())
-            .unwrap_or(0)
-            + a.implicit_regions;
-
-        a.params.infer(b.params, tt, start + arity, args)?;
-        a.thunk.infer(b.thunk, tt, start + arity, args)?;
-        Some(())
+    fn subtype(self, to: Self, tt: &TypeTable) -> bool {
+        let (from, to) = (tt[self].clone(), tt[to].clone());
+        assert_eq!(from.type_params, to.type_params);
+        assert_eq!(from.implicit_regions, to.implicit_regions);
+        to.params.subtype(from.params, tt) && from.thunk.subtype(to.thunk, tt)
+    }
+    fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
+        let (to, from) = (tt[self].clone(), tt[from].clone());
+        assert_eq!(to.type_params, from.type_params);
+        assert_eq!(to.implicit_regions, from.implicit_regions);
+        let arity = to.arity();
+        to.params.infer(from.params, tt, start + arity, args)
+            && to.thunk.infer(from.thunk, tt, start + arity, args)
+    }
+    fn no_holes(self, tt: &TypeTable) -> bool {
+        let sig = tt[self].clone();
+        sig.params.no_holes(tt) && sig.thunk.no_holes(tt)
     }
 }
 
@@ -759,14 +833,14 @@ mod tests {
     #[test]
     fn test_shift() {
         let table = TypeTable::new();
-        let lhs = GenericArgument {
+        let lhs = GenericArgument::Instance {
             term: Term::Type(table.insert_type(TypeEnum::Generic(GenericParameter {
                 index: 1,
                 apply: None,
             }))),
             arity: Some(1),
         };
-        let rhs = GenericArgument {
+        let rhs = GenericArgument::Instance {
             term: Term::Type(table.insert_type(TypeEnum::Generic(GenericParameter {
                 index: 0,
                 apply: None,
@@ -807,14 +881,14 @@ mod tests {
             },
         });
 
-        let mut generics = vec![None];
-        assert_eq!(sig.infer(inserted_sig, &table, 0, &mut generics), Some(()));
+        let mut generics = vec![GenericArgument::Hole];
+        assert!(sig.infer(inserted_sig, &table, 0, &mut generics));
         assert_eq!(
             generics[0],
-            Some(GenericArgument {
+            GenericArgument::Instance {
                 term: Term::Type(inserted),
                 arity: None
-            })
+            }
         );
     }
 }

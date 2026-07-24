@@ -14,7 +14,7 @@ use crate::mu::{self, ExpressionTable as _, TypeTable as _};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::pass::lower::{HeaderQuery, Lower};
-use crate::span::HasSpan;
+use crate::span::{HasSpan, Span};
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
@@ -374,7 +374,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
         }
     }
-    fn caller_location_effect(&self, call: &'a ast::Call) -> mu::Expression {
+    fn caller_location_effect(&self, span: Span) -> mu::Expression {
         let ty = self
             .effect(self.caller_location)
             .expect("ICE: caller location effect has no type")
@@ -393,7 +393,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             Some(path) => path.to_string_lossy().to_compact_string(),
             None => self.lower.module.to_compact_string(),
         };
-        let (line, column) = line_column::line_column(self.source, call.span().start as usize);
+        let (line, column) = line_column::line_column(self.source, span.start as usize);
 
         self.et.construct(
             tup,
@@ -415,11 +415,16 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     }
     fn call(
         &mut self,
-        call: &'a ast::Call,
+        call: Either<&'a ast::Call, &'a ast::Path>,
         use_arg: Option<UseArg<'a>>,
         expected: Option<Type>,
     ) -> Result<(mu::Expression, Type)> {
-        self.path(&call.fun).and_then(|(fun, fun_ty)| {
+        // TODO: also put non-call paths under here
+        self.path(match call {
+            Either::Left(call) => &call.fun,
+            Either::Right(path) => path,
+        })
+        .and_then(|(fun, fun_ty)| {
             let mut problems = Problems::ok();
 
             // function signature with partially applied generics
@@ -438,11 +443,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
             // get all arguments
             let (mut args, params) = if let Some(sig_params) = &sig_mono_val.params {
-                if sig_params.len() != call.count_args() + use_arg.is_some() as usize {
+                if sig_params.len()
+                    != call.left().map_or(0, ast::Call::count_args) + use_arg.is_some() as usize
+                {
                     todo!("error: incorrect amount of arguments")
                 }
                 let (mut args, mut params): (Vec<_>, Vec<_>) =
-                    Iterator::zip(sig_params.iter().copied(), call.args())
+                    Iterator::zip(sig_params.iter().copied(), call.unwrap_left().args())
                         .map(|(param, arg)| {
                             match param {
                                 FunctionParameter::Data(ty) => problems
@@ -534,7 +541,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     });
                 }
                 (args, params)
-            } else if call.args.is_some() || call.block.is_some() || use_arg.is_some() {
+            } else if call.left().is_some_and(|call| {
+                call.args.is_some() || call.block.is_some() || use_arg.is_some()
+            }) {
                 todo!("error: function has no arguments")
             } else {
                 (Vec::new(), Vec::new())
@@ -560,7 +569,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let sig_mono = sig.apply(self.lower.tt, &implicit_generics);
                 let sig_mono_val = &self.lower.tt[sig_mono];
                 if !sig_mono.no_holes(self.lower.tt) {
-                    eprintln!("{}", &self.source[call.span()]);
                     todo!(
                         "error: ambiguous generics for {}",
                         sig_mono.display(self.lower.tt)
@@ -577,7 +585,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             for effect in sig_mono_val.thunk.effect.effects(self.lower.tt) {
                 if effect.is_marker(self.lower.tt) {
                     if !self.has_marker_effect(effect) {
-                        eprintln!("{}", &self.source[call.span()]);
                         todo!("error: no {}", effect.display(self.lower.tt))
                     }
                 } else if let Some(idx) = self.find_effect(effect) {
@@ -587,7 +594,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .1;
                     args.push(self.et.reference(effect_ty, idx));
                 } else if effect == self.caller_location {
-                    args.push(self.caller_location_effect(call));
+                    args.push(self.caller_location_effect(match call {
+                        Either::Left(call) => call.span(),
+                        Either::Right(path) => path.span(),
+                    }));
                 } else {
                     // TODO: global handlers
                     todo!("{}", effect.display(self.lower.tt))
@@ -865,19 +875,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 } else {
                     self.path(path).and_then(|(e, p)| match p {
                         PathType::Data(ty) => Result::new((e.unwrap_left(), ty)),
-                        PathType::Function(sig, generics) => {
-                            let sig_val = &self.lower.tt[sig];
-                            if let Some(_params) = &sig_val.params {
-                                todo!("error")
-                            }
-                            Result::new((
-                                match e {
-                                    Either::Left(e) => self.et.apply(e, []),
-                                    Either::Right(i) => self.intrinsic(i, generics, []),
-                                },
-                                sig_val.thunk.returns,
-                            ))
-                        }
+                        PathType::Function(_, _) => self.call(Either::Right(path), None, expected),
                     })
                 }
             }
@@ -1201,14 +1199,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     _ => todo!("error"),
                 }
             }
-            ast::Expression::Call(call) => self.call(call, None, expected),
+            ast::Expression::Call(call) => self.call(Either::Left(call), None, expected),
             ast::Expression::Use {
                 params,
                 call,
                 block,
                 ..
             } => self.call(
-                call,
+                Either::Left(call),
                 Some(UseArg {
                     params: params.as_ref().map(|(_, params, _)| params),
                     block,

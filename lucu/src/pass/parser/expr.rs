@@ -36,7 +36,7 @@ impl<'a> Parser<'a> {
         allow_lambda: AllowLambda,
     ) -> Result<std::result::Result<ast::Call, ast::Path>> {
         m! {
-            args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma, |p| p.expression(true)));
+            args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma.into(), |p| p.expression(true)));
             block <- if allow_lambda != AllowLambda::No
                 && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
                 if self.is_next(TokenEnum::Identifier) {
@@ -94,7 +94,7 @@ impl<'a> Parser<'a> {
                             let tk_use = self.skip();
                             call <- self.call(true);
                             tk_newline <- self.consume(Symbol::Semicolon);
-                            block <- self.many(Symbol::Semicolon, Self::statement);
+                            block <- self.many(Symbol::Semicolon.into(), Self::statement);
                             return Box::new(ast::Expression::Use {
                                 params: Some((tk_let, ast::Separated { elements: vec![(LambdaParameter { var, ty }, None)], end }, tk_equals)),
                                 tk_use,
@@ -114,7 +114,7 @@ impl<'a> Parser<'a> {
                     let tk_use = self.skip();
                     call <- self.call(true);
                     tk_newline <- self.consume(Symbol::Semicolon);
-                    block <- self.many(Symbol::Semicolon, Self::statement);
+                    block <- self.many(Symbol::Semicolon.into(), Self::statement);
                     return Box::new(ast::Expression::Use {
                         params: None,
                         tk_use,
@@ -357,7 +357,7 @@ impl<'a> Parser<'a> {
                 .grouped(Group::Brace, Self::block)
                 .map(|block| Box::new(ast::Expression::Block(block))),
             TokenEnum::Open(Group::Bracket) => self
-                .many_grouped(Group::Bracket, Symbol::Comma, |p| p.expression(true))
+                .many_grouped(Group::Bracket, Symbol::Comma.into(), |p| p.expression(true))
                 .map(|exprs| Box::new(ast::Expression::Array(exprs))),
             TokenEnum::Keyword(Keyword::Handle) => {
                 m! {
@@ -403,7 +403,7 @@ impl<'a> Parser<'a> {
                             let tk_dot = self.skip();
                             self.ident().and_then(|member| {
                                 self.when(Parser::starts_multiple_generics, |parser|
-                                    parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                                    parser.many_grouped(Group::Bracket, Symbol::Comma.into(), Parser::generic_argument)
                                 ).map(|generics| ast::Path {
                                     origin: ast::PathOrigin::Package(ident, tk_dot, member),
                                     generics,
@@ -412,7 +412,7 @@ impl<'a> Parser<'a> {
                         }
                         _ => {
                             self.when(Parser::starts_multiple_generics, |parser|
-                                parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                                parser.many_grouped(Group::Bracket, Symbol::Comma.into(), Parser::generic_argument)
                             ).map(|generics| ast::Path {
                                 origin: ast::PathOrigin::Local(ident),
                                 generics,
@@ -453,14 +453,14 @@ impl<'a> Parser<'a> {
             params <- if self.starts_lambda() {
                 let s = &mut *self;
                 m! {
-                    names <- s.many_until_seperated(Symbol::Comma, &[TokenEnum::Symbol(Symbol::Arrow)], Self::lambda_parameter);
+                    names <- s.many_until_seperated(Symbol::Comma.into(), &[TokenEnum::Symbol(Symbol::Arrow)], Self::lambda_parameter);
                     tk_arrow <- s.consume(TokenEnum::Symbol(Symbol::Arrow));
                     return Some((names, tk_arrow));
                 }
             } else {
                 Result::new(None)
             };
-            stmts <- self.many(Symbol::Semicolon, Self::statement);
+            stmts <- self.many(Symbol::Semicolon.into(), Self::statement);
             return ast::Block { params, stmts };
         }
     }

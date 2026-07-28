@@ -90,8 +90,8 @@ impl<'a> Parser<'a> {
     }
     pub fn module(&mut self) -> Result<ast::Module> {
         m! {
-            imports <- self.many_while_next(Symbol::Semicolon, Keyword::Import, Parser::import);
-            items <- self.many(Symbol::Semicolon, Parser::item);
+            imports <- self.many_while_next(Symbol::Semicolon.into(), Keyword::Import, Parser::import);
+            items <- self.many(Symbol::Semicolon.into(), Parser::item);
             return ast::Module { imports, items };
         }
     }
@@ -142,7 +142,7 @@ impl<'a> Parser<'a> {
                     let token = self.skip();
                     generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                         Group::Bracket,
-                        Symbol::Comma,
+                        Symbol::Comma.into(),
                         Parser::generic,
                     ));
                     handler <- self.handler();
@@ -168,7 +168,7 @@ impl<'a> Parser<'a> {
         m! {
             effect <- self.path(false);
             with_effects <- self.when_next(Keyword::With, Parser::with_effects);
-            items <- self.many_grouped(Group::Brace, Symbol::Semicolon, Parser::item);
+            items <- self.many_grouped(Group::Brace, Symbol::Semicolon.into(), Parser::item);
             return ast::Handler { effect, with_effects, items };
         }
     }
@@ -205,7 +205,7 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn effect_body(&mut self) -> Result<ast::EffectBody> {
-        self.many_grouped(Group::Brace, Symbol::Semicolon, Parser::item)
+        self.many_grouped(Group::Brace, Symbol::Semicolon.into(), Parser::item)
             .map(|items| ast::EffectBody { items })
     }
     pub fn function_definition(&mut self) -> Result<ast::FunctionDefinition> {
@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
                             && (!may_precede_type || parser.last_token_end == parser.next().span.start)
                     },
                     |parser| {
-                        parser.many_grouped(Group::Bracket, Symbol::Comma, Parser::generic_argument)
+                        parser.many_grouped(Group::Bracket, Symbol::Comma.into(), Parser::generic_argument)
                     },
                 );
             return ast::Path { origin, generics };
@@ -400,7 +400,7 @@ impl<'a> Parser<'a> {
     pub fn r#struct(&mut self) -> Result<ast::Struct> {
         m! {
             r#struct <- self.consume(Keyword::Struct);
-            members <- self.many_grouped(Group::Parenthesis, Symbol::Comma, Parser::struct_member);
+            members <- self.many_grouped(Group::Parenthesis, Symbol::Comma.into(), Parser::struct_member);
             return ast::Struct { r#struct, members };
         }
     }
@@ -432,7 +432,7 @@ impl<'a> Parser<'a> {
             name <- self.name(false);
             parameters <- self.when_next(TokenEnum::Open(Group::Parenthesis), |parser| parser.many_grouped(
                 Group::Parenthesis,
-                Symbol::Comma,
+                Symbol::Comma.into(),
                 Parser::parameter,
             ));
             returns <- self.when(Parser::starts_type, Parser::returns);
@@ -460,7 +460,7 @@ impl<'a> Parser<'a> {
             ident <- if underscore { self.ident_or_underscore() } else { self.ident() };
             generics <- self.when_next(TokenEnum::Open(Group::Bracket), |parser| parser.many_grouped(
                 Group::Bracket,
-                Symbol::Comma,
+                Symbol::Comma.into(),
                 Parser::generic,
             ));
             return ast::Name { ident, generics };
@@ -639,13 +639,13 @@ impl<'a> Parser<'a> {
             }
         }
     }
-    fn skip_to_recovery(&mut self, sep: Symbol, until: &[TokenEnum]) {
+    fn skip_to_recovery(&mut self, sep: TokenEnum, until: &[TokenEnum]) {
         loop {
             match self.next().token {
                 t if until.contains(&t) => {
                     break;
                 }
-                TokenEnum::Symbol(sym) if sym == sep => {
+                t if t == sep => {
                     self.skip();
                     break;
                 }
@@ -675,21 +675,21 @@ impl<'a> Parser<'a> {
     fn many_grouped<T>(
         &mut self,
         group: Group,
-        separator: Symbol,
+        separator: TokenEnum,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Grouped<ast::Separated<T>>> {
         self.grouped(group, |parser| parser.many(separator, parse))
     }
     fn many<T>(
         &mut self,
-        separator: Symbol,
+        separator: TokenEnum,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Separated<T>> {
         self.many_while(separator, |_| true, parse)
     }
     fn many_while_next<T>(
         &mut self,
-        separator: Symbol,
+        separator: TokenEnum,
         token: impl Into<TokenEnum>,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Separated<T>> {
@@ -698,7 +698,7 @@ impl<'a> Parser<'a> {
     }
     fn many_while<T>(
         &mut self,
-        separator: Symbol,
+        separator: TokenEnum,
         pred: impl Fn(&Self) -> bool,
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Separated<T>> {
@@ -724,7 +724,7 @@ impl<'a> Parser<'a> {
     }
     fn many_until_seperated<T>(
         &mut self,
-        separator: Symbol,
+        separator: TokenEnum,
         until: &[TokenEnum],
         parse: impl Fn(&mut Self) -> Result<T>,
     ) -> Result<ast::Separated<T>> {
@@ -758,8 +758,9 @@ impl<'a> Parser<'a> {
             let next = self.next().token;
             let has_next =
                 !until.contains(&next) && !matches!(next, TokenEnum::Close(_) | TokenEnum::Eof);
-            has_next
-                .then(|| parse(self).tap_none(|| self.skip_to_recovery(Symbol::Semicolon, until)))
+            has_next.then(|| {
+                parse(self).tap_none(|| self.skip_to_recovery(Symbol::Semicolon.into(), until))
+            })
         })
         .collect()
     }

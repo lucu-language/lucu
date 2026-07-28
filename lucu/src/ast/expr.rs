@@ -108,6 +108,7 @@ pub enum UnOp {
 #[derive(Debug, PartialEq, Eq)]
 pub struct LambdaParameter {
     pub var: Identifier,
+    // TODO: uhhh we also need to support functions lmao
     pub ty: Option<Box<Type>>,
 }
 

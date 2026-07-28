@@ -189,7 +189,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 self.tt[kind].params.as_ref(),
                                 name.generics.as_ref(),
                                 |l| {
-                                    let ty = problems.append(l.r#type(ast));
+                                    let ty = problems.append(l.r#type(ast, false));
                                     if let Some(ty) = ty {
                                         let item = ItemDecl::Alias(kind, Term::Type(ty));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
@@ -331,7 +331,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 }
 
                 // NOTE: if we eventually have dependent kinds this this might fail
-                let ty = problems.append(self.r#type(ty));
+                let ty = problems.append(self.r#type(ty, false));
                 let kind = ty.and_then(|ty| {
                     problems.append(self.kind(name.generics.as_ref(), SimpleKind::Constant(ty)))
                 });
@@ -505,7 +505,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     }
     fn struct_member(&mut self, member: &'a ast::StructMember) -> Result<StructMember> {
         match member {
-            ast::StructMember::Data(name, ty) => self.r#type(ty).map(|ty| StructMember {
+            ast::StructMember::Data(name, ty) => self.r#type(ty, false).map(|ty| StructMember {
                 name: name.as_str().to_compact_string(),
                 ty,
             }),

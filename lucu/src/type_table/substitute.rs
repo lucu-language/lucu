@@ -43,11 +43,26 @@ impl GenericParameter {
         };
         let new = GenericArgument::Instance { term: inner, arity };
         let old = *arg;
-        if old.subtype(new, tt) && new.subtype(old, tt) {
+
+        // TODO: proper hole filling thing
+        let do_subst = match old {
+            GenericArgument::Instance { term, .. } => match term {
+                Term::Type(ty) => tt[ty] == TypeEnum::Hole,
+                Term::Region(region) => tt[region] == RegionEnum::Hole,
+                Term::Effect(effect) => tt[effect] == EffectEnum::Hole,
+                Term::Constant(constant) => tt[constant] == ConstantEnum::Hole,
+                Term::Thunk(thunk) => {
+                    tt[thunk.returns] == TypeEnum::Hole && tt[thunk.effect] == EffectEnum::Hole
+                }
+                Term::Hole => true,
+            },
+            GenericArgument::Hole => true,
+        };
+        if do_subst {
             *arg = new;
             true
         } else {
-            false
+            !new.subtype(old, tt) && !old.subtype(new, tt)
         }
     }
 }
@@ -717,6 +732,7 @@ impl Substitute for FunctionParameter {
         match self {
             FunctionParameter::Data(ty) => FunctionParameter::Data(ty.subst(tt, start, args)),
             FunctionParameter::Lambda(sig) => FunctionParameter::Lambda(sig.subst(tt, start, args)),
+            FunctionParameter::Hole => FunctionParameter::Hole,
         }
     }
     fn shift(self, tt: &TypeTable, start: usize, offset: usize) -> Self {
@@ -725,12 +741,14 @@ impl Substitute for FunctionParameter {
             FunctionParameter::Lambda(sig) => {
                 FunctionParameter::Lambda(sig.shift(tt, start, offset))
             }
+            FunctionParameter::Hole => FunctionParameter::Hole,
         }
     }
     fn subtype(self, to: Self, tt: &TypeTable) -> bool {
         match (self, to) {
             (FunctionParameter::Data(a), FunctionParameter::Data(b)) => a.subtype(b, tt),
             (FunctionParameter::Lambda(a), FunctionParameter::Lambda(b)) => a.subtype(b, tt),
+            (FunctionParameter::Hole, _) | (_, FunctionParameter::Hole) => true,
             _ => panic!(),
         }
     }
@@ -740,6 +758,7 @@ impl Substitute for FunctionParameter {
             (FunctionParameter::Lambda(a), FunctionParameter::Lambda(b)) => {
                 a.infer(b, tt, start, args)
             }
+            (FunctionParameter::Hole, _) | (_, FunctionParameter::Hole) => true,
             _ => panic!(),
         }
     }
@@ -747,6 +766,7 @@ impl Substitute for FunctionParameter {
         match self {
             FunctionParameter::Data(ty) => ty.no_holes(tt),
             FunctionParameter::Lambda(function_signature) => function_signature.no_holes(tt),
+            FunctionParameter::Hole => false,
         }
     }
 }

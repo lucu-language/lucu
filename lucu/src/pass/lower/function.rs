@@ -19,8 +19,8 @@ use crate::span::{HasSpan, Span};
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, RegionEnum, SimpleKind, Term,
-    Type, TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, Kind, RegionEnum, SimpleKind,
+    Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -133,6 +133,7 @@ impl mu::Module {
     }
 }
 
+#[derive(Clone, Copy)]
 struct UseArg<'a> {
     params: Option<&'a ast::Separated<ast::LambdaParameter>>,
     block: &'a ast::Separated<Box<ast::Expression>>,
@@ -148,6 +149,7 @@ impl From<FunctionParameter> for PathType {
         match value {
             FunctionParameter::Data(ty) => Self::Data(ty),
             FunctionParameter::Lambda(sig) => Self::Function(sig, Arc::new([])),
+            FunctionParameter::Hole => panic!("ICE: function parameter hole"),
         }
     }
 }
@@ -171,7 +173,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .map(|param| (param.name(), None)),
                     iter::once(&**body),
                 )
-                .map(|lambda| {
+                .map(|(lambda, _)| {
                     let mu::ExpressionEnum::Abstract(_, body) = self.et[lambda] else {
                         panic!("ICE: abstraction did not give lambda expression")
                     };
@@ -199,7 +201,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         sig: FunctionSignature,
         params: impl IntoIterator<Item = (&'a ast::Identifier, Option<&'a ast::Type>)>,
         body: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
-    ) -> Result<mu::Expression> {
+    ) -> Result<(mu::Expression, Type)> {
         // FIXME: push generic arguments of sig
         // also requires shifting all vars and markers
         let mut me = self.reborrow();
@@ -241,7 +243,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             &mut body.into_iter().peekable(),
             Some(sig_val.thunk.returns),
         )
-        .map(|(expr, _)| self.et.lambda(from, expr))
+        .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
     }
     fn find_named(&self, name: &str) -> Option<(u32, FunctionParameter)> {
         self.vars
@@ -414,6 +416,46 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             )],
         )
     }
+    fn lambda_signature(
+        &mut self,
+        type_params: Option<Arc<[Kind]>>,
+        implicit_regions: usize,
+        ast: Option<&'a ast::Separated<ast::LambdaParameter>>,
+    ) -> Result<FunctionSignature> {
+        let thunk = Thunk {
+            returns: self.lower.tt.insert_type(TypeEnum::Hole),
+            effect: self.lower.tt.insert_effect(EffectEnum::Hole),
+        };
+        match ast {
+            Some(ast_params) => ast_params
+                .iter()
+                .map(|ast_param| match &ast_param.ty {
+                    Some(ty) => self.lower.r#type(ty, true).map(FunctionParameter::Data),
+                    None => Result::new(FunctionParameter::Hole),
+                })
+                .collect::<Result<_>>()
+                .map(|params| {
+                    self.lower
+                        .tt
+                        .insert_function_signature(FunctionSignatureValue {
+                            type_params,
+                            implicit_regions,
+                            params: Some(params),
+                            thunk,
+                        })
+                }),
+            None => Result::new(
+                self.lower
+                    .tt
+                    .insert_function_signature(FunctionSignatureValue {
+                        type_params,
+                        implicit_regions,
+                        params: None,
+                        thunk,
+                    }),
+            ),
+        }
+    }
     fn call(
         &mut self,
         call: Either<&'a ast::Call, &'a ast::Path>,
@@ -435,23 +477,76 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             };
             let sig_val = &self.lower.tt[sig];
 
-            // function signature with additional generics as holes
-            // infer from expected type
             let implicit_arity = sig_val.arity();
             let mut mono_args =
                 iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
+
+            // infer from expected type
             if let Some(expected) = expected {
                 sig_val
                     .thunk
                     .returns
                     .infer(expected, self.lower.tt, 0, &mut mono_args);
             }
+
+            // infer from lambda block types
+            // TODO: also other lambda blocks plz
+            if let Some(use_arg) = use_arg {
+                let param = sig_val
+                    .params
+                    .as_ref()
+                    .unwrap_or_else(|| todo!())
+                    .last()
+                    .copied()
+                    .unwrap_or_else(|| todo!());
+                let FunctionParameter::Lambda(sig) = param else {
+                    todo!()
+                };
+
+                let user_sig = problems.append(self.lambda_signature(
+                    self.lower.tt[sig].type_params.clone(),
+                    self.lower.tt[sig].implicit_regions,
+                    use_arg.params,
+                ));
+
+                if let Some(user_sig) = user_sig {
+                    sig.infer(user_sig, self.lower.tt, 0, &mut mono_args);
+                }
+            }
+
             let mut sig_mono = sig.apply(self.lower.tt, &mono_args);
             let mut sig_mono_val = &self.lower.tt[sig_mono];
 
             // get all arguments
             let (mut args, _params) = if let Some(sig_mono_params) = &sig_mono_val.params {
                 let mut sig_mono_params = sig_mono_params;
+                macro_rules! infer_step {
+                    ($old:expr, $new:expr) => {
+                        if implicit_arity > 0 {
+                            let old_hash = {
+                                let mut hasher = DefaultHasher::new();
+                                mono_args.hash(&mut hasher);
+                                hasher.finish()
+                            };
+                            ($old).infer($new, self.lower.tt, 0, &mut mono_args);
+                            let new_hash = {
+                                let mut hasher = DefaultHasher::new();
+                                mono_args.hash(&mut hasher);
+                                hasher.finish()
+                            };
+                            #[allow(unused_assignments)]
+                            if old_hash != new_hash {
+                                sig_mono = sig.apply(self.lower.tt, &mono_args);
+                                sig_mono_val = &self.lower.tt[sig_mono];
+                                sig_mono_params = sig_mono_val
+                                    .params
+                                    .as_ref()
+                                    .expect("ICE: new inferred sig has no params");
+                            }
+                        }
+                    };
+                }
+
                 if sig_mono_params.len()
                     != call.left().map_or(0, ast::Call::count_args) + use_arg.is_some() as usize
                 {
@@ -515,7 +610,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 self.abstraction(sig, [], [arg])
                             };
                             (
-                                problems.append(e).unwrap_or_else(|| self.et.unreachable()),
+                                problems
+                                    .append(e)
+                                    .map(|(lambda, _)| lambda)
+                                    .unwrap_or_else(|| self.et.unreachable()),
                                 {
                                     // FIXME: get user given function type
                                     assert!(sig.no_holes(self.lower.tt));
@@ -523,73 +621,81 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 },
                             )
                         }
+                        FunctionParameter::Hole => todo!(),
                     };
                     params.push(user_param);
                     args.push(mu_arg);
 
                     // infer more generics
-                    if implicit_arity > 0 {
-                        let old_hash = {
-                            let mut hasher = DefaultHasher::new();
-                            mono_args.hash(&mut hasher);
-                            hasher.finish()
-                        };
-                        param.infer(user_param, self.lower.tt, 0, &mut mono_args);
-                        let new_hash = {
-                            let mut hasher = DefaultHasher::new();
-                            mono_args.hash(&mut hasher);
-                            hasher.finish()
-                        };
-                        if old_hash != new_hash {
-                            sig_mono = sig.apply(self.lower.tt, &mono_args);
-                            sig_mono_val = &self.lower.tt[sig_mono];
-                            sig_mono_params = sig_mono_val
-                                .params
-                                .as_ref()
-                                .expect("ICE: new inferred sig has no params");
-                        }
-                    }
+                    infer_step!(param, user_param);
                 }
                 if let Some(arg) = use_arg {
-                    // FIXME: get user given function type
-                    assert!(
-                        sig_mono_params
-                            .last()
-                            .copied()
-                            .unwrap()
-                            .no_holes(self.lower.tt)
-                    );
-                    params.push(sig_mono_params.last().copied().unwrap());
-                    args.push({
-                        let param = sig_mono_params.last().copied().unwrap();
-                        let FunctionParameter::Lambda(sig) = param else {
-                            todo!("error")
-                        };
-                        let sig_val = &self.lower.tt[sig];
-                        if sig_val.type_params.as_ref().is_some_and(|ps| {
-                            ps.iter()
-                                .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
-                        }) {
-                            todo!("error: no support for generics yet")
-                        }
-                        if arg.params.map(|params| params.elements.len())
-                            != sig_val.params.as_ref().map(|params| params.len())
-                        {
-                            todo!("error")
-                        }
-                        problems
-                            .append(
-                                self.abstraction(
-                                    sig,
-                                    arg.params
-                                        .into_iter()
-                                        .flat_map(|lambda| lambda.iter())
-                                        .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
-                                    arg.block.iter().map(|e| &**e),
-                                ),
+                    let mono_param = sig_mono_params.last().copied().unwrap();
+                    let FunctionParameter::Lambda(mono_sig) = mono_param else {
+                        todo!("error")
+                    };
+                    let mono_sig_val = &self.lower.tt[mono_sig];
+                    if mono_sig_val.type_params.as_ref().is_some_and(|ps| {
+                        ps.iter()
+                            .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
+                    }) {
+                        todo!("error: no support for generics yet")
+                    }
+                    if arg.params.map(|params| params.elements.len())
+                        != mono_sig_val.params.as_ref().map(|params| params.len())
+                    {
+                        todo!("error")
+                    }
+
+                    let mono_param = sig_mono_val
+                        .params
+                        .as_ref()
+                        .unwrap()
+                        .last()
+                        .copied()
+                        .unwrap();
+                    let FunctionParameter::Lambda(mono_sig) = mono_param else {
+                        panic!()
+                    };
+
+                    let (user_arg, user_returns) = problems
+                        .append(
+                            self.abstraction(
+                                mono_sig,
+                                arg.params
+                                    .into_iter()
+                                    .flat_map(|lambda| lambda.iter())
+                                    .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
+                                arg.block.iter().map(|e| &**e),
+                            ),
+                        )
+                        .unwrap_or_else(|| {
+                            (
+                                self.et.unreachable(),
+                                self.lower.tt.insert_type(TypeEnum::Hole),
                             )
-                            .unwrap_or_else(|| self.et.unreachable())
-                    });
+                        });
+
+                    // FIXME: hmmm we are doing this twice now
+                    let param = sig_val.params.as_ref().unwrap().last().copied().unwrap();
+                    let FunctionParameter::Lambda(sig) = param else {
+                        panic!()
+                    };
+                    let mut user_sig = problems
+                        .append(self.lambda_signature(
+                            mono_sig_val.type_params.clone(),
+                            mono_sig_val.implicit_regions,
+                            arg.params,
+                        ))
+                        .unwrap_or_else(|| todo!());
+                    let mut user_sig_val = self.lower.tt[user_sig].clone();
+                    user_sig_val.thunk.returns = user_returns;
+                    user_sig = self.lower.tt.insert_function_signature(user_sig_val);
+
+                    infer_step!(sig, user_sig);
+
+                    params.push(FunctionParameter::Lambda(user_sig));
+                    args.push(user_arg);
                 }
                 (args, params)
             } else if call.left().is_some_and(|call| {
@@ -1189,7 +1295,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         }
 
                         // ???
-                        _ => todo!("error"),
+                        (_, idx) => todo!("error: indexing {}", ty.display(self.lower.tt)),
                     }
                 })
             }
@@ -1198,7 +1304,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     todo!("error: not enough info")
                 };
                 if !ty.no_holes(self.lower.tt) {
-                    todo!("error: ambiguous info")
+                    todo!("error: ambiguous info: {}", ty.display(self.lower.tt))
                 }
                 match self.lower.tt[ty] {
                     TypeEnum::PointerSlice(_, _, _) => todo!(),
@@ -1245,13 +1351,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     todo!("error: not enough info")
                 };
                 if !ty.no_holes(self.lower.tt) {
-                    todo!("error: ambiguous info")
+                    todo!("error: ambiguous info: {}", ty.display(self.lower.tt))
                 }
                 let mut self_inner = self.reborrow();
                 self_inner.vars.push_front(Var::Raise(ty));
                 self_inner
                     .expression(expr, expected)
-                    .map(|(e, ty)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
+                    .map(|(e, _)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
             }
             ast::Expression::Raise { expr, .. } => {
                 let never = self.lower.tt.insert_type(TypeEnum::Never);
@@ -1270,7 +1376,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     None if ty.is_unit(self.lower.tt) => {
                         Result::new((self.et.apply(f, [self.et.construct_unit(self.tt)]), never))
                     }
-                    None => todo!("error"),
+                    None => {
+                        todo!("error: expected {}", ty.display(self.lower.tt));
+                    }
                 }
             }
         }
@@ -1308,7 +1416,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let self_ = &mut *self;
                 let stmts_ = &mut *stmts;
                 m! {
-                    ty <- ty.as_ref().map_or(Result::new(None), |ty| self_.lower.r#type(ty).map(Some));
+                    ty <- ty.as_ref().map_or(Result::new(None), |ty| self_.lower.r#type(ty, true).map(Some));
                     outer <- self_.expression(value, ty);
                     inner <- {
                         let mut self_inner = self_.reborrow();
@@ -1344,6 +1452,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             FunctionParameter::Lambda(sig) => self
                 .tt
                 .insert_type(mu::TypeEnum::Function(self.function_type(sig, None))),
+            FunctionParameter::Hole => self.tt.never(),
         }
     }
     fn function_type(
@@ -1371,12 +1480,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .params
             .iter()
             .flat_map(|params| params.iter().copied())
-            .map(|param| match param {
-                FunctionParameter::Data(ty) => self.r#type(ty),
-                FunctionParameter::Lambda(sig) => self
-                    .tt
-                    .insert_type(mu::TypeEnum::Function(self.function_type(sig, None))),
-            });
+            .map(|param| self.function_param(param));
         let from = if let Some(decl) = decl {
             let name = decl.name.ident.as_str();
             self.tt.push_named_tuple(

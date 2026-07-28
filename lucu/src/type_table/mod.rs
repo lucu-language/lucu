@@ -265,6 +265,7 @@ impl FunctionSignatureValue {
 pub enum FunctionParameter {
     Data(Type),
     Lambda(FunctionSignature),
+    Hole,
 }
 
 impl KindEnum {

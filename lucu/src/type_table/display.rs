@@ -258,6 +258,9 @@ impl fmt::Display for Interned<'_, FunctionSignature> {
                             write!(f, "{} -> ", sig.display(self.1))?;
                         }
                     }
+                    FunctionParameter::Hole => {
+                        write!(f, "_ -> ")?;
+                    }
                 }
             }
         }

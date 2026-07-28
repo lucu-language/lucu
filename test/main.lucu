@@ -37,7 +37,7 @@ fun hoohaa = {
 
 fun _start ! with World Div = {
     hoohaa
-    assert(2 + 2 == 5, "damn")
+    assert(2 + 2 == 4, "damn")
     trace_int(420)
     traceln
     trace_int(69)

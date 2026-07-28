@@ -14,7 +14,7 @@ use crate::module::Module;
 use crate::pass::imports::Imports;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
-    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, IntSize, Integer, Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
+    Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 mod header;
@@ -425,7 +425,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }),
                 },
                 ast::GenericArgument::Type(ty, effects) => {
-                    l.r#type(ty).and_then(|ty| {
+                    l.r#type(ty, false).and_then(|ty| {
                         // FIXME: we didn't lower the effects yet
                         let expected = if arity == Some(1) && l.used_underscore() {
                             l.tt.insert_kind(KindEnum {
@@ -527,6 +527,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn pointer_region(
         &mut self,
         ty: Option<&ast::PointerRegion>,
+        allow_holes: bool
     ) -> Result<Region> {
         let kind = match ty {
             Some(ast::PointerRegion::At(_, path)) => return self.region(path),
@@ -535,7 +536,11 @@ impl<'a, 'b> Lower<'a, 'b> {
         };
 
         let Some(next) = self.next_implicit_region() else {
-            todo!("error")
+            if allow_holes {
+                return Result::new(self.tt.insert_region(RegionEnum::Hole));
+            } else {
+                todo!("error")
+            }
         };
 
         self.implicit_region(kind, next)
@@ -571,6 +576,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn r#type(
         &mut self,
         ty: &ast::Type,
+        allow_holes: bool,
     ) -> Result<Type> {
         match ty {
             ast::Type::Path(path) => {
@@ -581,7 +587,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     })
             }
             ast::Type::Maybe(_, inner) => {
-                self.r#type(inner).map(|ty| self.tt.insert_type(TypeEnum::Maybe(ty)))
+                self.r#type(inner, allow_holes).map(|ty| self.tt.insert_type(TypeEnum::Maybe(ty)))
             }
             ast::Type::Pointer(_, region, ty) => {
                 if let ast::Type::Array(props, inner) = &**ty
@@ -590,15 +596,15 @@ impl<'a, 'b> Lower<'a, 'b> {
                     // pointer to slice
                     m! {
                         let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
-                        region <- self.pointer_region(region.as_ref());
-                        ty <- self.r#type(inner);
+                        region <- self.pointer_region(region.as_ref(), allow_holes);
+                        ty <- self.r#type(inner, allow_holes);
                         return self.tt.insert_type(TypeEnum::PointerSlice(ty, region, sentinel));
                     }
                 } else {
                     // regular pointer
                     m! {
-                        region <- self.pointer_region(region.as_ref());
-                        ty <- self.r#type(ty);
+                        region <- self.pointer_region(region.as_ref(), allow_holes);
+                        ty <- self.r#type(ty, allow_holes);
                         return self.tt.insert_type(TypeEnum::Pointer(ty, region));
                     }
                 }
@@ -612,7 +618,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 m! {
                     size <- self.constant(size, Some(usize_ty));
                     let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
-                    ty <- self.r#type(ty);
+                    ty <- self.r#type(ty, allow_holes);
                     return self.tt.insert_type(TypeEnum::Array(ty, size.0, sentinel));
                 }
             }
@@ -702,7 +708,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 l.next_implicit_region = None;
                 l.implicit_effects = None;
                 l
-                    .r#type(ty)
+                    .r#type(ty, false)
                     .map(SimpleKind::Constant)
             },
         }
@@ -812,7 +818,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                             _ => todo!("error"),
                         })
                 }
-                ast::Returns::Type(ty) => self.r#type(ty).map(|ty| Thunk {
+                ast::Returns::Type(ty) => self.r#type(ty, false).map(|ty| Thunk {
                     returns: ty,
                     effect: Effect::empty(self.tt),
                 }),
@@ -833,7 +839,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     ) -> Result<FunctionParameter> {
         match param {
             ast::Parameter::Data(_, ty) => self
-                .r#type(ty)
+                .r#type(ty, false)
                 .map(FunctionParameter::Data),
             ast::Parameter::Lambda(decl) => self
                 .function_signature(decl)

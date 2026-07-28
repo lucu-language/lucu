@@ -39,7 +39,7 @@ fun clear_state(state ^mut []bool, stride size) = {
 fun next_state(old ^[]bool, new ^[]bool, stride size) = {
     for(0, stride) { y ->
         for(0, stride) { x ->
-            let neighbors = use regions.ref[size, unit](0)
+            let neighbors ^size = use regions.ref(0)
 
             if old[dec(x, stride) + dec(y, stride) * stride]^ then neighbors^ += 1
             if old[    x          + dec(y, stride) * stride]^ then neighbors^ += 1
@@ -67,8 +67,8 @@ fun main with World Div = {
     let stride size = 32
 
     -- create buffers
-    let board_a = use regions.alloca[bool, unit](stride * stride)
-    let board_b = use regions.alloca[bool, unit](stride * stride)
+    let board_a ^[]bool = use regions.alloca(stride * stride)
+    let board_b ^[]bool = use regions.alloca(stride * stride)
 
     -- init state
     clear_state(board_a, stride)

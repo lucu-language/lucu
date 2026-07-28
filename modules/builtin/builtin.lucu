@@ -106,7 +106,7 @@ fun syscall_exit(code addr) ! with World = {
 }
 
 fun wait with World = {
-	let buf = use regions.ref[[1]i8, unit](---)
+	let buf ^[1]i8 = use regions.ref(---)
 	handle unfounded loop {
 		if syscall_read(0, buf[..]) == 0 then raise
 		if buf[0]^ == 10 then raise
@@ -122,17 +122,17 @@ fun trap !
 	= #intrinsic
 
 fun traceln = {
-	let buf = use regions.ref[[1]i8, unit]([10])
+	let buf ^[1]i8 = use regions.ref([10])
 	trace(buf[..])
 }
 
 fun trace_int(n int) = {
-	let buf = use regions.ref[[21]i8, unit](---)
+	let buf ^[21]i8 = use regions.ref(---)
 
 	let remaining = use regions.ref(abs(n))
 
 	let start size = handle {
-		let current = use regions.ref[size, size](20)
+		let current ^size = use regions.ref(20)
 		unfounded loop {
 			buf[current^]^ = '0' + #trunc (remaining^ % 10)
 			remaining^ /= 10

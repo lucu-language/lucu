@@ -1,3 +1,4 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -419,7 +420,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         use_arg: Option<UseArg<'a>>,
         expected: Option<Type>,
     ) -> Result<(mu::Expression, Type)> {
-        // TODO: also put non-call paths under here
+        // TODO: also put non-call paths under here?
+        // TODO: a big clean up of this function
         self.path(match call {
             Either::Left(call) => &call.fun,
             Either::Right(path) => path,
@@ -434,83 +436,132 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             let sig_val = &self.lower.tt[sig];
 
             // function signature with additional generics as holes
+            // infer from expected type
             let implicit_arity = sig_val.arity();
-            let sig_mono = sig.apply(
-                self.lower.tt,
-                &iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>(),
-            );
-            let sig_mono_val = &self.lower.tt[sig_mono];
+            let mut mono_args =
+                iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
+            if let Some(expected) = expected {
+                sig_val
+                    .thunk
+                    .returns
+                    .infer(expected, self.lower.tt, 0, &mut mono_args);
+            }
+            let mut sig_mono = sig.apply(self.lower.tt, &mono_args);
+            let mut sig_mono_val = &self.lower.tt[sig_mono];
 
             // get all arguments
-            let (mut args, params) = if let Some(sig_params) = &sig_mono_val.params {
-                if sig_params.len()
+            let (mut args, _params) = if let Some(sig_mono_params) = &sig_mono_val.params {
+                let mut sig_mono_params = sig_mono_params;
+                if sig_mono_params.len()
                     != call.left().map_or(0, ast::Call::count_args) + use_arg.is_some() as usize
                 {
                     todo!("error: incorrect amount of arguments")
                 }
-                let (mut args, mut params): (Vec<_>, Vec<_>) =
-                    Iterator::zip(sig_params.iter().copied(), call.unwrap_left().args())
-                        .map(|(param, arg)| {
-                            match param {
-                                FunctionParameter::Data(ty) => problems
-                                    .append(
-                                        self.expression(arg, Some(ty))
-                                            .map(|(mu, ty)| (mu, FunctionParameter::Data(ty))),
-                                    )
-                                    .unwrap_or_else(|| {
-                                        (self.et.unreachable(), FunctionParameter::Data(ty))
-                                    }),
-                                FunctionParameter::Lambda(sig) => {
-                                    let sig_val = &self.lower.tt[sig];
-                                    if sig_val.type_params.as_ref().is_some_and(|ps| {
-                                        ps.iter()
-                                            .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
-                                    }) {
-                                        todo!("error: no support for generics yet")
-                                    }
-                                    let e = if let ast::Expression::Block(block) = arg {
-                                        if block
-                                            .inner
-                                            .params
-                                            .as_ref()
-                                            .map(|(params, _)| params.elements.len())
-                                            != sig_val.params.as_ref().map(|params| params.len())
-                                        {
-                                            todo!("error")
-                                        }
-                                        self.abstraction(
-                                            sig,
-                                            block
-                                                .inner
-                                                .params
-                                                .iter()
-                                                .flat_map(|(lambda, _)| lambda.iter())
-                                                .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
-                                            block.inner.stmts.iter().map(|e| &**e),
-                                        )
-                                    } else if sig_val.params.is_some() {
-                                        todo!("error")
-                                    } else {
-                                        self.abstraction(sig, [], [arg])
-                                    };
-                                    (
-                                        problems.append(e).unwrap_or_else(|| self.et.unreachable()),
-                                        {
-                                            // TODO: get user given function type
-                                            assert!(sig.no_holes(self.lower.tt));
-                                            FunctionParameter::Lambda(sig)
-                                        },
-                                    )
-                                }
+                let mut args = Vec::new();
+                let mut params = Vec::new();
+                for (param_index, (param, arg)) in Iterator::zip(
+                    sig_val
+                        .params
+                        .as_ref()
+                        .expect("ICE: sigval has no params but mono does")
+                        .iter()
+                        .copied(),
+                    call.unwrap_left().args(),
+                )
+                .enumerate()
+                {
+                    // lower argument
+                    let mono_param = sig_mono_params[param_index];
+                    let (mu_arg, user_param) = match mono_param {
+                        FunctionParameter::Data(ty) => problems
+                            .append(
+                                self.expression(arg, Some(ty))
+                                    .map(|(mu, ty)| (mu, FunctionParameter::Data(ty))),
+                            )
+                            .unwrap_or_else(|| {
+                                (self.et.unreachable(), FunctionParameter::Data(ty))
+                            }),
+                        FunctionParameter::Lambda(sig) => {
+                            let sig_val = &self.lower.tt[sig];
+                            if sig_val.type_params.as_ref().is_some_and(|ps| {
+                                ps.iter()
+                                    .any(|&k| self.lower.tt[k].output != SimpleKind::Region)
+                            }) {
+                                todo!("error: no support for generics yet")
                             }
-                        })
-                        .unzip();
+                            let e = if let ast::Expression::Block(block) = arg {
+                                if block
+                                    .inner
+                                    .params
+                                    .as_ref()
+                                    .map(|(params, _)| params.elements.len())
+                                    != sig_val.params.as_ref().map(|params| params.len())
+                                {
+                                    todo!("error")
+                                }
+                                self.abstraction(
+                                    sig,
+                                    block
+                                        .inner
+                                        .params
+                                        .iter()
+                                        .flat_map(|(lambda, _)| lambda.iter())
+                                        .map(|lambda| (&lambda.var, lambda.ty.as_deref())),
+                                    block.inner.stmts.iter().map(|e| &**e),
+                                )
+                            } else if sig_val.params.is_some() {
+                                todo!("error")
+                            } else {
+                                self.abstraction(sig, [], [arg])
+                            };
+                            (
+                                problems.append(e).unwrap_or_else(|| self.et.unreachable()),
+                                {
+                                    // FIXME: get user given function type
+                                    assert!(sig.no_holes(self.lower.tt));
+                                    FunctionParameter::Lambda(sig)
+                                },
+                            )
+                        }
+                    };
+                    params.push(user_param);
+                    args.push(mu_arg);
+
+                    // infer more generics
+                    if implicit_arity > 0 {
+                        let old_hash = {
+                            let mut hasher = DefaultHasher::new();
+                            mono_args.hash(&mut hasher);
+                            hasher.finish()
+                        };
+                        param.infer(user_param, self.lower.tt, 0, &mut mono_args);
+                        let new_hash = {
+                            let mut hasher = DefaultHasher::new();
+                            mono_args.hash(&mut hasher);
+                            hasher.finish()
+                        };
+                        if old_hash != new_hash {
+                            sig_mono = sig.apply(self.lower.tt, &mono_args);
+                            sig_mono_val = &self.lower.tt[sig_mono];
+                            sig_mono_params = sig_mono_val
+                                .params
+                                .as_ref()
+                                .expect("ICE: new inferred sig has no params");
+                        }
+                    }
+                }
                 if let Some(arg) = use_arg {
-                    // TODO: get user given function type
-                    assert!(sig_params.last().copied().unwrap().no_holes(self.lower.tt));
-                    params.push(sig_params.last().copied().unwrap());
+                    // FIXME: get user given function type
+                    assert!(
+                        sig_mono_params
+                            .last()
+                            .copied()
+                            .unwrap()
+                            .no_holes(self.lower.tt)
+                    );
+                    params.push(sig_mono_params.last().copied().unwrap());
                     args.push({
-                        let param = sig_params.last().copied().unwrap();
+                        let param = sig_mono_params.last().copied().unwrap();
                         let FunctionParameter::Lambda(sig) = param else {
                             todo!("error")
                         };
@@ -549,37 +600,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 (Vec::new(), Vec::new())
             };
 
-            // infer args
-            let mut implicit_generics =
-                iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
-            let sig_mono_val = if implicit_arity > 0 {
-                if !sig.infer_params(&params, self.lower.tt, &mut implicit_generics)
-                    || !expected.is_none_or(|e| {
-                        sig_val
-                            .thunk
-                            .returns
-                            .infer(e, self.lower.tt, 0, &mut implicit_generics)
-                    })
-                {
-                    todo!(
-                        "error: cannot infer generics for {}",
-                        sig.display(self.lower.tt),
-                    )
-                }
-                let sig_mono = sig.apply(self.lower.tt, &implicit_generics);
-                let sig_mono_val = &self.lower.tt[sig_mono];
-                if !sig_mono.no_holes(self.lower.tt) {
-                    todo!(
-                        "error: ambiguous generics for {}",
-                        sig_mono.display(self.lower.tt)
-                    );
-                }
-                // FIXME: check if args are subtypes of inferred params
-                // (we need to check this because 'infer_params' allows false positives)
-                sig_mono_val
-            } else {
-                sig_val
-            };
+            if !sig_mono.no_holes(self.lower.tt) {
+                todo!(
+                    "error: ambiguous generics for {}",
+                    sig_mono.display(self.lower.tt)
+                );
+            }
+            // FIXME: check if args are subtypes of inferred params
 
             // effects
             for effect in sig_mono_val.thunk.effect.effects(self.lower.tt) {
@@ -608,7 +635,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             let mu = match fun {
                 Either::Left(fun) => self.et.apply(fun, args),
                 Either::Right(i) => {
-                    let all_generics = implicit_generics
+                    let all_generics = mono_args
                         .into_iter()
                         .chain(generics.iter().copied())
                         .collect();

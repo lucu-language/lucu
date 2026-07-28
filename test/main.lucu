@@ -29,7 +29,7 @@ fun test(
 }
 
 fun hoohaa = {
-    let n = use regions.ref[int, unit](1)
+    let n = use regions.ref(1)
     n^ <<= 3
     trace_int(n^)
     traceln

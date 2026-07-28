@@ -640,6 +640,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             ast::Constant::Integer(integer) => {
                 let ty = match expected {
                     Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
+                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) => self.tt.insert_type(TypeEnum::INT),
                     None => self.tt.insert_type(TypeEnum::INT),
                     _ => todo!("error")
                 };
@@ -653,6 +654,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                 let ty = match expected {
                     Some(ty) if let TypeEnum::PointerSlice(inner, _, sentinel) = self.tt[ty] && inner.is_i8(self.tt) =>
                         self.tt.insert_type(TypeEnum::PointerSlice(inner, self.tt.insert_region(RegionEnum::Static), sentinel)),
+                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) =>
+                        self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
                     None =>
                         self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
                     Some(ty) => todo!("error: string for {}", ty.display(self.tt)),
@@ -665,6 +668,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             ast::Constant::Character(character) => {
                 let ty = match expected {
                     Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
+                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) => self.tt.insert_type(TypeEnum::I8),
                     None => self.tt.insert_type(TypeEnum::I8),
                     _ => todo!("error")
                 };

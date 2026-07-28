@@ -129,7 +129,7 @@ fun traceln = {
 fun trace_int(n int) = {
 	let buf = use regions.ref[[21]i8, unit](---)
 
-	let remaining = use regions.ref[int, unit](abs(n))
+	let remaining = use regions.ref(abs(n))
 
 	let start size = handle {
 		let current = use regions.ref[size, size](20)
@@ -194,14 +194,14 @@ fun unfounded(fun body ! with Div) !
 
 fun for(from size, to size, fun body(n size)) = {
 	if to >= from {
-		let current = use regions.ref[size, unit](from)
+		let current = use regions.ref(from)
 		handle unfounded loop {
 			if current^ == to then raise
 			body(current^)
 			current^ += 1
 		}
 	} else {
-		let current = use regions.ref[size, unit](from - 1)
+		let current = use regions.ref(from - 1)
 		handle unfounded loop {
 			body(current^)
 			current^ -= 1

@@ -1,31 +1,33 @@
 import "builtin:regions"
+import "core:io"
 
 fun dec(n size, stride size) size = if n == 0 then stride - 1 else n - 1
 fun inc(n size, stride size) size = if n == stride - 1 then 0 else n + 1
 
-fun trace_state(state ^[]bool, stride size) = {
-    trace("-")
+fun write_state(state ^[]bool, stride size) with io.Sink = {
+    discard io.write("-")
     for(0, stride) { x ->
-        trace("--")
+        discard io.write("--")
     }
-    trace("-")
-    traceln
+    discard io.write("-")
+    discard io.writeln
 
     for(0, stride) { y ->
-        trace("|")
+        discard io.write("|")
         for(0, stride) { x ->
-            trace(if state[x + y * stride]^ then "[]" else "  ")
+            discard io.write(if state[x + y * stride]^ then "[]" else "  ")
         }
-        trace("|")
-        traceln
+        discard io.write("|")
+        discard io.writeln
     }
 
-    trace("-")
+    discard io.write("-")
     for(0, stride) { x ->
-        trace("--")
+        discard io.write("--")
     }
-    trace("-")
-    traceln
+    discard io.write("-")
+    discard io.writeln
+    io.flush
 }
 
 fun clear_state(state ^mut []bool, stride size) = {
@@ -63,9 +65,7 @@ fun next_state(old ^[]bool, new ^[]bool, stride size) = {
     }
 }
 
-fun main with World Div = {
-    let stride size = 32
-
+fun main(stride size) with World Div io.Sink = {
     -- create buffers
     let board_a ^[]bool = use regions.alloca(stride * stride)
     let board_b ^[]bool = use regions.alloca(stride * stride)
@@ -79,10 +79,10 @@ fun main with World Div = {
     board_a[1 + 2 * stride]^ = true
 
     loop {
-        trace_state(board_a, stride)
+        write_state(board_a, stride)
         wait
         next_state(board_a, board_b, stride)
-        trace_state(board_b, stride)
+        write_state(board_b, stride)
         wait
         next_state(board_b, board_a, stride)
     }

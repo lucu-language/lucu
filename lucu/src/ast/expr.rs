@@ -1,7 +1,7 @@
 use strum::IntoStaticStr;
 
 use crate::ast::{
-    Constant, Grouped, Identifier, Path, Sentinel, Separated, Token, Type, WithEffects,
+    Constant, Grouped, Handler, Identifier, Path, Sentinel, Separated, Token, Type, WithEffects,
 };
 use crate::span::{HasSpan, Span};
 use crate::tokens::{SymbolAssign, SymbolEquality, SymbolInequality};
@@ -238,6 +238,8 @@ pub enum Expression {
     Handle {
         tk_handle: Token,
         expr: Box<Self>,
+        /// without the `with_effects` field
+        handlers: Option<(Token, Separated<Handler>)>,
     },
     Raise {
         tk_raise: Token,
@@ -309,9 +311,17 @@ impl HasSpan for Expression {
                 let end = block.span().end;
                 Span::new(start, end)
             }
-            Expression::Handle { tk_handle, expr } => {
-                Span::new(tk_handle.span().start, expr.span().end)
-            }
+            Expression::Handle {
+                tk_handle,
+                expr,
+                handlers,
+            } => Span::new(
+                tk_handle.span().start,
+                handlers
+                    .as_ref()
+                    .map(|(_, handlers)| handlers.span().end)
+                    .unwrap_or_else(|| expr.span().end),
+            ),
             Expression::Raise { tk_raise, expr } => match expr {
                 Some(expr) => Span::new(tk_raise.span().start, expr.span().end),
                 None => tk_raise.span(),

@@ -1,10 +1,17 @@
+import "builtin:regions"
+
 effect Source = {
-   fun read() size with Sink
+   fun read size with Sink
 }
 
 effect Sink = {
    fun write(bytes ^[]i8) size
-   fun flush()
+   fun flush
+}
+
+fun writeln size with Sink = {
+	let buf ^[1]i8 = use regions.ref([10])
+	write(buf[..])
 }
 
 -- fun read_line with Source Sink = {
@@ -14,6 +21,37 @@ effect StdIo = {
    fun stdin(fun body with Source)
    fun stdout(fun body with Sink)
    fun stderr(fun body with Sink)
+}
+
+fun buffered(buffer ^mut []i8, fun handled(fun body with Sink), fun body with Sink) = {
+   handled {
+      let current ^size = use regions.ref(0)
+      -- FIXME: deal with super write not writing everything
+      handle body with Sink {
+         fun write(bytes ^[]i8) size = {
+            for(0, len(bytes)) { i ->
+               if current^ == len(buffer) {
+                  discard write(buffer)
+                  current^ = 0
+               }
+               buffer[current^]^ = bytes[i]^
+               current^ += 1
+            }
+            len(bytes)
+         }
+         fun flush = {
+            if current^ > 0 {
+               discard write(buffer[0..current^])
+               current^ = 0
+            }
+            flush
+         }
+      }
+      -- write remaining buffer
+      if current^ > 0 {
+         discard write(buffer[0..current^])
+      }
+   }
 }
 
 -- effect Buffered[E effect] = {

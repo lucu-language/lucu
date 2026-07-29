@@ -54,6 +54,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Literal(Literal::Integer) => {
                 let token = self.skip();
                 let value = self.source[token.0]
+                    .replace('_', "")
                     .parse()
                     .expect("ICE: could not parse lexed integer");
                 Result::new(ast::Integer { token, value })
@@ -145,7 +146,7 @@ impl<'a> Parser<'a> {
                         Symbol::Comma.into(),
                         Parser::generic,
                     ));
-                    handler <- self.handler();
+                    handler <- self.handler(true);
                     return ast::Item::Handle(token, generics, handler);
                 }
             }
@@ -164,10 +165,10 @@ impl<'a> Parser<'a> {
             return ast::WithEffects { with, effects };
         }
     }
-    pub fn handler(&mut self) -> Result<ast::Handler> {
+    pub fn handler(&mut self, allow_with_effects: bool) -> Result<ast::Handler> {
         m! {
             effect <- self.path(false);
-            with_effects <- self.when_next(Keyword::With, Parser::with_effects);
+            with_effects <- Result::guard(allow_with_effects, || self.when_next(Keyword::With, Parser::with_effects));
             items <- self.many_grouped(Group::Brace, Symbol::Semicolon.into(), Parser::item);
             return ast::Handler { effect, with_effects, items };
         }
@@ -214,7 +215,7 @@ impl<'a> Parser<'a> {
                 Result::new(ast::FunctionDefinition::Intrinsic(self.skip()))
             }
             _ => self
-                .expression(true)
+                .expression(true, true)
                 .map(ast::FunctionDefinition::Expression),
         }
     }

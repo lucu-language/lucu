@@ -22,10 +22,10 @@ impl From<bool> for AllowLambda {
 }
 
 impl<'a> Parser<'a> {
-    pub fn call(&mut self, allow_lambda: bool) -> Result<ast::Call> {
+    pub fn call(&mut self, allow_lambda: bool, allow_with: bool) -> Result<ast::Call> {
         m! {
             fun <- self.path(false);
-            call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+            call <- self.call_suffix(fun, AllowLambda::from(allow_lambda), allow_with);
             return call.unwrap_or_else(Into::into);
         }
     }
@@ -34,9 +34,10 @@ impl<'a> Parser<'a> {
         &mut self,
         fun: ast::Path,
         allow_lambda: AllowLambda,
+        allow_with: bool,
     ) -> Result<std::result::Result<ast::Call, ast::Path>> {
         m! {
-            args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma.into(), |p| p.expression(true)));
+            args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma.into(), |p| p.expression(true, true)));
             block <- if allow_lambda != AllowLambda::No
                 && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
                 if self.is_next(TokenEnum::Identifier) {
@@ -45,12 +46,12 @@ impl<'a> Parser<'a> {
                     let p = &mut *self;
                     m! {
                         fun <- p.path(false);
-                        call <- p.call_suffix(fun, AllowLambda::Force);
+                        call <- p.call_suffix(fun, AllowLambda::Force, allow_with);
                         let call = call.unwrap_or_else(Into::into);
                         return Some(Box::new(ast::Expression::Call(call)));
                     }
                 } else {
-                    self.expression_top(true).map(Some)
+                    self.expression_top(true, true).map(Some)
                 }
             } else if allow_lambda != AllowLambda::Force {
                 Result::new(None)
@@ -58,7 +59,7 @@ impl<'a> Parser<'a> {
                 // NOTE: do we maybe want a more specific error here?
                 self.error(Expected::Token(TokenEnum::Open(Group::Brace)))
             };
-            with_effects <- self.when_next(Keyword::With, Parser::with_effects);
+            with_effects <- Result::guard(allow_with, || self.when_next(Keyword::With, Parser::with_effects));
             return if args.is_some() || block.is_some() || with_effects.is_some() {
                 Ok(ast::Call {
                     fun,
@@ -77,7 +78,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Discard) => {
                 m! {
                     let tk_discard = self.skip();
-                    expr <- self.expression(true);
+                    expr <- self.expression(true, true);
                     return Box::new(ast::Expression::Discard { tk_discard, expr });
                 }
             }
@@ -92,7 +93,7 @@ impl<'a> Parser<'a> {
                         // FIXME: allow multiple values
                         TokenEnum::Keyword(Keyword::Use) => m! {
                             let tk_use = self.skip();
-                            call <- self.call(true);
+                            call <- self.call(true, true);
                             tk_newline <- self.consume(Symbol::Semicolon);
                             block <- self.many(Symbol::Semicolon.into(), Self::statement);
                             return Box::new(ast::Expression::Use {
@@ -103,7 +104,7 @@ impl<'a> Parser<'a> {
                                 block,
                             });
                         },
-                        _ => self.expression(true).map(|value| {
+                        _ => self.expression(true, true).map(|value| {
                            Box::new(ast::Expression::Let { tk_let, var, ty, tk_equals, value })
                         })
                     }
@@ -112,7 +113,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Use) => {
                 m! {
                     let tk_use = self.skip();
-                    call <- self.call(true);
+                    call <- self.call(true, true);
                     tk_newline <- self.consume(Symbol::Semicolon);
                     block <- self.many(Symbol::Semicolon.into(), Self::statement);
                     return Box::new(ast::Expression::Use {
@@ -124,17 +125,17 @@ impl<'a> Parser<'a> {
                     });
                 }
             }
-            _ => self.expression(true),
+            _ => self.expression(true, true),
         }
     }
 
-    pub fn expression(&mut self, allow_lambda: bool) -> Expr {
-        self.expression_assign(allow_lambda)
+    pub fn expression(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
+        self.expression_assign(allow_lambda, allow_with)
     }
 
-    fn expression_assign(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_assign(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         self.expression_right_recurse(
-            &|p| p.expression_pipe(allow_lambda),
+            &|p| p.expression_pipe(allow_lambda, allow_with),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Assign(op)) => Some(op.into()),
                 _ => None,
@@ -143,14 +144,14 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn expression_pipe(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_pipe(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         // TODO: pipe operator
-        self.expression_equality(allow_lambda)
+        self.expression_equality(allow_lambda, allow_with)
     }
 
-    fn expression_equality(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_equality(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         self.expression_left_recurse(
-            &|p| p.expression_inequality(allow_lambda),
+            &|p| p.expression_inequality(allow_lambda, allow_with),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Equality(op)) => {
                     Some(ast::PredicateOp::Equality(op.into()))
@@ -161,9 +162,9 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn expression_inequality(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_inequality(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         self.expression_left_recurse(
-            &|p| p.expression_addition(allow_lambda),
+            &|p| p.expression_addition(allow_lambda, allow_with),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Inequality(op)) => {
                     Some(ast::PredicateOp::Inequality(op.into()))
@@ -174,9 +175,9 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn expression_addition(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_addition(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         self.expression_left_recurse(
-            &|p| p.expression_multiplication(allow_lambda),
+            &|p| p.expression_multiplication(allow_lambda, allow_with),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Plus) => Some(ast::MathOp::Add),
                 TokenEnum::Symbol(Symbol::Dash) => Some(ast::MathOp::Sub),
@@ -188,9 +189,9 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn expression_multiplication(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_multiplication(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         self.expression_left_recurse(
-            &|p| p.expression_typed(allow_lambda),
+            &|p| p.expression_typed(allow_lambda, allow_with),
             &|t| match t {
                 TokenEnum::Symbol(Symbol::Star) => Some(ast::MathOp::Mul),
                 TokenEnum::Symbol(Symbol::Slash) => Some(ast::MathOp::Div),
@@ -205,93 +206,100 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn expression_typed(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_typed(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         // TODO: 'expr as type'
-        self.expression_prefix(allow_lambda)
+        self.expression_prefix(allow_lambda, allow_with)
     }
 
-    fn expression_prefix(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_prefix(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         match self.next().token {
             TokenEnum::Symbol(Symbol::Plus) => {
                 let tk_op = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::UnOp {
-                        op: ast::UnOp::Plus,
-                        tk_op,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::UnOp {
+                            op: ast::UnOp::Plus,
+                            tk_op,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Symbol(Symbol::Bang) => {
                 let tk_op = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::UnOp {
-                        op: ast::UnOp::Not,
-                        tk_op,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::UnOp {
+                            op: ast::UnOp::Not,
+                            tk_op,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Symbol(Symbol::Tilde) => {
                 let tk_op = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::UnOp {
-                        op: ast::UnOp::Complement,
-                        tk_op,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::UnOp {
+                            op: ast::UnOp::Complement,
+                            tk_op,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Symbol(Symbol::Dash) => {
                 let tk_op = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::UnOp {
-                        op: ast::UnOp::Negate,
-                        tk_op,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::UnOp {
+                            op: ast::UnOp::Negate,
+                            tk_op,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Keyword(Keyword::Extend) => {
                 let tk_cast = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::Cast {
-                        op: ast::Cast::Extend,
-                        tk_cast,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::Cast {
+                            op: ast::Cast::Extend,
+                            tk_cast,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Keyword(Keyword::Truncate) => {
                 let tk_cast = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::Cast {
-                        op: ast::Cast::Truncate,
-                        tk_cast,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::Cast {
+                            op: ast::Cast::Truncate,
+                            tk_cast,
+                            expr,
+                        })
                     })
-                })
             }
             TokenEnum::Keyword(Keyword::Transmute) => {
                 let tk_cast = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::Cast {
-                        op: ast::Cast::Transmute,
-                        tk_cast,
-                        expr,
+                self.expression_prefix(allow_lambda, allow_with)
+                    .map(|expr| {
+                        Box::new(ast::Expression::Cast {
+                            op: ast::Cast::Transmute,
+                            tk_cast,
+                            expr,
+                        })
                     })
-                })
             }
-            _ => self.expression_postfix(allow_lambda),
+            _ => self.expression_postfix(allow_lambda, allow_with),
         }
     }
 
     pub fn index(&mut self) -> Result<ast::Index> {
         m! {
-            from <- self.unless_next(&[TokenEnum::Symbol(Symbol::DotDot)], |p| p.expression(true));
+            from <- self.unless_next(&[TokenEnum::Symbol(Symbol::DotDot)], |p| p.expression(true, true));
             to <- self.consume_next(
                 Symbol::DotDot,
-                |parse| parse.unless_next(&[TokenEnum::Symbol(Symbol::Colon)], |p| p.expression(true))
+                |parse| parse.unless_next(&[TokenEnum::Symbol(Symbol::Colon)], |p| p.expression(true, true))
             );
             match (from, to) {
                 (None, None) =>
@@ -305,8 +313,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expression_postfix(&mut self, allow_lambda: bool) -> Expr {
-        let mut expr = self.expression_top(allow_lambda);
+    fn expression_postfix(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
+        let mut expr = self.expression_top(allow_lambda, allow_with);
         while expr.value().is_some() {
             let s = &mut *self;
             match s.next().token {
@@ -348,28 +356,31 @@ impl<'a> Parser<'a> {
         expr
     }
 
-    fn expression_top(&mut self, allow_lambda: bool) -> Expr {
+    fn expression_top(&mut self, allow_lambda: bool, allow_with: bool) -> Expr {
         match self.next().token {
             TokenEnum::Open(Group::Parenthesis) => self
-                .grouped(Group::Parenthesis, |p| p.expression(true))
+                .grouped(Group::Parenthesis, |p| p.expression(true, true))
                 .map(|expr| Box::new(ast::Expression::Enclosed(expr))),
             TokenEnum::Open(Group::Brace) => self
                 .grouped(Group::Brace, Self::block)
                 .map(|block| Box::new(ast::Expression::Block(block))),
             TokenEnum::Open(Group::Bracket) => self
-                .many_grouped(Group::Bracket, Symbol::Comma.into(), |p| p.expression(true))
+                .many_grouped(Group::Bracket, Symbol::Comma.into(), |p| {
+                    p.expression(true, true)
+                })
                 .map(|exprs| Box::new(ast::Expression::Array(exprs))),
             TokenEnum::Keyword(Keyword::Handle) => {
                 m! {
                     let tk_handle = self.skip();
-                    expr <- self.expression(allow_lambda);
-                    return Box::new(ast::Expression::Handle { tk_handle, expr });
+                    expr <- self.expression(allow_lambda, false);
+                    handlers <- self.consume_next(Keyword::With, |p| p.many_until_seperated(Keyword::With.into(), &[Symbol::Semicolon.into(), Symbol::Comma.into()], |p| p.handler(false)));
+                    return Box::new(ast::Expression::Handle { tk_handle, expr, handlers });
                 }
             }
             TokenEnum::Keyword(Keyword::Raise) => {
                 m! {
                     let tk_raise = self.skip();
-                    expr <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Semicolon)], |p| p.expression(allow_lambda));
+                    expr <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Semicolon)], |p| p.expression(allow_lambda, allow_with));
                     return Box::new(ast::Expression::Raise { tk_raise, expr });
                 }
             }
@@ -379,18 +390,18 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::If) => {
                 m! {
                     let tk_if = self.skip();
-                    condition <- self.expression(false);
+                    condition <- self.expression(false, true);
                     branch_true <- match self.next().token {
                         TokenEnum::Keyword(Keyword::Then) => {
                             let tk_then = self.skip();
-                            self.expression(true).map(|branch| (Some(tk_then), branch))
+                            self.expression(allow_lambda, allow_with).map(|branch| (Some(tk_then), branch))
                         },
                         TokenEnum::Open(Group::Brace) => self
                             .grouped(Group::Brace, Self::block)
                             .map(|block| (None, Box::new(ast::Expression::Block(block)))),
                         _ => self.error(Expected::IfBlock),
                     };
-                    branch_false <- self.consume_next(Keyword::Else, |p| p.expression(true));
+                    branch_false <- self.consume_next(Keyword::Else, |p| p.expression(allow_lambda, allow_with));
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });
                 }
             }
@@ -419,7 +430,7 @@ impl<'a> Parser<'a> {
                             })
                         }
                     };
-                    call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+                    call <- self.call_suffix(fun, AllowLambda::from(allow_lambda), allow_with);
                     return Box::new(call.map_or_else(ast::Expression::Path, ast::Expression::Call));
                 }
             }

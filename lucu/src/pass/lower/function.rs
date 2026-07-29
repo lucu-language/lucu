@@ -958,6 +958,90 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ConstantEnum::Hole => self.et.unreachable(),
         }
     }
+    fn handler_function(
+        &mut self,
+        sig: FunctionSignature,
+        decl: &'a ast::FunctionDeclaration,
+        def: &'a ast::FunctionDefinition,
+    ) -> Result<mu::Expression> {
+        self.lower
+            .function_signature(decl)
+            .and_then(|user_sig| {
+                if !sig.subtype(user_sig, self.lower.tt) {
+                    todo!("error")
+                }
+                match def {
+                    ast::FunctionDefinition::Expression(expression) => self.abstraction(
+                        user_sig,
+                        decl.parameters
+                            .iter()
+                            .flat_map(|params| params.inner.iter())
+                            .map(|param| (param.name(), None)),
+                        [&**expression],
+                    ),
+                    ast::FunctionDefinition::Intrinsic(_) => todo!("error"),
+                }
+            })
+            .map(|(e, _)| e)
+    }
+    fn handler(
+        &mut self,
+        effect: Effect,
+        ast: &'a ast::Separated<ast::Item>,
+    ) -> Result<mu::Expression> {
+        let EffectEnum::Item(item) = &self.lower.tt[effect] else {
+            todo!("error: handler effect is not an item");
+        };
+        let effect_decl = self.effect_decl(item);
+
+        // TODO: error on not a function
+        // TODO: error on no definition
+        // TODO: error on too many functions
+        // TODO: error on same name
+
+        let effect_ty = self
+            .effect(effect)
+            .expect("ICE: effect with body with no type")
+            .1;
+        let mu::TypeEnum::Product(effect_tys) = self.tt[effect_ty] else {
+            panic!("ICE: effect with body is not a product type");
+        };
+
+        let mut problems = Problems::ok();
+        let constructed = self.et.construct(
+            effect_tys,
+            effect_decl.members.iter().map(|member| {
+                let Some((decl, def)) = ast
+                    .iter()
+                    .filter_map(|i| match i {
+                        ast::Item::Function(decl, Some((_, def))) => Some((decl, def)),
+                        _ => None,
+                    })
+                    .find(|(decl, _)| decl.name.ident.as_str() == member.name.as_str())
+                else {
+                    todo!("error and return recovery value")
+                };
+                let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
+                let sig_val = self.lower.tt[member.signature].clone();
+                let partial = self
+                    .lower
+                    .tt
+                    .insert_function_signature(FunctionSignatureValue {
+                        // TODO: if we have dependent kinds these need to be substituted too
+                        type_params: sig_val
+                            .type_params
+                            .map(|params| params.iter().copied().skip(args.len()).collect()),
+                        implicit_regions: sig_val.implicit_regions,
+                        params: sig_val.params.subst(self.lower.tt, 0, args),
+                        thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
+                    });
+                problems
+                    .append(self.handler_function(partial, decl, def))
+                    .unwrap_or_else(|| self.et.unreachable())
+            }),
+        );
+        problems.with(constructed)
+    }
     fn expression(
         &mut self,
         expr: &'a ast::Expression,
@@ -1203,11 +1287,49 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 ),
                             }),
                         (
-                            &TypeEnum::PointerSlice(ty, _, sentinel_ty),
+                            &TypeEnum::PointerSlice(ty, region, sentinel_ty),
                             ast::Index::Range {
                                 from, to, sentinel, ..
                             },
-                        ) => todo!("slice slice"),
+                        ) => {
+                            // FIXME: sentinel
+                            let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
+                            let mu_usize = self.r#type(usize_t);
+                            let mu_ty = self.r#type(ty);
+                            let from_index = from
+                                .as_ref()
+                                .map(|expr| {
+                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
+                                })
+                                .unwrap_or_else(|| {
+                                    Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
+                                });
+                            let to_index = to
+                                .as_ref()
+                                .map(|expr| {
+                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
+                                })
+                                .unwrap_or_else(|| {
+                                    Result::new(
+                                        self.et.call(mu::Callable::Len { ty: mu_ty }, [array]),
+                                    )
+                                });
+                            from_index.and_then(|from_index| {
+                                to_index.map(|to_index| {
+                                    (
+                                        self.et.call(
+                                            mu::Callable::PointerSliceSlice { ty: mu_ty },
+                                            [array, from_index, to_index],
+                                        ),
+                                        self.lower.tt.insert_type(TypeEnum::PointerSlice(
+                                            ty,
+                                            region,
+                                            sentinel_ty.filter(|_| to.is_none()),
+                                        )),
+                                    )
+                                })
+                            })
+                        }
 
                         // [N]T
                         (
@@ -1251,6 +1373,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         ) if let TypeEnum::Array(ty, size, sentinel_ty) =
                             self.lower.tt[pointee] =>
                         {
+                            // FIXME: sentinel
                             let max = self.array_size(size);
                             let size = max + sentinel_ty.is_some() as u32;
                             let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
@@ -1346,7 +1469,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 }),
                 expected,
             ),
-            ast::Expression::Handle { expr, .. } => {
+            ast::Expression::Handle { expr, handlers, .. } => {
                 let Some(ty) = expected else {
                     todo!("error: not enough info")
                 };
@@ -1355,9 +1478,25 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 }
                 let mut self_inner = self.reborrow();
                 self_inner.vars.push_front(Var::Raise(ty));
-                self_inner
-                    .expression(expr, expected)
-                    .map(|(e, _)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
+
+                if let Some((_, handlers)) = handlers {
+                    let [(handler, _)] = handlers.elements.as_slice() else {
+                        todo!("error: not yet supported")
+                    };
+                    self_inner.lower.effect(&handler.effect).and_then(|effect| {
+                        self_inner
+                            .handler(effect, &handler.items.inner)
+                            .and_then(|effect_mu| {
+                                self_inner.vars.push_front(Var::Effect(effect));
+                                self_inner
+                                    .expression(expr, expected)
+                                    .map(|(e, t)| (self_inner.et.let_chain([effect_mu], e), t))
+                            })
+                    })
+                } else {
+                    self_inner.expression(expr, expected)
+                }
+                .map(|(e, _)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
             }
             ast::Expression::Raise { expr, .. } => {
                 let never = self.lower.tt.insert_type(TypeEnum::Never);

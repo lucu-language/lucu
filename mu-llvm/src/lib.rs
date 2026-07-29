@@ -1149,6 +1149,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .append_basic_block(self.function.read().unwrap().unwrap(), name)
     }
     pub fn build_functions_that_llvm_tries_to_call_for_some_reason(&self) {
+        // memset
         let u8_ptr = self.context.ptr_type(AddressSpace::default());
         let uptr = self.context.ptr_sized_int_type(&self.target_data, None);
 
@@ -1221,6 +1222,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         self.builder.position_at_end(memset_ret);
         self.builder.build_return(Some(&start)).unwrap();
 
+        // tell the linker these are used
         let used_const = u8_ptr.const_array(&[
             // guard.as_pointer_value().const_cast(u8_ptr),
             // fail.as_global_value().as_pointer_value().const_cast(u8_ptr),

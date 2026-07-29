@@ -194,6 +194,12 @@ impl<V: Combine> Combine for Result<V> {
     }
 }
 
+impl<T> Result<Option<T>> {
+    pub fn guard(pred: bool, f: impl FnOnce() -> Result<Option<T>>) -> Result<Option<T>> {
+        if pred { f() } else { Result::new(None) }
+    }
+}
+
 impl<T> Result<T> {
     pub fn new(t: T) -> Self {
         Self {

@@ -1,54 +1,20 @@
 import "core:io"
-import "libc:types" c
 import "conway"
 import "builtin:regions"
 
-type Id[T] = T
-type Test1 = Id[u32,]
-
-type Apply[M[_], T] = M[T,]
-type ApplyApply[MM[_[_], _], M[_], T] = MM[
-    M,
-    T,
-    -- test
-]
-type ApplyApplyApply[MMM[_[_[_], _], _[_], _], MM[_[_], _], M[_], T] = MMM[MM, M, T]
-
-type Test2 = Apply[Id, u32]
-type CString[r] = c.string[r,]
-type Slice[T, r] = ^@r []T
-
--- test
-fun test(
-    -- comment
-    param ^u8,
-    -- wha
-    --
-) = {
-    -- bababooey
-}
-
-fun hoohaa = {
-    let n = use regions.ref(1)
-    n^ <<= 3
-    trace_int(n^)
-    traceln
+fun stdout(fun body with io.Sink) with World = handle body with io.Sink {
+    fun write(bytes ^[]i8) size = syscall_write(1, bytes)
+    fun flush = {}
 }
 
 fun _start ! with World Div = {
-    hoohaa
-    assert(2 + 2 == 4, "damn")
-    trace_int(420)
-    traceln
-    trace_int(69)
-    traceln
-    trace_int(-10)
-    traceln
-    trace("Hello, World!")
-    traceln
-    conway.main
+    let buffer ^[]i8 = use regions.alloca(100_000)
+
+    -- FIXME: `io.buffered(buffer, stdout) { ... }`
+    io.buffered(buffer, { body -> stdout(body) }) {
+        conway.main(48)
+    }
+
     syscall_exit(0)
     unreachable
 }
-
-type Maybe[T] = ?T

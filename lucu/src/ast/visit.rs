@@ -470,8 +470,14 @@ impl Ast for ast::Expression {
             ast::Expression::Raise { expr, .. } => {
                 visit_option(expr, visitor, |v, e| v.visit(&**e))
             }
-            ast::Expression::Handle { expr, .. }
-            | ast::Expression::Discard { expr, .. }
+            ast::Expression::Handle { expr, handlers, .. } => V::Output::combine([
+                visitor.visit(&**expr),
+                visit_option(handlers, visitor, |v, (_, handlers)| {
+                    visit_vec(&handlers.elements, v, |v, (handler, _)| v.visit(handler))
+                }),
+            ]),
+
+            ast::Expression::Discard { expr, .. }
             | ast::Expression::UnOp { expr, .. }
             | ast::Expression::Dereference { expr, .. }
             | ast::Expression::Cast { expr, .. } => visitor.visit(&**expr),

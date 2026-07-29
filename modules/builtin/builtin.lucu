@@ -105,14 +105,6 @@ fun syscall_exit(code addr) ! with World = {
 	unreachable
 }
 
-fun wait with World = {
-	let buf ^[1]i8 = use regions.ref(---)
-	handle unfounded loop {
-		if syscall_read(0, buf[..]) == 0 then raise
-		if buf[0]^ == 10 then raise
-	}
-}
-
 -- printing
 
 fun trace(buf ^[]i8)

@@ -65,7 +65,7 @@ fun next_state(old ^[]bool, new ^[]bool, stride size) = {
     }
 }
 
-fun main(stride size) with World Div io.Sink = {
+fun main(stride size) with Div io.Source io.Sink = {
     -- create buffers
     let board_a ^[]bool = use regions.alloca(stride * stride)
     let board_b ^[]bool = use regions.alloca(stride * stride)
@@ -80,10 +80,10 @@ fun main(stride size) with World Div io.Sink = {
 
     loop {
         write_state(board_a, stride)
-        wait
+        discard io.skip_line
         next_state(board_a, board_b, stride)
         write_state(board_b, stride)
-        wait
+        discard io.skip_line
         next_state(board_b, board_a, stride)
     }
 }

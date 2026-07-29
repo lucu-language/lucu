@@ -1,20 +1,8 @@
-import "core:io"
 import "conway"
-import "builtin:regions"
-
-fun stdout(fun body with io.Sink) with World = handle body with io.Sink {
-    fun write(bytes ^[]i8) size = syscall_write(1, bytes)
-    fun flush = {}
-}
+import "echo"
 
 fun _start ! with World Div = {
-    let buffer ^[]i8 = use regions.alloca(100_000)
-
-    -- FIXME: `io.buffered(buffer, stdout) { ... }`
-    io.buffered(buffer, { body -> stdout(body) }) {
-        conway.main(48)
-    }
-
+    echo.main
     syscall_exit(0)
     unreachable
 }

@@ -812,7 +812,19 @@ impl Ast for ast::Expression {
                 ty,
                 tk_equals,
                 value,
-            } => todo!(),
+            } => {
+                nodes.token(*tk_let);
+                nodes.space();
+                nodes.token(var.token);
+                nodes.space();
+                if let Some(ty) = ty {
+                    ty.push_nodes(nodes);
+                    nodes.space();
+                }
+                nodes.token(*tk_equals);
+                nodes.space();
+                value.push_nodes(nodes);
+            }
             ast::Expression::If {
                 tk_if,
                 condition,
@@ -890,8 +902,25 @@ impl Ast for ast::Expression {
             ast::Expression::Handle {
                 tk_handle: tk,
                 expr,
+                handlers,
+            } => {
+                nodes.token(*tk);
+                nodes.space();
+                expr.push_nodes(nodes);
+                if let Some((tk_with, handlers)) = handlers {
+                    nodes.space();
+                    nodes.token(*tk_with);
+                    for (handler, tk_with) in handlers.elements.iter() {
+                        nodes.space();
+                        handler.push_nodes(nodes);
+                        if let Some(tk_with) = tk_with {
+                            nodes.space();
+                            nodes.token(*tk_with);
+                        }
+                    }
+                }
             }
-            | ast::Expression::Discard {
+            ast::Expression::Discard {
                 tk_discard: tk,
                 expr,
             }
@@ -904,8 +933,10 @@ impl Ast for ast::Expression {
             }
             ast::Expression::Raise { tk_raise, expr } => {
                 nodes.token(*tk_raise);
-                nodes.space();
-                expr.push_nodes(nodes);
+                if let Some(expr) = expr {
+                    nodes.space();
+                    expr.push_nodes(nodes);
+                }
             }
             ast::Expression::Member { lhs, tk_dot, rhs } => {
                 lhs.push_nodes(nodes);

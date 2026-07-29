@@ -1,69 +1,109 @@
 import "builtin:regions"
 
 effect Source = {
-   fun read size with Sink
+    fun read(bytes ^mut []i8) size
+}
+
+fun skip_line size with Source = {
+    let total ^size = use regions.ref(0)
+    let buf ^[1]i8 = use regions.ref(---)
+    handle unfounded loop {
+        if read(buf[..]) == 0 then raise
+        total^ += 1
+        if buf[0]^ == 10 then raise
+    }
+    total^
+}
+
+fun read_line(bytes ^mut []i8) size with Source = {
+    let total ^size = use regions.ref(0)
+    handle unfounded loop {
+        if read(bytes[total^..total^ + 1]) == 0 then raise
+        total^ += 1
+        if bytes[total^ - 1]^ == 10 then raise
+        if total^ == len(bytes) then raise
+    }
+    total^
 }
 
 effect Sink = {
-   fun write(bytes ^[]i8) size
-   fun flush
+    fun write(bytes ^[]i8) size
+    fun flush
 }
 
 fun writeln size with Sink = {
-	let buf ^[1]i8 = use regions.ref([10])
-	write(buf[..])
+    let buf ^[1]i8 = use regions.ref([10])
+    write(buf[..])
 }
 
--- fun read_line with Source Sink = {
--- }
+fun write_int(n int) with Sink = {
+	let buf ^[21]i8 = use regions.ref(---)
+
+	let remaining = use regions.ref(abs(n))
+
+	let start size = handle {
+		let current ^size = use regions.ref(20)
+		unfounded loop {
+			buf[current^]^ = '0' + #trunc (remaining^ % 10)
+			remaining^ /= 10
+			if remaining^ == 0 {
+				yeet current^
+			}
+			current^ -= 1
+		}
+	}
+
+    -- FIXME: write_all
+	discard write(if n < 0 {
+		buf[start - 1]^ = '-'
+		buf[start - 1..]
+	} else {
+		buf[start..]
+	})
+}
 
 effect StdIo = {
-   fun stdin(fun body with Source)
-   fun stdout(fun body with Sink)
-   fun stderr(fun body with Sink)
+    fun stdin(fun body with Source)
+    fun stdout(fun body with Sink)
+    fun stderr(fun body with Sink)
 }
 
-fun buffered(buffer ^mut []i8, fun handled(fun body with Sink), fun body with Sink) = {
-   handled {
-      let current ^size = use regions.ref(0)
-      -- FIXME: deal with super write not writing everything
-      handle body with Sink {
-         fun write(bytes ^[]i8) size = {
+fun linux(fun body with StdIo) with World = handle body with StdIo {
+    fun stdin(fun body with Source) = handle body with Source {
+        fun read(bytes ^mut []i8) size = syscall_read(0, bytes)
+    }
+    fun stdout(fun body with Sink) = handle body with Sink {
+        fun write(bytes ^[]i8) size = syscall_write(1, bytes)
+        fun flush = {}
+    }
+    fun stderr(fun body with Sink) = handle body with Sink {
+        fun write(bytes ^[]i8) size = syscall_write(2, bytes)
+        fun flush = {}
+    }
+}
+
+fun buffered_sink(buffer ^mut []i8, fun body with Sink) with Sink = {
+    let current ^size = use regions.ref(0)
+    -- FIXME: deal with super write not writing everything
+    -- (we need a Queue probably)
+    handle body with Sink {
+        fun write(bytes ^[]i8) size = {
             for(0, len(bytes)) { i ->
-               if current^ == len(buffer) {
-                  discard write(buffer)
-                  current^ = 0
-               }
-               buffer[current^]^ = bytes[i]^
-               current^ += 1
+                if current^ == len(buffer) {
+                    discard write(buffer)
+                    current^ = 0
+                }
+                buffer[current^]^ = bytes[i]^
+                current^ += 1
             }
             len(bytes)
-         }
-         fun flush = {
+        }
+        fun flush = {
             if current^ > 0 {
-               discard write(buffer[0..current^])
-               current^ = 0
+                discard write(buffer[0..current^])
+                current^ = 0
             }
             flush
-         }
-      }
-      -- write remaining buffer
-      if current^ > 0 {
-         discard write(buffer[0..current^])
-      }
-   }
+        }
+    }
 }
-
--- effect Buffered[E effect] = {
---    fun buffered(buffer ^mut []i8, fun handled(fun body with E), fun body with E)
--- }
-
--- handle Buffered[Source] {
---    fun buffered(buffer ^mut []i8, fun handled(fun body with Source), fun body with Source) = {
---    }
--- }
-
--- handle Buffered[Sink] {
---    fun buffered(buffer ^mut []i8, fun handled(fun body with Sink), fun body with Sink) = {
---    }
--- }

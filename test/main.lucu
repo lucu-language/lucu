@@ -1,11 +1,24 @@
 import "conway"
 import "echo"
+import "core:io"
 import "os:linux"
+import "builtin:c"
+
+type Args = struct(argc int, argv ^@static [0]c.string[static,])
+
+type ArgsPtr = ^@static Args
 
 fun _start ! with World Div = {
+    let rsp = asm_pure["", "={rsp},{rsp}", ArgsPtr, ArgsPtr](---)
+    let argc = rsp.argc^
+
     {
         use linux.sys_x86_64
         use linux.stdio
+
+        io.print_int(argc)
+        io.println
+
         echo.main
         conway.main(48)
         linux.exit(0)

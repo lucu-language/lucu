@@ -283,31 +283,44 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 from,
                 to,
             } => {
-                // TODO: support more from types
-                let from = llvm
-                    .get_type(from)
-                    .basic_type(llvm)
-                    .unwrap()
-                    .into_array_type();
-                let params = std::iter::repeat_n(
-                    BasicMetadataTypeEnum::from(from.get_element_type()),
-                    from.len() as usize,
-                )
-                .collect::<Box<_>>();
-                let arg_array = args
-                    .next()
-                    .unwrap()
-                    .build(llvm)
-                    .basic_value(llvm)
-                    .unwrap()
-                    .into_array_value();
-                let args = (0..from.len())
-                    .map(|n| {
-                        BasicMetadataValueEnum::from(
-                            llvm.builder.build_extract_value(arg_array, n, "").unwrap(),
-                        )
-                    })
+                let from = llvm.get_type(from).basic_type(llvm).unwrap();
+                let (params, args) = if from.is_array_type() {
+                    let from = from.into_array_type();
+                    let params = std::iter::repeat_n(
+                        BasicMetadataTypeEnum::from(from.get_element_type()),
+                        from.len() as usize,
+                    )
                     .collect::<Box<_>>();
+                    let arg_array = args
+                        .next()
+                        .unwrap()
+                        .build(llvm)
+                        .basic_value(llvm)
+                        .unwrap()
+                        .into_array_value();
+                    let args = (0..from.len())
+                        .map(|n| {
+                            BasicMetadataValueEnum::from(
+                                llvm.builder.build_extract_value(arg_array, n, "").unwrap(),
+                            )
+                        })
+                        .collect::<Box<_>>();
+                    (params, args)
+                } else {
+                    // TODO: support more types
+                    (
+                        vec![from.into()].into_boxed_slice(),
+                        vec![
+                            args.next()
+                                .unwrap()
+                                .build(llvm)
+                                .basic_value(llvm)
+                                .unwrap()
+                                .into(),
+                        ]
+                        .into_boxed_slice(),
+                    )
+                };
 
                 let to = llvm.get_type(to).basic_type(llvm);
                 let ty = match to {

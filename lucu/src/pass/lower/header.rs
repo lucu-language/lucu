@@ -144,7 +144,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     todo!("error")
                 }
 
-                let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type));
+                let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Region));
 
                 match def {
                     Some((_, ast::RegionDefinition::Alias(path))) => {
@@ -526,6 +526,9 @@ impl<'a, 'b> Lower<'a, 'b> {
             ("builtin:builtin", "unfounded") => Some(IntrinsicFunction::Unfounded),
             ("builtin:builtin", "unreachable") => Some(IntrinsicFunction::Unreachable),
             ("builtin:builtin", "len") => Some(IntrinsicFunction::Len),
+            ("builtin:builtin", "slice_from_raw_parts") => {
+                Some(IntrinsicFunction::SliceFromRawParts)
+            }
             _ => None,
         }
     }

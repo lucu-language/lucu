@@ -172,7 +172,10 @@ fun unreachable !
 
 -- other utils
 
-fun len[T](slice ^[]T) size
+fun len[R region, T](slice ^@R []T) size
+	= #intrinsic
+
+fun slice_from_raw_parts[R region, T](ptr ^@R [0]T, length size) ^@R []T
 	= #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n

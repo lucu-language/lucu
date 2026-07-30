@@ -62,6 +62,40 @@ fun write_int(n int) with Sink = {
 	})
 }
 
+fun print(bytes ^[]i8) with StdIo = {
+    use stdout
+    -- FIXME: write_all
+    discard write(bytes)
+}
+
+fun eprint(bytes ^[]i8) with StdIo = {
+    use stderr
+    -- FIXME: write_all
+    discard write(bytes)
+}
+
+fun println with StdIo = {
+    use stdout
+    -- FIXME: write_all
+    discard writeln
+}
+
+fun eprintln with StdIo = {
+    use stderr
+    -- FIXME: write_all
+    discard writeln
+}
+
+fun print_int(n int) with StdIo = {
+    use stdout
+    write_int(n)
+}
+
+fun eprint_int(n int) with StdIo = {
+    use stderr
+    write_int(n)
+}
+
 effect StdIo = {
     fun stdin(fun body with Source)
     fun stdout(fun body with Sink)

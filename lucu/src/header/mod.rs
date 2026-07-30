@@ -55,6 +55,7 @@ pub enum IntrinsicFunction {
     Asm,
     AsmPure,
     Len,
+    SliceFromRawParts,
     Unreachable,
     Loop,
     Unfounded,

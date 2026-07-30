@@ -57,6 +57,7 @@ pub enum IntSize {
     CLong,
     /// Equivalent of a C long long int
     /// At least 64 bits
+    /// At most IntSize::Register
     CLongLong,
 }
 
@@ -104,12 +105,12 @@ impl IntSize {
             (IntSize::Exact(n), IntSize::CLong) => n <= 32,
             (IntSize::Exact(n), IntSize::CLongLong) => n <= 64,
 
-            (IntSize::CChar, IntSize::CChar | IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
-            (IntSize::CShort, IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
-            (IntSize::CInt, IntSize::CInt | IntSize::CLong | IntSize::CLongLong) => true,
-            (IntSize::CLong, IntSize::CLong | IntSize::CLongLong) => true,
-            (IntSize::CLongLong, IntSize::CLongLong) => true,
-            
+            (IntSize::CChar, IntSize::CChar | IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
+            (IntSize::CShort, IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
+            (IntSize::CInt, IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
+            (IntSize::CLong, IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
+            (IntSize::CLongLong, IntSize::CLongLong | IntSize::Register) => true,
+
             _ => false,
         }
     }
@@ -140,7 +141,6 @@ impl Integer {
                     sign_b && int_size_a.smaller_than(int_size_b)
                 }
             }
-
             (Integer::Integer(sign, int_size), Integer::CChar) => {
                 !sign && int_size.smaller_than(IntSize::CChar)
             }
@@ -335,11 +335,8 @@ pub enum Term {
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
 pub enum GenericArgument {
-    Instance {
-        term: Term,
-        arity: Option<usize>,
-    },
-    Hole
+    Instance { term: Term, arity: Option<usize> },
+    Hole,
 }
 
 impl GenericArgument {
@@ -370,13 +367,16 @@ impl Effect {
     pub fn effects<'a>(&'a self, tt: &'a TypeTable) -> impl Iterator<Item = Self> + 'a {
         match &tt[*self] {
             EffectEnum::Row(effects) => effects.iter().copied(),
-            _ => slice::from_ref(self).iter().copied()
+            _ => slice::from_ref(self).iter().copied(),
         }
     }
-    pub fn is_marker(&self , tt: &TypeTable) -> bool {
+    pub fn is_marker(&self, tt: &TypeTable) -> bool {
         match &tt[*self] {
             EffectEnum::Item(_) => false,
-            EffectEnum::Read(_) | EffectEnum::Write(_) | EffectEnum::Divergent | EffectEnum::World => true,
+            EffectEnum::Read(_)
+            | EffectEnum::Write(_)
+            | EffectEnum::Divergent
+            | EffectEnum::World => true,
             EffectEnum::Generic(_) => panic!("ICE: asked if effect generic is a marker"),
             EffectEnum::Row(_) => panic!("ICE: asked if effect row is a marker"),
             EffectEnum::Hole => todo!(),
@@ -451,18 +451,31 @@ impl TypeTable {
     pub fn insert_constant(&self, value: ConstantEnum) -> Constant {
         Constant(self.constants.insert(value))
     }
-    pub fn insert_function_signature(
-        &self,
-        value: FunctionSignatureValue,
-    ) -> FunctionSignature {
+    pub fn insert_function_signature(&self, value: FunctionSignatureValue) -> FunctionSignature {
         FunctionSignature(self.function_signatures.insert(value))
     }
     pub fn eprint_lengths(&self) {
         eprintln!("types: {}/{}", self.types.len(), self.types.capacity());
-        eprintln!("regions: {}/{}", self.regions.len(), self.regions.capacity());
-        eprintln!("effects: {}/{}", self.effects.len(), self.effects.capacity());
+        eprintln!(
+            "regions: {}/{}",
+            self.regions.len(),
+            self.regions.capacity()
+        );
+        eprintln!(
+            "effects: {}/{}",
+            self.effects.len(),
+            self.effects.capacity()
+        );
         eprintln!("kinds: {}/{}", self.kinds.len(), self.kinds.capacity());
-        eprintln!("constants: {}/{}", self.constants.len(), self.constants.capacity());
-        eprintln!("function_signatures: {}/{}", self.function_signatures.len(), self.function_signatures.capacity());
+        eprintln!(
+            "constants: {}/{}",
+            self.constants.len(),
+            self.constants.capacity()
+        );
+        eprintln!(
+            "function_signatures: {}/{}",
+            self.function_signatures.len(),
+            self.function_signatures.capacity()
+        );
     }
 }

@@ -899,6 +899,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     self.et.unreachable(),
                 )
             }
+            IntrinsicFunction::SliceFromRawParts => todo!(),
         }
     }
     fn constant(&self, ty: Type, c: Constant) -> mu::Expression {
@@ -1066,33 +1067,21 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 Result::new((self.et.constant(self.r#type(ty), mu::Constant::Uninit), ty))
             }
-            ast::Expression::Member { lhs, rhs, .. } => {
-                self.expression(lhs, None).and_then(|(val, ty)| {
-                    // FIXME: member access through pointer
-                    let TypeEnum::Item(item) = &self.lower.tt[ty] else {
-                        todo!("error")
-                    };
-                    let decl = self.struct_decl(item);
-                    let Some((idx, member)) = decl
-                        .members
-                        .iter()
-                        .enumerate()
-                        .find(|(_, m)| m.name.as_str() == rhs.as_str())
-                    else {
-                        todo!("error")
-                    };
-                    Result::new((self.et.member(val, idx as u32), member.ty))
-                })
-            }
+            ast::Expression::Member { lhs, rhs, .. } => self
+                .expression(lhs, None)
+                .and_then(|(val, ty)| self.member_access(val, ty, rhs)),
             ast::Expression::Path(path) => {
-                if let ast::PathOrigin::Package(lhs, _, _rhs) = &path.origin
-                    && let Some((_index, _ty)) = self.find_named(lhs.as_str())
+                if let ast::PathOrigin::Package(lhs, _, rhs) = &path.origin
+                    && let Some((index, ty)) = self.find_named(lhs.as_str())
                 {
                     if let Some(_generics) = &path.generics {
                         todo!("error")
                     }
+                    let FunctionParameter::Data(ty) = ty else {
+                        todo!("evaluate 0-arity function")
+                    };
                     // TODO: this does not include member access of local constant / function output right now
-                    todo!("member access")
+                    self.member_access(self.et.reference(self.r#type(ty), index), ty, rhs)
                 } else {
                     self.path(path).and_then(|(e, p)| match p {
                         PathType::Data(ty) => Result::new((e.unwrap_left(), ty)),
@@ -1539,6 +1528,57 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Result::new((mu, found))
             }
         })
+    }
+    fn member_access(
+        &mut self,
+        lhs: mu::Expression,
+        ty: Type,
+        rhs: &ast::Identifier,
+    ) -> Result<(mu::Expression, Type)> {
+        if let TypeEnum::Pointer(inner, region) = self.lower.tt[ty] {
+            let TypeEnum::Item(item) = &self.lower.tt[inner] else {
+                todo!("error")
+            };
+            let decl = self.struct_decl(item);
+            let mu_ty = self.r#type(inner);
+            let mu::TypeEnum::Product(mu_tys) = self.tt[mu_ty] else {
+                panic!("ICE: item does not have product type");
+            };
+            let Some((idx, member)) = decl
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.name.as_str() == rhs.as_str())
+            else {
+                todo!("error")
+            };
+            Result::new((
+                self.et.call(
+                    mu::Callable::PointerMember {
+                        tys: mu_tys,
+                        member: idx as u32,
+                    },
+                    [lhs],
+                ),
+                self.lower
+                    .tt
+                    .insert_type(TypeEnum::Pointer(member.ty, region)),
+            ))
+        } else {
+            let TypeEnum::Item(item) = &self.lower.tt[ty] else {
+                todo!("error")
+            };
+            let decl = self.struct_decl(item);
+            let Some((idx, member)) = decl
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, m)| m.name.as_str() == rhs.as_str())
+            else {
+                todo!("error")
+            };
+            Result::new((self.et.member(lhs, idx as u32), member.ty))
+        }
     }
     fn statements(
         &mut self,

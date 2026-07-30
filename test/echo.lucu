@@ -1,14 +1,11 @@
 import "core:io"
 import "builtin:regions"
 
-fun main with World Div = {
-    use io.linux
+fun main with io.StdIo = {
     use io.stdin
     use io.stdout
 
-    loop {
-        let buffer ^[]i8 = use regions.alloca(1000)
-        let total = io.read_line(buffer)
-        discard io.write(buffer[..total])
-    }
+    let buffer ^[]i8 = use regions.alloca(1000)
+    let total = io.read_line(buffer)
+    discard io.write(buffer[..total])
 }

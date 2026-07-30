@@ -1,8 +1,14 @@
 import "conway"
 import "echo"
+import "os:linux"
 
 fun _start ! with World Div = {
-    echo.main
-    syscall_exit(0)
+    {
+        use linux.sys_x86_64
+        use linux.stdio
+        echo.main
+        conway.main(48)
+        linux.exit(0)
+    }
     unreachable
 }

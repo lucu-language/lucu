@@ -143,6 +143,8 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                                     out.as_ref().map(|e| e as &dyn inkwell::values::BasicValue),
                                 )
                                 .unwrap();
+                        } else {
+                            llvm.builder.build_unreachable().unwrap();
                         }
 
                         // return
@@ -608,6 +610,8 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                         .filter(|_| val.get_type().get_return_type().is_some()),
                 )
                 .unwrap();
+        } else {
+            self.builder.build_unreachable().unwrap();
         }
         self.builder.clear_insertion_position();
         *self.function.write().unwrap() = None;
@@ -880,13 +884,17 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     refs_new.push_front(arg);
                 }
                 let out = self.build_expression(body, &refs_new).basic_value(self);
-                self.builder
-                    .build_return(
-                        out.as_ref()
-                            .map(|e| e as &dyn inkwell::values::BasicValue)
-                            .filter(|_| function.get_type().get_return_type().is_some()),
-                    )
-                    .unwrap();
+                if !fun.never_returns(self.tt) {
+                    self.builder
+                        .build_return(
+                            out.as_ref()
+                                .map(|e| e as &dyn inkwell::values::BasicValue)
+                                .filter(|_| function.get_type().get_return_type().is_some()),
+                        )
+                        .unwrap();
+                } else {
+                    self.builder.build_unreachable().unwrap();
+                }
 
                 // return
                 self.builder.position_at_end(current_block);

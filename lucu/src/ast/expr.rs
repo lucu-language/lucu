@@ -36,7 +36,7 @@ impl From<SymbolAssign> for AssignOp {
             SymbolAssign::SlashEquals => Self::Math(MathOp::Div),
             SymbolAssign::StarEquals => Self::Math(MathOp::Mul),
             SymbolAssign::PercentEquals => Self::Math(MathOp::Mul),
-            SymbolAssign::AmpersandEquals => Self::Math(MathOp::Add),
+            SymbolAssign::AmpersandEquals => Self::Math(MathOp::And),
             SymbolAssign::BarEquals => Self::Math(MathOp::Or),
             SymbolAssign::TildeEquals => Self::Math(MathOp::Xor),
             SymbolAssign::ShiftLeftEquals => Self::Math(MathOp::ShiftLeft),

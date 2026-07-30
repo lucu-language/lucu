@@ -968,7 +968,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .function_signature(decl)
             .and_then(|user_sig| {
                 if !sig.subtype(user_sig, self.lower.tt) {
-                    todo!("error")
+                    todo!(
+                        "error: {} not subtype of {}",
+                        sig.display(self.lower.tt),
+                        user_sig.display(self.lower.tt)
+                    )
                 }
                 match def {
                     ast::FunctionDefinition::Expression(expression) => self.abstraction(

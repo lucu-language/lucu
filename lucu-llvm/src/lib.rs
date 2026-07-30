@@ -169,10 +169,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> mu_llvm::Value<'ctx, Self> {
         match op {
-            Operation::Unreachable => {
-                let _ = llvm.builder.build_unreachable().unwrap();
-                mu_llvm::Value::Data(None)
-            }
+            Operation::Unreachable => mu_llvm::Value::Data(None),
             Operation::Constant(ty, constant) => {
                 mu_llvm::Value::Data(llvm.get_type(*ty).basic_type(llvm).map(
                     |ty| match *constant {

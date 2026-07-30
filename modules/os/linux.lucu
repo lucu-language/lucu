@@ -1,0 +1,50 @@
+import "core:io"
+import "os:linux/arch"
+import "os:linux/arch/x86_64"
+
+effect Syscall = {
+    fun read(file addr, buf ^mut []i8) size
+    fun write(file addr, buf ^[]i8) size
+    fun exit(code addr) !
+    -- TODO: flags
+    fun getrandom(buf ^[]i8) size
+}
+
+fun with_syscall(fun body with Syscall) with arch.SyscallNR arch.SyscallRaw = {
+    handle body with Syscall {
+        fun read(file addr, buf ^mut []i8) size = {
+            #trunc arch.syscall3(arch.nr_read, file, #transmute buf[0], #ext len(buf))
+        }
+        fun write(file addr, buf ^[]i8) size = {
+            #trunc arch.syscall3(arch.nr_write, file, #transmute buf[0], #ext len(buf))
+        }
+        fun exit(code addr) ! = {
+            discard arch.syscall1(arch.nr_exit, code)
+            unreachable
+        }
+        fun getrandom(buf ^[]i8) size = {
+            #trunc arch.syscall3(arch.nr_getrandom, #transmute buf[0], #ext len(buf), 0)
+        }
+    }
+}
+
+fun stdio(fun body with io.StdIo) with Syscall = handle body with io.StdIo {
+    fun stdin(fun body with io.Source) = handle body with io.Source {
+        fun read(bytes ^mut []i8) size = read(0, bytes)
+    }
+    fun stdout(fun body with io.Sink) = handle body with io.Sink {
+        fun write(bytes ^[]i8) size = write(1, bytes)
+        fun flush = {}
+    }
+    fun stderr(fun body with io.Sink) = handle body with io.Sink {
+        fun write(bytes ^[]i8) size = write(2, bytes)
+        fun flush = {}
+    }
+}
+
+fun sys_x86_64(fun body with Syscall) with World = {
+    use x86_64.with_raw_x86_64
+    use x86_64.with_nr_x86_64
+    use with_syscall
+    body
+}

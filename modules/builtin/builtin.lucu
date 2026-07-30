@@ -70,41 +70,6 @@ fun asm[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U with World
 fun asm_pure[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U
 	= #intrinsic
 
-fun syscall0(nr addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},~{rcx},~{r11},~{memory}", [1]addr, addr]([nr])
-fun syscall1(nr addr, arg1 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},~{rcx},~{r11},~{memory}", [2]addr, addr]([nr, arg1])
-fun syscall2(nr addr, arg1 addr, arg2 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},~{rcx},~{r11},~{memory}", [3]addr, addr]([nr, arg1, arg2])
-fun syscall3(nr addr, arg1 addr, arg2 addr, arg3 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", [4]addr, addr]([nr, arg1, arg2, arg3])
-fun syscall4(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},~{rcx},~{r11},~{memory}", [5]addr, addr]([nr, arg1, arg2, arg3, arg4])
-fun syscall5(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},~{rcx},~{r11},~{memory}", [6]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5])
-fun syscall6(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
-	with World
-	= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
-
-fun syscall_read(file addr, buf ^mut []i8) size with World = {
-	#trunc syscall3(0, file, #transmute buf[0], #ext len(buf))
-}
-
-fun syscall_write(file addr, buf ^[]i8) size with World = {
-	#trunc syscall3(1, file, #transmute buf[0], #ext len(buf))
-}
-
-fun syscall_exit(code addr) ! with World = {
-	discard syscall1(60, code)
-	unreachable
-}
-
 -- printing
 
 fun trace(buf ^[]i8)

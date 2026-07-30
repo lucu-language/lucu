@@ -1,10 +1,11 @@
 import "builtin:regions"
 import "core:io"
+import "os:linux"
 
 fun dec(n size, stride size) size = if n == 0 then stride - 1 else n - 1
 fun inc(n size, stride size) size = if n == stride - 1 then 0 else n + 1
 
-fun write_state(state ^[]bool, stride size) with io.Sink = {
+fun write_state(state ^[]i8, stride size) with io.Sink = {
     discard io.write("-")
     for(0, stride) { x ->
         discard io.write("--")
@@ -15,7 +16,7 @@ fun write_state(state ^[]bool, stride size) with io.Sink = {
     for(0, stride) { y ->
         discard io.write("|")
         for(0, stride) { x ->
-            discard io.write(if state[x + y * stride]^ then "[]" else "  ")
+            discard io.write(if state[x + y * stride]^ == 1 then "[]" else "  ")
         }
         discard io.write("|")
         discard io.writeln
@@ -30,53 +31,69 @@ fun write_state(state ^[]bool, stride size) with io.Sink = {
     io.flush
 }
 
-fun clear_state(state ^mut []bool, stride size) = {
+fun clear_state(state ^mut []i8, stride size) = {
     for(0, stride) { y ->
         for(0, stride) { x ->
-            state[x + y * stride]^ = false
+            state[x + y * stride]^ = 0
         }
     }
 }
 
-fun next_state(old ^[]bool, new ^[]bool, stride size) = {
+fun next_state(old ^[]i8, new ^[]i8, stride size) = {
     for(0, stride) { y ->
         for(0, stride) { x ->
             let neighbors ^size = use regions.ref(0)
 
-            if old[dec(x, stride) + dec(y, stride) * stride]^ then neighbors^ += 1
-            if old[    x          + dec(y, stride) * stride]^ then neighbors^ += 1
-            if old[inc(x, stride) + dec(y, stride) * stride]^ then neighbors^ += 1
-            if old[dec(x, stride) +     y          * stride]^ then neighbors^ += 1
-            if old[inc(x, stride) +     y          * stride]^ then neighbors^ += 1
-            if old[dec(x, stride) + inc(y, stride) * stride]^ then neighbors^ += 1
-            if old[    x          + inc(y, stride) * stride]^ then neighbors^ += 1
-            if old[inc(x, stride) + inc(y, stride) * stride]^ then neighbors^ += 1
+            if old[dec(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old[    x          + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old[inc(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old[dec(x, stride) +     y          * stride]^ == 1 then neighbors^ += 1
+            if old[inc(x, stride) +     y          * stride]^ == 1 then neighbors^ += 1
+            if old[dec(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old[    x          + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old[inc(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
 
-            new[x + y * stride]^ = if old[x + y * stride]^ {
+            new[x + y * stride]^ = if old[x + y * stride]^ == 1 {
                 if neighbors^ == 2 {
-                    true
+                    1
+                } else if neighbors^ == 3 {
+                    1
                 } else {
-                    neighbors^ == 3
+                    0
                 }
+            } else if neighbors^ == 3 {
+                1
             } else {
-                neighbors^ == 3
+                0
             }
         }
     }
 }
 
-fun main(stride size) with Div io.Source io.Sink = {
+fun main(stride size) with Div io.StdIo linux.Syscall = {
+    use io.stdin
+    use io.stdout
+
     -- create buffers
-    let board_a ^[]bool = use regions.alloca(stride * stride)
-    let board_b ^[]bool = use regions.alloca(stride * stride)
+    let board_a ^[]i8 = use regions.alloca(stride * stride)
+    let board_b ^[]i8 = use regions.alloca(stride * stride)
 
     -- init state
-    clear_state(board_a, stride)
-    board_a[0 + 0 * stride]^ = true
-    board_a[1 + 1 * stride]^ = true
-    board_a[2 + 1 * stride]^ = true
-    board_a[0 + 2 * stride]^ = true
-    board_a[1 + 2 * stride]^ = true
+    if true {
+        -- random
+        discard linux.getrandom(board_a)
+        for(0, len(board_a)) { i ->
+            board_a[i]^ &= 1
+        }
+    } else {
+        -- glider
+        clear_state(board_a, stride)
+        board_a[0 + 0 * stride]^ = 1
+        board_a[1 + 1 * stride]^ = 1
+        board_a[2 + 1 * stride]^ = 1
+        board_a[0 + 2 * stride]^ = 1
+        board_a[1 + 2 * stride]^ = 1
+    }
 
     loop {
         write_state(board_a, stride)

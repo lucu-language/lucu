@@ -17,6 +17,7 @@ impl Library {
     pub const BUILTIN: Library = Library::const_new("builtin");
     pub const CORE: Library = Library::const_new("core");
     pub const LIBC: Library = Library::const_new("libc");
+    pub const OS: Library = Library::const_new("os");
 
     pub const fn const_new(name: &'static str) -> Self {
         Self(CompactString::const_new(name))
@@ -237,6 +238,10 @@ impl LibraryDir {
         dirs.insert(
             Library::CORE,
             LibraryDir::new(location.join("core")).with_preamble(Module::BUILTIN),
+        );
+        dirs.insert(
+            Library::OS,
+            LibraryDir::new(location.join("os")).with_preamble(Module::BUILTIN),
         );
         dirs
     }

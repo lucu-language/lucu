@@ -1,0 +1,16 @@
+effect SyscallNR = {
+    fun nr_read addr
+    fun nr_write addr
+    fun nr_exit addr
+    fun nr_getrandom addr
+}
+
+effect SyscallRaw = {
+    fun syscall0(nr addr) addr
+    fun syscall1(nr addr, arg1 addr) addr
+    fun syscall2(nr addr, arg1 addr, arg2 addr) addr
+    fun syscall3(nr addr, arg1 addr, arg2 addr, arg3 addr) addr
+    fun syscall4(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr) addr
+    fun syscall5(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr) addr
+    fun syscall6(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
+}

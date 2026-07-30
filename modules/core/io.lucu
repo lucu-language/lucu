@@ -68,20 +68,6 @@ effect StdIo = {
     fun stderr(fun body with Sink)
 }
 
-fun linux(fun body with StdIo) with World = handle body with StdIo {
-    fun stdin(fun body with Source) = handle body with Source {
-        fun read(bytes ^mut []i8) size = syscall_read(0, bytes)
-    }
-    fun stdout(fun body with Sink) = handle body with Sink {
-        fun write(bytes ^[]i8) size = syscall_write(1, bytes)
-        fun flush = {}
-    }
-    fun stderr(fun body with Sink) = handle body with Sink {
-        fun write(bytes ^[]i8) size = syscall_write(2, bytes)
-        fun flush = {}
-    }
-}
-
 fun buffered_sink(buffer ^mut []i8, fun body with Sink) with Sink = {
     let current ^size = use regions.ref(0)
     -- FIXME: deal with super write not writing everything

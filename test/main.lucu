@@ -3,25 +3,70 @@ import "echo"
 import "core:io"
 import "os:linux"
 import "builtin:c"
+import "builtin:regions"
 
-type Args = struct(argc int, argv ^@static [0]c.string[static,])
+type CStrings = ^@static [:0]c.string[static,]
 
-type ArgsPtr = ^@static Args
+type Args = struct(
+    argc i64,
+    argv0 c.string[static,],
+)
 
-fun _start ! with World Div = {
-    let rsp = asm_pure["", "={rsp},{rsp}", ArgsPtr, ArgsPtr](---)
-    let argc = rsp.argc^
+fun strlen(str ^[:0]c.char) size = {
+    let len ^size = use regions.ref(0)
+    handle unfounded loop {
+        if str[len^]^ == 0 then raise
+        len^ += 1
+    }
+    len^
+}
 
+fun entry(argc size, argv CStrings, env CStrings) ! with World Div = {
     {
         use linux.sys_x86_64
         use linux.stdio
 
-        io.print_int(argc)
+        io.print("argc: ")
+        io.print_int(#ext argc)
         io.println
+        for(0, argc) { i ->
+            let len = strlen(argv[i]^)
+            let arg ^@static []i8 = #transmute argv[i]^[..len]
+            io.print("argv[")
+            io.print_int(#ext i)
+            io.print("]: ")
+            io.print(arg)
+            io.println
+        }
+
+        let i ^size = use regions.ref(0)
+        handle unfounded loop {
+            let e addr = #transmute env[i^]^
+            if e == 0 then raise
+
+            let len = strlen(env[i^]^)
+            let arg ^@static []i8 = #transmute env[i^]^[..len]
+            io.print("env[")
+            io.print_int(#ext i^)
+            io.print("]: ")
+            io.print(arg)
+            io.println
+
+            i^ += 1
+        }
 
         echo.main
         conway.main(48)
         linux.exit(0)
     }
     unreachable
+}
+
+fun _start ! with World Div = {
+    asm["", "{rbp}", int, unit](0)
+    let rsp = asm["", "={rsp},{rsp}", ^@static Args, ^@static Args](---)
+    let argc size = #trunc rsp.argc^
+    let argv CStrings = #transmute rsp.argv0
+    let env CStrings = #transmute argv[argc + 1]
+    entry(argc, argv, env)
 }

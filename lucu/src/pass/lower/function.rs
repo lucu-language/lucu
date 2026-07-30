@@ -860,7 +860,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         mu::Callable::Syscall { args: 3 },
                         [
                             self.et.constant(mu_addr, mu::Constant::Integer(1)),
-                            self.et.constant(mu_addr, mu::Constant::Integer(0)),
+                            self.et.constant(mu_addr, mu::Constant::Integer(2)),
                             self.et.cast(
                                 mu_i8_ptr,
                                 mu_addr,
@@ -1311,7 +1311,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 to_index.map(|to_index| {
                                     (
                                         self.et.call(
-                                            mu::Callable::PointerSliceSlice { ty: mu_ty },
+                                            sentinel_ty.map_or_else(
+                                                || mu::Callable::PointerSliceSlice { ty: mu_ty },
+                                                |_| mu::Callable::MultiPointerSlice { ty: mu_ty },
+                                            ),
                                             [array, from_index, to_index],
                                         ),
                                         self.lower.tt.insert_type(TypeEnum::PointerSlice(

@@ -207,11 +207,6 @@ fn watch(cmd: CheckCommand) {
                 lucu_llvm::Builder::build(&context, &mu_tt, &mu_et, machine, "main", &functions);
 
             if let Some(fun) = llvm.module.get_function("_start") {
-                // fun.add_attribute(
-                //     AttributeLoc::Function,
-                //     context
-                //         .create_enum_attribute(Attribute::get_named_enum_kind_id("sspstrong"), 0),
-                // );
                 fun.add_attribute(
                     AttributeLoc::Function,
                     context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),

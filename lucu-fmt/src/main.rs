@@ -1184,7 +1184,19 @@ impl Ast for ast::Constant {
 impl Ast for ast::Struct {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         nodes.token(self.r#struct);
-        self.members.push_nodes(nodes);
+        nodes.token(self.members.open);
+        if self.members.inner.elements.len() > 0 {
+            nodes.indent(|nodes| {
+                nodes.line();
+                for param in self.members.inner.iter() {
+                    param.push_nodes(nodes);
+                    nodes.push(Node::Text(Chunk::COMMA));
+                    nodes.line();
+                }
+                nodes.comments(self.members.close.span());
+            });
+        }
+        nodes.token(self.members.close);
     }
 }
 

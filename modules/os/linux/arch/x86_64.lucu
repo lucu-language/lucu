@@ -1,25 +1,18 @@
 import "os:linux/arch"
 
 fun with_raw_x86_64(fun body with arch.SyscallRaw) with World = handle body with arch.SyscallRaw {
-	fun syscall0(nr addr) addr
-		= asm["syscall", "={rax},{rax},~{rcx},~{r11},~{memory}", [1]addr, addr]([nr])
-	fun syscall1(nr addr, arg1 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},~{rcx},~{r11},~{memory}", [2]addr, addr]([nr, arg1])
-	fun syscall2(nr addr, arg1 addr, arg2 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},{rsi},~{rcx},~{r11},~{memory}", [3]addr, addr]([nr, arg1, arg2])
-	fun syscall3(nr addr, arg1 addr, arg2 addr, arg3 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}", [4]addr, addr]([nr, arg1, arg2, arg3])
-	fun syscall4(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},~{rcx},~{r11},~{memory}", [5]addr, addr]([nr, arg1, arg2, arg3, arg4])
-	fun syscall5(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},~{rcx},~{r11},~{memory}", [6]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5])
-	fun syscall6(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
-		= asm["syscall", "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}", [7]addr, addr]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
+    fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
+        = asm[
+            "syscall",
+            "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}",
+            [7]addr,
+            addr,
+        ]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
 }
 
 fun with_nr_x86_64(fun body with arch.SyscallNR) = handle body with arch.SyscallNR {
-	fun nr_read addr = 0
-	fun nr_write addr = 1
-	fun nr_exit addr = 60
+    fun nr_read addr = 0
+    fun nr_write addr = 1
+    fun nr_exit addr = 60
     fun nr_getrandom addr = 318
 }

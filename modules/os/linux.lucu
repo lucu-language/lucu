@@ -13,17 +13,33 @@ effect Syscall = {
 fun with_syscall(fun body with Syscall) with arch.SyscallNR arch.SyscallRaw = {
     handle body with Syscall {
         fun read(file addr, buf ^mut []i8) size = {
-            #trunc arch.syscall3(arch.nr_read, file, #transmute buf[0], #ext len(buf))
+            #trunc arch.syscall(arch.nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
         }
         fun write(file addr, buf ^[]i8) size = {
-            #trunc arch.syscall3(arch.nr_write, file, #transmute buf[0], #ext len(buf))
+            #trunc arch.syscall(
+                arch.nr_write,
+                file,
+                #transmute buf[0],
+                #ext len(buf),
+                ---,
+                ---,
+                ---,
+            )
         }
         fun exit(code addr) ! = {
-            discard arch.syscall1(arch.nr_exit, code)
+            discard arch.syscall(arch.nr_exit, code, ---, ---, ---, ---, ---)
             unreachable
         }
         fun getrandom(buf ^[]i8) size = {
-            #trunc arch.syscall3(arch.nr_getrandom, #transmute buf[0], #ext len(buf), 0)
+            #trunc arch.syscall(
+                arch.nr_getrandom,
+                #transmute buf[0],
+                #ext len(buf),
+                0,
+                ---,
+                ---,
+                ---,
+            )
         }
     }
 }

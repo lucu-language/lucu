@@ -309,7 +309,7 @@ impl<'a> Parser<'a> {
     fn starts_region_kind(&self) -> bool {
         matches!(
             self.next().token,
-            TokenEnum::Keyword(Keyword::Mut)
+            TokenEnum::Keyword(Keyword::Mut | Keyword::Write | Keyword::Raw)
                 // not really, but we count them
                 | TokenEnum::Symbol(Symbol::At)
         )
@@ -319,7 +319,11 @@ impl<'a> Parser<'a> {
     }
     pub fn region_kind(&mut self) -> Result<ast::RegionKind> {
         match self.next().token {
-            TokenEnum::Keyword(Keyword::Mut) => Result::new(ast::RegionKind::Mutable(self.skip())),
+            TokenEnum::Keyword(Keyword::Mut) => {
+                Result::new(ast::RegionKind::ReadWrite(self.skip()))
+            }
+            TokenEnum::Keyword(Keyword::Write) => Result::new(ast::RegionKind::Write(self.skip())),
+            TokenEnum::Keyword(Keyword::Raw) => Result::new(ast::RegionKind::None(self.skip())),
             _ => self.error(Expected::RegionKind),
         }
     }

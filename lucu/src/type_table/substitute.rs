@@ -827,9 +827,10 @@ impl Substitute for FunctionSignature {
     }
     fn subtype(self, to: Self, tt: &TypeTable) -> bool {
         let (from, to) = (tt[self].clone(), tt[to].clone());
-        assert_eq!(from.type_params, to.type_params);
-        assert_eq!(from.implicit_regions, to.implicit_regions);
-        to.params.subtype(from.params, tt) && from.thunk.subtype(to.thunk, tt)
+        from.type_params == to.type_params
+            && from.implicit_regions == to.implicit_regions
+            && to.params.subtype(from.params, tt)
+            && from.thunk.subtype(to.thunk, tt)
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         let (to, from) = (tt[self].clone(), tt[from].clone());

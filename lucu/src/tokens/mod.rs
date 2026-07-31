@@ -205,6 +205,10 @@ pub enum Keyword {
     Transmute,
     #[strum(serialize = "#intrinsic")]
     Intrinsic,
+    #[strum(serialize = "#write")]
+    Write,
+    #[strum(serialize = "#raw")]
+    Raw,
     #[strum(disabled)]
     Unknown,
 }

@@ -595,16 +595,27 @@ impl<'a, 'b> Lower<'a, 'b> {
         kind: Option<&ast::RegionKind>,
         index: (usize, usize),
     ) -> Result<Region> {
-
         let region = self
             .tt
             .insert_region(RegionEnum::Generic(GenericParameter { index: index.0, apply: None }));
         match kind {
-            Some(ast::RegionKind::Mutable(_)) => {
+            Some(ast::RegionKind::ReadWrite(_)) => {
                 if let Some(effects) = self.implicit_effects.as_deref_mut() {
                     effects.push(self.tt.insert_effect(EffectEnum::Read(region)));
                     effects.push(self.tt.insert_effect(EffectEnum::Write(region)));
                 } else {
+                    todo!("error")
+                }
+            }
+            Some(ast::RegionKind::Write(_)) => {
+                if let Some(effects) = self.implicit_effects.as_deref_mut() {
+                    effects.push(self.tt.insert_effect(EffectEnum::Write(region)));
+                } else {
+                    todo!("error")
+                }
+            }
+            Some(ast::RegionKind::None(_)) => {
+                if self.implicit_effects.is_none() {
                     todo!("error")
                 }
             }

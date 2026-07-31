@@ -1,5 +1,4 @@
 use std::iter;
-use std::sync::Arc;
 
 use crate::error::{Context, ContextLevel, Diagnostic, Label};
 use crate::module::Module;

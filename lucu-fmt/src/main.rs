@@ -960,7 +960,9 @@ impl Ast for ast::Name {
 impl Ast for ast::RegionKind {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
-            ast::RegionKind::Mutable(token) => nodes.token(*token),
+            ast::RegionKind::None(token)
+            | ast::RegionKind::Write(token)
+            | ast::RegionKind::ReadWrite(token) => nodes.token(*token),
         }
     }
 }

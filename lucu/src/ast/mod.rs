@@ -131,7 +131,9 @@ pub struct Name {
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "RegionKind::")]
 pub enum RegionKind {
-    Mutable(Token),
+    None(Token),
+    ReadWrite(Token),
+    Write(Token),
 }
 
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
@@ -492,7 +494,9 @@ impl<T: HasSpan> HasSpan for Separated<T> {
 impl HasSpan for RegionKind {
     fn span(&self) -> Span {
         match self {
-            RegionKind::Mutable(token) => token.span(),
+            RegionKind::ReadWrite(token) | RegionKind::None(token) | RegionKind::Write(token) => {
+                token.span()
+            }
         }
     }
 }

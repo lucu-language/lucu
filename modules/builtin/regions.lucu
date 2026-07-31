@@ -1,20 +1,18 @@
-region static
-   = #intrinsic
+region static = #intrinsic
 
-region heap
-   = #intrinsic
+region heap = #intrinsic
 
 effect Read[r]
-   = #intrinsic
+    = #intrinsic
 
 effect Write[r]
-   = #intrinsic
+    = #intrinsic
 
 fun ref[T, U](val T, fun body(ptr ^mut T) U) U
-   = #intrinsic
+    = #intrinsic
 
 fun alloca[T, U](len size, fun body(slice ^mut []T) U) U
-   = #intrinsic
+    = #intrinsic
 
 -- fun alloca[T, U](fill T, len size, fun body(slice ^mut []T) U) U
 --   = #intrinsic

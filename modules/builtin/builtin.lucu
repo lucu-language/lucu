@@ -34,8 +34,8 @@ type static_str = ^@static []i8
 region static = regions.static
 region heap = regions.heap
 
-effect Read[r] = regions.Read[r]
-effect Write[r] = regions.Write[r]
+effect Read[r] = regions.Read[r,]
+effect Write[r] = regions.Write[r,]
 
 -- fun ref[T, U](val T, fun body(ptr ^mut T) U) U
 -- 	= regions.ref[T, U](val, body)
@@ -43,140 +43,141 @@ effect Write[r] = regions.Write[r]
 -- source location
 
 type SourceLocation = struct(
-	path static_str,
-	line int,
-	column int,
+    path static_str,
+    line int,
+    column int,
 )
 
 effect CallerLocation = {
-	fun caller SourceLocation
+    fun caller SourceLocation
 }
 
 handle CallerLocation {
-	fun caller SourceLocation = #intrinsic
+    fun caller SourceLocation
+        = #intrinsic
 }
 
 -- world
 
 effect World
-	= #intrinsic
+    = #intrinsic
 
 fun link[LIB static_str, E effect](fun body with E) with World
-	= #intrinsic
+    = #intrinsic
 
 fun asm[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U with World
-	= #intrinsic
+    = #intrinsic
 
 fun asm_pure[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U
-	= #intrinsic
+    = #intrinsic
 
 -- printing
 
 fun trace(buf ^[]i8)
-	= #intrinsic
+    = #intrinsic
 
 fun trap !
-	= #intrinsic
+    = #intrinsic
 
 fun traceln = {
-	let buf ^[1]i8 = use regions.ref([10])
-	trace(buf[..])
+    let buf ^[1]i8 = use regions.ref([10])
+    trace(buf[..])
 }
 
 fun trace_int(n int) = {
-	let buf ^[21]i8 = use regions.ref(---)
+    let buf ^[21]i8 = use regions.ref(---)
 
-	let remaining = use regions.ref(abs(n))
+    let remaining = use regions.ref(abs(n))
 
-	let start size = handle {
-		let current ^size = use regions.ref(20)
-		unfounded loop {
-			buf[current^]^ = '0' + #trunc (remaining^ % 10)
-			remaining^ /= 10
-			if remaining^ == 0 {
-				yeet current^
-			}
-			current^ -= 1
-		}
-	}
+    let start size = handle {
+        let current ^size = use regions.ref(20)
+        unfounded loop {
+            buf[current^]^ = '0' + #trunc (remaining^ % 10)
+            remaining^ /= 10
+            if remaining^ == 0 {
+                yeet current^
+            }
+            current^ -= 1
+        }
+    }
 
-	trace(if n < 0 {
-		buf[start - 1]^ = '-'
-		buf[start - 1..]
-	} else {
-		buf[start..]
-	})
+    trace(if n < 0 {
+        buf[start - 1]^ = '-'
+        buf[start - 1..]
+    } else {
+        buf[start..]
+    })
 }
 
 fun assert(condition bool, msg ^[]i8) with CallerLocation = {
-	if !condition {
-		panic(msg)
-	}
+    if !condition {
+        panic(msg)
+    }
 }
 
 fun panic(msg ^[]i8) ! with CallerLocation = {
-	trace((caller).path)
-	trace(":")
-	trace_int((caller).line)
-	trace(":")
-	trace_int((caller).column)
-	trace(": PANIC: ")
-	trace(msg)
-	traceln
-	trap
+    trace((caller).path)
+    trace(":")
+    trace_int((caller).line)
+    trace(":")
+    trace_int((caller).column)
+    trace(": PANIC: ")
+    trace(msg)
+    traceln
+    trap
 }
 
 fun todo(msg ^[]i8) ! with CallerLocation = {
-	trace((caller).path)
-	trace(":")
-	trace_int((caller).line)
-	trace(":")
-	trace_int((caller).column)
-	trace(": TODO: ")
-	trace(msg)
-	traceln
-	trap
+    trace((caller).path)
+    trace(":")
+    trace_int((caller).line)
+    trace(":")
+    trace_int((caller).column)
+    trace(": TODO: ")
+    trace(msg)
+    traceln
+    trap
 }
 
 -- control flow
 
 effect Div
-	= #intrinsic
+    = #intrinsic
 
 fun loop(fun body) ! with Div
-	= #intrinsic
+    = #intrinsic
 
 fun unfounded(fun body ! with Div) !
-	= #intrinsic
+    = #intrinsic
 
 fun for(from size, to size, fun body(n size)) = {
-	if to >= from {
-		let current = use regions.ref(from)
-		handle unfounded loop {
-			if current^ == to then raise
-			body(current^)
-			current^ += 1
-		}
-	} else {
-		let current = use regions.ref(from - 1)
-		handle unfounded loop {
-			body(current^)
-			current^ -= 1
-			if current^ == to then raise
-		}
-	}
+    if to >= from {
+        let current = use regions.ref(from)
+        handle unfounded loop {
+            if current^ == to then raise
+            body(current^)
+            current^ += 1
+        }
+    } else {
+        let current = use regions.ref(from - 1)
+        handle unfounded loop {
+            body(current^)
+            current^ -= 1
+            if current^ == to then raise
+        }
+    }
 }
 
 fun unreachable !
-	= #intrinsic
+    = #intrinsic
 
 -- other utils
 
-fun len[R region, T](slice ^@R []T) size
-	= #intrinsic
+fun len[T](slice ^#raw []T) size
+    = #intrinsic
 
-fun slice_from_raw_parts[R region, T](ptr ^@R [0]T, length size) ^@R []T
-	= #intrinsic
+fun slice_from_raw_parts[#raw r, T](ptr ^@r [0]T, length size) ^@r []T
+    = #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n
 

@@ -347,7 +347,9 @@ impl Ast for ast::Kind {
 impl Ast for ast::RegionKind {
     fn visit<V: Visitor>(&self, _visitor: V) -> V::Output<'_> {
         match self {
-            ast::RegionKind::Mutable(_) => V::Output::default(),
+            ast::RegionKind::None(_)
+            | ast::RegionKind::Write(_)
+            | ast::RegionKind::ReadWrite(_) => V::Output::default(),
         }
     }
     fn node_name(&self) -> &'static str {

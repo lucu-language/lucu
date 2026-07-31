@@ -1,7 +1,7 @@
 import "builtin:regions"
 
 effect Source = {
-    fun read(bytes ^mut []i8) size
+    fun read(bytes ^#write []i8) size
 }
 
 fun skip_line size with Source = {
@@ -15,12 +15,15 @@ fun skip_line size with Source = {
     total^
 }
 
-fun read_line(bytes ^mut []i8) size with Source = {
+fun read_line(bytes ^#write []i8) size with Source = {
     let total ^size = use regions.ref(0)
+    let buf ^[1]i8 = use regions.ref(---)
     handle unfounded loop {
-        if read(bytes[total^..total^ + 1]) == 0 then raise
+        if read(buf[..]) == 0 then raise
+        let char = buf[0]^
+        bytes[total^]^ = char
         total^ += 1
-        if bytes[total^ - 1]^ == 10 then raise
+        if char == 10 then raise
         if total^ == len(bytes) then raise
     }
     total^
@@ -37,29 +40,29 @@ fun writeln size with Sink = {
 }
 
 fun write_int(n int) with Sink = {
-	let buf ^[21]i8 = use regions.ref(---)
+    let buf ^[21]i8 = use regions.ref(---)
 
-	let remaining = use regions.ref(abs(n))
+    let remaining = use regions.ref(abs(n))
 
-	let start size = handle {
-		let current ^size = use regions.ref(20)
-		unfounded loop {
-			buf[current^]^ = '0' + #trunc (remaining^ % 10)
-			remaining^ /= 10
-			if remaining^ == 0 {
-				yeet current^
-			}
-			current^ -= 1
-		}
-	}
+    let start size = handle {
+        let current ^size = use regions.ref(20)
+        unfounded loop {
+            buf[current^]^ = '0' + #trunc (remaining^ % 10)
+            remaining^ /= 10
+            if remaining^ == 0 {
+                yeet current^
+            }
+            current^ -= 1
+        }
+    }
 
     -- FIXME: write_all
-	discard write(if n < 0 {
-		buf[start - 1]^ = '-'
-		buf[start - 1..]
-	} else {
-		buf[start..]
-	})
+    discard write(if n < 0 {
+        buf[start - 1]^ = '-'
+        buf[start - 1..]
+    } else {
+        buf[start..]
+    })
 }
 
 fun print(bytes ^[]i8) with StdIo = {

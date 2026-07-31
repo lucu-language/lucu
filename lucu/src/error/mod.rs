@@ -10,8 +10,8 @@ use crate::module::Module;
 use crate::pass::defs::err::MultipleDefinitions;
 use crate::pass::imports::err::{UnknownFile, UnknownLibrary};
 use crate::pass::lower::err::{
-    InvalidEffectItem, KindMismatch, LiteralMismatch, NotEnoughInfo, SignatureMismatch,
-    TypeMismatch, UnknownSymbol,
+    InvalidEffectItem, KindMismatch, LiteralMismatch, MissingEffects, NotEnoughInfo,
+    SignatureMismatch, TypeMismatch, UnknownSymbol,
 };
 use crate::pass::parser::err::Expected;
 use crate::span::{HasSpan, Span};
@@ -54,6 +54,12 @@ impl Add for Problems {
         Problems {
             problems: self.problems + rhs.problems,
         }
+    }
+}
+
+impl AddAssign for Problems {
+    fn add_assign(&mut self, rhs: Problems) {
+        self.problems.extend(rhs.problems);
     }
 }
 
@@ -458,4 +464,5 @@ diagnostics!(
     (SignatureMismatch(SignatureMismatch), 113, Error, "Effect function signature mismatch"),
     (LiteralMismatch(LiteralMismatch),     114, Error, "Invalid literal for type"),
     (NotEnoughInfo(NotEnoughInfo),         115, Error, "Not enough info"),
+    (MissingEffects(MissingEffects),       116, Error, "Missing effect(s)"),
 );

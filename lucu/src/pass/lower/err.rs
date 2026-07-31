@@ -1,9 +1,10 @@
 use std::iter;
+use std::sync::Arc;
 
 use crate::error::{Context, ContextLevel, Diagnostic, Label};
 use crate::module::Module;
 use crate::span::Span;
-use crate::type_table::{Kind, Term, Type, TypeTable};
+use crate::type_table::{Effect, Kind, Term, Type, TypeTable};
 
 #[derive(Clone, Copy, Debug)]
 pub struct InvalidEffectItem;
@@ -139,5 +140,14 @@ impl Diagnostic for SignatureMismatch {
             label: Some("effect function declared here".into()),
             level: ContextLevel::Info,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MissingEffects(pub Effect);
+
+impl Diagnostic for MissingEffects {
+    fn label<'a>(&'a self, _source: &'a str, tt: &TypeTable) -> Option<Label<'a>> {
+        Some(self.0.display(tt).to_string().into())
     }
 }

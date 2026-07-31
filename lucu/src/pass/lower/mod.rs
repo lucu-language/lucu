@@ -101,6 +101,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                      inner,
                  )
             }
+            (Some(params), None) => {
+                self.with_arity(params, inner)
+            }
             (None, None) => {
                 let mut lower = self.reborrow();
                 if implicit_regions > 0 {

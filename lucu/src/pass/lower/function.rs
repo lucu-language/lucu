@@ -14,7 +14,7 @@ use crate::module::Module;
 use crate::mu::{self, ExpressionTable as _, TypeTable as _};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
-use crate::pass::lower::err::{NotEnoughInfo, SignatureMismatch, TypeMismatch};
+use crate::pass::lower::err::{MissingEffects, NotEnoughInfo, SignatureMismatch, TypeMismatch};
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::span::{HasSpan, Span};
 use crate::type_table::substitute::Substitute;
@@ -168,6 +168,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let ty = self.function_type(sig, Some(decl));
                 self.abstraction(
                     sig,
+                    decl.name.generics.as_ref(),
                     decl.parameters
                         .iter()
                         .flat_map(|params| params.inner.iter())
@@ -197,51 +198,100 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::FunctionDefinition::Intrinsic(_) => todo!("error"),
         }
     }
+    fn with_name<T>(
+        &mut self,
+        implicit_regions: usize,
+        params: Option<&Arc<[Kind]>>,
+        name: Option<&'a ast::GenericParameters>,
+        inner: impl FnOnce(&mut MuLower<'a, '_>) -> T,
+    ) -> T {
+        let offset = implicit_regions + params.map_or(0, |kinds| kinds.len());
+        if offset > 0 {
+            self.lower
+                .with_name(implicit_regions, params, name, |lower| {
+                    let tt = lower.tt;
+                    let mut mu = MuLower {
+                        lower: lower.reborrow(),
+                        tt: self.tt,
+                        et: self.et,
+                        vars: self
+                            .vars
+                            .iter()
+                            .map(|v| match v {
+                                Var::Named(name, param) => {
+                                    Var::Named(name, param.shift(tt, 0, offset))
+                                }
+                                Var::Effect(effect) => Var::Effect(effect.shift(tt, 0, offset)),
+                                Var::Raise(ty) => Var::Raise(ty.shift(tt, 0, offset)),
+                                Var::Unit => Var::Unit,
+                            })
+                            .collect(),
+                        markers: self
+                            .markers
+                            .iter()
+                            .map(|e| e.shift(tt, 0, offset))
+                            .collect(),
+                        path: self.path,
+                        source: self.source,
+                        caller_location: self.caller_location,
+                    };
+                    inner(&mut mu)
+                })
+        } else {
+            let mut mu = self.reborrow();
+            inner(&mut mu)
+        }
+    }
     fn abstraction(
         &mut self,
         sig: FunctionSignature,
+        name: Option<&'a ast::GenericParameters>,
         params: impl IntoIterator<Item = (&'a ast::Identifier, Option<&'a ast::Type>)>,
         body: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
     ) -> Result<(mu::Expression, Type)> {
-        // FIXME: push generic arguments of sig
-        // also requires shifting all vars and markers
-        let mut me = self.reborrow();
-        let sig_val = &me.lower.tt[sig];
-        let from = me.tt.insert_tuple(Iterator::chain(
-            sig_val
-                .params
-                .iter()
-                .flat_map(|params| params.iter().copied())
-                .map(|param| me.function_param(param)),
-            sig_val
-                .thunk
-                .effect
-                .effects(me.lower.tt)
-                .filter_map(|e| me.effect(e).map(|(_, t)| t)),
-        ));
-        let params = Iterator::zip(
-            params.into_iter().map(|(param, _ty)| {
-                // TODO: check user given type
-                param.as_str()
-            }),
-            sig_val
-                .params
-                .iter()
-                .flat_map(|params| params.iter().copied()),
+        let sig_val = &self.lower.tt[sig];
+        self.with_name(
+            sig_val.implicit_regions,
+            sig_val.type_params.as_ref(),
+            name,
+            |me| {
+                let from = me.tt.insert_tuple(Iterator::chain(
+                    sig_val
+                        .params
+                        .iter()
+                        .flat_map(|params| params.iter().copied())
+                        .map(|param| me.function_param(param)),
+                    sig_val
+                        .thunk
+                        .effect
+                        .effects(me.lower.tt)
+                        .filter_map(|e| me.effect(e).map(|(_, t)| t)),
+                ));
+                let params = Iterator::zip(
+                    params.into_iter().map(|(param, _ty)| {
+                        // TODO: check user given type
+                        param.as_str()
+                    }),
+                    sig_val
+                        .params
+                        .iter()
+                        .flat_map(|params| params.iter().copied()),
+                )
+                .map(|(name, param)| Var::Named(name, param));
+                for param in params {
+                    me.vars.push_front(param);
+                }
+                for effect in sig_val.thunk.effect.effects(me.lower.tt) {
+                    if effect.is_marker(me.lower.tt) {
+                        me.markers.push_front(effect);
+                    } else {
+                        me.vars.push_front(Var::Effect(effect));
+                    }
+                }
+                me.statements(&mut body.into_iter().peekable(), sig_val.thunk.returns)
+                    .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
+            },
         )
-        .map(|(name, param)| Var::Named(name, param));
-        for param in params {
-            me.vars.push_front(param);
-        }
-        for effect in sig_val.thunk.effect.effects(me.lower.tt) {
-            if effect.is_marker(me.lower.tt) {
-                me.markers.push_front(effect);
-            } else {
-                me.vars.push_front(Var::Effect(effect));
-            }
-        }
-        me.statements(&mut body.into_iter().peekable(), sig_val.thunk.returns)
-            .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
     }
     fn find_named(&self, name: &str) -> Option<(u32, FunctionParameter)> {
         self.vars
@@ -254,6 +304,15 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     }
     fn has_marker_effect(&self, effect: Effect) -> bool {
         self.markers.contains(&effect)
+    }
+    fn marker_effect(&self, effect: Effect, at: &impl HasSpan) -> Problems {
+        if self.has_marker_effect(effect) {
+            Problems::ok()
+        } else {
+            ProblemKind::MissingEffects(MissingEffects(effect))
+                .at(self.lower.module, at)
+                .into()
+        }
     }
     fn find_effect(&self, effect: Effect) -> Option<u32> {
         self.vars
@@ -460,11 +519,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     ) -> Result<(mu::Expression, Type)> {
         // TODO: also put non-call paths under here?
         // TODO: a big clean up of this function
-        self.path(match call {
+        let path = match call {
             Either::Left(call) => &call.fun,
             Either::Right(path) => path,
-        })
-        .and_then(|(fun, fun_ty)| {
+        };
+        self.path(path).and_then(|(fun, fun_ty)| {
             let mut problems = Problems::ok();
 
             // function signature with partially applied generics
@@ -590,6 +649,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 }
                                 self.abstraction(
                                     sig,
+                                    None,
                                     block
                                         .inner
                                         .params
@@ -601,7 +661,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             } else if sig_val.params.is_some() {
                                 todo!("error")
                             } else {
-                                self.abstraction(sig, [], [arg])
+                                self.abstraction(sig, None, [], [arg])
                             };
                             (
                                 problems
@@ -656,6 +716,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .append(
                             self.abstraction(
                                 mono_sig,
+                                None,
                                 arg.params
                                     .into_iter()
                                     .flat_map(|lambda| lambda.iter())
@@ -709,10 +770,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             // FIXME: check if args are subtypes of inferred params
 
             // effects
+            let mut missing = Vec::new();
             for effect in sig_mono_val.thunk.effect.effects(self.lower.tt) {
                 if effect.is_marker(self.lower.tt) {
                     if !self.has_marker_effect(effect) {
-                        todo!("error: no {}", effect.display(self.lower.tt))
+                        missing.push(effect);
                     }
                 } else if let Some(idx) = self.find_effect(effect) {
                     let effect_ty = self
@@ -727,8 +789,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     }));
                 } else {
                     // TODO: global handlers
-                    todo!("{}", effect.display(self.lower.tt))
+                    missing.push(effect);
                 }
+            }
+            if !missing.is_empty() {
+                problems += ProblemKind::MissingEffects(MissingEffects(
+                    self.lower.tt.insert_effect(EffectEnum::Row(missing.into())),
+                ))
+                .at(self.lower.module, path);
             }
 
             // call expression
@@ -976,6 +1044,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 match def {
                     ast::FunctionDefinition::Expression(expression) => self.abstraction(
                         user_sig,
+                        decl.name.generics.as_ref(),
                         decl.parameters
                             .iter()
                             .flat_map(|params| params.inner.iter())
@@ -1166,7 +1235,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::Expression::Discard { expr, .. } => self
                 .expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
                 .map(|(mu, _)| (mu, self.lower.tt.insert_type(TypeEnum::Unit))),
-            ast::Expression::AssignOp(op, lhs, _, rhs) => {
+            ast::Expression::AssignOp(op, lhs, tk_op, rhs) => {
                 let ast::Expression::Dereference { expr, .. } = &**lhs else {
                     todo!("error")
                 };
@@ -1178,14 +1247,18 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     )),
                 )
                 .and_then(|(lhs, ty)| {
-                    let TypeEnum::Pointer(inner, _) = self.lower.tt[ty] else {
+                    let TypeEnum::Pointer(inner, region) = self.lower.tt[ty] else {
                         panic!("ICE: not a poiner :(")
                     };
                     self.expression(rhs, inner).and_then(|(rhs, _)| {
+                        let mut problems = Problems::ok();
                         let mu_inner = self.r#type(inner);
                         let val = match op {
                             &ast::AssignOp::Math(op) => {
-                                // TODO: check for read effect
+                                problems += self.marker_effect(
+                                    self.lower.tt.insert_effect(EffectEnum::Read(region)),
+                                    tk_op,
+                                );
                                 self.et.call(
                                     mu::Callable::MathOp { ty: mu_inner, op },
                                     [
@@ -1196,8 +1269,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             }
                             ast::AssignOp::Assign => rhs,
                         };
-                        // TODO: check for write effect
-                        Result::new((
+                        problems += self.marker_effect(
+                            self.lower.tt.insert_effect(EffectEnum::Write(region)),
+                            tk_op,
+                        );
+                        problems.with((
                             self.et
                                 .call(mu::Callable::Write { ty: mu_inner }, [lhs, val]),
                             self.lower.tt.insert_type(TypeEnum::Unit),
@@ -1253,17 +1329,20 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     )
                 })
             }
-            ast::Expression::Dereference { expr, .. } => {
+            ast::Expression::Dereference { expr, tk_caret } => {
                 let expected_inner = self.lower.tt.insert_type(TypeEnum::Pointer(
                     expected,
                     self.lower.tt.insert_region(RegionEnum::Hole),
                 ));
                 self.expression(expr, expected_inner).and_then(|(e, ty)| {
-                    let TypeEnum::Pointer(inner, _region) = self.lower.tt[ty] else {
+                    let TypeEnum::Pointer(inner, region) = self.lower.tt[ty] else {
                         panic!("ICE: not a poiner :(")
                     };
-                    // TODO: check for read effect
-                    Result::new((
+                    self.marker_effect(
+                        self.lower.tt.insert_effect(EffectEnum::Read(region)),
+                        tk_caret,
+                    )
+                    .with((
                         self.et.call(
                             mu::Callable::Read {
                                 ty: self.r#type(inner),

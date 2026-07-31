@@ -14,6 +14,7 @@ use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::pass::lower::err::InvalidEffectItem;
 use crate::pass::lower::{HeaderQuery, Lower};
+use crate::span::HasSpan;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, GenericParameter, IntSize, Integer, Item, Region,
     RegionEnum, SimpleKind, Term, Type, TypeEnum, TypeTable,
@@ -236,7 +237,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     {
                         FunctionDefinition::Intrinsic(i)
                     }
-                    _ => FunctionDefinition::Other(node),
+                    _ => FunctionDefinition::Other,
                 };
                 match parent {
                     Some(parent) => {
@@ -265,7 +266,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                         apply,
                                     }));
 
-                                    let item = ItemDecl::Function(sig, Some(effect), def);
+                                    let item = ItemDecl::Function(sig, Some(effect), node, def);
                                     Some(Decl::Item(decl.name.ident.as_str().into(), item))
                                 } else {
                                     None
@@ -282,7 +283,7 @@ impl<'a, 'b> Lower<'a, 'b> {
 
                         let sig = problems.append(self.function_signature(decl));
                         if let Some(sig) = sig {
-                            let item = ItemDecl::Function(sig, None, def);
+                            let item = ItemDecl::Function(sig, None, node, def);
                             return problems
                                 .with(Some(Decl::Item(decl.name.ident.as_str().into(), item)));
                         }
@@ -365,7 +366,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 self.tt[kind].params.as_ref(),
                                 name.generics.as_ref(),
                                 |l| {
-                                    let constant = problems.append(l.constant(constant, Some(ty)));
+                                    let constant = problems.append(l.constant(constant, ty));
                                     if let Some((constant, _)) = constant {
                                         let item = ItemDecl::Alias(kind, Term::Constant(constant));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
@@ -505,14 +506,19 @@ impl<'a, 'b> Lower<'a, 'b> {
                         .iter()
                         .filter_map(|def| {
                             // TODO: is there a way to get this without looking it up again?
-                            let name = def.name()?;
-                            let &ItemDecl::Function(sig, _, _) = header.get(name.ident.as_str())?
+                            let ast::Item::Function(decl, _) = def else {
+                                panic!("ICE: what why are you not a function")
+                            };
+                            let name = &decl.name;
+                            let &ItemDecl::Function(sig, _, _, _) =
+                                header.get(name.ident.as_str())?
                             else {
                                 return None;
                             };
                             Some(EffectMember {
                                 name: name.ident.as_str().to_compact_string(),
                                 signature: sig,
+                                span: decl.span(),
                             })
                         })
                         .collect();

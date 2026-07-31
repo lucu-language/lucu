@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 use compact_str::CompactString;
 use petgraph::graph::NodeIndex;
 
+use crate::span::Span;
 use crate::type_table::{Effect, FunctionSignature, Kind, Term, Type};
 
 pub mod display;
@@ -44,7 +45,12 @@ pub enum ItemDecl {
     Alias(Kind, Term),
     Struct(Kind, Arc<OnceLock<StructDecl>>),
     Effect(Kind, Arc<OnceLock<EffectDecl>>),
-    Function(FunctionSignature, Option<Effect>, FunctionDefinition),
+    Function(
+        FunctionSignature,
+        Option<Effect>,
+        NodeIndex,
+        FunctionDefinition,
+    ),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +72,7 @@ pub enum IntrinsicFunction {
 #[derive(Debug, Clone, Copy)]
 pub enum FunctionDefinition {
     Intrinsic(IntrinsicFunction),
-    Other(NodeIndex),
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +88,7 @@ pub struct HandlerDecl {
 pub struct EffectMember {
     pub name: CompactString,
     pub signature: FunctionSignature,
+    pub span: Span,
 }
 
 #[derive(Debug)]

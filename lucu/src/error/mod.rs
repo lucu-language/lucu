@@ -8,9 +8,14 @@ use do_notation::Lift;
 use crate::ast::visit::Combine;
 use crate::module::Module;
 use crate::pass::defs::err::MultipleDefinitions;
-use crate::pass::lower::err::InvalidEffectItem;
+use crate::pass::imports::err::{UnknownFile, UnknownLibrary};
+use crate::pass::lower::err::{
+    InvalidEffectItem, KindMismatch, LiteralMismatch, NotEnoughInfo, SignatureMismatch,
+    TypeMismatch, UnknownSymbol,
+};
 use crate::pass::parser::err::Expected;
 use crate::span::{HasSpan, Span};
+use crate::type_table::TypeTable;
 
 #[cfg(feature = "print")]
 pub mod print;
@@ -336,18 +341,23 @@ pub enum ContextLevel {
 }
 
 pub trait Diagnostic {
-    fn label(&self) -> Option<Label<'_>>;
-    fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
+    fn label<'a>(&'a self, source: &'a str, tt: &TypeTable) -> Option<Label<'a>>;
+    #[expect(unused_variables)]
+    fn context<'a>(
+        &'a self,
+        source: &'a str,
+        tt: &'a TypeTable,
+    ) -> impl Iterator<Item = Context<'a>> {
         iter::empty()
     }
 }
 impl Diagnostic for () {
-    fn label(&self) -> Option<Label<'_>> {
+    fn label(&self, _source: &str, _tt: &TypeTable) -> Option<Label<'_>> {
         None
     }
 }
 impl Diagnostic for CompactString {
-    fn label(&self) -> Option<Label<'_>> {
+    fn label(&self, _source: &str, _tt: &TypeTable) -> Option<Label<'_>> {
         Some(self.as_str().into())
     }
 }
@@ -366,11 +376,14 @@ pub struct Problem {
 }
 
 impl Problem {
+    pub fn with<T>(self, value: T) -> Result<T> {
+        Problems::from(self).with(value)
+    }
     pub fn header(&self) -> ProblemHeader {
         self.kind.header()
     }
-    pub fn label(&self) -> Option<Cow<'_, str>> {
-        self.kind.label()
+    pub fn label<'a>(&'a self, source: &'a str, tt: &TypeTable) -> Option<Cow<'a, str>> {
+        self.kind.label(source, tt)
     }
 }
 
@@ -406,14 +419,14 @@ macro_rules! diagnostics {
             }
         }
         impl Diagnostic for ProblemKind {
-            fn label(&self) -> Option<Cow<'_, str>> {
+            fn label<'a>(&'a self, source: &'a str, tt: &TypeTable) -> Option<Cow<'a, str>> {
                 match self {
-                    $(Self::$variant(v) => Diagnostic::label(v)),*
+                    $(Self::$variant(v) => Diagnostic::label(v, source, tt)),*
                 }
             }
-            fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
+            fn context<'a>(&'a self, source: &'a str, tt: &'a TypeTable) -> impl Iterator<Item = Context<'a>> {
                 match self {
-                    $(Self::$variant(v) => Box::new(Diagnostic::context(v)) as Box<dyn Iterator<Item = Context>>),*
+                    $(Self::$variant(v) => Box::new(Diagnostic::context(v, source, tt)) as Box<dyn Iterator<Item = Context<'a>>>),*
                 }
             }
         }
@@ -428,14 +441,21 @@ diagnostics!(
     (UnexpectedEOF    (Expected), 102, Error, "Unexpected end of file"),
 
     // import graph
-    (UnknownFile      (CompactString), 103, Error, "Could not access module file"),
-    (UnknownLibrary   (CompactString), 104, Error, "Unknown library"),
-    (InvalidIdentifier(()),            105, Error, "File name is not a valid identifier"),
+    (UnknownFile      (UnknownFile),    103, Error, "Could not access module file"),
+    (UnknownLibrary   (UnknownLibrary), 104, Error, "Unknown library"),
+    (InvalidIdentifier(()),             105, Error, "File name is not a valid identifier"),
 
     // definition graph
     (MultipleDefinitions(MultipleDefinitions), 106, Error, "Name is defined multiple times"),
 
-    // headers
+    // lowering
     (InvalidEffectItem(InvalidEffectItem), 107, Error, "Invalid effect item"),
     (MissingItemDefinition(()),            108, Error, "Missing item definition"),
+    (UnknownSymbol(UnknownSymbol),         109, Error, "Unknown symbol"),
+    (InvalidUnderscore(()),                110, Error, "Invalid underscore location"),
+    (TypeMismatch(TypeMismatch),           111, Error, "Type mismatch"),
+    (KindMismatch(KindMismatch),           112, Error, "Kind mismatch"),
+    (SignatureMismatch(SignatureMismatch), 113, Error, "Effect function signature mismatch"),
+    (LiteralMismatch(LiteralMismatch),     114, Error, "Invalid literal for type"),
+    (NotEnoughInfo(NotEnoughInfo),         115, Error, "Not enough info"),
 );

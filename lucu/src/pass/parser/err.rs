@@ -1,5 +1,6 @@
 use crate::error::{Diagnostic, Label};
 use crate::tokens::TokenEnum;
+use crate::type_table::TypeTable;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Expected {
@@ -22,7 +23,7 @@ pub enum Expected {
 }
 
 impl Diagnostic for Expected {
-    fn label(&self) -> Option<Label<'_>> {
+    fn label(&self, _source: &str, _tt: &TypeTable) -> Option<Label<'_>> {
         match self {
             Expected::Token(token) => Some(format!("expected {}", token).into()),
             Expected::Item => Some("expected a definition".into()),

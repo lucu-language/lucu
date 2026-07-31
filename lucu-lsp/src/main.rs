@@ -172,7 +172,7 @@ impl Backend {
                 module.path_with_extension()
             ))
             .unwrap();
-            let diagnostics = diagnostics(&module_uri, src, problems);
+            let diagnostics = diagnostics(&module_uri, src, &self.type_table, problems);
 
             self.log(&format!(
                 "publishing diagnostics for {}",
@@ -379,7 +379,12 @@ impl LanguageServer for Backend {
                     related_documents: None,
                     full_document_diagnostic_report: FullDocumentDiagnosticReport {
                         result_id: None,
-                        items: diagnostics(&params.text_document.uri, &source, problems),
+                        items: diagnostics(
+                            &params.text_document.uri,
+                            &source,
+                            &self.type_table,
+                            problems,
+                        ),
                     },
                 }),
             ))
@@ -439,12 +444,12 @@ impl LanguageServer for Backend {
     }
 }
 
-fn diagnostics(uri: &Uri, source: &str, problems: Problems) -> Vec<Diagnostic> {
+fn diagnostics(uri: &Uri, source: &str, tt: &TypeTable, problems: Problems) -> Vec<Diagnostic> {
     problems
         .into_iter()
         .map(|p| {
             let header = p.header();
-            let label = p.label();
+            let label = p.label(source, tt);
             Diagnostic {
                 range: Range {
                     start: position(source, p.span.start),
@@ -464,7 +469,7 @@ fn diagnostics(uri: &Uri, source: &str, problems: Problems) -> Vec<Diagnostic> {
                 },
                 related_information: Some(
                     p.kind
-                        .context()
+                        .context(source, tt)
                         .flat_map(|c| {
                             c.module.is_none().then_some(())?;
                             Some(DiagnosticRelatedInformation {

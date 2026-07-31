@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use asta_annotate::Annotate;
 use asta_handle_map::HandleSet;
 use facet::Facet;
 use facet_args as args;
@@ -9,7 +8,6 @@ use inkwell::OptimizationLevel;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::targets::{InitializationConfig, Target, TargetMachine, TargetMachineOptions};
-use lucu::annotate::AnnotateExt;
 use lucu::error::HasProblems;
 use lucu::error::print::PrintProblems;
 use lucu::module::watcher::FileWatcher;
@@ -156,7 +154,7 @@ fn watch(cmd: CheckCommand) {
                     functions.extend(mu.functions.iter().cloned())
                 }
 
-                stages.print_problems(watcher.modules(), false);
+                stages.print_problems(watcher.modules(), &tt, false);
 
                 if cmd.debug {
                     println!();

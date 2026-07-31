@@ -11,6 +11,7 @@ use crate::error::{ContextLevel, Diagnostic, HasProblems, Problem, ProblemLevel}
 use crate::module::Modules;
 use crate::pass::lexer::Lexer;
 use crate::span::Span;
+use crate::type_table::TypeTable;
 
 pub const ERROR_COLOR: Color = Color::Ansi(AnsiColor::Red);
 pub const WARNING_COLOR: Color = Color::Ansi(AnsiColor::Yellow);
@@ -35,12 +36,12 @@ pub const LABEL_STYLE: Style = Style::new();
 pub const PATH_STYLE: Style = LINE_STYLE;
 
 pub trait PrintProblems: HasProblems {
-    fn print_problems(&self, resolver: &impl Modules, compact: bool) {
+    fn print_problems(&self, resolver: &impl Modules, tt: &TypeTable, compact: bool) {
         for (i, problem) in self.problems().enumerate() {
             if i > 0 && compact {
                 println!();
             }
-            problem.print(resolver, compact);
+            problem.print(resolver, tt, compact);
         }
     }
 }
@@ -48,7 +49,10 @@ pub trait PrintProblems: HasProblems {
 impl<T> PrintProblems for T where T: HasProblems {}
 
 impl Problem {
-    pub fn print(&self, resolver: &impl Modules, compact: bool) {
+    pub fn print(&self, resolver: &impl Modules, tt: &TypeTable, compact: bool) {
+        let contents = resolver.contents(&self.module);
+        let source = contents.as_deref().unwrap_or_default();
+
         let header = self.header();
         let title = header.title;
         let id = header.id;
@@ -61,25 +65,23 @@ impl Problem {
         anstream::print!(
             "{title_kind_style}{name} {id:03}{title_kind_style:#}{TITLE_STYLE}: {title}"
         );
-        if let Some(label) = self.label() {
+        if let Some(label) = self.label(source, tt) {
             anstream::println!(":{TITLE_STYLE:#} {LABEL_STYLE}{label}{LABEL_STYLE:#}");
         } else {
             anstream::println!("{TITLE_STYLE:#}");
         }
 
         // Problem location
-        let contents = resolver.contents(&self.module);
         let path = resolver
             .relative_path(&self.module)
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.module.to_string());
-
         if let Some(contents) = contents.as_deref() {
             print_highlight(highlight, self.span, Some(&path), contents, compact);
         }
 
         // Context locations
-        for ctx in self.kind.context() {
+        for ctx in self.kind.context(source, tt) {
             let (contents, path) = if let Some(module) = ctx.module {
                 (
                     resolver.contents(&module).map(Cow::Owned),

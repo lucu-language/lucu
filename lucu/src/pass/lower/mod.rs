@@ -6,12 +6,14 @@ use do_notation::m;
 
 use crate::ast;
 use crate::ast::visit::{Ast, Visitor};
-use crate::error::{Problems, Result};
+use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{
     Header, ItemDecl,
 };
 use crate::module::Module;
 use crate::pass::imports::Imports;
+use crate::pass::lower::err::{FoundLiteral, KindMismatch, LiteralMismatch, Namespace, NotEnoughInfo, TypeMismatch, UnknownSymbol};
+use crate::span::HasSpan;
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature, FunctionSignatureValue, GenericArgument, GenericParameter, Item, Kind, KindEnum, Region, RegionEnum, Sentinel, SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
@@ -139,9 +141,12 @@ impl<'a, 'b> Lower<'a, 'b> {
             ast::PathOrigin::Package(pkg, _, name) => match self.imports.get(pkg.as_str()) {
                 Some(module) => match self.query.header(module, self.tt) {
                     Some(ir) => ((module, ir), None, name.as_str()),
-                    None => todo!("recover"),
+                    None => todo!("recover? module is not in the graph, file probably does not exist"),
                 },
-                None => todo!("error"),
+                None => return Err(ProblemKind::UnknownSymbol(UnknownSymbol {
+                    symbol: pkg.span(),
+                    namespace: Namespace::Local
+                }).at(self.module, pkg).into()),
             },
             ast::PathOrigin::Local(name) => (
                 (self.module, self.query.header(self.module, self.tt).expect("ICE: cannot get own header")),
@@ -150,7 +155,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     .and_then(|module| self.query.header(module, self.tt).map(|ir| (module, ir))),
                 name.as_str(),
             ),
-            ast::PathOrigin::Underscore(_) => todo!("error"),
+            ast::PathOrigin::Underscore(tk) => return Err(ProblemKind::InvalidUnderscore(()).at(self.module, tk).into()),
         };
 
         for (module, ir) in iter::once(module).chain(preamble) {
@@ -159,12 +164,14 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
         }
 
-        todo!(
-            "error: unknown {}, searched in {:?} and {:?}",
-            name,
-            module.0,
-            preamble.map(|t| t.0)
-        )
+        let (span, namespace) = match &path.origin {
+            ast::PathOrigin::Package(_, _, rhs) => (rhs.span(), Namespace::Module(module.0.clone())),
+            _ => (path.origin.span(), Namespace::Local),
+        };
+        Err(ProblemKind::UnknownSymbol(UnknownSymbol {
+            symbol: span,
+            namespace,
+        }).at(self.module, &span).into())
     }
     fn apply_sig(&mut self, sig: FunctionSignature, effect: Option<Effect>, ast: Option<&ast::GenericArguments>) -> Result<(FunctionSignature, Option<Effect>, Arc<[GenericArgument]>)> {
         match ast {
@@ -267,11 +274,11 @@ impl<'a, 'b> Lower<'a, 'b> {
         path: &ast::Path,
     ) -> Result<(Kind, Term)> {
         let (item_kind, term) = {
-            if let ast::PathOrigin::Underscore(_) = path.origin {
+            if let ast::PathOrigin::Underscore(tk) = &path.origin {
                 if let Some((index, kind)) = self.get_underscore() {
                     (kind, self.generic_parameter(index, kind))
                 } else {
-                    todo!("error")
+                    return Result::error(ProblemKind::InvalidUnderscore(()).at(self.module, tk))
                 }
             } else if let ast::PathOrigin::Local(name) = &path.origin
                 && let Some((index, kind)) = self.get_generic(name.as_str())
@@ -281,7 +288,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 // Module Item
                 let (module, name, item) = match self.item_ref(path) {
                     Ok((module, name, item)) => (module, name, item),
-                    Err(problems) => return problems.with(todo!("recovery value")),
+                    Err(problems) => return problems.error(),
                 };
                 match *item {
                     ItemDecl::Alias(item_kind, term) => (item_kind, term),
@@ -305,7 +312,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }));
                         (item_kind, Term::Effect(base))
                     }
-                    ItemDecl::Function(_, _, _) => todo!("error"),
+                    ItemDecl::Function(_, _, _, _) => todo!("error"),
                 }
             }
         };
@@ -341,6 +348,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         let arity = self.tt[param].params.as_ref().map(|kinds| kinds.len());
         self.with_arity(kinds, |l| {
              // TODO: this could be refactored to be smaller, *surely*
+             // TODO: also, these errors could be much better
             match arg {
                 ast::GenericArgument::Path(path, effects) => match effects {
                     Some(effects) => {
@@ -357,8 +365,17 @@ impl<'a, 'b> Lower<'a, 'b> {
                                             }),
                                         Term::Thunk(thunk) if l2.tt[kind].params.is_none() =>
                                             Result::new(thunk),
-                                        _ => todo!("error"),
+                                        _ =>
+                                            // NOTE: we accept Type or Thunk, but NOT Effect
+                                            // I think KindEnum::TYPE should be good for that in the error
+                                            Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                                expected: l2.tt.insert_kind(KindEnum::TYPE),
+                                                found: kind,
+                                            }).at(l2.module, path))
                                     }
+                                }).recover_with(|| Thunk {
+                                    returns: l2.tt.insert_type(TypeEnum::Hole),
+                                    effect: l2.tt.insert_effect(EffectEnum::Hole),
                                 });
                             effects <- effects.effects
                                 .iter()
@@ -382,7 +399,10 @@ impl<'a, 'b> Lower<'a, 'b> {
                             if l.tt[expected] == KindEnum::THUNK {
                                 Result::new(term)
                             } else {
-                                todo!("error")
+                                Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                    expected,
+                                    found: l.tt.insert_kind(KindEnum::THUNK),
+                                }).at(l.module, arg))
                             }
                         })
                     }
@@ -417,11 +437,10 @@ impl<'a, 'b> Lower<'a, 'b> {
                                     effect,
                                 }))
                             } else {
-                                todo!(
-                                    "error: found '{}' expected '{}'",
-                                    kind.display(l.tt),
-                                    expected.display(l.tt)
-                                )
+                                Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                    expected,
+                                    found: kind,
+                                }).at(l.module, arg))
                             }
                         }),
                 },
@@ -452,16 +471,26 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 });
                             }
                         } else {
-                            todo!("error")
+                            Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                expected,
+                                found: if effects.is_some() {
+                                    l.tt.insert_kind(KindEnum::THUNK)
+                                } else {
+                                    l.tt.insert_kind(KindEnum::TYPE)
+                                },
+                            }).at(l.module, arg))
                         }
                     })
                 }
                 ast::GenericArgument::Constant(constant) => {
                     // TODO: if we have dependent kinds then we also need to subst `ty` here
                     let SimpleKind::Constant(ty) = l.tt[param].output else {
-                        todo!("error")
+                        return Result::error(ProblemKind::KindMismatch(KindMismatch {
+                            expected: l.tt.insert_kind(KindEnum { params: None, output: l.tt[param].output }),
+                            found: l.tt.insert_kind(KindEnum::constant(l.tt.insert_type(TypeEnum::Hole))),
+                        }).at(l.module, arg));
                     };
-                    l.constant(constant, Some(ty)).and_then(|(constant, _)| {
+                    l.constant(constant, ty).and_then(|(constant, _)| {
                         let expected = if arity == Some(1) && l.used_underscore() {
                             l.tt.insert_kind(KindEnum {
                                 params: None,
@@ -473,13 +502,17 @@ impl<'a, 'b> Lower<'a, 'b> {
                         if l.tt[expected] == KindEnum::constant(ty) {
                             Result::new(Term::Constant(constant))
                         } else {
-                            todo!("error")
+                            Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                expected,
+                                found: l.tt.insert_kind(KindEnum::constant(ty)),
+                            }).at(l.module, arg))
                         }
                     })
                 },
             }
             .map(|term| GenericArgument::Instance { term, arity })           
         })
+        .recover_with(|| GenericArgument::Hole)
 
     }
     fn region(
@@ -489,8 +522,12 @@ impl<'a, 'b> Lower<'a, 'b> {
         self.term_path(region)
             .and_then(|(kind, path)| match path {
                 Term::Region(region) if self.tt[kind].params.is_none() => Result::new(region),
-                _ => todo!("error"),
+                _ => Result::error(ProblemKind::KindMismatch(KindMismatch {
+                    expected: self.tt.insert_kind(KindEnum::REGION),
+                    found: kind,
+                }).at(self.module, region)),
             })
+            .recover_with(|| self.tt.insert_region(RegionEnum::Hole))
     }
     fn effect(
         &mut self,
@@ -499,8 +536,12 @@ impl<'a, 'b> Lower<'a, 'b> {
         self.term_path(effect)
             .and_then(|(kind, path)| match path {
                 Term::Effect(effect) if self.tt[kind].params.is_none() => Result::new(effect),
-                _ => todo!("error"),
+                _ => Result::error(ProblemKind::KindMismatch(KindMismatch {
+                    expected: self.tt.insert_kind(KindEnum::EFFECT),
+                    found: kind,
+                }).at(self.module, effect)),
             })
+            .recover_with(|| self.tt.insert_effect(EffectEnum::Hole))
     }
     fn count_implicit_regions(&mut self, ast: &impl Ast) -> usize {
         #[derive(Clone, Copy)]
@@ -579,13 +620,18 @@ impl<'a, 'b> Lower<'a, 'b> {
         ty: &ast::Type,
         allow_holes: bool,
     ) -> Result<Type> {
+        let tt = self.tt;
         match ty {
             ast::Type::Path(path) => {
                 self.term_path(path)
                     .and_then(|(kind, path)| match path {
                         Term::Type(ty) if self.tt[kind].params.is_none() => Result::new(ty),
-                        _ => todo!("error"),
+                        _ => Result::error(ProblemKind::KindMismatch(KindMismatch {
+                            expected: self.tt.insert_kind(KindEnum::TYPE),
+                            found: kind,
+                        }).at(self.module, ty)),
                     })
+                    .recover_with(|| self.tt.insert_type(TypeEnum::Hole))
             }
             ast::Type::Maybe(_, inner) => {
                 self.r#type(inner, allow_holes).map(|ty| self.tt.insert_type(TypeEnum::Maybe(ty)))
@@ -617,39 +663,53 @@ impl<'a, 'b> Lower<'a, 'b> {
 
                 let usize_ty = self.tt.insert_type(TypeEnum::SIZE);
                 m! {
-                    size <- self.constant(size, Some(usize_ty));
+                    size <- self.constant(size, usize_ty);
                     let sentinel = props.inner.sentinel.is_some().then_some(Sentinel);
                     ty <- self.r#type(ty, allow_holes);
                     return self.tt.insert_type(TypeEnum::Array(ty, size.0, sentinel));
                 }
             }
-        }
+        }.recover_with(|| tt.insert_type(TypeEnum::Hole))
     }
     fn constant(
         &mut self,
         constant: &ast::Constant,
-        expected: Option<Type>,
+        expected: Type,
     ) -> Result<(Constant, Type)> {
         match constant {
             ast::Constant::Path(path) => {
                 self.term_path(path)
                     .and_then(|(kind, term)| match (self.tt[kind].params.as_ref(), self.tt[kind].output, term) {
                         (None, SimpleKind::Constant(ty), Term::Constant(c)) => {
-                            if let Some(e) = expected && ty.subtype(e, self.tt) {
-                                Result::new((c, ty))
+                            if !ty.subtype(expected, self.tt) {
+                                Result::error(
+                                    ProblemKind::TypeMismatch(TypeMismatch { expected, found: ty })
+                                    .at(self.module, constant)
+                                )
                             } else {
-                                todo!("error")
+                                Result::new((c, ty))
                             }
                         },
-                        _ => todo!("error"),
+                        _ => Result::error(
+                            ProblemKind::KindMismatch(KindMismatch {
+                                expected: self.tt.insert_kind(KindEnum::constant(expected)),
+                                found: kind
+                            }).at(self.module, constant),
+                        ),
                     })
+                    .recover_with(|| (
+                        self.tt.insert_constant(ConstantEnum::Hole),
+                        expected
+                    ))
             }
             ast::Constant::Integer(integer) => {
-                let ty = match expected {
-                    Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
-                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) => self.tt.insert_type(TypeEnum::INT),
-                    None => self.tt.insert_type(TypeEnum::INT),
-                    _ => todo!("error")
+                let ty = match self.tt[expected] {
+                    TypeEnum::Integer(_) => expected,
+                    TypeEnum::Hole => self.tt.insert_type(TypeEnum::INT),
+                    _ => return Result::error(ProblemKind::LiteralMismatch(LiteralMismatch {
+                        expected,
+                        found: FoundLiteral::Integer,
+                    }).at(self.module, integer))
                 };
                 Result::new(
                     (self.tt
@@ -658,14 +718,15 @@ impl<'a, 'b> Lower<'a, 'b> {
             },
             // TODO: escaping!
             ast::Constant::String(string) => {
-                let ty = match expected {
-                    Some(ty) if let TypeEnum::PointerSlice(inner, _, sentinel) = self.tt[ty] && inner.is_i8(self.tt) =>
+                let ty = match self.tt[expected] {
+                    TypeEnum::PointerSlice(inner, _, sentinel) if inner.is_i8(self.tt) =>
                         self.tt.insert_type(TypeEnum::PointerSlice(inner, self.tt.insert_region(RegionEnum::Static), sentinel)),
-                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) =>
+                    TypeEnum::Hole =>
                         self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
-                    None =>
-                        self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
-                    Some(ty) => todo!("error: string for {}", ty.display(self.tt)),
+                    _ => return Result::error(ProblemKind::LiteralMismatch(LiteralMismatch {
+                        expected,
+                        found: FoundLiteral::String,
+                    }).at(self.module, string))
                 };
                 Result::new(
                     (self.tt
@@ -673,11 +734,13 @@ impl<'a, 'b> Lower<'a, 'b> {
                 )
             },
             ast::Constant::Character(character) => {
-                let ty = match expected {
-                    Some(ty) if matches!(self.tt[ty], TypeEnum::Integer(_)) => ty,
-                    Some(ty) if matches!(self.tt[ty], TypeEnum::Hole) => self.tt.insert_type(TypeEnum::I8),
-                    None => self.tt.insert_type(TypeEnum::I8),
-                    _ => todo!("error")
+                let ty = match self.tt[expected] {
+                    TypeEnum::Integer(_) => expected,
+                    TypeEnum::Hole => self.tt.insert_type(TypeEnum::I8),
+                    _ => return Result::error(ProblemKind::LiteralMismatch(LiteralMismatch {
+                        expected,
+                        found: FoundLiteral::Character,
+                    }).at(self.module, character))
                 };
                 Result::new(
                     (self.tt
@@ -686,15 +749,18 @@ impl<'a, 'b> Lower<'a, 'b> {
             },
             // TODO: check if zeroable
             ast::Constant::Zero(_) => {
-                let Some(ty) = expected else {
-                    todo!("error")
-                };
-                if !ty.no_holes(self.tt) {
-                    todo!("error")
+                if let TypeEnum::Hole = self.tt[expected] {
+                    Result::new((self.tt.insert_constant(ConstantEnum::Zero), self.tt.insert_type(TypeEnum::INT)))
+                } else if expected.no_holes(self.tt) {
+                    Result::new((self.tt.insert_constant(ConstantEnum::Zero), expected))
+                } else {
+                    Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.module, constant),
+                    )
                 }
-                Result::new((self.tt.insert_constant(ConstantEnum::Zero), ty))
             },
-        }
+        }.recover_with(|| (self.tt.insert_constant(ConstantEnum::Hole), expected))
     }
     fn simple_kind(&mut self, kind: &ast::Kind) -> Result<SimpleKind> {
         match kind {
@@ -816,7 +882,10 @@ impl<'a, 'b> Lower<'a, 'b> {
                             Term::Thunk(thunk) if self.tt[kind].params.is_none() => {
                                 Result::new(thunk)
                             }
-                            _ => todo!("error"),
+                            _ => Result::error(ProblemKind::KindMismatch(KindMismatch {
+                                expected: self.tt.insert_kind(KindEnum::THUNK),
+                                found: kind,
+                            }).at(self.module, returns)),
                         })
                 }
                 ast::Returns::Type(ty) => self.r#type(ty, false).map(|ty| Thunk {

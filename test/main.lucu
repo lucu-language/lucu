@@ -12,7 +12,7 @@ type Args = struct(
     argv0 c.string[static,],
 )
 
-fun strlen(str ^[:0]c.char) size = {
+fun strlen[r](str c.string[r,]) size = {
     let len ^size = use regions.ref(0)
     handle unfounded loop {
         if str[len^]^ == 0 then raise

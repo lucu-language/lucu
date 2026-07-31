@@ -8,12 +8,13 @@ use do_notation::m;
 use itertools::Either;
 
 use crate::ast;
-use crate::error::{Problems, Result};
+use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{EffectDecl, FunctionDefinition, IntrinsicFunction, ItemDecl, StructDecl};
 use crate::module::Module;
 use crate::mu::{self, ExpressionTable as _, TypeTable as _};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
+use crate::pass::lower::err::{NotEnoughInfo, SignatureMismatch, TypeMismatch};
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::span::{HasSpan, Span};
 use crate::type_table::substitute::Substitute;
@@ -120,7 +121,7 @@ impl mu::Module {
             .items()
             .filter_map(|(name, decl)| {
                 // TODO: effect functions
-                let &ItemDecl::Function(sig, None, FunctionDefinition::Other(node)) = decl else {
+                let &ItemDecl::Function(sig, None, node, FunctionDefinition::Other) = decl else {
                     return None;
                 };
                 let ast::Item::Function(decl, Some((_, def))) = defs.item(node, ast) else {
@@ -239,11 +240,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 me.vars.push_front(Var::Effect(effect));
             }
         }
-        me.statements(
-            &mut body.into_iter().peekable(),
-            Some(sig_val.thunk.returns),
-        )
-        .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
+        me.statements(&mut body.into_iter().peekable(), sig_val.thunk.returns)
+            .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
     }
     fn find_named(&self, name: &str) -> Option<(u32, FunctionParameter)> {
         self.vars
@@ -301,11 +299,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             .apply(kind, term, path.generics.as_ref())
                             .and_then(|(kind, term)| {
                                 let kind_enum = &self.lower.tt[kind];
-                                if kind_enum.params.is_some() {
-                                    todo!("error")
-                                }
-                                let SimpleKind::Constant(ty) = kind_enum.output else {
-                                    todo!("error")
+                                let ty = match kind_enum.output {
+                                    SimpleKind::Constant(ty) if kind_enum.params.is_none() => ty,
+                                    _ => todo!("error"),
                                 };
                                 let Term::Constant(c) = term else {
                                     panic!("ICE: constant kind but not constant term")
@@ -318,7 +314,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     }),
                 ItemDecl::Struct(_, _) => todo!("struct constructor"),
                 ItemDecl::Effect(_, _) => todo!("error"),
-                ItemDecl::Function(sig, effect, def) => {
+                ItemDecl::Function(sig, effect, _, def) => {
                     let module = module.clone();
                     self.lower
                         .apply_sig(sig, effect, path.generics.as_ref())
@@ -356,7 +352,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     },
                                     None => match def {
                                         FunctionDefinition::Intrinsic(i) => Either::Right(i),
-                                        FunctionDefinition::Other(_) => {
+                                        FunctionDefinition::Other => {
                                             let item = mu::Item {
                                                 module,
                                                 item: name.to_compact_string(),
@@ -460,7 +456,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         &mut self,
         call: Either<&'a ast::Call, &'a ast::Path>,
         use_arg: Option<UseArg<'a>>,
-        expected: Option<Type>,
+        expected: Type,
     ) -> Result<(mu::Expression, Type)> {
         // TODO: also put non-call paths under here?
         // TODO: a big clean up of this function
@@ -482,12 +478,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
 
             // infer from expected type
-            if let Some(expected) = expected {
-                sig_val
-                    .thunk
-                    .returns
-                    .infer(expected, self.lower.tt, 0, &mut mono_args);
-            }
+            sig_val
+                .thunk
+                .returns
+                .infer(expected, self.lower.tt, 0, &mut mono_args);
 
             // infer from lambda block types
             // TODO: also other lambda blocks plz
@@ -570,7 +564,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     let (mu_arg, user_param) = match mono_param {
                         FunctionParameter::Data(ty) => problems
                             .append(
-                                self.expression(arg, Some(ty))
+                                self.expression(arg, ty)
                                     .map(|(mu, ty)| (mu, FunctionParameter::Data(ty))),
                             )
                             .unwrap_or_else(|| {
@@ -962,6 +956,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn handler_function(
         &mut self,
         sig: FunctionSignature,
+        parent_module: &'a Module,
+        parent_decl: Span,
         decl: &'a ast::FunctionDeclaration,
         def: &'a ast::FunctionDefinition,
     ) -> Result<mu::Expression> {
@@ -969,11 +965,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .function_signature(decl)
             .and_then(|user_sig| {
                 if !sig.subtype(user_sig, self.lower.tt) {
-                    todo!(
-                        "error: {} not subtype of {}",
-                        sig.display(self.lower.tt),
-                        user_sig.display(self.lower.tt)
-                    )
+                    return Result::error(
+                        ProblemKind::SignatureMismatch(SignatureMismatch {
+                            defined_module: parent_module.clone(),
+                            defined_span: parent_decl,
+                        })
+                        .at(self.lower.module, decl),
+                    );
                 }
                 match def {
                     ast::FunctionDefinition::Expression(expression) => self.abstraction(
@@ -1041,7 +1039,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
                     });
                 problems
-                    .append(self.handler_function(partial, decl, def))
+                    .append(self.handler_function(partial, &item.module, member.span, decl, def))
                     .unwrap_or_else(|| self.et.unreachable())
             }),
         );
@@ -1050,8 +1048,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn expression(
         &mut self,
         expr: &'a ast::Expression,
-        expected: Option<Type>,
+        expected: Type,
     ) -> Result<(mu::Expression, Type)> {
+        let expr_outer = expr;
         match expr {
             ast::Expression::Let { .. } => {
                 panic!("ICE: let expressions should be managed by MuLower::statements")
@@ -1062,13 +1061,20 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 .map(|(c, ty)| (self.constant(ty, c), ty)),
             ast::Expression::Uninit(_) => {
                 // TODO: check if uninit is allowed for this type
-                let Some(ty) = expected else {
-                    todo!("error: not enough info")
-                };
-                Result::new((self.et.constant(self.r#type(ty), mu::Constant::Uninit), ty))
+                if !expected.no_holes(self.lower.tt) {
+                    return Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.lower.module, expr_outer),
+                    );
+                }
+                Result::new((
+                    self.et
+                        .constant(self.r#type(expected), mu::Constant::Uninit),
+                    expected,
+                ))
             }
             ast::Expression::Member { lhs, rhs, .. } => self
-                .expression(lhs, None)
+                .expression(lhs, self.lower.tt.insert_type(TypeEnum::Hole))
                 .and_then(|(val, ty)| self.member_access(val, ty, rhs)),
             ast::Expression::Path(path) => {
                 if let ast::PathOrigin::Package(lhs, _, rhs) = &path.origin
@@ -1098,18 +1104,20 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
             ast::Expression::Enclosed(expr) => self.expression(&expr.inner, expected),
             ast::Expression::Cast { op, expr, .. } => {
-                let Some(to) = expected else {
-                    todo!("error: not enough info")
-                };
-                if !to.no_holes(self.lower.tt) {
-                    todo!("error: ambiguous info")
+                if !expected.no_holes(self.lower.tt) {
+                    return Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.lower.module, expr_outer),
+                    );
                 }
-                self.expression(expr, None).map(|(value, from)| {
-                    (
-                        self.et.cast(self.r#type(from), self.r#type(to), *op, value),
-                        to,
-                    )
-                })
+                self.expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
+                    .map(|(value, from)| {
+                        (
+                            self.et
+                                .cast(self.r#type(from), self.r#type(expected), *op, value),
+                            expected,
+                        )
+                    })
             }
             ast::Expression::If {
                 condition,
@@ -1117,10 +1125,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 branch_false,
                 ..
             } => self
-                .expression(
-                    condition,
-                    Some(self.lower.tt.insert_type(TypeEnum::Boolean)),
-                )
+                .expression(condition, self.lower.tt.insert_type(TypeEnum::Boolean))
                 .and_then(|(condition, _)| {
                     // this is a match expression under the hood
                     // so we need to push the unit bool variant on the var stack
@@ -1128,40 +1133,55 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     self_inner.vars.push_front(Var::Unit);
                     self_inner
                         .expression(&branch_true.1, expected)
-                        .and_then(|(then_branch, ty)| match branch_false {
-                            Some((_, branch_false)) => self_inner
-                                .expression(branch_false, Some(ty))
-                                .map(|(else_branch, _)| {
-                                    (
-                                        self_inner.et.if_else(condition, then_branch, else_branch),
-                                        ty,
-                                    )
-                                }),
-                            None if !ty.subtype(
-                                self_inner.lower.tt.insert_type(TypeEnum::Unit),
-                                self_inner.lower.tt,
-                            ) =>
-                            {
-                                todo!("error")
+                        .and_then(|(then_branch, ty)| {
+                            let unit_t = self_inner.lower.tt.insert_type(TypeEnum::Unit);
+                            match branch_false {
+                                Some((_, branch_false)) => self_inner
+                                    .expression(branch_false, ty)
+                                    .map(|(else_branch, _)| {
+                                        (
+                                            self_inner.et.if_else(
+                                                condition,
+                                                then_branch,
+                                                else_branch,
+                                            ),
+                                            ty,
+                                        )
+                                    }),
+                                None if !ty.subtype(unit_t, self_inner.lower.tt) => {
+                                    ProblemKind::TypeMismatch(TypeMismatch {
+                                        expected: unit_t,
+                                        found: ty,
+                                    })
+                                    .at(self_inner.lower.module, &branch_true.1)
+                                    .with((self_inner.et.unreachable(), unit_t))
+                                }
+                                None => Result::new((
+                                    self_inner.et.if_stmt(self_inner.tt, condition, then_branch),
+                                    ty,
+                                )),
                             }
-                            None => Result::new((
-                                self_inner.et.if_stmt(self_inner.tt, condition, then_branch),
-                                ty,
-                            )),
                         })
                 }),
             ast::Expression::Discard { expr, .. } => self
-                .expression(expr, None)
+                .expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
                 .map(|(mu, _)| (mu, self.lower.tt.insert_type(TypeEnum::Unit))),
             ast::Expression::AssignOp(op, lhs, _, rhs) => {
                 let ast::Expression::Dereference { expr, .. } = &**lhs else {
                     todo!("error")
                 };
-                self.expression(expr, None).and_then(|(lhs, ty)| {
+                self.expression(
+                    expr,
+                    self.lower.tt.insert_type(TypeEnum::Pointer(
+                        self.lower.tt.insert_type(TypeEnum::Hole),
+                        self.lower.tt.insert_region(RegionEnum::Hole),
+                    )),
+                )
+                .and_then(|(lhs, ty)| {
                     let TypeEnum::Pointer(inner, _) = self.lower.tt[ty] else {
-                        todo!("error")
+                        panic!("ICE: not a poiner :(")
                     };
-                    self.expression(rhs, Some(inner)).and_then(|(rhs, _)| {
+                    self.expression(rhs, inner).and_then(|(rhs, _)| {
                         let mu_inner = self.r#type(inner);
                         let val = match op {
                             &ast::AssignOp::Math(op) => {
@@ -1185,9 +1205,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     })
                 })
             }
-            ast::Expression::PredicateOp(op, lhs, _, rhs) => {
-                self.expression(lhs, None).and_then(|(lhs, ty)| {
-                    self.expression(rhs, Some(ty)).map(|(rhs, _)| {
+            ast::Expression::PredicateOp(op, lhs, _, rhs) => self
+                .expression(lhs, self.lower.tt.insert_type(TypeEnum::Hole))
+                .and_then(|(lhs, ty)| {
+                    self.expression(rhs, ty).map(|(rhs, _)| {
                         (
                             self.et.call(
                                 mu::Callable::PredicateOp {
@@ -1199,12 +1220,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             self.lower.tt.insert_type(TypeEnum::Boolean),
                         )
                     })
-                })
-            }
+                }),
             ast::Expression::MathOp(op, lhs, _, rhs) => {
                 // TODO: check if type valid
                 self.expression(lhs, expected).and_then(|(lhs, ty)| {
-                    self.expression(rhs, Some(ty)).map(|(rhs, _)| {
+                    self.expression(rhs, ty).map(|(rhs, _)| {
                         (
                             self.et.call(
                                 mu::Callable::MathOp {
@@ -1234,9 +1254,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 })
             }
             ast::Expression::Dereference { expr, .. } => {
-                self.expression(expr, None).and_then(|(e, ty)| {
+                let expected_inner = self.lower.tt.insert_type(TypeEnum::Pointer(
+                    expected,
+                    self.lower.tt.insert_region(RegionEnum::Hole),
+                ));
+                self.expression(expr, expected_inner).and_then(|(e, ty)| {
                     let TypeEnum::Pointer(inner, _region) = self.lower.tt[ty] else {
-                        todo!("error")
+                        panic!("ICE: not a poiner :(")
                     };
                     // TODO: check for read effect
                     Result::new((
@@ -1251,181 +1275,191 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 })
             }
             ast::Expression::Index { array, index } => {
-                self.expression(array, None).and_then(|(array, ty)| {
-                    match (&self.lower.tt[ty], &index.inner) {
-                        // ^[]T
-                        (
-                            &TypeEnum::PointerSlice(ty, region, sentinel_ty),
-                            ast::Index::Single(expr),
-                        ) => self
-                            .expression(expr, Some(self.lower.tt.insert_type(TypeEnum::SIZE)))
-                            .map(|(index, _)| match sentinel_ty {
-                                Some(_) => (
-                                    self.et.call(
-                                        mu::Callable::MultiPointerIndex {
-                                            ty: self.r#type(ty),
-                                        },
-                                        [array, index],
-                                    ),
-                                    self.lower.tt.insert_type(TypeEnum::Pointer(ty, region)),
-                                ),
-                                None => (
-                                    self.et.call(
-                                        mu::Callable::PointerSliceIndex {
-                                            ty: self.r#type(ty),
-                                        },
-                                        [array, index],
-                                    ),
-                                    self.lower.tt.insert_type(TypeEnum::Pointer(ty, region)),
-                                ),
-                            }),
-                        (
-                            &TypeEnum::PointerSlice(ty, region, sentinel_ty),
-                            ast::Index::Range {
-                                from, to, sentinel, ..
-                            },
-                        ) => {
-                            // FIXME: sentinel
-                            let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
-                            let mu_usize = self.r#type(usize_t);
-                            let mu_ty = self.r#type(ty);
-                            let from_index = from
-                                .as_ref()
-                                .map(|expr| {
-                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
-                                })
-                                .unwrap_or_else(|| {
-                                    Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
-                                });
-                            let to_index = to
-                                .as_ref()
-                                .map(|expr| {
-                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
-                                })
-                                .unwrap_or_else(|| {
-                                    Result::new(
-                                        self.et.call(mu::Callable::Len { ty: mu_ty }, [array]),
-                                    )
-                                });
-                            from_index.and_then(|from_index| {
-                                to_index.map(|to_index| {
-                                    (
+                // NOTE: if T is not 0-able and array has sentinel, should indexing return ?T instead of T ..?
+                self.expression(array, self.lower.tt.insert_type(TypeEnum::Hole))
+                    .and_then(|(array, ty)| {
+                        match (&self.lower.tt[ty], &index.inner) {
+                            // ^[]T
+                            (
+                                &TypeEnum::PointerSlice(ty, region, sentinel_ty),
+                                ast::Index::Single(expr),
+                            ) => self
+                                .expression(expr, self.lower.tt.insert_type(TypeEnum::SIZE))
+                                .map(|(index, _)| match sentinel_ty {
+                                    Some(_) => (
                                         self.et.call(
-                                            sentinel_ty.map_or_else(
-                                                || mu::Callable::PointerSliceSlice { ty: mu_ty },
-                                                |_| mu::Callable::MultiPointerSlice { ty: mu_ty },
-                                            ),
-                                            [array, from_index, to_index],
-                                        ),
-                                        self.lower.tt.insert_type(TypeEnum::PointerSlice(
-                                            ty,
-                                            region,
-                                            sentinel_ty.filter(|_| to.is_none()),
-                                        )),
-                                    )
-                                })
-                            })
-                        }
-
-                        // [N]T
-                        (
-                            &TypeEnum::Array(ty, size, sentinel_ty),
-                            ast::Index::Single(expression),
-                        ) => {
-                            todo!("index array")
-                        }
-                        (
-                            &TypeEnum::Array(ty, size, sentinel_ty),
-                            ast::Index::Range {
-                                from, to, sentinel, ..
-                            },
-                        ) => todo!("slice array"),
-
-                        // ^[N]T
-                        (&TypeEnum::Pointer(pointee, region), ast::Index::Single(expr))
-                            if let TypeEnum::Array(ty, size, sentinel_ty) =
-                                self.lower.tt[pointee] =>
-                        {
-                            self.expression(expr, Some(self.lower.tt.insert_type(TypeEnum::SIZE)))
-                                .map(|(index, _)| {
-                                    let size = self.array_size(size) + sentinel_ty.is_some() as u32;
-                                    (
-                                        self.et.call(
-                                            mu::Callable::PointerArrayIndex {
+                                            mu::Callable::MultiPointerIndex {
                                                 ty: self.r#type(ty),
-                                                size,
                                             },
                                             [array, index],
                                         ),
                                         self.lower.tt.insert_type(TypeEnum::Pointer(ty, region)),
-                                    )
-                                })
-                        }
-                        (
-                            &TypeEnum::Pointer(pointee, region),
-                            ast::Index::Range {
-                                from, to, sentinel, ..
-                            },
-                        ) if let TypeEnum::Array(ty, size, sentinel_ty) =
-                            self.lower.tt[pointee] =>
-                        {
-                            // FIXME: sentinel
-                            let max = self.array_size(size);
-                            let size = max + sentinel_ty.is_some() as u32;
-                            let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
-                            let mu_usize = self.r#type(usize_t);
-                            let from_index = from
-                                .as_ref()
-                                .map(|expr| {
-                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
-                                })
-                                .unwrap_or_else(|| {
-                                    Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
-                                });
-                            let to_index = to
-                                .as_ref()
-                                .map(|expr| {
-                                    self.expression(expr, Some(usize_t)).map(|(expr, _)| expr)
-                                })
-                                .unwrap_or_else(|| {
-                                    Result::new(
-                                        self.et
-                                            .constant(mu_usize, mu::Constant::Integer(max as u64)),
-                                    )
-                                });
-                            from_index.and_then(|from_index| {
-                                to_index.map(|to_index| {
-                                    (
+                                    ),
+                                    None => (
                                         self.et.call(
-                                            mu::Callable::PointerArraySlice {
+                                            mu::Callable::PointerSliceIndex {
                                                 ty: self.r#type(ty),
-                                                size,
                                             },
-                                            [array, from_index, to_index],
+                                            [array, index],
                                         ),
-                                        self.lower.tt.insert_type(TypeEnum::PointerSlice(
-                                            ty,
-                                            region,
-                                            sentinel_ty.filter(|_| to.is_none()),
-                                        )),
-                                    )
+                                        self.lower.tt.insert_type(TypeEnum::Pointer(ty, region)),
+                                    ),
+                                }),
+                            (
+                                &TypeEnum::PointerSlice(ty, region, sentinel_ty),
+                                ast::Index::Range {
+                                    from, to, sentinel, ..
+                                },
+                            ) => {
+                                // FIXME: sentinel
+                                let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
+                                let mu_usize = self.r#type(usize_t);
+                                let mu_ty = self.r#type(ty);
+                                let from_index = from
+                                    .as_ref()
+                                    .map(|expr| {
+                                        self.expression(expr, usize_t).map(|(expr, _)| expr)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
+                                    });
+                                let to_index = to
+                                    .as_ref()
+                                    .map(|expr| {
+                                        self.expression(expr, usize_t).map(|(expr, _)| expr)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        Result::new(
+                                            self.et.call(mu::Callable::Len { ty: mu_ty }, [array]),
+                                        )
+                                    });
+                                from_index.and_then(|from_index| {
+                                    to_index.map(|to_index| {
+                                        (
+                                            self.et.call(
+                                                sentinel_ty.map_or_else(
+                                                    || mu::Callable::PointerSliceSlice {
+                                                        ty: mu_ty,
+                                                    },
+                                                    |_| mu::Callable::MultiPointerSlice {
+                                                        ty: mu_ty,
+                                                    },
+                                                ),
+                                                [array, from_index, to_index],
+                                            ),
+                                            self.lower.tt.insert_type(TypeEnum::PointerSlice(
+                                                ty,
+                                                region,
+                                                sentinel_ty.filter(|_| to.is_none()),
+                                            )),
+                                        )
+                                    })
                                 })
-                            })
-                        }
+                            }
 
-                        // ???
-                        (_, idx) => todo!("error: indexing {}", ty.display(self.lower.tt)),
-                    }
-                })
+                            // [N]T
+                            (
+                                &TypeEnum::Array(ty, size, sentinel_ty),
+                                ast::Index::Single(expression),
+                            ) => {
+                                todo!("index array")
+                            }
+                            (
+                                &TypeEnum::Array(ty, size, sentinel_ty),
+                                ast::Index::Range {
+                                    from, to, sentinel, ..
+                                },
+                            ) => todo!("slice array"),
+
+                            // ^[N]T
+                            (&TypeEnum::Pointer(pointee, region), ast::Index::Single(expr))
+                                if let TypeEnum::Array(ty, size, sentinel_ty) =
+                                    self.lower.tt[pointee] =>
+                            {
+                                self.expression(expr, self.lower.tt.insert_type(TypeEnum::SIZE))
+                                    .map(|(index, _)| {
+                                        let size =
+                                            self.array_size(size) + sentinel_ty.is_some() as u32;
+                                        (
+                                            self.et.call(
+                                                mu::Callable::PointerArrayIndex {
+                                                    ty: self.r#type(ty),
+                                                    size,
+                                                },
+                                                [array, index],
+                                            ),
+                                            self.lower
+                                                .tt
+                                                .insert_type(TypeEnum::Pointer(ty, region)),
+                                        )
+                                    })
+                            }
+                            (
+                                &TypeEnum::Pointer(pointee, region),
+                                ast::Index::Range {
+                                    from, to, sentinel, ..
+                                },
+                            ) if let TypeEnum::Array(ty, size, sentinel_ty) =
+                                self.lower.tt[pointee] =>
+                            {
+                                // FIXME: sentinel
+                                let max = self.array_size(size);
+                                let size = max + sentinel_ty.is_some() as u32;
+                                let usize_t = self.lower.tt.insert_type(TypeEnum::SIZE);
+                                let mu_usize = self.r#type(usize_t);
+                                let from_index = from
+                                    .as_ref()
+                                    .map(|expr| {
+                                        self.expression(expr, usize_t).map(|(expr, _)| expr)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
+                                    });
+                                let to_index =
+                                    to.as_ref()
+                                        .map(|expr| {
+                                            self.expression(expr, usize_t).map(|(expr, _)| expr)
+                                        })
+                                        .unwrap_or_else(|| {
+                                            Result::new(self.et.constant(
+                                                mu_usize,
+                                                mu::Constant::Integer(max as u64),
+                                            ))
+                                        });
+                                from_index.and_then(|from_index| {
+                                    to_index.map(|to_index| {
+                                        (
+                                            self.et.call(
+                                                mu::Callable::PointerArraySlice {
+                                                    ty: self.r#type(ty),
+                                                    size,
+                                                },
+                                                [array, from_index, to_index],
+                                            ),
+                                            self.lower.tt.insert_type(TypeEnum::PointerSlice(
+                                                ty,
+                                                region,
+                                                sentinel_ty.filter(|_| to.is_none()),
+                                            )),
+                                        )
+                                    })
+                                })
+                            }
+
+                            // ???
+                            (_, idx) => todo!("error: indexing {}", ty.display(self.lower.tt)),
+                        }
+                    })
             }
             ast::Expression::Array(exprs) => {
-                let Some(ty) = expected else {
-                    todo!("error: not enough info")
-                };
-                if !ty.no_holes(self.lower.tt) {
-                    todo!("error: ambiguous info: {}", ty.display(self.lower.tt))
+                // TODO: we can infer stuff, we don't need to check for holes here
+                if !expected.no_holes(self.lower.tt) {
+                    return Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.lower.module, expr_outer),
+                    );
                 }
-                match self.lower.tt[ty] {
+                match self.lower.tt[expected] {
                     TypeEnum::PointerSlice(_, _, _) => todo!(),
                     TypeEnum::Array(inner, constant, s) => {
                         if let Some(s) = s {
@@ -1441,12 +1475,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         let et = self.et;
                         let args = exprs.inner.iter().map(|elem| {
                             problems
-                                .append(self.expression(elem, Some(inner)))
+                                .append(self.expression(elem, inner))
                                 .map_or_else(|| self.et.unreachable(), |(e, _)| e)
                         });
                         let construct =
                             et.call(mu::Callable::ArrayConstruct { ty: mu_inner, size }, args);
-                        problems.with((construct, ty))
+                        problems.with((construct, expected))
                     }
                     _ => todo!("error"),
                 }
@@ -1466,14 +1500,15 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 expected,
             ),
             ast::Expression::Handle { expr, handlers, .. } => {
-                let Some(ty) = expected else {
-                    todo!("error: not enough info")
-                };
-                if !ty.no_holes(self.lower.tt) {
-                    todo!("error: ambiguous info: {}", ty.display(self.lower.tt))
+                // TODO: OnceLock on Var::Raise so we don't have to already know it here
+                if !expected.no_holes(self.lower.tt) {
+                    return Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.lower.module, expr_outer),
+                    );
                 }
                 let mut self_inner = self.reborrow();
-                self_inner.vars.push_front(Var::Raise(ty));
+                self_inner.vars.push_front(Var::Raise(expected));
 
                 if let Some((_, handlers)) = handlers {
                     let [(handler, _)] = handlers.elements.as_slice() else {
@@ -1492,7 +1527,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 } else {
                     self_inner.expression(expr, expected)
                 }
-                .map(|(e, _)| (self_inner.et.try_break(self_inner.r#type(ty), e), ty))
+                .map(|(e, _)| {
+                    (
+                        self_inner.et.try_break(self_inner.r#type(expected), e),
+                        expected,
+                    )
+                })
             }
             ast::Expression::Raise { expr, .. } => {
                 let never = self.lower.tt.insert_type(TypeEnum::Never);
@@ -1506,7 +1546,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 );
                 match expr {
                     Some(expr) => self
-                        .expression(expr, Some(ty))
+                        .expression(expr, ty)
                         .map(|(e, _)| (self.et.apply(f, [e]), never)),
                     None if ty.is_unit(self.lower.tt) => {
                         Result::new((self.et.apply(f, [self.et.construct_unit(self.tt)]), never))
@@ -1518,19 +1558,15 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
         }
         .and_then(|(mu, found)| {
-            if let Some(expected) = expected
-                && !found.subtype(expected, self.lower.tt)
-            {
-                todo!(
-                    "error: found {} expected {} at {expr:?}",
-                    found.display(self.lower.tt),
-                    expected.display(self.lower.tt)
-                );
-                Result::new((mu, found))
+            if !found.subtype(expected, self.lower.tt) {
+                ProblemKind::TypeMismatch(TypeMismatch { expected, found })
+                    .at(self.lower.module, expr)
+                    .with((mu, expected))
             } else {
                 Result::new((mu, found))
             }
         })
+        .recover_with(|| (self.et.unreachable(), expected))
     }
     fn member_access(
         &mut self,
@@ -1586,7 +1622,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn statements(
         &mut self,
         stmts: &mut iter::Peekable<impl Iterator<Item = &'a ast::Expression>>,
-        expected: Option<Type>,
+        expected: Type,
     ) -> Result<(mu::Expression, Type)> {
         let unit_t = self.lower.tt.insert_type(TypeEnum::Unit);
 
@@ -1594,7 +1630,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         let mut exprs = Vec::new();
         while let Some(next) = stmts.next() {
             let expected = if stmts.peek().is_some() {
-                Some(unit_t)
+                unit_t
             } else {
                 expected
             };
@@ -1603,7 +1639,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let stmts_ = &mut *stmts;
                 m! {
                     ty <- ty.as_ref().map_or(Result::new(None), |ty| self_.lower.r#type(ty, true).map(Some));
-                    outer <- self_.expression(value, ty);
+                    outer <- self_.expression(value, ty.unwrap_or_else(|| self_.lower.tt.insert_type(TypeEnum::Hole)));
                     inner <- {
                         let mut self_inner = self_.reborrow();
                         self_inner.vars.push_front(Var::Named(var.as_str(), FunctionParameter::Data(outer.1)));
@@ -1730,7 +1766,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     }
     fn r#type(&self, ty: Type) -> mu::Type {
         match self.lower.tt[ty] {
-            TypeEnum::Generic(_) => todo!(),
+            TypeEnum::Generic(_) => self.tt.never(),
             TypeEnum::Item(ref item) => {
                 // TODO: make these named, and cache results
                 let decl = self.struct_decl(item);

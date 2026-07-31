@@ -1,13 +1,16 @@
 use std::collections::{HashMap, hash_map};
 use std::fmt::Display;
 
-use compact_str::{CompactString, ToCompactString, format_compact};
+use compact_str::{CompactString, ToCompactString};
 
 use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
 use crate::module::{Module, Modules, UnknownModule, import_name};
+use crate::pass::imports::err::{UnknownFile, UnknownLibrary};
 use crate::span::{HasSpan, Span};
 use crate::tokens::is_valid_identifier;
+
+pub mod err;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum Import {
@@ -113,16 +116,14 @@ impl Imports {
         match resolver.exists(module) {
             Ok(()) => Problems::ok(),
             Err(UnknownModule::UnknownLibrary) => {
-                ProblemKind::UnknownLibrary(format_compact!("'{}'", module.library))
+                ProblemKind::UnknownLibrary(UnknownLibrary(module.library.clone()))
                     .at(parent, &Self::library_span(&import.path))
                     .into()
             }
-            Err(UnknownModule::UnknownFile) => ProblemKind::UnknownFile(format_compact!(
-                "path resolved to '{}'",
+            Err(UnknownModule::UnknownFile) => ProblemKind::UnknownFile(UnknownFile(
                 resolver
                     .relative_path(module)
-                    .unwrap_or_else(|| resolver.path(module).expect("ICE: unknown path"))
-                    .display()
+                    .unwrap_or_else(|| resolver.path(module).expect("ICE: unknown path")),
             ))
             .at(parent, &import.path)
             .into(),

@@ -4,6 +4,7 @@ use compact_str::CompactString;
 
 use crate::error::{Context, ContextLevel, Diagnostic, Label};
 use crate::span::Span;
+use crate::type_table::TypeTable;
 
 #[derive(Clone, Debug)]
 pub struct MultipleDefinitions {
@@ -12,10 +13,10 @@ pub struct MultipleDefinitions {
 }
 
 impl Diagnostic for MultipleDefinitions {
-    fn label(&self) -> Option<Label<'_>> {
+    fn label(&self, _source: &str, _tt: &TypeTable) -> Option<Label<'_>> {
         None
     }
-    fn context<'a>(&'a self) -> impl Iterator<Item = Context<'a>> {
+    fn context<'a>(&'a self, _source: &str, _tt: &TypeTable) -> impl Iterator<Item = Context<'a>> {
         self.redefined
             .iter()
             .copied()

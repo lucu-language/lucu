@@ -137,47 +137,26 @@ fn watch(cmd: CheckCommand) {
     let mu_et = unsafe { mu::table::ExpressionTable::new() };
 
     loop {
-        // if cmd.debug {
-        println!("---");
-        println!("{}", graph.dot());
-        // }
+        if cmd.debug {
+            println!("---");
+            println!("{}", graph.dot());
+        }
 
         let mut functions = Vec::new();
         for module in graph.postorder().unwrap() {
             if let Some(stages) = graph.stages(module) {
-                if cmd.debug && stages.source().is_some() {
-                    let source = stages.source().unwrap();
-                    let tokens = stages.tokens().unwrap();
-                    let ast = stages.ast().unwrap();
-
-                    // let annotated = source.snippet().mark_line_numbers().mark_syntax(tokens);
-
-                    // if let Some(definitions) = stages.definitions() {
-                    //     anstream::println!("{}", annotated.mark_definition_order(ast, definitions));
-                    // } else {
-                    //     anstream::println!("{}", annotated);
-                    // }
-
-                    anstream::println!(
-                        "{}",
-                        source
-                            .snippet()
-                            .mark_ast(ast)
-                            // .debug()
-                            .mark_line_numbers()
-                            .mark_syntax(tokens)
-                    );
-
-                    if let Some(header) = stages.header(&graph, &tt) {
-                        println!("{}", header.display(&tt));
-                    }
+                if cmd.debug
+                    && stages.source().is_some()
+                    && let Some(header) = stages.header(&graph, &tt)
+                {
+                    println!("{}", header.display(&tt));
                 }
 
                 if let Some(mu) = stages.mu(&graph, &tt, &mu_tt, &mu_et) {
                     functions.extend(mu.functions.iter().cloned())
                 }
 
-                stages.print_problems(watcher.modules(), true);
+                stages.print_problems(watcher.modules(), false);
 
                 if cmd.debug {
                     println!();

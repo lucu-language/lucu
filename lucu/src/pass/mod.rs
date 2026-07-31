@@ -51,6 +51,8 @@ impl HasProblems for Stages {
             .chain(self.ast.problems())
             .chain(self.imports.problems())
             .chain(self.definitions.problems())
+            .chain(self.header.problems())
+            .chain(self.mu.problems())
     }
 }
 

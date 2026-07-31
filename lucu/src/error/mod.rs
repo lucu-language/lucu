@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::iter;
-use std::ops::Add;
+use std::ops::{Add, AddAssign};
 
 use compact_str::CompactString;
 use do_notation::Lift;
@@ -8,6 +8,7 @@ use do_notation::Lift;
 use crate::ast::visit::Combine;
 use crate::module::Module;
 use crate::pass::defs::err::MultipleDefinitions;
+use crate::pass::lower::err::InvalidEffectItem;
 use crate::pass::parser::err::Expected;
 use crate::span::{HasSpan, Span};
 
@@ -48,6 +49,12 @@ impl Add for Problems {
         Problems {
             problems: self.problems + rhs.problems,
         }
+    }
+}
+
+impl AddAssign<Problem> for Problems {
+    fn add_assign(&mut self, rhs: Problem) {
+        self.problems.push_back(rhs);
     }
 }
 
@@ -415,13 +422,20 @@ macro_rules! diagnostics {
 
 #[rustfmt::skip]
 diagnostics!(
+    // parsing
     (UnexpectedToken  (Expected), 100, Error, "Unexpected token"),
     (UnexpectedNewline(Expected), 101, Error, "Unexpected newline"),
     (UnexpectedEOF    (Expected), 102, Error, "Unexpected end of file"),
 
+    // import graph
     (UnknownFile      (CompactString), 103, Error, "Could not access module file"),
     (UnknownLibrary   (CompactString), 104, Error, "Unknown library"),
     (InvalidIdentifier(()),            105, Error, "File name is not a valid identifier"),
 
+    // definition graph
     (MultipleDefinitions(MultipleDefinitions), 106, Error, "Name is defined multiple times"),
+
+    // headers
+    (InvalidEffectItem(InvalidEffectItem), 107, Error, "Invalid effect item"),
+    (MissingItemDefinition(()),            108, Error, "Missing item definition"),
 );

@@ -4,7 +4,7 @@ use compact_str::{CompactString, ToCompactString};
 use petgraph::graph::NodeIndex;
 
 use crate::ast;
-use crate::error::{Problems, Result};
+use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{
     EffectDecl, EffectMember, FunctionDefinition, HandlerDecl, Header, IntrinsicFunction, ItemDecl,
     StructDecl, StructMember,
@@ -12,6 +12,7 @@ use crate::header::{
 use crate::module::Module;
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
+use crate::pass::lower::err::InvalidEffectItem;
 use crate::pass::lower::{HeaderQuery, Lower};
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, GenericParameter, IntSize, Integer, Item, Region,
@@ -99,6 +100,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 }
                                 None => None,
                             })
+                            .recover_default()
                     })
                     .collect::<Result<Vec<_>>>(),
             )
@@ -139,9 +141,11 @@ impl<'a, 'b> Lower<'a, 'b> {
         let mut problems = Problems::ok();
 
         match item {
-            ast::Item::Region(_, name, def) => {
-                if let Some(parent) = parent {
-                    todo!("error")
+            ast::Item::Region(tk, name, def) => {
+                if parent.is_some() {
+                    problems +=
+                        ProblemKind::InvalidEffectItem(InvalidEffectItem).at(self.module, tk);
+                    return problems.with(None);
                 }
 
                 let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Region));
@@ -171,12 +175,16 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
                     }
-                    None => todo!("error"),
+                    None => {
+                        problems += ProblemKind::MissingItemDefinition(()).at(self.module, name);
+                    }
                 }
             }
-            ast::Item::Type(_, name, def) => {
-                if let Some(parent) = parent {
-                    todo!("error")
+            ast::Item::Type(tk, name, def) => {
+                if parent.is_some() {
+                    problems +=
+                        ProblemKind::InvalidEffectItem(InvalidEffectItem).at(self.module, tk);
+                    return problems.with(None);
                 }
 
                 let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Type));
@@ -216,11 +224,13 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
                     }
-                    None => todo!("error"),
+                    None => {
+                        problems += ProblemKind::MissingItemDefinition(()).at(self.module, name);
+                    }
                 }
             }
-            ast::Item::Function(decl, def) => {
-                let def = match def {
+            ast::Item::Function(decl, def_ast) => {
+                let def = match def_ast {
                     Some((_, ast::FunctionDefinition::Intrinsic(_)))
                         if let Some(i) = self.intrinsic_function(&decl.name) =>
                     {
@@ -238,7 +248,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                             todo!()
                         };
                         let &ItemDecl::Effect(kind, _) = item else {
-                            todo!("error")
+                            todo!()
                         };
 
                         let decl = self.with_name(
@@ -265,6 +275,11 @@ impl<'a, 'b> Lower<'a, 'b> {
                         return problems.with(decl);
                     }
                     None => {
+                        if def_ast.is_none() {
+                            problems +=
+                                ProblemKind::MissingItemDefinition(()).at(self.module, &decl.name);
+                        }
+
                         let sig = problems.append(self.function_signature(decl));
                         if let Some(sig) = sig {
                             let item = ItemDecl::Function(sig, None, def);
@@ -274,9 +289,11 @@ impl<'a, 'b> Lower<'a, 'b> {
                     }
                 }
             }
-            ast::Item::Effect(_, name, def) => {
-                if let Some(parent) = parent {
-                    todo!("error")
+            ast::Item::Effect(tk, name, def) => {
+                if parent.is_some() {
+                    problems +=
+                        ProblemKind::InvalidEffectItem(InvalidEffectItem).at(self.module, tk);
+                    return problems.with(None);
                 }
 
                 let kind = problems.append(self.kind(name.generics.as_ref(), SimpleKind::Effect));
@@ -322,12 +339,16 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
                     }
-                    None => todo!("error"),
+                    None => {
+                        problems += ProblemKind::MissingItemDefinition(()).at(self.module, name);
+                    }
                 }
             }
-            ast::Item::Constant(_, name, ty, def) => {
-                if let Some(parent) = parent {
-                    todo!("error")
+            ast::Item::Constant(tk, name, ty, def) => {
+                if parent.is_some() {
+                    problems +=
+                        ProblemKind::InvalidEffectItem(InvalidEffectItem).at(self.module, tk);
+                    return problems.with(None);
                 }
 
                 // NOTE: if we eventually have dependent kinds this this might fail
@@ -364,12 +385,16 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
                     }
-                    None => todo!("error"),
+                    None => {
+                        problems += ProblemKind::MissingItemDefinition(()).at(self.module, name);
+                    }
                 }
             }
-            ast::Item::Handle(_, params, handler) => {
-                if let Some(parent) = parent {
-                    todo!("error")
+            ast::Item::Handle(tk, params, handler) => {
+                if parent.is_some() {
+                    problems +=
+                        ProblemKind::InvalidEffectItem(InvalidEffectItem).at(self.module, tk);
+                    return problems.with(None);
                 }
 
                 let mut l = self.reborrow();

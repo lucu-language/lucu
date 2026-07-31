@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use crate::error::Diagnostic;
+use crate::error::{Diagnostic, Label};
 use crate::tokens::TokenEnum;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -24,7 +22,7 @@ pub enum Expected {
 }
 
 impl Diagnostic for Expected {
-    fn label(&self) -> Option<Cow<'_, str>> {
+    fn label(&self) -> Option<Label<'_>> {
         match self {
             Expected::Token(token) => Some(format!("expected {}", token).into()),
             Expected::Item => Some("expected a definition".into()),

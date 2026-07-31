@@ -19,6 +19,7 @@ use crate::type_table::{
 
 mod header;
 mod function;
+pub mod err;
 
 struct Lower<'a, 'scope> {
     tt: &'a TypeTable,

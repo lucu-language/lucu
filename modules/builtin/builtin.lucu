@@ -173,6 +173,14 @@ fun unreachable !
 
 -- other utils
 
+effect Fail = {
+    fun fail !
+}
+
+-- fun try(fun body with Fail) = handle body with Fail {
+--     fun fail ! = raise
+-- }
+
 fun len[T](slice ^#raw []T) size
     = #intrinsic
 

@@ -34,6 +34,10 @@ effect Sink = {
     fun flush
 }
 
+fun write_all(bytes ^[]i8) with Fail = {
+    todo("write_all")
+}
+
 fun writeln size with Sink = {
     let buf ^[1]i8 = use regions.ref([10])
     write(buf[..])

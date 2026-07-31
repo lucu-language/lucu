@@ -200,8 +200,8 @@ fn watch(cmd: CheckCommand) {
 
             llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
 
-            eprintln!(" --- LLVM --- ");
-            llvm.eprint();
+            // eprintln!(" --- LLVM --- ");
+            // llvm.eprint();
             llvm.verify().unwrap();
             llvm.optimize().unwrap();
             // eprintln!(" --- LLVM O3 --- ");

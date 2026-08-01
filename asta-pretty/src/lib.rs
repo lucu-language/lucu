@@ -39,12 +39,14 @@ impl<'text> Chunk<'text> {
     pub const COMMA: Self = Self::new(",");
     pub const COMMA_SPACE: Self = Self::new(", ");
 
+    #[must_use]
     pub const fn new(contents: &'text str) -> Self {
         Self {
             contents,
             size: contents.len(),
         }
     }
+    #[must_use]
     pub const fn new_sized(contents: &'text str, size: usize) -> Self {
         Self { contents, size }
     }
@@ -57,10 +59,12 @@ impl<'text> Node<'text> {
     pub const LN_TRAILING_COMMA: Self = Node::LineOr(Chunk::COMMA, Chunk::EMPTY);
     pub const LN_TRAILING_COMMA_SPACE: Self = Node::LineOr(Chunk::COMMA, Chunk::SPACE);
 
+    #[must_use]
     pub const fn text(contents: &'text str) -> Self {
         Self::Text(Chunk::new(contents))
     }
 
+    #[must_use]
     pub const fn text_sized(contents: &'text str, size: usize) -> Self {
         Self::Text(Chunk::new_sized(contents, size))
     }
@@ -70,49 +74,55 @@ impl<'text> Node<'text> {
         indent_size: usize,
         mut current: usize,
         mut current_indent: usize,
-        mut nesting: usize,
+        nesting: u8,
         mut wrap: u64,
         mut indent_todo: usize,
         force_nowrap: bool,
     ) -> usize {
-        let mut nesting_min = nesting;
         let nesting_start = nesting;
-        let mut maximum = 0;
+        let mut nesting_min = nesting;
 
-        set_bit(&mut wrap, nesting as u8, false);
+        set_bit(&mut wrap, nesting, false);
+        let mut nesting = u64::from(nesting);
+        let mut maximum = 0;
         let mut nowrap = force_nowrap.then_some(nesting);
 
         for &node in nodes {
             match node {
                 Node::OpenGroup(_) => {
-                    nesting += 1;
+                    // SAFETY: this is never going to happen
+                    // it requires 2^64 open group nodes in a row
+                    // good luck putting all of that in memory
+                    nesting = unsafe { nesting.unchecked_add(1) };
                 }
                 Node::CloseGroup => {
                     if nowrap.is_some_and(|n| n == nesting) {
                         nowrap = None;
                     }
-                    if nesting == nesting_min {
-                        nesting_min -= 1;
+                    if nesting == u64::from(nesting_min) {
+                        nesting_min = nesting_min.saturating_sub(1);
                     }
-                    nesting -= 1;
+                    nesting = nesting.saturating_sub(1);
                 }
-                Node::OpenIndent => current_indent += indent_size,
+                Node::OpenIndent => current_indent = current_indent.wrapping_add(indent_size),
                 Node::CloseIndent => {
-                    current_indent -= indent_size;
+                    current_indent = current_indent.wrapping_sub(indent_size);
                     indent_todo = indent_todo.min(current_indent);
                 }
                 Node::OpenIndentOnWrap => {
-                    if (nesting != nesting_min || bit_set(wrap, nesting as u8)) && nowrap.is_none()
+                    if (nesting != u64::from(nesting_min) || bit_set(wrap, nesting_min))
+                        && nowrap.is_none()
                     {
                         // Assumes that wrapping is always the better choice
-                        current_indent += indent_size;
+                        current_indent = current_indent.wrapping_add(indent_size);
                     }
                 }
                 Node::CloseIndentOnWrap => {
-                    if (nesting != nesting_min || bit_set(wrap, nesting as u8)) && nowrap.is_none()
+                    if (nesting != u64::from(nesting_min) || bit_set(wrap, nesting_min))
+                        && nowrap.is_none()
                     {
                         // Assumes that wrapping is always the better choice
-                        current_indent -= indent_size;
+                        current_indent = current_indent.wrapping_sub(indent_size);
                         indent_todo = indent_todo.min(current_indent);
                     }
                 }
@@ -121,7 +131,7 @@ impl<'text> Node<'text> {
                         current = current.saturating_add(indent_todo);
                         indent_todo = 0;
                     }
-                    current = current.saturating_add(text.size)
+                    current = current.saturating_add(text.size);
                 }
                 Node::Line => {
                     maximum = maximum.max(current);
@@ -132,13 +142,14 @@ impl<'text> Node<'text> {
                     indent_todo = current_indent;
                 }
                 Node::LineOr(wrapping, nonwrapping) => {
-                    if (nesting == nesting_min && !bit_set(wrap, nesting as u8)) || nowrap.is_some()
+                    if (nesting == u64::from(nesting_min) && !bit_set(wrap, nesting_min))
+                        || nowrap.is_some()
                     {
                         if !nonwrapping.contents.is_empty() {
                             current = current.saturating_add(indent_todo);
                             indent_todo = 0;
                         }
-                        current = current.saturating_add(nonwrapping.size)
+                        current = current.saturating_add(nonwrapping.size);
                     } else {
                         // Assumes that wrapping is always the better choice
                         if !wrapping.contents.is_empty() {
@@ -171,39 +182,42 @@ impl<'text> Node<'text> {
         while let Some((&next, rest)) = nodes.split_first() {
             match next {
                 Node::OpenGroup(_) => {
-                    nesting += 1;
+                    // SAFETY: this is never going to happen
+                    // it requires 2^64 open group nodes in a row
+                    // good luck putting all of that in memory
+                    nesting = unsafe { nesting.unchecked_add(1) };
                 }
                 Node::CloseGroup => {
-                    if nesting == 0 {
-                        return Ok(());
+                    if let Some(next) = nesting.checked_sub(1) {
+                        nesting = next;
                     } else {
-                        nesting -= 1;
+                        return Ok(());
                     }
                 }
-                Node::OpenIndent => current_indent += indent_size,
+                Node::OpenIndent => current_indent = current_indent.wrapping_add(indent_size),
                 Node::CloseIndent => {
-                    current_indent -= indent_size;
+                    current_indent = current_indent.wrapping_sub(indent_size);
                     *indent_todo = (*indent_todo).min(current_indent);
                 }
                 Node::OpenIndentOnWrap => {
                     if wrap {
-                        current_indent += indent_size;
+                        current_indent = current_indent.wrapping_add(indent_size);
                     }
                 }
                 Node::CloseIndentOnWrap => {
                     if wrap {
-                        current_indent -= indent_size;
+                        current_indent = current_indent.wrapping_sub(indent_size);
                         *indent_todo = (*indent_todo).min(current_indent);
                     }
                 }
                 Node::Text(chunk) => {
                     if !chunk.contents.is_empty() {
                         write!(f, "{: <1$}", "", indent_todo)?;
-                        *current += *indent_todo;
+                        *current = current.saturating_add(*indent_todo);
                         *indent_todo = 0;
                     }
                     write!(f, "{}", chunk.contents)?;
-                    *current += chunk.size;
+                    *current = current.saturating_add(chunk.size);
                 }
                 Node::Line => {
                     writeln!(f)?;
@@ -221,17 +235,16 @@ impl<'text> Node<'text> {
                     } else {
                         if !nonwrapping.contents.is_empty() {
                             write!(f, "{: <1$}", "", *indent_todo)?;
-                            *current += *indent_todo;
+                            *current = current.saturating_add(*indent_todo);
                             *indent_todo = 0;
                         }
                         write!(f, "{}", nonwrapping.contents)?;
-                        *current += nonwrapping.size;
+                        *current = current.saturating_add(nonwrapping.size);
                     }
                 }
             }
             *nodes = rest;
         }
-        assert!(nesting == 0);
         Ok(())
     }
 }
@@ -269,7 +282,11 @@ impl Display for Text<'_, '_> {
         while let Some((&next, rest)) = nodes.split_first() {
             match next {
                 Node::OpenGroup(force) => {
-                    nesting += 1;
+                    // SAFETY: this is never going to happen
+                    // we check if it is equal to 64 here
+                    // and in `display` we do all inner groups
+                    // so it should never become larger than 64
+                    nesting = unsafe { nesting.unchecked_add(1) };
                     if nesting >= 64 {
                         // too much nesting to keep track of
                         // we just wrap everything at this point
@@ -291,7 +308,7 @@ impl Display for Text<'_, '_> {
                         self.indent_size,
                         current,
                         current_indent,
-                        nesting as usize,
+                        nesting,
                         wrap,
                         indent_todo,
                         force,
@@ -320,33 +337,32 @@ impl Display for Text<'_, '_> {
                     }
                 }
                 Node::CloseGroup => {
-                    assert!(nesting > 0);
-                    nesting -= 1;
+                    nesting = nesting.saturating_sub(1);
                 }
-                Node::OpenIndent => current_indent += self.indent_size,
+                Node::OpenIndent => current_indent = current_indent.wrapping_add(self.indent_size),
                 Node::CloseIndent => {
-                    current_indent -= self.indent_size;
+                    current_indent = current_indent.wrapping_sub(self.indent_size);
                     indent_todo = indent_todo.min(current_indent);
                 }
                 Node::OpenIndentOnWrap => {
                     if bit_set(wrap, nesting) {
-                        current_indent += self.indent_size;
+                        current_indent = current_indent.wrapping_add(self.indent_size);
                     }
                 }
                 Node::CloseIndentOnWrap => {
                     if bit_set(wrap, nesting) {
-                        current_indent -= self.indent_size;
+                        current_indent = current_indent.wrapping_sub(self.indent_size);
                         indent_todo = indent_todo.min(current_indent);
                     }
                 }
                 Node::Text(chunk) => {
                     if !chunk.contents.is_empty() {
                         write!(f, "{: <1$}", "", indent_todo)?;
-                        current += indent_todo;
+                        current = current.saturating_add(indent_todo);
                         indent_todo = 0;
                     }
                     write!(f, "{}", chunk.contents)?;
-                    current += chunk.size;
+                    current = current.saturating_add(chunk.size);
                 }
                 Node::Line => {
                     writeln!(f)?;
@@ -364,22 +380,22 @@ impl Display for Text<'_, '_> {
                     } else {
                         if !nonwrapping.contents.is_empty() {
                             write!(f, "{: <1$}", "", indent_todo)?;
-                            current += indent_todo;
+                            current = current.saturating_add(indent_todo);
                             indent_todo = 0;
                         }
                         write!(f, "{}", nonwrapping.contents)?;
-                        current += nonwrapping.size;
+                        current = current.saturating_add(nonwrapping.size);
                     }
                 }
             }
             nodes = rest;
         }
-        assert!(nesting == 0);
         Ok(())
     }
 }
 
 #[cfg(test)]
+#[expect(clippy::disallowed_macros)]
 mod tests {
     extern crate std;
     use std::string::ToString;

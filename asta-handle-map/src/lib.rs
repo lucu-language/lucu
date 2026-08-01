@@ -30,9 +30,9 @@ where
 {
     fn default() -> Self {
         Self {
-            indices: Default::default(),
-            entries: Default::default(),
-            hash_builder: Default::default(),
+            indices: RwLock::default(),
+            entries: XarInner::default(),
+            hash_builder: S::default(),
         }
     }
 }
@@ -47,6 +47,7 @@ where
 }
 
 impl<K, V, const BITS: u32, const CHUNKS: usize, S> HandleMap<K, V, BITS, CHUNKS, S> {
+    #[must_use]
     pub fn new() -> Self
     where
         S: Default,
@@ -55,8 +56,8 @@ impl<K, V, const BITS: u32, const CHUNKS: usize, S> HandleMap<K, V, BITS, CHUNKS
     }
     pub fn with_hasher(hash_builder: S) -> Self {
         Self {
-            indices: Default::default(),
-            entries: Default::default(),
+            indices: RwLock::default(),
+            entries: XarInner::default(),
             hash_builder,
         }
     }
@@ -144,6 +145,7 @@ impl<K, V, const BITS: u32, const CHUNKS: usize, S> HandleMap<K, V, BITS, CHUNKS
 }
 
 impl<T, const BITS: u32, const CHUNKS: usize, S> HandleSet<T, BITS, CHUNKS, S> {
+    #[must_use]
     pub fn new() -> Self
     where
         S: Default,
@@ -197,10 +199,10 @@ impl<T, const BITS: u32, const CHUNKS: usize, S> HandleSet<T, BITS, CHUNKS, S> {
         self.0.capacity()
     }
     pub fn get(&self, index: u32) -> Option<&T> {
-        self.0.get(index).map(|(t, _)| t)
+        self.0.get(index).map(|(t, ())| t)
     }
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.0.iter().map(|(t, _)| t)
+        self.0.iter().map(|(t, ())| t)
     }
     pub unsafe fn get_unchecked(&self, index: u32) -> &T {
         unsafe { self.0.get_unchecked(index) }.0

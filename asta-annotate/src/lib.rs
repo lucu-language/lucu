@@ -13,6 +13,7 @@ use itertools::{Either, Itertools};
 
 pub trait Mark {
     #[cfg(feature = "anstyle")]
+    #[must_use]
     fn style(&self) -> ansi::MarkStyle {
         ansi::MarkStyle::default()
     }
@@ -24,15 +25,17 @@ pub trait Mark {
     fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Ok(())
     }
+    #[must_use]
     fn ignore_nested(&self) -> bool {
         false
     }
     fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = core::any::type_name::<Self>();
-        let simple_name = name.split('<').next().unwrap().rsplit("::").next().unwrap();
-        write!(f, "{simple_name}")
+        let simple_name = name.split('<').next().and_then(|d| d.rsplit("::").next());
+        simple_name.map_or(Ok(()), |simple_name| write!(f, "{simple_name}"))
     }
 
+    #[must_use]
     fn at(self, span: impl Into<Range<usize>>) -> Annotation<Self>
     where
         Self: Sized,
@@ -54,32 +57,32 @@ where
     #[cfg(feature = "anstyle")]
     fn style(&self) -> ansi::MarkStyle {
         match self {
-            Either::Left(l) => l.style(),
-            Either::Right(r) => r.style(),
+            Self::Left(l) => l.style(),
+            Self::Right(r) => r.style(),
         }
     }
     fn fmt_before(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Either::Left(l) => l.fmt_before(f),
-            Either::Right(r) => r.fmt_before(f),
+            Self::Left(l) => l.fmt_before(f),
+            Self::Right(r) => r.fmt_before(f),
         }
     }
     fn fmt_after(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Either::Left(l) => l.fmt_after(f),
-            Either::Right(r) => r.fmt_after(f),
+            Self::Left(l) => l.fmt_after(f),
+            Self::Right(r) => r.fmt_after(f),
         }
     }
     fn ignore_nested(&self) -> bool {
         match self {
-            Either::Left(l) => l.ignore_nested(),
-            Either::Right(r) => r.ignore_nested(),
+            Self::Left(l) => l.ignore_nested(),
+            Self::Right(r) => r.ignore_nested(),
         }
     }
     fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Either::Left(l) => l.fmt_debug(f),
-            Either::Right(r) => r.fmt_debug(f),
+            Self::Left(l) => l.fmt_debug(f),
+            Self::Right(r) => r.fmt_debug(f),
         }
     }
 }
@@ -135,50 +138,61 @@ pub struct Snippet<'a> {
 }
 
 impl<'a> Snippet<'a> {
+    #[must_use]
     pub fn source(&self) -> &'a str {
         self.src
     }
+    #[must_use]
     pub fn range(&self) -> Range<usize> {
         self.start..self.end
     }
+    #[must_use]
     pub fn bytes(mut self, bytes: Range<usize>) -> Self {
         self.start = bytes.start;
         self.end = bytes.end;
         self
     }
+    #[must_use]
     pub fn lines(self, lines: Range<usize>) -> Self {
-        let start = self
+        let start: usize = self
             .src
             .split_inclusive('\n')
             .take(lines.start)
             .map(str::len)
             .sum();
-        let end = start
-            + self
-                .src
+        let end = start.saturating_add(
+            self.src
                 .split_inclusive('\n')
                 .skip(lines.start)
-                .take(lines.end - lines.start)
+                .take(lines.len())
                 .map(str::len)
-                .sum::<usize>();
+                .sum::<usize>(),
+        );
         self.bytes(start..end)
     }
+    #[must_use]
     pub fn lines_containing(self, span: impl Into<Range<usize>>) -> Self {
         let range = span.into();
-        let start = self.src[..range.start]
-            .bytes()
-            .rposition(|b| b == b'\n')
-            .map(|n| n + 1)
+        let start = self
+            .src
+            .get(..range.start)
+            .and_then(|substr| substr.bytes().rposition(|b| b == b'\n'))
+            .and_then(|n| n.checked_add(1))
             .unwrap_or(0);
-        let end = self.src[range.end..]
-            .bytes()
-            .position(|b| b == b'\n')
-            .map(|n| n + range.end)
+        let end = self
+            .src
+            .get(range.end..)
+            .and_then(|substr| substr.bytes().position(|b| b == b'\n'))
+            .and_then(|n| n.checked_add(range.end))
             .unwrap_or(self.src.len());
         self.bytes(start..end)
     }
+    #[must_use]
     pub fn outer(self) -> Self {
-        self.lines_containing(self.start.saturating_sub(1)..(self.end + 1).min(self.src.len()))
+        // FIXME: we subtract and add byte offsets here, but we should actually do character offsets...
+        self.lines_containing(
+            self.start.saturating_sub(1)..self.end.saturating_add(1).min(self.src.len()),
+        )
     }
 }
 
@@ -348,7 +362,11 @@ where
         // print up until annotation
         #[cfg(feature = "anstyle")]
         ansi::apply(unstyled, style, f)?;
-        write!(f, "{}", &src[current..annotation.start])?;
+        write!(
+            f,
+            "{}",
+            src.get(current..annotation.start).ok_or(fmt::Error)?
+        )?;
 
         // print annotation
         #[cfg(feature = "anstyle")]
@@ -358,8 +376,10 @@ where
         #[cfg(feature = "anstyle")]
         ansi::apply(mark_style.content.unwrap_or(unstyled), style, f)?;
         if annotation.mark.ignore_nested() {
-            let segment = &src[annotation.start..annotation.end];
-            write!(f, "{}", segment)?;
+            let segment = src
+                .get(annotation.start..annotation.end)
+                .ok_or(fmt::Error)?;
+            write!(f, "{segment}")?;
         } else {
             fmt_impl(
                 src,
@@ -381,5 +401,5 @@ where
     // print rest
     #[cfg(feature = "anstyle")]
     ansi::apply(unstyled, style, f)?;
-    write!(f, "{}", &src[current..range.end])
+    write!(f, "{}", src.get(current..range.end).ok_or(fmt::Error)?)
 }

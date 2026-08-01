@@ -10,24 +10,28 @@ pub struct MarkStyle {
 }
 
 impl MarkStyle {
+    #[must_use]
     pub fn before(value: anstyle::Style) -> Self {
         Self {
             before: Some(value),
             ..Default::default()
         }
     }
+    #[must_use]
     pub fn content(value: anstyle::Style) -> Self {
         Self {
             content: Some(value),
             ..Default::default()
         }
     }
+    #[must_use]
     pub fn after(value: anstyle::Style) -> Self {
         Self {
             after: Some(value),
             ..Default::default()
         }
     }
+    #[must_use]
     pub fn surround(value: anstyle::Style) -> Self {
         Self {
             before: Some(value),
@@ -42,11 +46,11 @@ pub fn apply(
     style: &mut anstyle::Style,
     f: &mut fmt::Formatter<'_>,
 ) -> Result<(), fmt::Error> {
-    if new != *style {
+    if new == *style {
+        Ok(())
+    } else {
         let old = core::mem::replace(style, new);
         write!(f, "{old:#}{new}")
-    } else {
-        Ok(())
     }
 }
 

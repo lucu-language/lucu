@@ -24,6 +24,7 @@ impl<T, const BITS: u32, const CHUNKS: usize> Default for Xar<T, BITS, CHUNKS> {
 }
 
 impl<T, const BITS: u32, const CHUNKS: usize> Xar<T, BITS, CHUNKS> {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: XarInner::new(),

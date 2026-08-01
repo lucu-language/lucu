@@ -16,6 +16,7 @@ pub trait Table:
 
     fn insert_type(&self, ty: TypeEnum<Self::Base>) -> Type;
 
+    // types
     fn insert_tuple(&self, tys: impl IntoIterator<Item = Type>) -> Tuple;
     fn push_named_tuple(
         &self,
@@ -34,6 +35,7 @@ pub trait Table:
     fn enum_name(&self, tys: Enum) -> Option<&Self::Name>;
     fn enum_variant_name(&self, tys: Enum, index: u32) -> Option<&Self::Name>;
 
+    // expressions
     fn push_expression(&self, expr: ExpressionEnum<Self::Operation>) -> Expression;
     fn push_expressions(&self, exprs: impl IntoIterator<Item = Expression>) -> Expressions;
 
@@ -167,10 +169,6 @@ impl Tuple {
     pub const fn index(self) -> u32 {
         self.0
     }
-    #[must_use]
-    pub fn len(self, mt: &(impl Table + ?Sized)) -> u32 {
-        mt[self].len() as u32
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
@@ -184,10 +182,6 @@ impl Enum {
     #[must_use]
     pub const fn index(self) -> u32 {
         self.0
-    }
-    #[must_use]
-    pub fn len(self, mt: &(impl Table + ?Sized)) -> u32 {
-        mt[self].len() as u32
     }
 }
 
@@ -396,7 +390,10 @@ impl Expression {
                 }
             }
             ExpressionEnum::Abstract(t, e) => {
-                if let Some(next_offset) = offset.checked_add(t.len(mt)) {
+                if let Some(next_offset) = u32::try_from(mt[t].len())
+                    .ok()
+                    .and_then(|len| offset.checked_add(len))
+                {
                     e.get_captures_inner(mt, next_offset, captures);
                 }
             }

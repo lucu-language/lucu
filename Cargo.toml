@@ -26,20 +26,21 @@ include_dir = "0.7.4"
 
 [workspace.lints.clippy]
 # UM, ACTUALLY
-pedantic = { level = "warn", priority = -1 }
-# DEVELOPING LINTS
-nursery = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
 # DENY PANICS
-unwrap_used = "warn"
-expect_used = "warn"
-indexing_slicing = "warn"
-arithmetic_side_effects = "warn"
-unreachable = "warn"
-unimplemented = "warn"
-unchecked_time_subtraction = "warn"
-todo = "warn"
-string_slice = "warn"
-panic_in_result_fn = "warn"
-panic = "warn"
-exit = "warn"
-# as_conversions = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+disallowed_macros = "deny"
+# ALLOW PEDANTIC STUFF I DON'T CARE ABOUT
+missing_errors_doc = "allow"
+too_many_lines = "allow"

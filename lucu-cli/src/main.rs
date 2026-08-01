@@ -16,8 +16,6 @@ use lucu::mu;
 use lucu::pass::ModuleGraph;
 use lucu::type_table::TypeTable;
 
-mod test;
-
 #[derive(Facet)]
 struct CheckCommand {
     /// .lucu file with entry point
@@ -74,7 +72,6 @@ enum SubCommand {
     Watch(CheckCommand),
     Build(BuildCommand),
     Run(BuildCommand),
-    Test,
 }
 
 #[derive(Facet)]
@@ -109,9 +106,6 @@ fn main() {
         SubCommand::Run(build_command) => {
             todo!()
         }
-        SubCommand::Test => {
-            test::test();
-        }
     }
 }
 
@@ -131,8 +125,7 @@ fn watch(cmd: CheckCommand) {
     });
 
     let tt = TypeTable::new();
-    let mu_tt = unsafe { mu::table::TypeTable::new() };
-    let mu_et = unsafe { mu::table::ExpressionTable::new() };
+    let mt = unsafe { mu::table::Table::new() };
 
     loop {
         if cmd.debug {
@@ -150,7 +143,7 @@ fn watch(cmd: CheckCommand) {
                     println!("{}", header.display(&tt));
                 }
 
-                if let Some(mu) = stages.mu(&graph, &tt, &mu_tt, &mu_et) {
+                if let Some(mu) = stages.mu(&graph, &tt, &mt) {
                     functions.extend(mu.functions.iter().cloned())
                 }
 
@@ -180,8 +173,7 @@ fn watch(cmd: CheckCommand) {
                 .unwrap();
 
             let context = Context::create();
-            let llvm =
-                lucu_llvm::Builder::build(&context, &mu_tt, &mu_et, machine, "main", &functions);
+            let llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
 
             if let Some(fun) = llvm.module.get_function("_start") {
                 fun.add_attribute(

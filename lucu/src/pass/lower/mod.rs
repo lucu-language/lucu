@@ -102,12 +102,13 @@ impl<'a, 'b> Lower<'a, 'b> {
                  )
             }
             (Some(params), None) => {
+                let arity = implicit_regions + params.len();
                 let mut lower = self.reborrow();
-                if implicit_regions > 0 {
-                    lower.generics = lower.generics.into_iter().map(|(ident, (index, kind))| (ident, (index + implicit_regions, kind))).collect();
+                if arity > 0 {
+                    lower.generics = lower.generics.into_iter().map(|(ident, (index, kind))| (ident, (index + arity, kind))).collect();
                     lower.generics.remove("_");
                 }
-                lower.with_arity(params, inner)
+                inner(&mut lower)
             }
             (None, None) => {
                 let mut lower = self.reborrow();

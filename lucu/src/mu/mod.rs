@@ -134,98 +134,98 @@ pub enum Operation {
 
 impl mu::Typed for Callable {
     type Base = Base;
-    fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
+    fn get_type(&self, mt: &(impl mu::Table<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
-            Callable::ModuleFunction { ty, .. } => tt.insert_type(mu::TypeEnum::Function(ty)),
+            Callable::ModuleFunction { ty, .. } => mt.insert_type(mu::TypeEnum::Function(ty)),
             Callable::ArrayConstruct { ty, size } => {
-                let arr = tt.base(Base::Array(ty, size));
-                tt.function(tt.insert_tuple(iter::repeat_n(ty, size as usize)), arr)
+                let arr = mt.base(Base::Array(ty, size));
+                mt.function(mt.insert_tuple(iter::repeat_n(ty, size as usize)), arr)
             }
-            Callable::Asm { from, to, .. } => tt.function(tt.insert_tuple([from]), to),
-            Callable::Loop => tt.function(
-                tt.insert_tuple([tt.function(tt.insert_tuple([]), tt.unit())]),
-                tt.never(),
+            Callable::Asm { from, to, .. } => mt.function(mt.insert_tuple([from]), to),
+            Callable::Loop => mt.function(
+                mt.insert_tuple([mt.function(mt.insert_tuple([]), mt.unit())]),
+                mt.never(),
             ),
-            Callable::Cast { from, to, .. } => tt.function(tt.insert_tuple([from]), to),
-            Callable::UnOp { ty, .. } => tt.function(tt.insert_tuple([ty]), ty),
-            Callable::PredicateOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), tt.bool()),
-            Callable::MathOp { ty, .. } => tt.function(tt.insert_tuple([ty, ty]), ty),
+            Callable::Cast { from, to, .. } => mt.function(mt.insert_tuple([from]), to),
+            Callable::UnOp { ty, .. } => mt.function(mt.insert_tuple([ty]), ty),
+            Callable::PredicateOp { ty, .. } => mt.function(mt.insert_tuple([ty, ty]), mt.bool()),
+            Callable::MathOp { ty, .. } => mt.function(mt.insert_tuple([ty, ty]), ty),
             Callable::Syscall { args } => {
-                let uptr = tt.base(Base::ADDR);
-                tt.function(
-                    tt.insert_tuple(iter::repeat_n(uptr, args as usize + 1)),
+                let uptr = mt.base(Base::ADDR);
+                mt.function(
+                    mt.insert_tuple(iter::repeat_n(uptr, args as usize + 1)),
                     uptr,
                 )
             }
             Callable::LetReference { ty, to } => {
-                let ptr = tt.base(Base::Pointer(ty));
-                let fun = tt.function(tt.insert_tuple([ptr]), to);
-                tt.function(tt.insert_tuple([ty, fun]), to)
+                let ptr = mt.base(Base::Pointer(ty));
+                let fun = mt.function(mt.insert_tuple([ptr]), to);
+                mt.function(mt.insert_tuple([ty, fun]), to)
             }
             Callable::LetAlloca { ty, to } => {
-                let usize = tt.base(Base::SIZE);
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let fun = tt.function(tt.insert_tuple([ptr_slice]), to);
-                tt.function(tt.insert_tuple([usize, fun]), to)
+                let usize = mt.base(Base::SIZE);
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                let fun = mt.function(mt.insert_tuple([ptr_slice]), to);
+                mt.function(mt.insert_tuple([usize, fun]), to)
             }
             Callable::Read { ty } => {
-                let ptr = tt.base(Base::Pointer(ty));
-                tt.function(tt.insert_tuple([ptr]), ty)
+                let ptr = mt.base(Base::Pointer(ty));
+                mt.function(mt.insert_tuple([ptr]), ty)
             }
             Callable::Write { ty } => {
-                let ptr = tt.base(Base::Pointer(ty));
-                let unit = tt.unit();
-                tt.function(tt.insert_tuple([ptr, ty]), unit)
+                let ptr = mt.base(Base::Pointer(ty));
+                let unit = mt.unit();
+                mt.function(mt.insert_tuple([ptr, ty]), unit)
             }
             Callable::PointerMember { tys, member } => {
-                let product = tt.insert_type(mu::TypeEnum::Product(tys));
-                let field = tt[tys][member as usize];
-                tt.function(tt.insert_tuple([product]), field)
+                let product = mt.insert_type(mu::TypeEnum::Product(tys));
+                let field = mt[tys][member as usize];
+                mt.function(mt.insert_tuple([product]), field)
             }
             Callable::MultiPointerIndex { ty } => {
-                let multi_ptr = tt.base(Base::MultiPointer(ty));
-                let usize = tt.base(Base::SIZE);
-                let ptr = tt.base(Base::Pointer(ty));
-                tt.function(tt.insert_tuple([multi_ptr, usize]), ptr)
+                let multi_ptr = mt.base(Base::MultiPointer(ty));
+                let usize = mt.base(Base::SIZE);
+                let ptr = mt.base(Base::Pointer(ty));
+                mt.function(mt.insert_tuple([multi_ptr, usize]), ptr)
             }
             Callable::PointerSliceIndex { ty } => {
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::SIZE);
-                let ptr = tt.base(Base::Pointer(ty));
-                tt.function(tt.insert_tuple([ptr_slice, usize]), ptr)
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                let usize = mt.base(Base::SIZE);
+                let ptr = mt.base(Base::Pointer(ty));
+                mt.function(mt.insert_tuple([ptr_slice, usize]), ptr)
             }
             Callable::ArrayIndex { ty, size } => {
-                let arr = tt.base(Base::Array(ty, size));
-                let usize = tt.base(Base::SIZE);
-                tt.function(tt.insert_tuple([arr, usize]), ty)
+                let arr = mt.base(Base::Array(ty, size));
+                let usize = mt.base(Base::SIZE);
+                mt.function(mt.insert_tuple([arr, usize]), ty)
             }
             Callable::PointerArrayIndex { ty, size } => {
-                let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
-                let usize = tt.base(Base::SIZE);
-                let ptr = tt.base(Base::Pointer(ty));
-                tt.function(tt.insert_tuple([ptr_array, usize]), ptr)
+                let ptr_array = mt.base(Base::Pointer(mt.base(Base::Array(ty, size))));
+                let usize = mt.base(Base::SIZE);
+                let ptr = mt.base(Base::Pointer(ty));
+                mt.function(mt.insert_tuple([ptr_array, usize]), ptr)
             }
             Callable::MultiPointerSlice { ty } => {
-                let multi_ptr = tt.base(Base::MultiPointer(ty));
-                let usize = tt.base(Base::SIZE);
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                tt.function(tt.insert_tuple([multi_ptr, usize, usize]), ptr_slice)
+                let multi_ptr = mt.base(Base::MultiPointer(ty));
+                let usize = mt.base(Base::SIZE);
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                mt.function(mt.insert_tuple([multi_ptr, usize, usize]), ptr_slice)
             }
             Callable::PointerSliceSlice { ty } => {
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::SIZE);
-                tt.function(tt.insert_tuple([ptr_slice, usize, usize]), ptr_slice)
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                let usize = mt.base(Base::SIZE);
+                mt.function(mt.insert_tuple([ptr_slice, usize, usize]), ptr_slice)
             }
             Callable::PointerArraySlice { ty, size } => {
-                let ptr_array = tt.base(Base::Pointer(tt.base(Base::Array(ty, size))));
-                let usize = tt.base(Base::SIZE);
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                tt.function(tt.insert_tuple([ptr_array, usize, usize]), ptr_slice)
+                let ptr_array = mt.base(Base::Pointer(mt.base(Base::Array(ty, size))));
+                let usize = mt.base(Base::SIZE);
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                mt.function(mt.insert_tuple([ptr_array, usize, usize]), ptr_slice)
             }
             Callable::Len { ty } => {
-                let ptr_slice = tt.base(Base::PointerSlice(ty));
-                let usize = tt.base(Base::SIZE);
-                tt.function(tt.insert_tuple([ptr_slice]), usize)
+                let ptr_slice = mt.base(Base::PointerSlice(ty));
+                let usize = mt.base(Base::SIZE);
+                mt.function(mt.insert_tuple([ptr_slice]), usize)
             }
         }
     }
@@ -233,11 +233,11 @@ impl mu::Typed for Callable {
 
 impl mu::Typed for Operation {
     type Base = Base;
-    fn get_type(&self, tt: &(impl mu::TypeTable<Base = Self::Base> + ?Sized)) -> mu::Type {
+    fn get_type(&self, mt: &(impl mu::Table<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
-            Operation::Unreachable => tt.never(),
+            Operation::Unreachable => mt.never(),
             Operation::Constant(ty, _) => ty,
-            Operation::Callable(ref callable) => callable.get_type(tt),
+            Operation::Callable(ref callable) => callable.get_type(mt),
         }
     }
 }

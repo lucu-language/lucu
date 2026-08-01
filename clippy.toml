@@ -1,0 +1,6 @@
+disallowed-macros = [
+  "std::assert",
+  "std::assert_eq",
+  "std::assert_matches",
+  "std::assert_ne",
+]

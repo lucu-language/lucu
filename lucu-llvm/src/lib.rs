@@ -8,10 +8,10 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue};
 use inkwell::{AddressSpace, IntPredicate};
 use lucu::ast::{self, Cast};
-use lucu::mu::table::{ExpressionTable, TypeTable};
+use lucu::mu::table::Table;
 use lucu::mu::{Base, Callable, Constant, Function, Item, Operation};
 use lucu::type_table::{IntSize, Integer};
-use mu::TypeTable as _;
+use mu::Table as _;
 
 pub struct Builder<'ctx> {
     functions: OnceLock<HashMap<Item, FunctionValue<'ctx>>>,
@@ -20,16 +20,14 @@ pub struct Builder<'ctx> {
 impl<'ctx> Builder<'ctx> {
     pub fn build(
         context: &'ctx inkwell::context::Context,
-        tt: &'ctx TypeTable,
-        et: &'ctx ExpressionTable,
+        table: &'ctx Table,
         target_machine: TargetMachine,
         module_name: &str,
         funs: &[Function],
     ) -> mu_llvm::Context<'ctx, Self> {
         let llvm = mu_llvm::Context::new(
             context,
-            tt,
-            et,
+            table,
             Builder {
                 functions: OnceLock::new(),
             },
@@ -65,7 +63,7 @@ impl<'ctx> Builder<'ctx> {
         llvm
     }
     pub fn is_signed(ty: mu::Type, llvm: &mu_llvm::Context<'ctx, Self>) -> bool {
-        match llvm.tt[ty] {
+        match llvm.table[ty] {
             mu::TypeEnum::Base(Base::Integer(i)) => {
                 match i {
                     Integer::Integer(signed, _) => signed,
@@ -80,14 +78,10 @@ impl<'ctx> Builder<'ctx> {
 
 impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
     type Base = Base;
-    type TT = TypeTable;
-    type ET = ExpressionTable;
+    type Table = Table;
     type Callable = Callable;
 
-    fn has_zero_niche(
-        base: &<Self::TT as mu::TypeTable>::Base,
-        llvm: &mu_llvm::Context<'ctx, Self>,
-    ) -> bool {
+    fn has_zero_niche(base: &Base, llvm: &mu_llvm::Context<'ctx, Self>) -> bool {
         match *base {
             Base::Integer(_) => false,
             Base::Pointer(_) | Base::MultiPointer(_) | Base::PointerSlice(_) => true,
@@ -144,14 +138,15 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 .get_type(inner)
                 .nonzero_sized()
                 .then(|| llvm.context.ptr_type(AddressSpace::default()).into()),
-            Base::PointerSlice(inner) => llvm
-                .get_type(llvm.tt.insert_type(mu::TypeEnum::Product(
-                    llvm.tt.insert_tuple([
-                        llvm.tt.base(Base::Pointer(inner)),
-                        llvm.tt.base(Base::SIZE),
+            Base::PointerSlice(inner) => {
+                llvm.get_type(llvm.table.insert_type(mu::TypeEnum::Product(
+                    llvm.table.insert_tuple([
+                        llvm.table.base(Base::Pointer(inner)),
+                        llvm.table.base(Base::SIZE),
                     ]),
                 )))
-                .basic_type(llvm),
+                .basic_type(llvm)
+            }
             Base::Array(inner, size) => {
                 if size == 0 {
                     None
@@ -349,7 +344,11 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 llvm.builder.build_unconditional_branch(block).unwrap();
                 llvm.builder.position_at_end(block);
                 args.next().unwrap().build_call(
-                    mu::FunctionType::new(llvm.tt.insert_tuple([]), llvm.tt.unit(), llvm.tt),
+                    mu::FunctionType::new(
+                        llvm.table.insert_tuple([]),
+                        llvm.table.unit(),
+                        llvm.table,
+                    ),
                     [],
                     llvm,
                 );
@@ -546,9 +545,10 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 });
 
                 let fun = mu::FunctionType::new(
-                    llvm.tt.insert_tuple([llvm.tt.base(Base::Pointer(ty))]),
+                    llvm.table
+                        .insert_tuple([llvm.table.base(Base::Pointer(ty))]),
                     to,
-                    llvm.tt,
+                    llvm.table,
                 );
                 let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(ptr).into()], llvm)
@@ -566,7 +566,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     .basic_type(llvm)
                     .map(|ty| llvm.builder.build_array_alloca(ty, size, "").unwrap());
 
-                let ptr_slice = llvm.tt.base(Base::PointerSlice(ty));
+                let ptr_slice = llvm.table.base(Base::PointerSlice(ty));
                 let llvm_ptr_slice = llvm
                     .get_type(ptr_slice)
                     .basic_type(llvm)
@@ -588,7 +588,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     .unwrap()
                     .into_struct_value();
 
-                let fun = mu::FunctionType::new(llvm.tt.insert_tuple([ptr_slice]), to, llvm.tt);
+                let fun =
+                    mu::FunctionType::new(llvm.table.insert_tuple([ptr_slice]), to, llvm.table);
                 let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(Some(out.into())).into()], llvm)
             }
@@ -759,7 +760,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 let len = llvm.builder.build_int_sub(to, from, "").unwrap();
 
                 let mut out = llvm
-                    .get_type(llvm.tt.base(Base::PointerSlice(ty)))
+                    .get_type(llvm.table.base(Base::PointerSlice(ty)))
                     .basic_type(llvm)
                     .unwrap()
                     .into_struct_type()

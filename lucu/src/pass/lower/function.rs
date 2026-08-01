@@ -11,7 +11,7 @@ use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{EffectDecl, FunctionDefinition, IntrinsicFunction, ItemDecl, StructDecl};
 use crate::module::Module;
-use crate::mu::{self, ExpressionTable as _, TypeTable as _};
+use crate::mu::{self, Table as _};
 use crate::pass::defs::Definitions;
 use crate::pass::imports::Imports;
 use crate::pass::lower::err::{MissingEffects, NotEnoughInfo, SignatureMismatch, TypeMismatch};
@@ -35,8 +35,7 @@ enum Var<'a> {
 struct MuLower<'a, 'scope> {
     lower: Lower<'a, 'scope>,
 
-    tt: &'a mu::table::TypeTable,
-    et: &'a mu::table::ExpressionTable,
+    table: &'a mu::table::Table,
     vars: im::Vector<Var<'a>>,
     markers: im::Vector<Effect>,
 
@@ -50,8 +49,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         MuLower {
             lower: self.lower.reborrow(),
 
-            tt: self.tt,
-            et: self.et,
+            table: self.table,
             vars: self.vars.clone(),
             markers: self.markers.clone(),
 
@@ -72,8 +70,7 @@ impl mu::Module {
         imports: &Imports,
         defs: &Definitions,
         tt: &TypeTable,
-        mu_tt: &mu::table::TypeTable,
-        mu_et: &mu::table::ExpressionTable,
+        table: &mu::table::Table,
     ) -> Result<Self> {
         let mut used_underscore = false;
         let mut lower = MuLower {
@@ -90,8 +87,7 @@ impl mu::Module {
                 implicit_effects: None,
             },
 
-            tt: mu_tt,
-            et: mu_et,
+            table,
             vars: im::Vector::new(),
             markers: im::Vector::new(),
 
@@ -176,7 +172,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     iter::once(&**body),
                 )
                 .map(|(lambda, _)| {
-                    let mu::ExpressionEnum::Abstract(_, body) = self.et[lambda] else {
+                    let mu::ExpressionEnum::Abstract(_, body) = self.table[lambda] else {
                         panic!("ICE: abstraction did not give lambda expression")
                     };
                     mu::Function {
@@ -212,8 +208,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     let tt = lower.tt;
                     let mut mu = MuLower {
                         lower: lower.reborrow(),
-                        tt: self.tt,
-                        et: self.et,
+                        table: self.table,
                         vars: self
                             .vars
                             .iter()
@@ -255,7 +250,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             sig_val.type_params.as_ref(),
             name,
             |me| {
-                let from = me.tt.insert_tuple(Iterator::chain(
+                let from = me.table.insert_tuple(Iterator::chain(
                     sig_val
                         .params
                         .iter()
@@ -289,7 +284,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     }
                 }
                 me.statements(&mut body.into_iter().peekable(), sig_val.thunk.returns)
-                    .map(|(expr, ty)| (self.et.lambda(from, expr), ty))
+                    .map(|(expr, ty)| (self.table.lambda(from, expr), ty))
             },
         )
     }
@@ -343,7 +338,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 todo!("generic local function")
             }
             let mu_ty = self.function_param(ty);
-            Result::new((Either::Left(self.et.reference(mu_ty, index)), ty.into()))
+            Result::new((Either::Left(self.table.reference(mu_ty, index)), ty.into()))
         } else {
             let (module, name, item) = match self.lower.item_ref(path) {
                 Ok((module, name, item)) => (module, name, item),
@@ -387,7 +382,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                                 .effect(e)
                                                 .expect("ICE: effect with body with no type")
                                                 .1;
-                                            let mu_effect = self.et.reference(effect_ty, index);
+                                            let mu_effect = self.table.reference(effect_ty, index);
 
                                             let EffectEnum::Item(item) = &self.lower.tt[e] else {
                                                 panic!("ICE: effect with body is not an item");
@@ -401,7 +396,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                                 .expect("ICE: effect function not part of effect")
                                                 .0;
                                             let mu_function =
-                                                self.et.member(mu_effect, function_index as u32);
+                                                self.table.member(mu_effect, function_index as u32);
                                             Either::Left(mu_function)
                                         }
                                         None => {
@@ -417,7 +412,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                                 item: name.to_compact_string(),
                                             };
                                             let ty = self.function_type(sig, None);
-                                            Either::Left(self.et.operation(
+                                            Either::Left(self.table.operation(
                                                 mu::Operation::Callable(
                                                     mu::Callable::ModuleFunction { item, ty },
                                                 ),
@@ -437,13 +432,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .effect(self.caller_location)
             .expect("ICE: caller location effect has no type")
             .1;
-        let mu::TypeEnum::Product(tup) = self.tt[ty] else {
+        let mu::TypeEnum::Product(tup) = self.table[ty] else {
             panic!("ICE: caller location effect is not a mu product type")
         };
-        let mu::TypeEnum::Function(fun_ty) = self.tt[self.tt[tup][0]] else {
+        let mu::TypeEnum::Function(fun_ty) = self.table[self.table[tup][0]] else {
             panic!("ICE: caller location effect has no mu function type")
         };
-        let mu::TypeEnum::Product(loc_tup) = self.tt[fun_ty.to()] else {
+        let mu::TypeEnum::Product(loc_tup) = self.table[fun_ty.to()] else {
             panic!("ICE: caller location effect function does not return a mu product")
         };
 
@@ -453,19 +448,19 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         };
         let (line, column) = line_column::line_column(self.source, span.start as usize);
 
-        self.et.construct(
+        self.table.construct(
             tup,
-            [self.et.lambda(
+            [self.table.lambda(
                 fun_ty.from(),
-                self.et.construct(
+                self.table.construct(
                     loc_tup,
                     [
-                        self.et
-                            .constant(self.tt[loc_tup][0], mu::Constant::String(path)),
-                        self.et
-                            .constant(self.tt[loc_tup][1], mu::Constant::Integer(line as u64)),
-                        self.et
-                            .constant(self.tt[loc_tup][2], mu::Constant::Integer(column as u64)),
+                        self.table
+                            .constant(self.table[loc_tup][0], mu::Constant::String(path)),
+                        self.table
+                            .constant(self.table[loc_tup][1], mu::Constant::Integer(line as u64)),
+                        self.table
+                            .constant(self.table[loc_tup][2], mu::Constant::Integer(column as u64)),
                     ],
                 ),
             )],
@@ -627,7 +622,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     .map(|(mu, ty)| (mu, FunctionParameter::Data(ty))),
                             )
                             .unwrap_or_else(|| {
-                                (self.et.unreachable(), FunctionParameter::Data(ty))
+                                (self.table.unreachable(), FunctionParameter::Data(ty))
                             }),
                         FunctionParameter::Lambda(sig) => {
                             let sig_val = &self.lower.tt[sig];
@@ -667,7 +662,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 problems
                                     .append(e)
                                     .map(|(lambda, _)| lambda)
-                                    .unwrap_or_else(|| self.et.unreachable()),
+                                    .unwrap_or_else(|| self.table.unreachable()),
                                 {
                                     // FIXME: get user given function type
                                     assert!(sig.no_holes(self.lower.tt));
@@ -726,7 +721,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         )
                         .unwrap_or_else(|| {
                             (
-                                self.et.unreachable(),
+                                self.table.unreachable(),
                                 self.lower.tt.insert_type(TypeEnum::Hole),
                             )
                         });
@@ -781,7 +776,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .effect(effect)
                         .expect("ICE: non-marker effect has no type")
                         .1;
-                    args.push(self.et.reference(effect_ty, idx));
+                    args.push(self.table.reference(effect_ty, idx));
                 } else if effect == self.caller_location {
                     args.push(self.caller_location_effect(match call {
                         Either::Left(call) => call.span(),
@@ -801,7 +796,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
             // call expression
             let mu = match fun {
-                Either::Left(fun) => self.et.apply(fun, args),
+                Either::Left(fun) => self.table.apply(fun, args),
                 Either::Right(i) => {
                     let all_generics = mono_args
                         .into_iter()
@@ -832,7 +827,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let lambda = args.next().unwrap();
                 let ty = self.r#type(ty);
                 let to = self.r#type(to);
-                self.et
+                self.table
                     .call(mu::Callable::LetReference { ty, to }, [val, lambda])
             }
             IntrinsicFunction::Alloca => {
@@ -847,7 +842,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let lambda = args.next().unwrap();
                 let ty = self.r#type(ty);
                 let to = self.r#type(to);
-                self.et
+                self.table
                     .call(mu::Callable::LetAlloca { ty, to }, [val, lambda])
             }
             IntrinsicFunction::Link => todo!(),
@@ -870,7 +865,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Term::Type(to) = generics[3].term() else {
                     panic!()
                 };
-                self.et.call(
+                self.table.call(
                     mu::Callable::Asm {
                         assembly: assembly.clone(),
                         constraints: constraints.clone(),
@@ -885,23 +880,23 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Term::Type(ty) = generics[1].term() else {
                     panic!()
                 };
-                self.et.call(
+                self.table.call(
                     mu::Callable::Len {
                         ty: self.r#type(ty),
                     },
                     args,
                 )
             }
-            IntrinsicFunction::Unreachable => self.et.operation(mu::Operation::Unreachable),
+            IntrinsicFunction::Unreachable => self.table.operation(mu::Operation::Unreachable),
             IntrinsicFunction::Loop => {
                 let mut args = args.into_iter();
                 let body = args.next().unwrap();
                 // let _div = args.next().unwrap();
-                self.et.call(mu::Callable::Loop, [body])
+                self.table.call(mu::Callable::Loop, [body])
             }
             IntrinsicFunction::Unfounded => {
                 let mu::ExpressionEnum::Abstract(_, body) =
-                    self.et[args.into_iter().next().unwrap()]
+                    self.table[args.into_iter().next().unwrap()]
                 else {
                     panic!("ICE: unfounded arg is not a function")
                 };
@@ -911,37 +906,37 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let mut args = args.into_iter();
                 let slice = args.next().unwrap();
                 // let _read = args.next().unwrap();
-                let mu_size = self.tt.base(mu::Base::SIZE);
-                let mu_addr = self.tt.base(mu::Base::ADDR);
-                let mu_i8 = self.tt.base(mu::Base::I8);
-                let mu_i8_ptr = self.tt.base(mu::Base::Pointer(mu_i8));
-                let mu_i8_slice = self.tt.base(mu::Base::PointerSlice(mu_i8));
-                self.et.let_chain(
+                let mu_size = self.table.base(mu::Base::SIZE);
+                let mu_addr = self.table.base(mu::Base::ADDR);
+                let mu_i8 = self.table.base(mu::Base::I8);
+                let mu_i8_ptr = self.table.base(mu::Base::Pointer(mu_i8));
+                let mu_i8_slice = self.table.base(mu::Base::PointerSlice(mu_i8));
+                self.table.let_chain(
                     [slice],
-                    self.et.call(
+                    self.table.call(
                         mu::Callable::Syscall { args: 3 },
                         [
-                            self.et.constant(mu_addr, mu::Constant::Integer(1)),
-                            self.et.constant(mu_addr, mu::Constant::Integer(2)),
-                            self.et.cast(
+                            self.table.constant(mu_addr, mu::Constant::Integer(1)),
+                            self.table.constant(mu_addr, mu::Constant::Integer(2)),
+                            self.table.cast(
                                 mu_i8_ptr,
                                 mu_addr,
                                 ast::Cast::Transmute,
-                                self.et.call(
+                                self.table.call(
                                     mu::Callable::PointerSliceIndex { ty: mu_i8 },
                                     [
-                                        self.et.reference(mu_i8_slice, 0),
-                                        self.et.constant(mu_size, mu::Constant::Zero),
+                                        self.table.reference(mu_i8_slice, 0),
+                                        self.table.constant(mu_size, mu::Constant::Zero),
                                     ],
                                 ),
                             ),
-                            self.et.cast(
+                            self.table.cast(
                                 mu_size,
                                 mu_addr,
                                 ast::Cast::Extend,
-                                self.et.call(
+                                self.table.call(
                                     mu::Callable::Len { ty: mu_i8 },
-                                    [self.et.reference(mu_i8_slice, 0)],
+                                    [self.table.reference(mu_i8_slice, 0)],
                                 ),
                             ),
                         ],
@@ -949,16 +944,16 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 )
             }
             IntrinsicFunction::Trap => {
-                let mu_addr = self.tt.base(mu::Base::ADDR);
-                self.et.sequence(
-                    [self.et.call(
+                let mu_addr = self.table.base(mu::Base::ADDR);
+                self.table.sequence(
+                    [self.table.call(
                         mu::Callable::Syscall { args: 1 },
                         [
-                            self.et.constant(mu_addr, mu::Constant::Integer(60)),
-                            self.et.constant(mu_addr, mu::Constant::Integer(1)),
+                            self.table.constant(mu_addr, mu::Constant::Integer(60)),
+                            self.table.constant(mu_addr, mu::Constant::Integer(1)),
                         ],
                     )],
-                    self.et.unreachable(),
+                    self.table.unreachable(),
                 )
             }
             IntrinsicFunction::SliceFromRawParts => todo!(),
@@ -968,34 +963,34 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         match self.lower.tt[c] {
             ConstantEnum::Generic(_) => todo!(),
             ConstantEnum::True => {
-                let bool = self.tt.bool();
-                self.et.push_expression(mu::ExpressionEnum::Variant(
-                    bool.into_sum(self.tt),
+                let bool = self.table.bool();
+                self.table.push_expression(mu::ExpressionEnum::Variant(
+                    bool.into_sum(self.table).unwrap(),
                     1,
-                    self.et.construct_unit(self.tt),
+                    self.table.construct_unit(),
                 ))
             }
             ConstantEnum::False => {
-                let bool = self.tt.bool();
-                self.et.push_expression(mu::ExpressionEnum::Variant(
-                    bool.into_sum(self.tt),
+                let bool = self.table.bool();
+                self.table.push_expression(mu::ExpressionEnum::Variant(
+                    bool.into_sum(self.table).unwrap(),
                     0,
-                    self.et.construct_unit(self.tt),
+                    self.table.construct_unit(),
                 ))
             }
             ConstantEnum::Integer(int) => self
-                .et
+                .table
                 .constant(self.r#type(ty), mu::Constant::Integer(int)),
             ConstantEnum::String(ref str) => {
                 // FIXME: if the type has a sentinel we need to add that to the end
-                self.et
+                self.table
                     .constant(self.r#type(ty), mu::Constant::String(str.clone()))
             }
             ConstantEnum::Character(ref str) => {
                 let TypeEnum::Integer(i) = self.lower.tt[ty] else {
                     panic!("ICE: character constant is not of integer type");
                 };
-                let mu_ty = self.tt.base(mu::Base::Integer(i));
+                let mu_ty = self.table.base(mu::Base::Integer(i));
                 let value = match i {
                     Integer::CChar | Integer::Integer(_, IntSize::Exact(8) | IntSize::CChar) => {
                         let &[byte] = str.as_bytes() else {
@@ -1015,10 +1010,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     }
                     _ => panic!("ICE: unknown character constant integer size"),
                 };
-                self.et.constant(mu_ty, mu::Constant::Integer(value))
+                self.table.constant(mu_ty, mu::Constant::Integer(value))
             }
-            ConstantEnum::Zero => self.et.constant(self.r#type(ty), mu::Constant::Zero),
-            ConstantEnum::Hole => self.et.unreachable(),
+            ConstantEnum::Zero => self.table.constant(self.r#type(ty), mu::Constant::Zero),
+            ConstantEnum::Hole => self.table.unreachable(),
         }
     }
     fn handler_function(
@@ -1075,12 +1070,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .effect(effect)
             .expect("ICE: effect with body with no type")
             .1;
-        let mu::TypeEnum::Product(effect_tys) = self.tt[effect_ty] else {
+        let mu::TypeEnum::Product(effect_tys) = self.table[effect_ty] else {
             panic!("ICE: effect with body is not a product type");
         };
 
         let mut problems = Problems::ok();
-        let constructed = self.et.construct(
+        let constructed = self.table.construct(
             effect_tys,
             effect_decl.members.iter().map(|member| {
                 let Some((decl, def)) = ast
@@ -1109,7 +1104,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     });
                 problems
                     .append(self.handler_function(partial, &item.module, member.span, decl, def))
-                    .unwrap_or_else(|| self.et.unreachable())
+                    .unwrap_or_else(|| self.table.unreachable())
             }),
         );
         problems.with(constructed)
@@ -1137,7 +1132,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     );
                 }
                 Result::new((
-                    self.et
+                    self.table
                         .constant(self.r#type(expected), mu::Constant::Uninit),
                     expected,
                 ))
@@ -1156,7 +1151,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         todo!("evaluate 0-arity function")
                     };
                     // TODO: this does not include member access of local constant / function output right now
-                    self.member_access(self.et.reference(self.r#type(ty), index), ty, rhs)
+                    self.member_access(self.table.reference(self.r#type(ty), index), ty, rhs)
                 } else {
                     self.path(path).and_then(|(e, p)| match p {
                         PathType::Data(ty) => Result::new((e.unwrap_left(), ty)),
@@ -1182,7 +1177,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
                     .map(|(value, from)| {
                         (
-                            self.et
+                            self.table
                                 .cast(self.r#type(from), self.r#type(expected), *op, value),
                             expected,
                         )
@@ -1209,7 +1204,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     .expression(branch_false, ty)
                                     .map(|(else_branch, _)| {
                                         (
-                                            self_inner.et.if_else(
+                                            self_inner.table.if_else(
                                                 condition,
                                                 then_branch,
                                                 else_branch,
@@ -1223,10 +1218,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         found: ty,
                                     })
                                     .at(self_inner.lower.module, &branch_true.1)
-                                    .with((self_inner.et.unreachable(), unit_t))
+                                    .with((self_inner.table.unreachable(), unit_t))
                                 }
                                 None => Result::new((
-                                    self_inner.et.if_stmt(self_inner.tt, condition, then_branch),
+                                    self_inner.table.if_stmt(condition, then_branch),
                                     ty,
                                 )),
                             }
@@ -1259,10 +1254,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     self.lower.tt.insert_effect(EffectEnum::Read(region)),
                                     tk_op,
                                 );
-                                self.et.call(
+                                self.table.call(
                                     mu::Callable::MathOp { ty: mu_inner, op },
                                     [
-                                        self.et.call(mu::Callable::Read { ty: mu_inner }, [lhs]),
+                                        self.table.call(mu::Callable::Read { ty: mu_inner }, [lhs]),
                                         rhs,
                                     ],
                                 )
@@ -1274,7 +1269,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             tk_op,
                         );
                         problems.with((
-                            self.et
+                            self.table
                                 .call(mu::Callable::Write { ty: mu_inner }, [lhs, val]),
                             self.lower.tt.insert_type(TypeEnum::Unit),
                         ))
@@ -1286,7 +1281,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 .and_then(|(lhs, ty)| {
                     self.expression(rhs, ty).map(|(rhs, _)| {
                         (
-                            self.et.call(
+                            self.table.call(
                                 mu::Callable::PredicateOp {
                                     ty: self.r#type(ty),
                                     op: *op,
@@ -1302,7 +1297,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.expression(lhs, expected).and_then(|(lhs, ty)| {
                     self.expression(rhs, ty).map(|(rhs, _)| {
                         (
-                            self.et.call(
+                            self.table.call(
                                 mu::Callable::MathOp {
                                     ty: self.r#type(ty),
                                     op: *op,
@@ -1318,7 +1313,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 // TODO: check if type valid
                 self.expression(expr, expected).map(|(e, ty)| {
                     (
-                        self.et.call(
+                        self.table.call(
                             mu::Callable::UnOp {
                                 ty: self.r#type(ty),
                                 op: *op,
@@ -1343,7 +1338,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         tk_caret,
                     )
                     .with((
-                        self.et.call(
+                        self.table.call(
                             mu::Callable::Read {
                                 ty: self.r#type(inner),
                             },
@@ -1366,7 +1361,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 .expression(expr, self.lower.tt.insert_type(TypeEnum::SIZE))
                                 .map(|(index, _)| match sentinel_ty {
                                     Some(_) => (
-                                        self.et.call(
+                                        self.table.call(
                                             mu::Callable::MultiPointerIndex {
                                                 ty: self.r#type(ty),
                                             },
@@ -1375,7 +1370,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         self.lower.tt.insert_type(TypeEnum::Pointer(ty, region)),
                                     ),
                                     None => (
-                                        self.et.call(
+                                        self.table.call(
                                             mu::Callable::PointerSliceIndex {
                                                 ty: self.r#type(ty),
                                             },
@@ -1400,7 +1395,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         self.expression(expr, usize_t).map(|(expr, _)| expr)
                                     })
                                     .unwrap_or_else(|| {
-                                        Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
+                                        Result::new(
+                                            self.table.constant(mu_usize, mu::Constant::Zero),
+                                        )
                                     });
                                 let to_index = to
                                     .as_ref()
@@ -1409,13 +1406,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     })
                                     .unwrap_or_else(|| {
                                         Result::new(
-                                            self.et.call(mu::Callable::Len { ty: mu_ty }, [array]),
+                                            self.table
+                                                .call(mu::Callable::Len { ty: mu_ty }, [array]),
                                         )
                                     });
                                 from_index.and_then(|from_index| {
                                     to_index.map(|to_index| {
                                         (
-                                            self.et.call(
+                                            self.table.call(
                                                 sentinel_ty.map_or_else(
                                                     || mu::Callable::PointerSliceSlice {
                                                         ty: mu_ty,
@@ -1460,7 +1458,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         let size =
                                             self.array_size(size) + sentinel_ty.is_some() as u32;
                                         (
-                                            self.et.call(
+                                            self.table.call(
                                                 mu::Callable::PointerArrayIndex {
                                                     ty: self.r#type(ty),
                                                     size,
@@ -1492,7 +1490,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                         self.expression(expr, usize_t).map(|(expr, _)| expr)
                                     })
                                     .unwrap_or_else(|| {
-                                        Result::new(self.et.constant(mu_usize, mu::Constant::Zero))
+                                        Result::new(
+                                            self.table.constant(mu_usize, mu::Constant::Zero),
+                                        )
                                     });
                                 let to_index =
                                     to.as_ref()
@@ -1500,7 +1500,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                             self.expression(expr, usize_t).map(|(expr, _)| expr)
                                         })
                                         .unwrap_or_else(|| {
-                                            Result::new(self.et.constant(
+                                            Result::new(self.table.constant(
                                                 mu_usize,
                                                 mu::Constant::Integer(max as u64),
                                             ))
@@ -1508,7 +1508,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 from_index.and_then(|from_index| {
                                     to_index.map(|to_index| {
                                         (
-                                            self.et.call(
+                                            self.table.call(
                                                 mu::Callable::PointerArraySlice {
                                                     ty: self.r#type(ty),
                                                     size,
@@ -1551,11 +1551,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
                         let mut problems = Problems::ok();
                         let mu_inner = self.r#type(inner);
-                        let et = self.et;
+                        let et = self.table;
                         let args = exprs.inner.iter().map(|elem| {
                             problems
                                 .append(self.expression(elem, inner))
-                                .map_or_else(|| self.et.unreachable(), |(e, _)| e)
+                                .map_or_else(|| self.table.unreachable(), |(e, _)| e)
                         });
                         let construct =
                             et.call(mu::Callable::ArrayConstruct { ty: mu_inner, size }, args);
@@ -1600,7 +1600,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 self_inner.vars.push_front(Var::Effect(effect));
                                 self_inner
                                     .expression(expr, expected)
-                                    .map(|(e, t)| (self_inner.et.let_chain([effect_mu], e), t))
+                                    .map(|(e, t)| (self_inner.table.let_chain([effect_mu], e), t))
                             })
                     })
                 } else {
@@ -1608,7 +1608,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 }
                 .map(|(e, _)| {
                     (
-                        self_inner.et.try_break(self_inner.r#type(expected), e),
+                        self_inner.table.try_break(self_inner.r#type(expected), e),
                         expected,
                     )
                 })
@@ -1618,17 +1618,19 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let Some((index, ty)) = self.find_raise() else {
                     todo!("error")
                 };
-                let f = self.et.reference(
-                    self.tt
-                        .function(self.tt.insert_tuple([self.r#type(ty)]), self.tt.never()),
+                let f = self.table.reference(
+                    self.table.function(
+                        self.table.insert_tuple([self.r#type(ty)]),
+                        self.table.never(),
+                    ),
                     index,
                 );
                 match expr {
                     Some(expr) => self
                         .expression(expr, ty)
-                        .map(|(e, _)| (self.et.apply(f, [e]), never)),
+                        .map(|(e, _)| (self.table.apply(f, [e]), never)),
                     None if ty.is_unit(self.lower.tt) => {
-                        Result::new((self.et.apply(f, [self.et.construct_unit(self.tt)]), never))
+                        Result::new((self.table.apply(f, [self.table.construct_unit()]), never))
                     }
                     None => {
                         todo!("error: expected {}", ty.display(self.lower.tt));
@@ -1645,7 +1647,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Result::new((mu, found))
             }
         })
-        .recover_with(|| (self.et.unreachable(), expected))
+        .recover_with(|| (self.table.unreachable(), expected))
     }
     fn member_access(
         &mut self,
@@ -1659,7 +1661,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             };
             let decl = self.struct_decl(item);
             let mu_ty = self.r#type(inner);
-            let mu::TypeEnum::Product(mu_tys) = self.tt[mu_ty] else {
+            let mu::TypeEnum::Product(mu_tys) = self.table[mu_ty] else {
                 panic!("ICE: item does not have product type");
             };
             let Some((idx, member)) = decl
@@ -1671,7 +1673,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 todo!("error")
             };
             Result::new((
-                self.et.call(
+                self.table.call(
                     mu::Callable::PointerMember {
                         tys: mu_tys,
                         member: idx as u32,
@@ -1695,7 +1697,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             else {
                 todo!("error")
             };
-            Result::new((self.et.member(lhs, idx as u32), member.ty))
+            Result::new((self.table.member(lhs, idx as u32), member.ty))
         }
     }
     fn statements(
@@ -1725,7 +1727,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         self_inner.statements(stmts_, expected)
                     };
                     return (
-                        self_.et.push_expression(mu::ExpressionEnum::Let(outer.0, inner.0)),
+                        self_.table.push_expression(mu::ExpressionEnum::Let(outer.0, inner.0)),
                         inner.1,
                     );
                 }
@@ -1739,9 +1741,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
         let (last, ty) = exprs
             .pop()
-            .unwrap_or_else(|| (self.et.construct_unit(self.tt), unit_t));
+            .unwrap_or_else(|| (self.table.construct_unit(), unit_t));
         problems.with((
-            self.et
+            self.table
                 .sequence(exprs.into_iter().map(|(expr, _)| expr), last),
             ty,
         ))
@@ -1751,9 +1753,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         match param {
             FunctionParameter::Data(ty) => self.r#type(ty),
             FunctionParameter::Lambda(sig) => self
-                .tt
+                .table
                 .insert_type(mu::TypeEnum::Function(self.function_type(sig, None))),
-            FunctionParameter::Hole => self.tt.never(),
+            FunctionParameter::Hole => self.table.never(),
         }
     }
     fn function_type(
@@ -1784,7 +1786,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .map(|param| self.function_param(param));
         let from = if let Some(decl) = decl {
             let name = decl.name.ident.as_str();
-            self.tt.push_named_tuple(
+            self.table.push_named_tuple(
                 Iterator::zip(
                     decl.parameters
                         .iter()
@@ -1796,13 +1798,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 name.into(),
             )
         } else {
-            self.tt
+            self.table
                 .insert_tuple(params.chain(effect_params.map(|(_, e)| e)))
         };
 
         let to = self.r#type(val.thunk.returns);
 
-        mu::FunctionType::new(from, to, self.tt)
+        mu::FunctionType::new(from, to, self.table)
     }
     fn effect(&self, e: Effect) -> Option<(&'a str, mu::Type)> {
         match self.lower.tt[e] {
@@ -1826,13 +1828,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             params: sig_val.params.subst(self.lower.tt, 0, args),
                             thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
                         });
-                    self.tt
+                    self.table
                         .insert_type(mu::TypeEnum::Function(self.function_type(partial, None)))
                 });
                 Some((
                     name,
-                    self.tt
-                        .insert_type(mu::TypeEnum::Product(self.tt.insert_tuple(members))),
+                    self.table
+                        .insert_type(mu::TypeEnum::Product(self.table.insert_tuple(members))),
                 ))
             }
             EffectEnum::Read(_)
@@ -1845,7 +1847,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     }
     fn r#type(&self, ty: Type) -> mu::Type {
         match self.lower.tt[ty] {
-            TypeEnum::Generic(_) => self.tt.never(),
+            TypeEnum::Generic(_) => self.table.never(),
             TypeEnum::Item(ref item) => {
                 // TODO: make these named, and cache results
                 let decl = self.struct_decl(item);
@@ -1854,30 +1856,31 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     .members
                     .iter()
                     .map(|member| self.r#type(member.ty.subst(self.lower.tt, 0, args)));
-                self.tt
-                    .insert_type(mu::TypeEnum::Product(self.tt.insert_tuple(members)))
+                self.table
+                    .insert_type(mu::TypeEnum::Product(self.table.insert_tuple(members)))
             }
-            TypeEnum::Integer(integer) => self.tt.base(mu::Base::Integer(integer)),
-            TypeEnum::Boolean => self.tt.bool(),
-            TypeEnum::Unit => self.tt.unit(),
-            TypeEnum::Never => self.tt.never(),
+            TypeEnum::Integer(integer) => self.table.base(mu::Base::Integer(integer)),
+            TypeEnum::Boolean => self.table.bool(),
+            TypeEnum::Unit => self.table.unit(),
+            TypeEnum::Never => self.table.never(),
             TypeEnum::NullPointer => {
                 // this MUST be an actual pointer, and not removed as a zero-sized type
                 // so we do a pointer to i8
                 // (technically any nonzero-sized type would work)
-                self.tt.base(mu::Base::Pointer(self.tt.base(mu::Base::I8)))
+                self.table
+                    .base(mu::Base::Pointer(self.table.base(mu::Base::I8)))
             }
-            TypeEnum::Pointer(ty, _) => self.tt.base(mu::Base::Pointer(self.r#type(ty))),
+            TypeEnum::Pointer(ty, _) => self.table.base(mu::Base::Pointer(self.r#type(ty))),
             TypeEnum::PointerSlice(ty, _, sentinel) => match sentinel {
-                Some(_) => self.tt.base(mu::Base::MultiPointer(self.r#type(ty))),
-                None => self.tt.base(mu::Base::PointerSlice(self.r#type(ty))),
+                Some(_) => self.table.base(mu::Base::MultiPointer(self.r#type(ty))),
+                None => self.table.base(mu::Base::PointerSlice(self.r#type(ty))),
             },
-            TypeEnum::Array(ty, size, sentinel) => self.tt.base(mu::Base::Array(
+            TypeEnum::Array(ty, size, sentinel) => self.table.base(mu::Base::Array(
                 self.r#type(ty),
                 self.array_size(size) + sentinel.is_some() as u32,
             )),
-            TypeEnum::Maybe(ty) => self.tt.optional(self.r#type(ty)),
-            TypeEnum::Hole => self.tt.never(),
+            TypeEnum::Maybe(ty) => self.table.optional(self.r#type(ty)),
+            TypeEnum::Hole => self.table.never(),
         }
     }
     fn struct_decl(&self, item: &Item) -> &'scope StructDecl {

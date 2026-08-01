@@ -18,23 +18,20 @@ use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PhiValue, PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
-use mu::{TypeTable as _, Typed as _};
+use mu::{Table as _, Typed as _};
 
 pub trait Builder<'ctx>: Sized
 where
-    <Self::TT as mu::TypeTable>::Name: Deref<Target = str>,
+    <Self::Table as mu::Table>::Name: Deref<Target = str>,
 {
     type Base;
-    type TT: mu::TypeTable<Base = Self::Base> + ?Sized;
-    type ET: mu::ExpressionTable<Base = Self::Base> + ?Sized;
+    type Table: mu::Table<Base = Self::Base> + ?Sized;
     type Callable: mu::Typed<Base = Self::Base> + Clone + Hash + Eq;
 
-    fn has_zero_niche(base: &<Self::TT as mu::TypeTable>::Base, llvm: &Context<'ctx, Self>)
-    -> bool;
-    fn get_type(base: &<Self::TT as mu::TypeTable>::Base, llvm: &Context<'ctx, Self>)
-    -> Type<'ctx>;
+    fn has_zero_niche(base: &Self::Base, llvm: &Context<'ctx, Self>) -> bool;
+    fn get_type(base: &Self::Base, llvm: &Context<'ctx, Self>) -> Type<'ctx>;
     fn build_operation(
-        op: &<Self::ET as mu::ExpressionTable>::Operation,
+        op: &<Self::Table as mu::Table>::Operation,
         llvm: &Context<'ctx, Self>,
     ) -> Value<'ctx, Self>;
     fn build_callable(
@@ -126,7 +123,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                         };
 
                         // build function
-                        let fun = c.get_type(llvm.tt).into_function(llvm.tt);
+                        let fun = c.get_type(llvm.table).into_function(llvm.table).unwrap();
 
                         let function = llvm.add_function(fun, true, None, Some(Linkage::Private));
                         llvm.builder
@@ -137,7 +134,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                             .function_arguments(fun, function)
                             .map(ValueOrExpression::Value);
                         let out = B::build_callable(&c, fun, params, llvm).basic_value(llvm);
-                        if !fun.never_returns(llvm.tt) {
+                        if !fun.never_returns(llvm.table) {
                             llvm.builder
                                 .build_return(
                                     out.as_ref().map(|e| e as &dyn inkwell::values::BasicValue),
@@ -185,7 +182,7 @@ impl<'ctx, B: Builder<'ctx>> Expression<'ctx, B> {
         vals: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
         llvm: &Context<'ctx, B>,
     ) -> Value<'ctx, B> {
-        match llvm.et[self.expr] {
+        match llvm.table[self.expr] {
             mu::ExpressionEnum::Abstract(_, e) => {
                 let mut refs = self.bound;
                 for val in vals {
@@ -268,8 +265,7 @@ impl<'ctx> From<Enum<'ctx>> for Type<'ctx> {
 
 pub struct Context<'ctx, B: Builder<'ctx>> {
     pub context: &'ctx inkwell::context::Context,
-    pub tt: &'ctx B::TT,
-    pub et: &'ctx B::ET,
+    pub table: &'ctx B::Table,
     pub base: B,
     pub module: inkwell::module::Module<'ctx>,
     pub builder: inkwell::builder::Builder<'ctx>,
@@ -309,8 +305,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn new(
         context: &'ctx inkwell::context::Context,
-        tt: &'ctx B::TT,
-        et: &'ctx B::ET,
+        table: &'ctx B::Table,
         base: B,
         target_machine: TargetMachine,
         module_name: &str,
@@ -319,8 +314,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         let ptr_int_t = context.ptr_sized_int_type(&target_data, None);
         Self {
             context,
-            tt,
-            et,
+            table,
             base,
             module: context.create_module(module_name),
             builder: context.create_builder(),
@@ -443,7 +437,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     ) -> FunctionValue<'ctx> {
         let function_type = self.get_function_type(fun, closure_param);
         let function = self.module.add_function(
-            name.or_else(|| self.tt.tuple_name(fun.from()).map(Deref::deref))
+            name.or_else(|| self.table.tuple_name(fun.from()).map(Deref::deref))
                 .unwrap_or(""),
             function_type,
             linkage,
@@ -453,8 +447,8 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         let params = Iterator::zip(
             self.function_arguments(fun, function)
                 .map(|v| v.basic_value(self)),
-            (0..self.tt[fun.from()].len() as u32)
-                .map(|index| self.tt.tuple_field_name(fun.from(), index)),
+            (0..self.table[fun.from()].len() as u32)
+                .map(|index| self.table.tuple_field_name(fun.from(), index)),
         );
         for (param, name) in params.filter_map(|(a, b)| a.zip(b)) {
             param.set_name(name);
@@ -481,7 +475,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 drop(read);
 
                 // NOTE: recursive structs will cause a stack overflow here
-                let fields = self.tt[tys]
+                let fields = self.table[tys]
                     .iter()
                     .map(|&field| self.get_type(field))
                     .collect::<Box<_>>();
@@ -489,7 +483,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     .iter()
                     .filter_map(|f| f.basic_type(self))
                     .collect::<Box<_>>();
-                let struc = (!llvm_fields.is_empty()).then(|| match self.tt.tuple_name(tys) {
+                let struc = (!llvm_fields.is_empty()).then(|| match self.table.tuple_name(tys) {
                     Some(name) => {
                         let s = self.context.opaque_struct_type(name);
                         s.set_body(&llvm_fields, false);
@@ -503,16 +497,16 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         }
     }
     pub fn has_zero_niche(&self, ty: mu::Type) -> bool {
-        match self.tt[ty] {
+        match self.table[ty] {
             mu::TypeEnum::Base(ref base) => B::has_zero_niche(base, self),
             mu::TypeEnum::Sum(tys) => match self.get_enum(tys) {
                 Enum::Empty => true,
                 Enum::Units(_) | Enum::ZeroNiche(_, _) => false,
-                Enum::Single(_) | Enum::TaggedUnion(_) => self.has_zero_niche(self.tt[tys][0]),
+                Enum::Single(_) | Enum::TaggedUnion(_) => self.has_zero_niche(self.table[tys][0]),
             },
-            mu::TypeEnum::Product(tys) => {
-                self.tt[tys].iter().any(|&field| self.has_zero_niche(field))
-            }
+            mu::TypeEnum::Product(tys) => self.table[tys]
+                .iter()
+                .any(|&field| self.has_zero_niche(field)),
             mu::TypeEnum::Function(_) => true,
         }
     }
@@ -524,7 +518,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 drop(read);
 
                 // NOTE: recursive structs will cause a stack overflow here
-                let variants = self.tt[tys]
+                let variants = self.table[tys]
                     .iter()
                     .map(|&field| self.get_type(field))
                     .collect::<Box<_>>();
@@ -535,7 +529,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     16..32 => self.context.i32_type(),
                     _ => panic!("that's just way too many variants"),
                 };
-                let e = match self.tt[tys] {
+                let e = match self.table[tys] {
                     // no variants
                     [] => Enum::Empty,
                     // single variant
@@ -558,7 +552,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         }
     }
     pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
-        match self.tt[ty] {
+        match self.table[ty] {
             mu::TypeEnum::Base(ref base) => B::get_type(base, self),
             mu::TypeEnum::Product(tys) => Type::Data(self.get_struct(tys).map(Into::into)),
             mu::TypeEnum::Sum(tys) => self.get_enum(tys).into(),
@@ -572,7 +566,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         function: mu::FunctionType,
         closure_param: bool,
     ) -> FunctionType<'ctx> {
-        let mut param_types = self.tt[function.from()]
+        let mut param_types = self.table[function.from()]
             .iter()
             .filter_map(|&ty| self.get_type(ty).basic_type(self))
             .map(BasicMetadataTypeEnum::from)
@@ -602,7 +596,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             refs.push_front(arg);
         }
         let out = self.build_expression(expression, &refs).basic_value(self);
-        if !fun.never_returns(self.tt) {
+        if !fun.never_returns(self.table) {
             self.builder
                 .build_return(
                     out.as_ref()
@@ -622,7 +616,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         val: FunctionValue<'ctx>,
     ) -> impl Iterator<Item = Value<'ctx, B>> {
         let mut nth = 0;
-        self.tt[fun.from()].iter().map(move |&t| {
+        self.table[fun.from()].iter().map(move |&t| {
             Value::Data(self.get_type(t).nonzero_sized().then(|| {
                 let param = val.get_nth_param(nth).unwrap();
                 nth += 1;
@@ -635,7 +629,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         e: mu::Expression,
         refs: &im::Vector<Value<'ctx, B>>,
     ) -> Value<'ctx, B> {
-        match self.et[e] {
+        match self.table[e] {
             mu::ExpressionEnum::Operation(ref o) => B::build_operation(o, self),
             mu::ExpressionEnum::Reference(_, n) => refs[n as usize].clone(),
             mu::ExpressionEnum::Let(e1, e2) => {
@@ -644,20 +638,24 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 self.build_expression(e2, &refs_new)
             }
             mu::ExpressionEnum::Sequence(es, en) => {
-                for &e in self.et[es].iter() {
+                for &e in self.table[es].iter() {
                     let _ = self.build_expression(e, refs);
                 }
                 self.build_expression(en, refs)
             }
             mu::ExpressionEnum::Construct(types, expressions) => self.build_construct(
                 types,
-                self.et[expressions]
+                self.table[expressions]
                     .iter()
                     .map(|&e| self.build_expression(e, refs)),
             ),
             mu::ExpressionEnum::Apply(f, es) => {
-                let fun = f.get_type(self.tt, self.et).into_function(self.tt);
-                let vals = self.et[es].iter().map(|&e| {
+                let fun = f
+                    .get_type(self.table)
+                    .unwrap()
+                    .into_function(self.table)
+                    .unwrap();
+                let vals = self.table[es].iter().map(|&e| {
                     ValueOrExpression::Expression(Expression {
                         expr: e,
                         bound: refs.clone(),
@@ -670,7 +668,11 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 .build_call(fun, vals, self)
             }
             mu::ExpressionEnum::Member(e, index) => {
-                let types = e.get_type(self.tt, self.et).into_product(self.tt);
+                let types = e
+                    .get_type(self.table)
+                    .unwrap()
+                    .into_product(self.table)
+                    .unwrap();
                 let val = self.build_expression(e, refs);
                 self.build_member(types, index, val)
             }
@@ -692,11 +694,15 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 }
             }
             mu::ExpressionEnum::Match(e, es) => {
-                let sum = e.get_type(self.tt, self.et).into_sum(self.tt);
+                let sum = e
+                    .get_type(self.table)
+                    .unwrap()
+                    .into_sum(self.table)
+                    .unwrap();
                 let variant = self.build_expression(e, refs);
 
                 let out = self
-                    .get_type(self.et[es][0].get_type(self.tt, self.et))
+                    .get_type(self.table[es][0].get_type(self.table).unwrap())
                     .basic_type(self);
                 match self.get_enum(sum) {
                     Enum::Empty => Value::Data(None),
@@ -704,12 +710,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                         // TODO: simplify in the case of exactly 2 units
 
                         let else_block = self.build_block("");
-                        let cases = (0..self.et[es].len() as u32)
+                        let cases = (0..self.table[es].len() as u32)
                             .map(|n| {
                                 (
                                     int.const_int(n.into(), false),
                                     self.build_block(
-                                        self.tt
+                                        self.table
                                             .enum_variant_name(sum, n)
                                             .map(Deref::deref)
                                             .unwrap_or(""),
@@ -734,7 +740,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                         let mut refs_new = refs.clone();
                         refs_new.push_front(Value::Data(None));
-                        for ((_, case), &e) in cases.into_iter().zip(&self.et[es]) {
+                        for ((_, case), &e) in cases.into_iter().zip(&self.table[es]) {
                             self.builder.position_at_end(case);
                             let val = self.build_expression(e, &refs_new);
                             self.builder.build_unconditional_branch(end_block).unwrap();
@@ -758,7 +764,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     Enum::Single(_) => {
                         let mut refs_new = refs.clone();
                         refs_new.push_front(variant);
-                        self.build_expression(self.et[es][0], &refs_new)
+                        self.build_expression(self.table[es][0], &refs_new)
                     }
                     Enum::ZeroNiche(_, zero_index) => match variant.basic_value(self) {
                         Some(v) => {
@@ -774,16 +780,18 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                             self.builder.position_at_end(then_block);
                             let mut refs_new = refs.clone();
                             refs_new.push_front(Value::Data(None));
-                            let then_val =
-                                self.build_expression(self.et[es][zero_index as usize], &refs_new);
+                            let then_val = self
+                                .build_expression(self.table[es][zero_index as usize], &refs_new);
                             let then_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(next_block).unwrap();
 
                             self.builder.position_at_end(else_block);
                             let mut refs_new = refs.clone();
                             refs_new.push_front(Value::Data(Some(v)));
-                            let else_val = self
-                                .build_expression(self.et[es][(!zero_index) as usize], &refs_new);
+                            let else_val = self.build_expression(
+                                self.table[es][(!zero_index) as usize],
+                                &refs_new,
+                            );
                             let else_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(next_block).unwrap();
 
@@ -806,7 +814,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                         None => {
                             let mut refs_new = refs.clone();
                             refs_new.push_front(Value::Data(None));
-                            self.build_expression(self.et[es][zero_index as usize], &refs_new)
+                            self.build_expression(self.table[es][zero_index as usize], &refs_new)
                         }
                     },
                     Enum::TaggedUnion(_) => todo!(),
@@ -820,7 +828,8 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 let current_block = self.builder.get_insert_block().unwrap();
 
                 // create function
-                let fun = mu::FunctionType::new(from, body.get_type(self.tt, self.et), self.tt);
+                let fun =
+                    mu::FunctionType::new(from, body.get_type(self.table).unwrap(), self.table);
                 let function = self.add_function(fun, true, None, Some(Linkage::Private));
                 self.builder
                     .position_at_end(self.context.append_basic_block(function, ""));
@@ -828,7 +837,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                 // build closure
                 let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
-                e.get_captures(self.tt, self.et, &mut captures);
+                e.get_captures(self.table, &mut captures);
                 let mut closure_members = Vec::new();
                 let mut closure_refs = Vec::new();
                 for (i, val) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
@@ -884,7 +893,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     refs_new.push_front(arg);
                 }
                 let out = self.build_expression(body, &refs_new).basic_value(self);
-                if !fun.never_returns(self.tt) {
+                if !fun.never_returns(self.table) {
                     self.builder
                         .build_return(
                             out.as_ref()
@@ -976,7 +985,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         index: u32,
         val: Value<'ctx, B>,
     ) -> Value<'ctx, B> {
-        let member_types = &self.tt[types];
+        let member_types = &self.table[types];
         let member = member_types[index as usize];
         Value::Data(val.basic_value(self).and_then(|data| {
             self.get_type(member).nonzero_sized().then(|| {
@@ -988,7 +997,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     .build_extract_value(
                         data.into_struct_value(),
                         nth,
-                        self.tt
+                        self.table
                             .tuple_field_name(types, index)
                             .map(Deref::deref)
                             .unwrap_or(""),
@@ -1003,12 +1012,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         index: u32,
         val: Value<'ctx, B>,
     ) -> Value<'ctx, B> {
-        let member_types = &self.tt[types];
+        let member_types = &self.table[types];
         let member = member_types[index as usize];
         Value::Data(val.basic_value(self).and_then(|data| {
             self.get_type(member).nonzero_sized().then(|| {
                 let pointee_ty = self
-                    .get_type(self.tt.insert_type(mu::TypeEnum::Product(types)))
+                    .get_type(self.table.insert_type(mu::TypeEnum::Product(types)))
                     .basic_type(self)
                     .unwrap();
                 let nth = member_types[..index as usize]
@@ -1020,7 +1029,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                         pointee_ty,
                         data.into_pointer_value(),
                         nth,
-                        self.tt
+                        self.table
                             .tuple_field_name(types, index)
                             .map(Deref::deref)
                             .unwrap_or(""),
@@ -1039,7 +1048,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             // any 'callable' will get turned into a small function
             val.basic_value(self).map(|v| {
                 (
-                    self.tt
+                    self.table
                         .tuple_field_name(types, index as u32)
                         .map(Deref::deref)
                         .unwrap_or(""),

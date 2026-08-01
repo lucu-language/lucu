@@ -1187,7 +1187,7 @@ impl Ast for ast::Struct {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         nodes.token(self.r#struct);
         nodes.token(self.members.open);
-        if self.members.inner.elements.len() > 0 {
+        if !self.members.inner.elements.is_empty() {
             nodes.indent(|nodes| {
                 nodes.line();
                 for param in self.members.inner.iter() {

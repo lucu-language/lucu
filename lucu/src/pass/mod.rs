@@ -170,8 +170,7 @@ impl Stages {
         &self,
         graph: &ModuleGraph,
         tt: &TypeTable,
-        mu_tt: &mu::table::TypeTable,
-        mu_et: &mu::table::ExpressionTable,
+        table: &mu::table::Table,
     ) -> Option<&mu::Module> {
         self.mu.get_or_init(|| {
             // TODO: evaluate headers of parent modules first
@@ -190,8 +189,7 @@ impl Stages {
                 imports,
                 definitions,
                 tt,
-                mu_tt,
-                mu_et,
+                table,
             ))
         })
     }

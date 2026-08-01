@@ -3,20 +3,23 @@ use std::ops::Index;
 use asta_handle_map::xar::Xar;
 use asta_handle_map::{HandleMap, HandleSet};
 use compact_str::CompactString;
-use mu::ExpressionTable as _;
+use mu::Table as _;
 
 use crate::ast;
 use crate::mu::{Base, Callable, Constant, Operation};
 
-pub struct TypeTable {
+pub struct Table {
     types: HandleSet<mu::TypeEnum<Base>>,
     tuple_map: HandleMap<Box<[mu::Type]>, mu::Tuple>,
     tuples: Xar<Aggregate>,
     enum_map: HandleMap<Box<[mu::Type]>, mu::Enum>,
     enums: Xar<Aggregate>,
+
+    expressions: Xar<mu::ExpressionEnum<Operation>>,
+    expression_seqs: Xar<Box<[mu::Expression]>>,
 }
 
-impl TypeTable {
+impl Table {
     /// # Safety
     /// Every handle produced by this instance MUST only be used with this instance.
     ///
@@ -29,11 +32,36 @@ impl TypeTable {
             tuples: Xar::new(),
             enum_map: HandleMap::new(),
             enums: Xar::new(),
+
+            expressions: Xar::new(),
+            expression_seqs: Xar::new(),
         }
+    }
+    pub fn cast(
+        &self,
+        from: mu::Type,
+        to: mu::Type,
+        op: ast::Cast,
+        value: mu::Expression,
+    ) -> mu::Expression {
+        self.call(Callable::Cast { from, to, op }, [value])
+    }
+    pub fn constant(&self, ty: mu::Type, constant: Constant) -> mu::Expression {
+        self.operation(Operation::Constant(ty, constant))
+    }
+    pub fn call(
+        &self,
+        c: Callable,
+        vals: impl IntoIterator<Item = mu::Expression>,
+    ) -> mu::Expression {
+        self.apply_operation(Operation::Callable(c), vals)
+    }
+    pub fn unreachable(&self) -> mu::Expression {
+        self.operation(Operation::Unreachable)
     }
 }
 
-impl Index<mu::Type> for TypeTable {
+impl Index<mu::Type> for Table {
     type Output = mu::TypeEnum<Base>;
 
     fn index(&self, index: mu::Type) -> &Self::Output {
@@ -41,7 +69,7 @@ impl Index<mu::Type> for TypeTable {
     }
 }
 
-impl Index<mu::Tuple> for TypeTable {
+impl Index<mu::Tuple> for Table {
     type Output = [mu::Type];
 
     fn index(&self, index: mu::Tuple) -> &Self::Output {
@@ -53,7 +81,7 @@ impl Index<mu::Tuple> for TypeTable {
     }
 }
 
-impl Index<mu::Enum> for TypeTable {
+impl Index<mu::Enum> for Table {
     type Output = [mu::Type];
 
     fn index(&self, index: mu::Enum) -> &Self::Output {
@@ -65,9 +93,10 @@ impl Index<mu::Enum> for TypeTable {
     }
 }
 
-impl mu::TypeTable for TypeTable {
+impl mu::Table for Table {
     type Base = Base;
     type Name = CompactString;
+    type Operation = Operation;
 
     fn insert_type(&self, ty: mu::TypeEnum<Self::Base>) -> mu::Type {
         let i = self.types.insert(ty);
@@ -165,6 +194,16 @@ impl mu::TypeTable for TypeTable {
             Aggregate::Named { field_names, .. } => Some(&field_names[index as usize]),
         }
     }
+
+    fn push_expression(&self, expr: mu::ExpressionEnum<Self::Operation>) -> mu::Expression {
+        let i = self.expressions.push(expr);
+        unsafe { mu::Expression::new(i) }
+    }
+
+    fn push_expressions(&self, exprs: impl IntoIterator<Item = mu::Expression>) -> mu::Expressions {
+        let i = self.expression_seqs.push(exprs.into_iter().collect());
+        unsafe { mu::Expressions::new(i) }
+    }
 }
 
 enum Aggregate {
@@ -176,48 +215,7 @@ enum Aggregate {
     },
 }
 
-pub struct ExpressionTable {
-    expressions: Xar<mu::ExpressionEnum<Operation>>,
-    expression_seqs: Xar<Box<[mu::Expression]>>,
-}
-
-impl ExpressionTable {
-    /// # Safety
-    /// Every handle produced by this instance MUST only be used with this instance.
-    ///
-    /// Technically, we should make the methods of this unsafe, but that would cause too much unsafe blocks imo.
-    /// We usually have only one global instance of an ExpressionTable, so we simply make the constructor unsafe.
-    pub unsafe fn new() -> Self {
-        Self {
-            expressions: Xar::new(),
-            expression_seqs: Xar::new(),
-        }
-    }
-    pub fn cast(
-        &self,
-        from: mu::Type,
-        to: mu::Type,
-        op: ast::Cast,
-        value: mu::Expression,
-    ) -> mu::Expression {
-        self.call(Callable::Cast { from, to, op }, [value])
-    }
-    pub fn constant(&self, ty: mu::Type, constant: Constant) -> mu::Expression {
-        self.operation(Operation::Constant(ty, constant))
-    }
-    pub fn call(
-        &self,
-        c: Callable,
-        vals: impl IntoIterator<Item = mu::Expression>,
-    ) -> mu::Expression {
-        self.apply_operation(Operation::Callable(c), vals)
-    }
-    pub fn unreachable(&self) -> mu::Expression {
-        self.operation(Operation::Unreachable)
-    }
-}
-
-impl Index<mu::Expression> for ExpressionTable {
+impl Index<mu::Expression> for Table {
     type Output = mu::ExpressionEnum<Operation>;
 
     fn index(&self, index: mu::Expression) -> &Self::Output {
@@ -225,25 +223,10 @@ impl Index<mu::Expression> for ExpressionTable {
     }
 }
 
-impl Index<mu::Expressions> for ExpressionTable {
+impl Index<mu::Expressions> for Table {
     type Output = [mu::Expression];
 
     fn index(&self, index: mu::Expressions) -> &Self::Output {
         unsafe { self.expression_seqs.get_unchecked(index.index()) }
-    }
-}
-
-impl mu::ExpressionTable for ExpressionTable {
-    type Base = Base;
-    type Operation = Operation;
-
-    fn push_expression(&self, expr: mu::ExpressionEnum<Self::Operation>) -> mu::Expression {
-        let i = self.expressions.push(expr);
-        unsafe { mu::Expression::new(i) }
-    }
-
-    fn push_expressions(&self, exprs: impl IntoIterator<Item = mu::Expression>) -> mu::Expressions {
-        let i = self.expression_seqs.push(exprs.into_iter().collect());
-        unsafe { mu::Expressions::new(i) }
     }
 }

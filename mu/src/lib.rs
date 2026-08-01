@@ -3,16 +3,16 @@ use core::fmt::Debug;
 use core::hash::Hash;
 use core::ops::Index;
 
-mod kind;
-pub use kind::*;
-
-pub trait TypeTable:
+pub trait Table:
     Index<Type, Output = TypeEnum<Self::Base>>
     + Index<Tuple, Output = [Type]>
     + Index<Enum, Output = [Type]>
+    + Index<Expression, Output = ExpressionEnum<Self::Operation>>
+    + Index<Expressions, Output = [Expression]>
 {
     type Base;
     type Name: Debug;
+    type Operation: Typed<Base = Self::Base>;
 
     fn insert_type(&self, ty: TypeEnum<Self::Base>) -> Type;
 
@@ -34,7 +34,10 @@ pub trait TypeTable:
     fn enum_name(&self, tys: Enum) -> Option<&Self::Name>;
     fn enum_variant_name(&self, tys: Enum, index: u32) -> Option<&Self::Name>;
 
-    // convenience functions
+    fn push_expression(&self, expr: ExpressionEnum<Self::Operation>) -> Expression;
+    fn push_expressions(&self, exprs: impl IntoIterator<Item = Expression>) -> Expressions;
+
+    // convenience functions: types
     fn unit(&self) -> Type {
         self.insert_type(TypeEnum::Product(self.insert_tuple([])))
     }
@@ -55,31 +58,16 @@ pub trait TypeTable:
     fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
     }
-}
 
-pub trait Typed {
-    type Base;
-    fn get_type(&self, tt: &(impl TypeTable<Base = Self::Base> + ?Sized)) -> Type;
-}
-
-pub trait ExpressionTable:
-    Index<Expression, Output = ExpressionEnum<Self::Operation>>
-    + Index<Expressions, Output = [Expression]>
-{
-    type Base;
-    type Operation: Typed<Base = Self::Base>;
-    fn push_expression(&self, expr: ExpressionEnum<Self::Operation>) -> Expression;
-    fn push_expressions(&self, exprs: impl IntoIterator<Item = Expression>) -> Expressions;
-
-    // convenience functions
+    // convenience functions: expressions
     fn construct(&self, types: Tuple, exprs: impl IntoIterator<Item = Expression>) -> Expression {
         self.push_expression(ExpressionEnum::Construct(
             types,
             self.push_expressions(exprs),
         ))
     }
-    fn construct_unit(&self, tt: &(impl TypeTable<Base = Self::Base> + ?Sized)) -> Expression {
-        self.construct(tt.insert_tuple([]), [])
+    fn construct_unit(&self) -> Expression {
+        self.construct(self.insert_tuple([]), [])
     }
     fn sequence(
         &self,
@@ -125,7 +113,7 @@ pub trait ExpressionTable:
     fn try_break(&self, ty: Type, body: Expression) -> Expression {
         self.push_expression(ExpressionEnum::Try(ty, body))
     }
-    fn match_(
+    fn r#match(
         &self,
         value: Expression,
         variants: impl IntoIterator<Item = Expression>,
@@ -135,18 +123,8 @@ pub trait ExpressionTable:
             self.push_expressions(variants),
         ))
     }
-    fn if_stmt(
-        &self,
-        tt: &(impl TypeTable<Base = Self::Base> + ?Sized),
-        condition: Expression,
-        body: Expression,
-    ) -> Expression {
-        self.if_else(
-            condition,
-            // TODO: this sequence can be removed after testing
-            self.sequence([body], self.construct_unit(tt)),
-            self.construct_unit(tt),
-        )
+    fn if_stmt(&self, condition: Expression, body: Expression) -> Expression {
+        self.if_else(condition, body, self.construct_unit())
     }
     fn if_else(
         &self,
@@ -154,18 +132,25 @@ pub trait ExpressionTable:
         then_branch: Expression,
         else_branch: Expression,
     ) -> Expression {
-        self.match_(condition, [else_branch, then_branch])
+        self.r#match(condition, [else_branch, then_branch])
     }
+}
+
+pub trait Typed {
+    type Base;
+    fn get_type(&self, mt: &(impl Table<Base = Self::Base> + ?Sized)) -> Type;
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord, Debug)]
 pub struct Type(u32);
 
 impl Type {
-    pub unsafe fn new(i: u32) -> Self {
+    #[must_use]
+    pub const unsafe fn new(i: u32) -> Self {
         Self(i)
     }
-    pub fn index(self) -> u32 {
+    #[must_use]
+    pub const fn index(self) -> u32 {
         self.0
     }
 }
@@ -174,11 +159,17 @@ impl Type {
 pub struct Tuple(u32);
 
 impl Tuple {
-    pub unsafe fn new(i: u32) -> Self {
+    #[must_use]
+    pub const unsafe fn new(i: u32) -> Self {
         Self(i)
     }
-    pub fn index(self) -> u32 {
+    #[must_use]
+    pub const fn index(self) -> u32 {
         self.0
+    }
+    #[must_use]
+    pub fn len(self, mt: &(impl Table + ?Sized)) -> u32 {
+        mt[self].len() as u32
     }
 }
 
@@ -186,11 +177,17 @@ impl Tuple {
 pub struct Enum(u32);
 
 impl Enum {
-    pub unsafe fn new(i: u32) -> Self {
+    #[must_use]
+    pub const unsafe fn new(i: u32) -> Self {
         Self(i)
     }
-    pub fn index(self) -> u32 {
+    #[must_use]
+    pub const fn index(self) -> u32 {
         self.0
+    }
+    #[must_use]
+    pub fn len(self, mt: &(impl Table + ?Sized)) -> u32 {
+        mt[self].len() as u32
     }
 }
 
@@ -198,10 +195,12 @@ impl Enum {
 pub struct Expression(u32);
 
 impl Expression {
-    pub unsafe fn new(i: u32) -> Self {
+    #[must_use]
+    pub const unsafe fn new(i: u32) -> Self {
         Self(i)
     }
-    pub fn index(self) -> u32 {
+    #[must_use]
+    pub const fn index(self) -> u32 {
         self.0
     }
 }
@@ -210,10 +209,12 @@ impl Expression {
 pub struct Expressions(u32);
 
 impl Expressions {
-    pub unsafe fn new(i: u32) -> Self {
+    #[must_use]
+    pub const unsafe fn new(i: u32) -> Self {
         Self(i)
     }
-    pub fn index(self) -> u32 {
+    #[must_use]
+    pub const fn index(self) -> u32 {
         self.0
     }
 }
@@ -222,18 +223,30 @@ impl Expressions {
 pub struct FunctionType(Tuple, Type);
 
 impl FunctionType {
-    pub fn new(from: Tuple, to: Type, tt: &(impl TypeTable + ?Sized)) -> Self {
-        assert!(to.is_first_order(tt));
-        FunctionType(from, to)
+    /// Creates a new [`FunctionType`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if type `to` is not first-order.
+    #[must_use]
+    pub fn new(from: Tuple, to: Type, mt: &(impl Table + ?Sized)) -> Self {
+        // TODO: add a new FirstOrderType or something
+        // that is then convertible to Type
+        // same with FirstOrderTuple and FirstOrderEnum
+        assert!(to.is_first_order(mt));
+        Self(from, to)
     }
-    pub fn from(self) -> Tuple {
+    #[must_use]
+    pub const fn from(self) -> Tuple {
         self.0
     }
-    pub fn to(self) -> Type {
+    #[must_use]
+    pub const fn to(self) -> Type {
         self.1
     }
-    pub fn never_returns(self, tt: &(impl TypeTable + ?Sized)) -> bool {
-        matches!(tt[self.to()], TypeEnum::Sum(tys) if tt[tys].is_empty())
+    #[must_use]
+    pub fn never_returns(self, mt: &(impl Table + ?Sized)) -> bool {
+        matches!(mt[self.to()], TypeEnum::Sum(tys) if mt[tys].is_empty())
     }
 }
 
@@ -271,118 +284,126 @@ pub enum ExpressionEnum<O> {
 }
 
 impl Type {
-    pub fn is_first_order(self, tt: &(impl TypeTable + ?Sized)) -> bool {
-        match tt[self] {
+    #[must_use]
+    pub fn is_first_order(self, mt: &(impl Table + ?Sized)) -> bool {
+        match mt[self] {
             TypeEnum::Base(_) => true,
-            TypeEnum::Sum(sum) => tt[sum].iter().all(|ty| ty.is_first_order(tt)),
-            TypeEnum::Product(product) => tt[product].iter().all(|ty| ty.is_first_order(tt)),
+            TypeEnum::Sum(sum) => mt[sum].iter().all(|ty| ty.is_first_order(mt)),
+            TypeEnum::Product(product) => mt[product].iter().all(|ty| ty.is_first_order(mt)),
             TypeEnum::Function(_) => false,
         }
     }
-    pub fn into_product(self, tt: &(impl TypeTable + ?Sized)) -> Tuple {
-        match tt[self] {
-            TypeEnum::Product(types) => types,
-            _ => panic!(),
+    #[must_use]
+    pub fn into_product(self, mt: &(impl Table + ?Sized)) -> Option<Tuple> {
+        match mt[self] {
+            TypeEnum::Product(types) => Some(types),
+            _ => None,
         }
     }
-    pub fn into_sum(self, tt: &(impl TypeTable + ?Sized)) -> Enum {
-        match tt[self] {
-            TypeEnum::Sum(types) => types,
-            _ => panic!(),
+    #[must_use]
+    pub fn into_sum(self, mt: &(impl Table + ?Sized)) -> Option<Enum> {
+        match mt[self] {
+            TypeEnum::Sum(types) => Some(types),
+            _ => None,
         }
     }
-    pub fn into_function(self, tt: &(impl TypeTable + ?Sized)) -> FunctionType {
-        match tt[self] {
-            TypeEnum::Function(function) => function,
-            _ => panic!(),
+    #[must_use]
+    pub fn into_function(self, mt: &(impl Table + ?Sized)) -> Option<FunctionType> {
+        match mt[self] {
+            TypeEnum::Function(function) => Some(function),
+            _ => None,
         }
     }
 }
 
 impl Expression {
-    pub fn get_type<B>(
-        self,
-        tt: &(impl TypeTable<Base = B> + ?Sized),
-        et: &(impl ExpressionTable<Base = B> + ?Sized),
-    ) -> Type {
-        match et[self] {
-            ExpressionEnum::Operation(ref o) => o.get_type(tt),
-            ExpressionEnum::Reference(ty, _) | ExpressionEnum::Try(ty, _) => ty,
-            ExpressionEnum::Let(_, e) | ExpressionEnum::Sequence(_, e) => e.get_type(tt, et),
-            ExpressionEnum::Construct(types, _) => tt.insert_type(TypeEnum::Product(types)),
-            ExpressionEnum::Apply(f, _) => {
-                let fun = f.get_type(tt, et).into_function(tt);
-                fun.to()
-            }
-            ExpressionEnum::Member(e, n) => {
-                let types = e.get_type(tt, et).into_product(tt);
-                tt[types][n as usize]
-            }
-            ExpressionEnum::Abstract(from, e) => {
-                let to = e.get_type(tt, et);
-                tt.insert_type(TypeEnum::Function(FunctionType::new(from, to, tt)))
-            }
-            ExpressionEnum::Match(_, es) => et[es][0].get_type(tt, et),
-            ExpressionEnum::Variant(types, _, _) => tt.insert_type(TypeEnum::Sum(types)),
+    pub fn get_type<B>(self, mt: &(impl Table<Base = B> + ?Sized)) -> Option<Type> {
+        match mt[self] {
+            ExpressionEnum::Operation(ref o) => Some(o.get_type(mt)),
+            ExpressionEnum::Reference(ty, _) | ExpressionEnum::Try(ty, _) => Some(ty),
+            ExpressionEnum::Let(_, e) | ExpressionEnum::Sequence(_, e) => e.get_type(mt),
+            ExpressionEnum::Construct(types, _) => Some(mt.insert_type(TypeEnum::Product(types))),
+            ExpressionEnum::Apply(f, _) => f
+                .get_type(mt)
+                .and_then(|t| t.into_function(mt))
+                .map(FunctionType::to),
+            ExpressionEnum::Member(e, n) => e
+                .get_type(mt)
+                .and_then(|t| t.into_product(mt))
+                .and_then(|types| mt[types].get(n as usize).copied()),
+            ExpressionEnum::Abstract(from, e) => e
+                .get_type(mt)
+                .map(|to| mt.insert_type(TypeEnum::Function(FunctionType::new(from, to, mt)))),
+            ExpressionEnum::Match(_, es) => mt[es]
+                .first()
+                .map_or_else(|| Some(mt.never()), |e| e.get_type(mt)),
+            ExpressionEnum::Variant(types, _, _) => Some(mt.insert_type(TypeEnum::Sum(types))),
         }
     }
-    pub fn get_captures<B>(
-        self,
-        tt: &(impl TypeTable<Base = B> + ?Sized),
-        et: &(impl ExpressionTable<Base = B> + ?Sized),
-        captures: &mut [bool],
-    ) {
-        self.get_captures_inner(tt, et, 0, captures);
+    pub fn get_captures<B>(self, mt: &(impl Table<Base = B> + ?Sized), captures: &mut [bool]) {
+        self.get_captures_inner(mt, 0, captures);
     }
     fn get_captures_inner<B>(
         self,
-        tt: &(impl TypeTable<Base = B> + ?Sized),
-        et: &(impl ExpressionTable<Base = B> + ?Sized),
+        mt: &(impl Table<Base = B> + ?Sized),
         offset: u32,
         captures: &mut [bool],
     ) {
-        match et[self] {
+        // if we (somehow) have enough lambda arguments that the `offset` threatens to overflow,
+        // we can simply stop checking within there,
+        // as those inner nodes will never be able to reference our captures anyway
+        match mt[self] {
             ExpressionEnum::Operation(_) => {}
             ExpressionEnum::Reference(_, n) => {
-                if n >= offset && ((n - offset) as usize) < captures.len() {
-                    captures[(n - offset) as usize] = true;
+                if let Some(capture_idx) = n.checked_sub(offset)
+                    && let Some(capture) = captures.get_mut(capture_idx as usize)
+                {
+                    *capture = true;
                 }
             }
             ExpressionEnum::Let(e1, e2) => {
-                e1.get_captures_inner(tt, et, offset, captures);
-                e2.get_captures_inner(tt, et, offset + 1, captures);
+                e1.get_captures_inner(mt, offset, captures);
+                if let Some(next_offset) = offset.checked_add(1) {
+                    e2.get_captures_inner(mt, next_offset, captures);
+                }
             }
             ExpressionEnum::Sequence(es, en) => {
-                for e in et[es].iter() {
-                    e.get_captures_inner(tt, et, offset, captures);
+                for &e in &mt[es] {
+                    e.get_captures_inner(mt, offset, captures);
                 }
-                en.get_captures_inner(tt, et, offset, captures);
+                en.get_captures_inner(mt, offset, captures);
             }
             ExpressionEnum::Construct(_, es) => {
-                for e in et[es].iter() {
-                    e.get_captures_inner(tt, et, offset, captures);
+                for &e in &mt[es] {
+                    e.get_captures_inner(mt, offset, captures);
                 }
             }
             ExpressionEnum::Apply(e1, es) => {
-                e1.get_captures_inner(tt, et, offset, captures);
-                for &e2 in et[es].iter() {
-                    e2.get_captures_inner(tt, et, offset, captures);
+                e1.get_captures_inner(mt, offset, captures);
+                for &e2 in &mt[es] {
+                    e2.get_captures_inner(mt, offset, captures);
                 }
             }
             ExpressionEnum::Member(e, _) | ExpressionEnum::Variant(_, _, e) => {
-                e.get_captures_inner(tt, et, offset, captures);
+                e.get_captures_inner(mt, offset, captures);
             }
             ExpressionEnum::Match(e, es) => {
-                e.get_captures_inner(tt, et, offset, captures);
-                for e in et[es].iter() {
-                    e.get_captures_inner(tt, et, offset + 1, captures);
+                e.get_captures_inner(mt, offset, captures);
+                if let Some(next_offset) = offset.checked_add(1) {
+                    for &e in &mt[es] {
+                        e.get_captures_inner(mt, next_offset, captures);
+                    }
                 }
             }
             ExpressionEnum::Abstract(t, e) => {
-                e.get_captures_inner(tt, et, offset + tt[t].len() as u32, captures);
+                if let Some(next_offset) = offset.checked_add(t.len(mt)) {
+                    e.get_captures_inner(mt, next_offset, captures);
+                }
             }
             ExpressionEnum::Try(_, e) => {
-                e.get_captures_inner(tt, et, offset + 1, captures);
+                if let Some(next_offset) = offset.checked_add(1) {
+                    e.get_captures_inner(mt, next_offset, captures);
+                }
             }
         }
     }

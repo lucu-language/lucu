@@ -1,3 +1,5 @@
+#![cfg(feature = "print")]
+
 use std::borrow::Cow;
 
 use anstyle::{AnsiColor, Color, Style};

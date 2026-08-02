@@ -1,5 +1,6 @@
 import "types"
 import "regions"
+import "c"
 
 type u8 = types.u8
 type u16 = types.u16
@@ -188,6 +189,15 @@ fun slice_from_raw_parts[#raw r, T](ptr ^@r [0]T, length size) ^@r []T
     = #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n
+
+fun strlen[r](str c.string[r,]) size = {
+    let len ^size = use regions.ref(0)
+    handle unfounded loop {
+        if str[len^]^ == 0 then raise
+        len^ += 1
+    }
+    len^
+}
 
 -- --# USAGE:
 -- --# ```

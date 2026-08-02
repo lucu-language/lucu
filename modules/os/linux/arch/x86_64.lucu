@@ -1,18 +1,52 @@
-import "os:linux/arch"
+import "os:linux"
+import "main:main"
+import "builtin:c"
 
-fun with_raw_x86_64(fun body with arch.SyscallRaw) with World = handle body with arch.SyscallRaw {
-    fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
-        = asm[
-            "syscall",
-            "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}",
-            [7]addr,
-            addr,
-        ]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
+fun with_syscall_raw(fun body with linux.SyscallRaw) with World = {
+    handle body with linux.SyscallRaw {
+        fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
+            = asm[
+                "syscall",
+                "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}",
+                [7]addr,
+                addr,
+            ]([nr, arg1, arg2, arg3, arg4, arg5, arg6])
+    }
 }
 
-fun with_nr_x86_64(fun body with arch.SyscallNR) = handle body with arch.SyscallNR {
-    fun nr_read addr = 0
-    fun nr_write addr = 1
-    fun nr_exit addr = 60
-    fun nr_getrandom addr = 318
+fun with_syscall_nr(fun body with linux.SyscallNR) = {
+    handle body with linux.SyscallNR {
+        fun nr_read addr = 0
+        fun nr_write addr = 1
+        fun nr_exit addr = 60
+        fun nr_getrandom addr = 318
+    }
+}
+
+fun entry(argc size, argv CStrings, envp CStrings) ! with World Div = {
+    {
+        use with_syscall_raw
+        use with_syscall_nr
+        use linux.with_syscall
+        use linux.stdio
+        main.main
+        linux.exit(0)
+    }
+    unreachable
+}
+
+type CStrings = ^@static [:0]c.string[static,]
+
+type Args = struct(
+    argc int,
+    argv0 c.string[static,],
+)
+
+fun _start ! with World Div = {
+    asm["", "{rbp}", int, unit](0)
+    let rsp = asm_pure["", "={rsp},{rsp}", ^@static Args, ^@static Args](---)
+    let argc size = #trunc rsp.argc^
+    let argv CStrings = #transmute rsp.argv0
+    let envp CStrings = #transmute argv[argc + 1]
+    entry(argc, argv, envp)
 }

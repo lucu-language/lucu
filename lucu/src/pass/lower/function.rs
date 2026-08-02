@@ -3,7 +3,7 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use compact_str::{CompactString, ToCompactString};
+use compact_str::{CompactString, ToCompactString, format_compact};
 use do_notation::m;
 use itertools::Either;
 
@@ -300,7 +300,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn has_marker_effect(&self, effect: Effect) -> bool {
         self.markers.contains(&effect)
     }
-    fn marker_effect(&self, effect: Effect, at: &impl HasSpan) -> Problems {
+    fn check_marker_effect(&self, effect: Effect, at: &impl HasSpan) -> Problems {
         if self.has_marker_effect(effect) {
             Problems::ok()
         } else {
@@ -310,6 +310,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         }
     }
     fn find_effect(&self, effect: Effect) -> Option<u32> {
+        // TODO: global effect handlers
+        // return either u32 index or some global handler
         self.vars
             .iter()
             .enumerate()
@@ -376,6 +378,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             let ty = PathType::Function(sig, generics);
                             Result::new((
                                 match effect {
+                                    // TODO: delay getting exact handler until we know the inferred generics
+                                    // add another option other than "mu::Expression" and "IntrinsicFunction" for effect functions
                                     Some(e) => match self.find_effect(e) {
                                         Some(index) => {
                                             let effect_ty = self
@@ -400,8 +404,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                             Either::Left(mu_function)
                                         }
                                         None => {
-                                            // TODO: global handlers
-                                            todo!("{}", e.display(self.lower.tt))
+                                            return Result::error(
+                                                ProblemKind::MissingEffects(MissingEffects(e))
+                                                    .at(self.lower.module, path),
+                                            );
                                         }
                                     },
                                     None => match def {
@@ -757,10 +763,15 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             };
 
             if !sig_mono.no_holes(self.lower.tt) {
-                todo!(
-                    "error: ambiguous generics for {}",
-                    sig_mono.display(self.lower.tt)
-                );
+                return problems.and_then(|()| {
+                    Result::error(
+                        ProblemKind::Other(format_compact!(
+                            "ambiguous generics for {}",
+                            sig_mono.display(self.lower.tt)
+                        ))
+                        .at(self.lower.module, path),
+                    )
+                });
             }
             // FIXME: check if args are subtypes of inferred params
 
@@ -783,7 +794,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         Either::Right(path) => path.span(),
                     }));
                 } else {
-                    // TODO: global handlers
                     missing.push(effect);
                 }
             }
@@ -1126,16 +1136,17 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::Expression::Uninit(_) => {
                 // TODO: check if uninit is allowed for this type
                 if !expected.no_holes(self.lower.tt) {
-                    return Result::error(
+                    Result::error(
                         ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
                             .at(self.lower.module, expr_outer),
-                    );
+                    )
+                } else {
+                    Result::new((
+                        self.table
+                            .constant(self.r#type(expected), mu::Constant::Uninit),
+                        expected,
+                    ))
                 }
-                Result::new((
-                    self.table
-                        .constant(self.r#type(expected), mu::Constant::Uninit),
-                    expected,
-                ))
             }
             ast::Expression::Member { lhs, rhs, .. } => self
                 .expression(lhs, self.lower.tt.insert_type(TypeEnum::Hole))
@@ -1168,20 +1179,25 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
             ast::Expression::Enclosed(expr) => self.expression(&expr.inner, expected),
             ast::Expression::Cast { op, expr, .. } => {
-                if !expected.no_holes(self.lower.tt) {
-                    return Result::error(
+                if expected.no_holes(self.lower.tt) {
+                    self.expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
+                        .map(|(value, from)| {
+                            (
+                                self.table.cast(
+                                    self.r#type(from),
+                                    self.r#type(expected),
+                                    *op,
+                                    value,
+                                ),
+                                expected,
+                            )
+                        })
+                } else {
+                    Result::error(
                         ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
                             .at(self.lower.module, expr_outer),
-                    );
+                    )
                 }
-                self.expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
-                    .map(|(value, from)| {
-                        (
-                            self.table
-                                .cast(self.r#type(from), self.r#type(expected), *op, value),
-                            expected,
-                        )
-                    })
             }
             ast::Expression::If {
                 condition,
@@ -1231,7 +1247,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 .expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
                 .map(|(mu, _)| (mu, self.lower.tt.insert_type(TypeEnum::Unit))),
             ast::Expression::AssignOp(op, lhs, tk_op, rhs) => {
-                let ast::Expression::Dereference { expr, .. } = &**lhs else {
+                let ast::Expression::Dereference { expr, tk_caret } = &**lhs else {
                     todo!("error")
                 };
                 self.expression(
@@ -1250,9 +1266,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         let mu_inner = self.r#type(inner);
                         let val = match op {
                             &ast::AssignOp::Math(op) => {
-                                problems += self.marker_effect(
+                                problems += self.check_marker_effect(
                                     self.lower.tt.insert_effect(EffectEnum::Read(region)),
-                                    tk_op,
+                                    tk_caret,
                                 );
                                 self.table.call(
                                     mu::Callable::MathOp { ty: mu_inner, op },
@@ -1264,7 +1280,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             }
                             ast::AssignOp::Assign => rhs,
                         };
-                        problems += self.marker_effect(
+                        problems += self.check_marker_effect(
                             self.lower.tt.insert_effect(EffectEnum::Write(region)),
                             tk_op,
                         );
@@ -1333,7 +1349,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     let TypeEnum::Pointer(inner, region) = self.lower.tt[ty] else {
                         panic!("ICE: not a poiner :(")
                     };
-                    self.marker_effect(
+                    self.check_marker_effect(
                         self.lower.tt.insert_effect(EffectEnum::Read(region)),
                         tk_caret,
                     )
@@ -1526,42 +1542,49 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             }
 
                             // ???
-                            (_, idx) => todo!("error: indexing {}", ty.display(self.lower.tt)),
+                            (_, _) => Result::error(
+                                ProblemKind::Other(format_compact!(
+                                    "indexing {}",
+                                    ty.display(self.lower.tt)
+                                ))
+                                .at(self.lower.module, expr_outer),
+                            ),
                         }
                     })
             }
             ast::Expression::Array(exprs) => {
                 // TODO: we can infer stuff, we don't need to check for holes here
-                if !expected.no_holes(self.lower.tt) {
-                    return Result::error(
+                if expected.no_holes(self.lower.tt) {
+                    match self.lower.tt[expected] {
+                        TypeEnum::PointerSlice(_, _, _) => todo!(),
+                        TypeEnum::Array(inner, constant, s) => {
+                            if let Some(s) = s {
+                                todo!("add sentinel value");
+                            }
+                            let size = self.array_size(constant);
+                            if exprs.inner.elements.len() != size as usize {
+                                todo!("error");
+                            }
+
+                            let mut problems = Problems::ok();
+                            let mu_inner = self.r#type(inner);
+                            let et = self.table;
+                            let args = exprs.inner.iter().map(|elem| {
+                                problems
+                                    .append(self.expression(elem, inner))
+                                    .map_or_else(|| self.table.unreachable(), |(e, _)| e)
+                            });
+                            let construct =
+                                et.call(mu::Callable::ArrayConstruct { ty: mu_inner, size }, args);
+                            problems.with((construct, expected))
+                        }
+                        _ => todo!("error"),
+                    }
+                } else {
+                    Result::error(
                         ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
                             .at(self.lower.module, expr_outer),
-                    );
-                }
-                match self.lower.tt[expected] {
-                    TypeEnum::PointerSlice(_, _, _) => todo!(),
-                    TypeEnum::Array(inner, constant, s) => {
-                        if let Some(s) = s {
-                            todo!("add sentinel value");
-                        }
-                        let size = self.array_size(constant);
-                        if exprs.inner.elements.len() != size as usize {
-                            todo!("error");
-                        }
-
-                        let mut problems = Problems::ok();
-                        let mu_inner = self.r#type(inner);
-                        let et = self.table;
-                        let args = exprs.inner.iter().map(|elem| {
-                            problems
-                                .append(self.expression(elem, inner))
-                                .map_or_else(|| self.table.unreachable(), |(e, _)| e)
-                        });
-                        let construct =
-                            et.call(mu::Callable::ArrayConstruct { ty: mu_inner, size }, args);
-                        problems.with((construct, expected))
-                    }
-                    _ => todo!("error"),
+                    )
                 }
             }
             ast::Expression::Call(call) => self.call(Either::Left(call), None, expected),
@@ -1580,38 +1603,39 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ),
             ast::Expression::Handle { expr, handlers, .. } => {
                 // TODO: OnceLock on Var::Raise so we don't have to already know it here
-                if !expected.no_holes(self.lower.tt) {
-                    return Result::error(
-                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
-                            .at(self.lower.module, expr_outer),
-                    );
-                }
-                let mut self_inner = self.reborrow();
-                self_inner.vars.push_front(Var::Raise(expected));
+                if expected.no_holes(self.lower.tt) {
+                    let mut self_inner = self.reborrow();
+                    self_inner.vars.push_front(Var::Raise(expected));
 
-                if let Some((_, handlers)) = handlers {
-                    let [(handler, _)] = handlers.elements.as_slice() else {
-                        todo!("error: not yet supported")
-                    };
-                    self_inner.lower.effect(&handler.effect).and_then(|effect| {
-                        self_inner
-                            .handler(effect, &handler.items.inner)
-                            .and_then(|effect_mu| {
-                                self_inner.vars.push_front(Var::Effect(effect));
-                                self_inner
-                                    .expression(expr, expected)
-                                    .map(|(e, t)| (self_inner.table.let_chain([effect_mu], e), t))
-                            })
+                    if let Some((_, handlers)) = handlers {
+                        let [(handler, _)] = handlers.elements.as_slice() else {
+                            todo!("error: not yet supported")
+                        };
+                        self_inner.lower.effect(&handler.effect).and_then(|effect| {
+                            self_inner
+                                .handler(effect, &handler.items.inner)
+                                .and_then(|effect_mu| {
+                                    self_inner.vars.push_front(Var::Effect(effect));
+                                    self_inner.expression(expr, expected).map(|(e, t)| {
+                                        (self_inner.table.let_chain([effect_mu], e), t)
+                                    })
+                                })
+                        })
+                    } else {
+                        self_inner.expression(expr, expected)
+                    }
+                    .map(|(e, _)| {
+                        (
+                            self_inner.table.try_break(self_inner.r#type(expected), e),
+                            expected,
+                        )
                     })
                 } else {
-                    self_inner.expression(expr, expected)
-                }
-                .map(|(e, _)| {
-                    (
-                        self_inner.table.try_break(self_inner.r#type(expected), e),
-                        expected,
+                    Result::error(
+                        ProblemKind::NotEnoughInfo(NotEnoughInfo(Term::Type(expected)))
+                            .at(self.lower.module, expr_outer),
                     )
-                })
+                }
             }
             ast::Expression::Raise { expr, .. } => {
                 let never = self.lower.tt.insert_type(TypeEnum::Never);
@@ -1719,8 +1743,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let self_ = &mut *self;
                 let stmts_ = &mut *stmts;
                 m! {
-                    ty <- ty.as_ref().map_or(Result::new(None), |ty| self_.lower.r#type(ty, true).map(Some));
-                    outer <- self_.expression(value, ty.unwrap_or_else(|| self_.lower.tt.insert_type(TypeEnum::Hole)));
+                    ty <- ty.as_ref().map_or_else(|| Result::new(self_.lower.tt.insert_type(TypeEnum::Hole)), |ty| self_.lower.r#type(ty, true));
+                    outer <- self_.expression(value, ty);
                     inner <- {
                         let mut self_inner = self_.reborrow();
                         self_inner.vars.push_front(Var::Named(var.as_str(), FunctionParameter::Data(outer.1)));

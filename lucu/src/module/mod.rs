@@ -6,7 +6,6 @@ use compact_str::{CompactString, ToCompactString, format_compact};
 use include_dir::{Dir, File, include_dir};
 use path_clean::{PathClean, clean};
 
-#[cfg(feature = "watcher")]
 pub mod watcher;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, PartialOrd, Ord)]

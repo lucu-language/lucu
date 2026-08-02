@@ -1,6 +1,15 @@
 import "core:io"
-import "os:linux/arch"
-import "os:linux/arch/x86_64"
+
+effect SyscallNR = {
+    fun nr_read addr
+    fun nr_write addr
+    fun nr_exit addr
+    fun nr_getrandom addr
+}
+
+effect SyscallRaw = {
+    fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
+}
 
 effect Syscall = {
     fun read(file addr, buf ^#write []i8) size
@@ -10,36 +19,20 @@ effect Syscall = {
     fun getrandom(buf ^#write []i8) size
 }
 
-fun with_syscall(fun body with Syscall) with arch.SyscallNR arch.SyscallRaw = {
+fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = {
     handle body with Syscall {
         fun read(file addr, buf ^#write []i8) size = {
-            #trunc arch.syscall(arch.nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
+            #trunc syscall(nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
         }
         fun write(file addr, buf ^[]i8) size = {
-            #trunc arch.syscall(
-                arch.nr_write,
-                file,
-                #transmute buf[0],
-                #ext len(buf),
-                ---,
-                ---,
-                ---,
-            )
+            #trunc syscall(nr_write, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
         }
         fun exit(code addr) ! = {
-            discard arch.syscall(arch.nr_exit, code, ---, ---, ---, ---, ---)
+            discard syscall(nr_exit, code, ---, ---, ---, ---, ---)
             unreachable
         }
         fun getrandom(buf ^#write []i8) size = {
-            #trunc arch.syscall(
-                arch.nr_getrandom,
-                #transmute buf[0],
-                #ext len(buf),
-                0,
-                ---,
-                ---,
-                ---,
-            )
+            #trunc syscall(nr_getrandom, #transmute buf[0], #ext len(buf), 0, ---, ---, ---)
         }
     }
 }
@@ -56,11 +49,4 @@ fun stdio(fun body with io.StdIo) with Syscall = handle body with io.StdIo {
         fun write(bytes ^[]i8) size = write(2, bytes)
         fun flush = {}
     }
-}
-
-fun sys_x86_64(fun body with Syscall) with World = {
-    use x86_64.with_raw_x86_64
-    use x86_64.with_nr_x86_64
-    use with_syscall
-    body
 }

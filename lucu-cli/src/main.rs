@@ -18,7 +18,7 @@ use lucu::type_table::TypeTable;
 
 #[derive(Facet)]
 struct CheckCommand {
-    /// .lucu file with entry point
+    /// Location of the main library
     #[facet(args::positional)]
     main: PathBuf,
     /// Set the location of the folder that contains the standard libraries
@@ -35,7 +35,7 @@ struct CheckCommand {
 
 #[derive(Facet)]
 struct BuildCommand {
-    /// .lucu file with entry point
+    /// Location of the main library
     #[facet(args::positional)]
     main: PathBuf,
     /// Set the file name of the outputted executable, defaults to 'out'
@@ -52,6 +52,9 @@ struct BuildCommand {
     /// Target cpu features, defaults to the common denominator for the target architecture
     #[facet(args::named)]
     features: Option<String>,
+    /// Module containing the entry point
+    #[facet(args::named)]
+    entry: Option<String>,
 
     /// Set the location of the folder that contains the standard libraries
     #[facet(args::named)]
@@ -101,12 +104,110 @@ fn main() {
         SubCommand::Check(check_command) => todo!(),
         SubCommand::Watch(check_command) => watch(check_command),
         SubCommand::Build(build_command) => {
-            todo!()
+            if build(build_command) {
+                println!("COMPILED");
+            }
         }
         SubCommand::Run(build_command) => {
-            todo!()
+            if build(build_command) {
+                std::process::Command::new("./out").status().unwrap();
+            }
         }
     }
+}
+
+fn build(cmd: BuildCommand) -> bool {
+    let mut dirs = LibraryDir::stdlib(cmd.stdlib);
+    dirs.insert(
+        Library::MAIN,
+        LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
+    );
+
+    let entry = match cmd.entry {
+        Some(entry) => Module::from_import(&Module::MAIN, &entry),
+        None => Module::new(Library::OS, "linux/arch/x86_64"),
+    };
+
+    let modules = HandleSet::<Module>::new();
+    let mut graph = ModuleGraph::new();
+    graph.insert_or_update(&dirs, &entry, |m| modules.intern_cloned(m));
+
+    if cmd.debug {
+        eprintln!("---");
+        eprintln!("{}", graph.dot());
+        eprintln!("---");
+    }
+
+    let tt = TypeTable::new();
+    let mt = unsafe { mu::table::Table::new() };
+
+    let mut functions = Vec::new();
+    if let Some(postorder) = graph.postorder().value() {
+        for module in postorder {
+            if let Some(stages) = graph.stages(module)
+                && let Some(mu) = stages.mu(&graph, &tt, &mt)
+            {
+                functions.extend(mu.functions.iter().cloned())
+            }
+        }
+    }
+
+    if graph.has_problems() {
+        graph.print_problems(&dirs, &tt, false);
+        return false;
+    }
+
+    // owo no problems
+    // COMPILE
+    Target::initialize_native(&InitializationConfig::default()).unwrap();
+
+    let triple = TargetMachine::get_default_triple();
+    let machine = Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine_from_options(
+            &triple,
+            TargetMachineOptions::new().set_level(OptimizationLevel::Aggressive),
+        )
+        .unwrap();
+
+    let context = Context::create();
+    let llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
+
+    if let Some(fun) = llvm.module.get_function("_start") {
+        fun.add_attribute(
+            AttributeLoc::Function,
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),
+        );
+        fun.add_attribute(
+            AttributeLoc::Function,
+            context.create_string_attribute("stackrealign", ""),
+        );
+        fun.add_attribute(
+            AttributeLoc::Function,
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("naked"), 0),
+        );
+    }
+
+    llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
+
+    // eprintln!(" --- LLVM --- ");
+    // llvm.eprint();
+    llvm.verify().unwrap();
+    llvm.optimize().unwrap();
+    // eprintln!(" --- LLVM O3 --- ");
+    // llvm.eprint();
+
+    llvm.write_asm(Path::new("out.asm")).unwrap();
+    llvm.write_object(Path::new("out.o")).unwrap();
+    std::process::Command::new("ld")
+        .arg("out.o")
+        .arg("-o")
+        .arg("out")
+        .arg("-e_start")
+        .status()
+        .unwrap();
+
+    true
 }
 
 fn watch(cmd: CheckCommand) {
@@ -129,8 +230,8 @@ fn watch(cmd: CheckCommand) {
 
     loop {
         if cmd.debug {
-            println!("---");
-            println!("{}", graph.dot());
+            eprintln!("---");
+            eprintln!("{}", graph.dot());
         }
 
         let mut functions = Vec::new();
@@ -140,7 +241,8 @@ fn watch(cmd: CheckCommand) {
                     && stages.source().is_some()
                     && let Some(header) = stages.header(&graph, &tt)
                 {
-                    println!("{}", header.display(&tt));
+                    eprintln!("---");
+                    eprintln!("{}", header.display(&tt));
                 }
 
                 if let Some(mu) = stages.mu(&graph, &tt, &mt) {
@@ -148,70 +250,12 @@ fn watch(cmd: CheckCommand) {
                 }
 
                 stages.print_problems(watcher.modules(), &tt, false);
-
-                if cmd.debug {
-                    println!();
-                }
             }
         }
         if cmd.debug {
+            eprintln!("---");
             tt.eprint_lengths();
         }
-
-        if cmd.debug && !graph.problems().next().is_some() {
-            // owo no problems
-            // COMPILE
-            Target::initialize_native(&InitializationConfig::default()).unwrap();
-
-            let triple = TargetMachine::get_default_triple();
-            let machine = Target::from_triple(&triple)
-                .unwrap()
-                .create_target_machine_from_options(
-                    &triple,
-                    TargetMachineOptions::new().set_level(OptimizationLevel::Aggressive),
-                )
-                .unwrap();
-
-            let context = Context::create();
-            let llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
-
-            if let Some(fun) = llvm.module.get_function("_start") {
-                fun.add_attribute(
-                    AttributeLoc::Function,
-                    context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),
-                );
-                fun.add_attribute(
-                    AttributeLoc::Function,
-                    context.create_string_attribute("stackrealign", ""),
-                );
-                fun.add_attribute(
-                    AttributeLoc::Function,
-                    context.create_enum_attribute(Attribute::get_named_enum_kind_id("naked"), 0),
-                );
-            }
-
-            llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
-
-            // eprintln!(" --- LLVM --- ");
-            // llvm.eprint();
-            llvm.verify().unwrap();
-            llvm.optimize().unwrap();
-            // eprintln!(" --- LLVM O3 --- ");
-            // llvm.eprint();
-
-            llvm.write_asm(Path::new("out.asm")).unwrap();
-            llvm.write_object(Path::new("out.o")).unwrap();
-            std::process::Command::new("ld")
-                .arg("out.o")
-                .arg("-o")
-                .arg("out")
-                .arg("-e_start")
-                .status()
-                .unwrap();
-
-            eprintln!("COMPILED");
-        }
-
         // wait for changes
         let changes = watcher.await_change();
         for changed in changes {

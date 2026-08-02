@@ -379,7 +379,7 @@ impl Effect {
             | EffectEnum::World => true,
             EffectEnum::Generic(_) => panic!("ICE: asked if effect generic is a marker"),
             EffectEnum::Row(_) => panic!("ICE: asked if effect row is a marker"),
-            EffectEnum::Hole => todo!(),
+            EffectEnum::Hole => true,
         }
     }
 }

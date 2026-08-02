@@ -17,11 +17,13 @@ use crate::pass::parser::err::Expected;
 use crate::span::{HasSpan, Span};
 use crate::type_table::TypeTable;
 
-#[cfg(feature = "print")]
 pub mod print;
 
 pub trait HasProblems {
     fn problems(&self) -> impl Iterator<Item = &Problem>;
+    fn has_problems(&self) -> bool {
+        self.problems().next().is_some()
+    }
 }
 
 #[must_use = "this `Result` may have problems, which should be handled"]
@@ -465,4 +467,7 @@ diagnostics!(
     (LiteralMismatch(LiteralMismatch),     114, Error, "Invalid literal for type"),
     (NotEnoughInfo(NotEnoughInfo),         115, Error, "Not enough info"),
     (MissingEffects(MissingEffects),       116, Error, "Missing effect(s)"),
+
+    // other
+    (Other(CompactString), 199, Error, "OTHER ERROR"),
 );

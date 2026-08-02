@@ -1,3 +1,5 @@
+#![cfg(feature = "watcher")]
+
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 

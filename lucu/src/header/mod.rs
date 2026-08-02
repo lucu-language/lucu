@@ -67,6 +67,8 @@ pub enum IntrinsicFunction {
     Unfounded,
     Trace,
     Trap,
+    None,
+    Some,
 }
 
 #[derive(Debug, Clone, Copy)]

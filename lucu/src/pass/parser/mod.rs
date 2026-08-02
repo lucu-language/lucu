@@ -299,7 +299,7 @@ impl<'a> Parser<'a> {
         matches!(
             self.next().token,
             TokenEnum::Identifier | TokenEnum::Underscore
-                | TokenEnum::Symbol(Symbol::Caret)
+                | TokenEnum::Symbol(Symbol::Caret | Symbol::Question)
                 | TokenEnum::Open(Group::Bracket)
                 // not really types, but we count them
                 | TokenEnum::Symbol(Symbol::Bang)

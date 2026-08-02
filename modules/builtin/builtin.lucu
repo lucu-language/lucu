@@ -1,6 +1,5 @@
 import "types"
 import "regions"
-import "c"
 
 type u8 = types.u8
 type u16 = types.u16
@@ -28,7 +27,7 @@ const false bool = types.false
 
 type nullptr = types.nullptr
 
-type static_str = ^@static []i8
+type str[r] = ^@r []i8
 
 -- regions
 
@@ -44,7 +43,7 @@ effect Write[r] = regions.Write[r,]
 -- source location
 
 type SourceLocation = struct(
-    path static_str,
+    path str[static,],
     line int,
     column int,
 )
@@ -63,13 +62,13 @@ handle CallerLocation {
 effect World
     = #intrinsic
 
-fun link[LIB static_str, E effect](fun body with E) with World
+fun link[LIB str[static,], E effect](fun body with E) with World
     = #intrinsic
 
-fun asm[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U with World
+fun asm[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U with World
     = #intrinsic
 
-fun asm_pure[ASSEMBLY static_str, CONSTRAINTS static_str, T, U](t T) U
+fun asm_pure[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U
     = #intrinsic
 
 -- printing
@@ -185,12 +184,29 @@ effect Fail = {
 fun len[T](slice ^#raw []T) size
     = #intrinsic
 
-fun slice_from_raw_parts[#raw r, T](ptr ^@r [0]T, length size) ^@r []T
+fun slice_from_raw_parts[#raw r, T](ptr ^@r T, length size) ^@r []T
     = #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n
 
-fun strlen[r](str c.string[r,]) size = {
+fun str_eq[r](a str[r,], b str[r,]) bool = {
+    if len(a) != len(b) {
+        false
+    } else {
+        let current ^size = use regions.ref(0)
+        handle unfounded loop {
+            if current^ == len(a) {
+                raise true
+            }
+            if a[current^]^ != b[current^]^ {
+                raise false
+            }
+            current^ += 1
+        }
+    }
+}
+
+fun strlen[r](str ^@r [:0]i8) size = {
     let len ^size = use regions.ref(0)
     handle unfounded loop {
         if str[len^]^ == 0 then raise
@@ -198,6 +214,17 @@ fun strlen[r](str c.string[r,]) size = {
     }
     len^
 }
+
+fun cstr_to_str[r](str ^@r [:0]i8) str[r,] = {
+    let len = strlen(str)
+    slice_from_raw_parts(str[0], len)
+}
+
+fun some[T](t T) ?T
+    = #intrinsic
+
+fun none[T] ?T
+    = #intrinsic
 
 -- --# USAGE:
 -- --# ```

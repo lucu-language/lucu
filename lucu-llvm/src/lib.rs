@@ -446,9 +446,6 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 let rhs = args.next().unwrap().build(llvm).basic_value(llvm);
                 let zip = lhs.zip(rhs);
                 zip.map(|(vl, vr)| {
-                    // TODO: non-int values
-                    let il = vl.into_int_value();
-                    let ir = vr.into_int_value();
                     let predicate = match op {
                         ast::PredicateOp::Equality(op) => match op {
                             ast::EqualityOp::Equals => IntPredicate::EQ,
@@ -465,9 +462,27 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                             (ast::InequalityOp::LessEquals, false) => IntPredicate::ULE,
                         },
                     };
-                    llvm.builder
-                        .build_int_compare(predicate, il, ir, "")
-                        .unwrap()
+                    if vl.is_int_value() {
+                        llvm.builder
+                            .build_int_compare(
+                                predicate,
+                                vl.into_int_value(),
+                                vr.into_int_value(),
+                                "",
+                            )
+                            .unwrap()
+                    } else if vl.is_pointer_value() {
+                        llvm.builder
+                            .build_int_compare(
+                                predicate,
+                                vl.into_pointer_value(),
+                                vr.into_pointer_value(),
+                                "",
+                            )
+                            .unwrap()
+                    } else {
+                        todo!()
+                    }
                 })
                 .unwrap_or_else(|| {
                     // unit equals itself
@@ -616,7 +631,9 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 let val = args.next().unwrap().build(llvm);
                 llvm.build_member_pointer(tys, member, val)
             }
-            Callable::MultiPointerIndex { ty } | Callable::PointerArrayIndex { ty, .. } => {
+            Callable::MultiPointerIndex { ty }
+            | Callable::PointerArrayIndex { ty, .. }
+            | Callable::MultiPointerOffset { ty } => {
                 // TODO: do a bounds check
                 let val = args.next().unwrap().build(llvm).basic_value(llvm);
                 let index = args

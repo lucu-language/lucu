@@ -1,9 +1,20 @@
-import "conway"
-import "echo"
 import "core:io"
-import "os:linux"
+import "core:env"
 
-fun main with Div io.StdIo linux.Syscall = {
-    echo.main
-    conway.main(48)
+fun main with io.StdIo env.Args env.Environ = {
+    discard env.next_arg
+    if env.next_arg { arg ->
+        io.print("Argument: ")
+        io.print(cstr_to_str(arg))
+        io.println
+    } else {
+        io.print("No argument given")
+        io.println
+    }
+
+    if env.get("HOME") { var ->
+        io.print("Your home directory is: ")
+        io.print(cstr_to_str(var))
+        io.println
+    }
 }

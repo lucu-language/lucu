@@ -20,8 +20,8 @@ use crate::span::{HasSpan, Span};
 use crate::type_table::substitute::Substitute;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
-    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, Kind, RegionEnum, SimpleKind,
-    Term, Thunk, Type, TypeEnum, TypeTable,
+    FunctionSignatureValue, GenericArgument, IntSize, Integer, Item, Kind, RegionEnum, Sentinel,
+    SimpleKind, Term, Thunk, Type, TypeEnum, TypeTable,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -553,18 +553,16 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     .last()
                     .copied()
                     .unwrap_or_else(|| todo!());
-                let FunctionParameter::Lambda(sig) = param else {
-                    todo!()
-                };
+                if let FunctionParameter::Lambda(sig) = param {
+                    let user_sig = problems.append(self.lambda_signature(
+                        self.lower.tt[sig].type_params.clone(),
+                        self.lower.tt[sig].implicit_regions,
+                        use_arg.params,
+                    ));
 
-                let user_sig = problems.append(self.lambda_signature(
-                    self.lower.tt[sig].type_params.clone(),
-                    self.lower.tt[sig].implicit_regions,
-                    use_arg.params,
-                ));
-
-                if let Some(user_sig) = user_sig {
-                    sig.infer(user_sig, self.lower.tt, 0, &mut mono_args);
+                    if let Some(user_sig) = user_sig {
+                        sig.infer(user_sig, self.lower.tt, 0, &mut mono_args);
+                    }
                 }
             }
 
@@ -604,7 +602,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 if sig_mono_params.len()
                     != call.left().map_or(0, ast::Call::count_args) + use_arg.is_some() as usize
                 {
-                    todo!("error: incorrect amount of arguments")
+                    problems +=
+                        ProblemKind::Other(format_compact!("Incorrect number of arguments"))
+                            .at(self.lower.module, path);
+                    return problems.error();
                 }
                 let mut args = Vec::new();
                 let mut params = Vec::new();
@@ -966,7 +967,44 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     self.table.unreachable(),
                 )
             }
-            IntrinsicFunction::SliceFromRawParts => todo!(),
+            IntrinsicFunction::SliceFromRawParts => {
+                let Term::Type(ty) = generics[1].term() else {
+                    panic!()
+                };
+                let ty = self.r#type(ty);
+                let size = self.table.base(mu::Base::SIZE);
+
+                let mut args = args.into_iter();
+                let ptr = args.next().unwrap();
+                let len = args.next().unwrap();
+
+                self.table.call(
+                    mu::Callable::MultiPointerSlice { ty },
+                    [ptr, self.table.constant(size, mu::Constant::Zero), len],
+                )
+            }
+            IntrinsicFunction::None => {
+                let Term::Type(ty) = generics[0].term() else {
+                    panic!()
+                };
+                let ty = self.r#type(ty);
+                self.table.push_expression(mu::ExpressionEnum::Variant(
+                    self.table.insert_enum([self.table.unit(), ty]),
+                    0,
+                    self.table.construct_unit(),
+                ))
+            }
+            IntrinsicFunction::Some => {
+                let Term::Type(ty) = generics[0].term() else {
+                    panic!()
+                };
+                let ty = self.r#type(ty);
+                self.table.push_expression(mu::ExpressionEnum::Variant(
+                    self.table.insert_enum([self.table.unit(), ty]),
+                    1,
+                    args.into_iter().next().unwrap(),
+                ))
+            }
         }
     }
     fn constant(&self, ty: Type, c: Constant) -> mu::Expression {
@@ -1096,7 +1134,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     })
                     .find(|(decl, _)| decl.name.ident.as_str() == member.name.as_str())
                 else {
-                    todo!("error and return recovery value")
+                    problems += ProblemKind::Other(format_compact!(
+                        "handler lacks member function '{}'",
+                        member.name.as_str()
+                    ))
+                    .at(self.lower.module, ast);
+                    return self.table.unreachable();
                 };
                 let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
                 let sig_val = self.lower.tt[member.signature].clone();
@@ -1204,45 +1247,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 branch_true,
                 branch_false,
                 ..
-            } => self
-                .expression(condition, self.lower.tt.insert_type(TypeEnum::Boolean))
-                .and_then(|(condition, _)| {
-                    // this is a match expression under the hood
-                    // so we need to push the unit bool variant on the var stack
-                    let mut self_inner = self.reborrow();
-                    self_inner.vars.push_front(Var::Unit);
-                    self_inner
-                        .expression(&branch_true.1, expected)
-                        .and_then(|(then_branch, ty)| {
-                            let unit_t = self_inner.lower.tt.insert_type(TypeEnum::Unit);
-                            match branch_false {
-                                Some((_, branch_false)) => self_inner
-                                    .expression(branch_false, ty)
-                                    .map(|(else_branch, _)| {
-                                        (
-                                            self_inner.table.if_else(
-                                                condition,
-                                                then_branch,
-                                                else_branch,
-                                            ),
-                                            ty,
-                                        )
-                                    }),
-                                None if !ty.subtype(unit_t, self_inner.lower.tt) => {
-                                    ProblemKind::TypeMismatch(TypeMismatch {
-                                        expected: unit_t,
-                                        found: ty,
-                                    })
-                                    .at(self_inner.lower.module, &branch_true.1)
-                                    .with((self_inner.table.unreachable(), unit_t))
-                                }
-                                None => Result::new((
-                                    self_inner.table.if_stmt(condition, then_branch),
-                                    ty,
-                                )),
-                            }
-                        })
-                }),
+            } => self.if_expression(
+                expected,
+                condition,
+                &branch_true.1,
+                branch_false.as_ref().map(|(_, branch)| &**branch),
+            ),
             ast::Expression::Discard { expr, .. } => self
                 .expression(expr, self.lower.tt.insert_type(TypeEnum::Hole))
                 .map(|(mu, _)| (mu, self.lower.tt.insert_type(TypeEnum::Unit))),
@@ -1415,39 +1425,55 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                             self.table.constant(mu_usize, mu::Constant::Zero),
                                         )
                                     });
-                                let to_index = to
-                                    .as_ref()
-                                    .map(|expr| {
-                                        self.expression(expr, usize_t).map(|(expr, _)| expr)
-                                    })
-                                    .unwrap_or_else(|| {
-                                        Result::new(
-                                            self.table
-                                                .call(mu::Callable::Len { ty: mu_ty }, [array]),
-                                        )
-                                    });
-                                from_index.and_then(|from_index| {
-                                    to_index.map(|to_index| {
+                                if let Some(Sentinel) = sentinel_ty
+                                    && to.is_none()
+                                {
+                                    from_index.map(|from_index| {
                                         (
                                             self.table.call(
-                                                sentinel_ty.map_or_else(
-                                                    || mu::Callable::PointerSliceSlice {
-                                                        ty: mu_ty,
-                                                    },
-                                                    |_| mu::Callable::MultiPointerSlice {
-                                                        ty: mu_ty,
-                                                    },
-                                                ),
-                                                [array, from_index, to_index],
+                                                mu::Callable::MultiPointerOffset { ty: mu_ty },
+                                                [array, from_index],
                                             ),
                                             self.lower.tt.insert_type(TypeEnum::PointerSlice(
                                                 ty,
                                                 region,
-                                                sentinel_ty.filter(|_| to.is_none()),
+                                                sentinel_ty,
                                             )),
                                         )
                                     })
-                                })
+                                } else {
+                                    let to_index = to
+                                        .as_ref()
+                                        .map(|expr| {
+                                            self.expression(expr, usize_t).map(|(expr, _)| expr)
+                                        })
+                                        .unwrap_or_else(|| {
+                                            Result::new(
+                                                self.table
+                                                    .call(mu::Callable::Len { ty: mu_ty }, [array]),
+                                            )
+                                        });
+                                    from_index.and_then(|from_index| {
+                                        to_index.map(|to_index| {
+                                            (
+                                                self.table.call(
+                                                    sentinel_ty.map_or_else(
+                                                        || mu::Callable::PointerSliceSlice {
+                                                            ty: mu_ty,
+                                                        },
+                                                        |_| mu::Callable::MultiPointerSlice {
+                                                            ty: mu_ty,
+                                                        },
+                                                    ),
+                                                    [array, from_index, to_index],
+                                                ),
+                                                self.lower.tt.insert_type(TypeEnum::PointerSlice(
+                                                    ty, region, None,
+                                                )),
+                                            )
+                                        })
+                                    })
+                                }
                             }
 
                             // [N]T
@@ -1673,6 +1699,117 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         })
         .recover_with(|| (self.table.unreachable(), expected))
     }
+    fn if_expression(
+        &mut self,
+        expected: Type,
+        condition: &'a ast::Expression,
+        branch_true: &'a ast::Expression,
+        branch_false: Option<&'a ast::Expression>,
+    ) -> Result<(mu::Expression, Type)> {
+        if let ast::Expression::Block(block) = branch_true
+            && let Some(params) = &block.inner.params
+        {
+            let [(param, _)] = params.0.elements.as_slice() else {
+                todo!("error")
+            };
+            // TODO: use param type
+
+            // maybe unwrap
+            self.expression(
+                condition,
+                self.lower
+                    .tt
+                    .insert_type(TypeEnum::Maybe(self.lower.tt.insert_type(TypeEnum::Hole))),
+            )
+            .and_then(|(maybe_mu, maybe_ty)| {
+                let TypeEnum::Maybe(ty) = self.lower.tt[maybe_ty] else {
+                    panic!("ICE: not a maybe :(")
+                };
+                let mut self_inner = self.reborrow();
+                self_inner
+                    .vars
+                    .push_front(Var::Named(param.var.as_str(), FunctionParameter::Data(ty)));
+                self_inner
+                    .statements(
+                        &mut block.inner.stmts.iter().map(|e| &**e).peekable(),
+                        expected,
+                    )
+                    .recover_with(|| (self_inner.table.unreachable(), expected))
+                    .and_then(|(then_branch, ty)| {
+                        let unit_t = self_inner.lower.tt.insert_type(TypeEnum::Unit);
+                        match branch_false {
+                            Some(branch_false) => {
+                                self_inner
+                                    .expression(branch_false, ty)
+                                    .map(|(else_branch, _)| {
+                                        (
+                                            self_inner
+                                                .table
+                                                .r#match(maybe_mu, [else_branch, then_branch]),
+                                            ty,
+                                        )
+                                    })
+                            }
+                            None if !ty.subtype(unit_t, self_inner.lower.tt) => {
+                                ProblemKind::TypeMismatch(TypeMismatch {
+                                    expected: unit_t,
+                                    found: ty,
+                                })
+                                .at(self_inner.lower.module, branch_true)
+                                .with((self_inner.table.unreachable(), unit_t))
+                            }
+                            None => Result::new((
+                                self_inner.table.r#match(
+                                    maybe_mu,
+                                    [self_inner.table.construct_unit(), then_branch],
+                                ),
+                                ty,
+                            )),
+                        }
+                    })
+            })
+        } else {
+            // boolean condition
+            self.expression(condition, self.lower.tt.insert_type(TypeEnum::Boolean))
+                .and_then(|(condition, _)| {
+                    // this is a match expression under the hood
+                    // so we need to push the unit bool variant on the var stack
+                    let mut self_inner = self.reborrow();
+                    self_inner.vars.push_front(Var::Unit);
+                    self_inner
+                        .expression(branch_true, expected)
+                        .and_then(|(then_branch, ty)| {
+                            let unit_t = self_inner.lower.tt.insert_type(TypeEnum::Unit);
+                            match branch_false {
+                                Some(branch_false) => self_inner.expression(branch_false, ty).map(
+                                    |(else_branch, _)| {
+                                        (
+                                            self_inner.table.if_else(
+                                                condition,
+                                                then_branch,
+                                                else_branch,
+                                            ),
+                                            ty,
+                                        )
+                                    },
+                                ),
+                                None if !ty.subtype(unit_t, self_inner.lower.tt) => {
+                                    ProblemKind::TypeMismatch(TypeMismatch {
+                                        expected: unit_t,
+                                        found: ty,
+                                    })
+                                    .at(self_inner.lower.module, branch_true)
+                                    .with((self_inner.table.unreachable(), unit_t))
+                                }
+                                None => Result::new((
+                                    self_inner.table.if_stmt(condition, then_branch),
+                                    ty,
+                                )),
+                            }
+                        })
+                })
+        }
+    }
     fn member_access(
         &mut self,
         lhs: mu::Expression,
@@ -1734,11 +1871,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         let mut problems = Problems::ok();
         let mut exprs = Vec::new();
         while let Some(next) = stmts.next() {
-            let expected = if stmts.peek().is_some() {
-                unit_t
-            } else {
-                expected
-            };
             let expr = problems.append(if let ast::Expression::Let { var, ty, value, .. } = next {
                 let self_ = &mut *self;
                 let stmts_ = &mut *stmts;
@@ -1756,6 +1888,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     );
                 }
             } else {
+                let expected = if stmts.peek().is_some() {
+                    unit_t
+                } else {
+                    expected
+                };
                 self.expression(next, expected)
             });
             if let Some(e) = expr {

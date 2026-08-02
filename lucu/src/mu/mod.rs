@@ -113,6 +113,8 @@ pub enum Callable {
     /// Unsafe operation:
     /// (*a x USize) -> ^a
     MultiPointerIndex { ty: mu::Type },
+    /// (*a x USize) -> *a
+    MultiPointerOffset { ty: mu::Type },
 
     /// (^[N]a x USize x USize) -> ^[]a
     PointerArraySlice { ty: mu::Type, size: u32 },
@@ -187,6 +189,11 @@ impl mu::Typed for Callable {
                 let usize = mt.base(Base::SIZE);
                 let ptr = mt.base(Base::Pointer(ty));
                 mt.function(mt.insert_tuple([multi_ptr, usize]), ptr)
+            }
+            Callable::MultiPointerOffset { ty } => {
+                let multi_ptr = mt.base(Base::MultiPointer(ty));
+                let usize = mt.base(Base::SIZE);
+                mt.function(mt.insert_tuple([multi_ptr, usize]), multi_ptr)
             }
             Callable::PointerSliceIndex { ty } => {
                 let ptr_slice = mt.base(Base::PointerSlice(ty));

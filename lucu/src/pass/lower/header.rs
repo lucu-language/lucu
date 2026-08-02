@@ -560,6 +560,8 @@ impl<'a, 'b> Lower<'a, 'b> {
             ("builtin:builtin", "slice_from_raw_parts") => {
                 Some(IntrinsicFunction::SliceFromRawParts)
             }
+            ("builtin:builtin", "none") => Some(IntrinsicFunction::None),
+            ("builtin:builtin", "some") => Some(IntrinsicFunction::Some),
             _ => None,
         }
     }

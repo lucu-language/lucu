@@ -49,7 +49,7 @@ pub trait Table:
     }
     fn optional(&self, ty: Type) -> Type {
         let unit = self.unit();
-        self.insert_type(TypeEnum::Sum(self.insert_enum([ty, unit])))
+        self.insert_type(TypeEnum::Sum(self.insert_enum([unit, ty])))
     }
     fn never(&self) -> Type {
         self.insert_type(TypeEnum::Sum(self.insert_enum([])))

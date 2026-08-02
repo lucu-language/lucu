@@ -1,6 +1,7 @@
+import "core:env"
 import "os:linux"
 import "main:main"
-import "builtin:c"
+import "builtin:regions"
 
 fun with_syscall_raw(fun body with linux.SyscallRaw) with World = {
     handle body with linux.SyscallRaw {
@@ -23,30 +24,74 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = {
     }
 }
 
-fun entry(argc size, argv CStrings, envp CStrings) ! with World Div = {
+fun with_args(argc size, argv CStrs, fun body with env.Args) = {
+    let current ^size = use regions.ref(0)
+    handle body with env.Args {
+        fun next_arg ?^@static [:0]i8 = {
+            if current^ < argc {
+                let arg = argv[current^]^
+                current^ += 1
+                some(arg)
+            } else {
+                none
+            }
+        }
+    }
+}
+
+fun with_environ(envp CStrs, fun body with env.Environ) = {
+    handle body with env.Environ {
+        fun get[r](key str[r,]) ?^@static [:0]i8 = {
+            let current ^size = use regions.ref(0)
+            handle unfounded loop {
+                let next = envp[current^]^
+                current^ += 1
+
+                if next == 0 {
+                    raise none
+                }
+
+                if strlen(next) > len(key) {
+                    if next[len(key)]^ == '=' {
+                        if str_eq(key, #transmute next[..len(key)]) {
+                            raise some(next[len(key) + 1..])
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun entry(argc size, argv CStrs, envp CStrs) ! with World Div = {
     {
         use with_syscall_raw
         use with_syscall_nr
         use linux.with_syscall
         use linux.stdio
+
+        use with_args(argc, argv)
+        use with_environ(envp)
+
         main.main
         linux.exit(0)
     }
     unreachable
 }
 
-type CStrings = ^@static [:0]c.string[static,]
+type CStr = ^@static [:0]i8
+type CStrs = ^@static [:0]^@static [:0]i8
 
 type Args = struct(
     argc int,
-    argv0 c.string[static,],
+    argv0 CStr,
 )
 
 fun _start ! with World Div = {
     asm["", "{rbp}", int, unit](0)
     let rsp = asm_pure["", "={rsp},{rsp}", ^@static Args, ^@static Args](---)
     let argc size = #trunc rsp.argc^
-    let argv CStrings = #transmute rsp.argv0
-    let envp CStrings = #transmute argv[argc + 1]
+    let argv CStrs = #transmute rsp.argv0
+    let envp CStrs = #transmute argv[argc + 1]
     entry(argc, argv, envp)
 }

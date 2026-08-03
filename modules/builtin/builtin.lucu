@@ -179,6 +179,13 @@ fun while(fun cond bool, fun body) with Div = {
     }
 }
 
+fun until(fun cond bool, fun body) with Div = {
+    handle loop {
+        if cond then raise
+        body
+    }
+}
+
 -- intrinsics that could be defined in-language one day
 
 fun len[T](slice ^#raw []T) size
@@ -208,6 +215,8 @@ effect Fail = {
 -- }
 
 fun abs(n int) int = if n >= 0 then n else -n
+
+fun and(a bool, b bool) bool = if a then b else false
 
 fun str_eq[r](a str[r,], b str[r,]) bool = {
     if len(a) != len(b) {

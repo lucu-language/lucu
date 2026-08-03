@@ -1,0 +1,69 @@
+import "core:io"
+import "core:env"
+import "builtin:regions"
+
+fun brainfuck[r](program str[r,]) with Div io.StdIo = {
+    let ip ^size = use regions.ref(0)
+
+    let buf ^[]i8 = use regions.alloca(65536)
+    let ptr ^size = use regions.ref(0)
+
+    until(ip^ == len(program)) {
+        let char = program[ip^]^
+        if char == '>' {
+            ptr^ += 1
+        } else if char == '<' {
+            ptr^ -= 1
+        } else if char == '+' {
+            buf[ptr^]^ += 1
+        } else if char == '-' {
+            buf[ptr^]^ -= 1
+        } else if char == '.' {
+            io.print(buf[ptr^..ptr^+1])
+        } else if char == ',' {
+            use io.stdin
+            if io.read(buf[ptr^..ptr^+1]) == 0 {
+                buf[ptr^]^ = 0
+            }
+        } else if char == '[' {
+            if buf[ptr^]^ == 0 {
+                ip^ += 1
+                let layer ^int = use regions.ref(0)
+                until(and(layer^ == 0, program[ip^]^ == ']')) {
+                    let char = program[ip^]^
+                    if char == '[' {
+                        layer^ += 1
+                    } else if char == ']' {
+                        layer^ -= 1
+                    }
+                    ip^ += 1
+                }
+            }
+        } else if char == ']' {
+            if buf[ptr^]^ != 0 {
+                ip^ -= 1
+                let layer ^int = use regions.ref(0)
+                until(and(layer^ == 0, program[ip^]^ == '[')) {
+                    let char = program[ip^]^
+                    if char == '[' {
+                        layer^ -= 1
+                    } else if char == ']' {
+                        layer^ += 1
+                    }
+                    ip^ -= 1
+                }
+            }
+        }
+        ip^ += 1
+    }
+}
+
+fun main with Div io.StdIo env.Args = {
+    discard env.next_arg
+    if env.next_arg { arg ->
+        brainfuck(cstr_to_str(arg))
+    } else {
+        io.eprint("ERROR: did not provide program")
+        io.eprintln
+    }
+}

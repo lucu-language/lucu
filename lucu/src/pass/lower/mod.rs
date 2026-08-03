@@ -185,6 +185,8 @@ impl<'a, 'b> Lower<'a, 'b> {
         match ast {
             Some(ast) => {
                 let sig_val = self.tt[sig].clone();
+                // FIXME: prepend `effect` params
+                // OR prepend the effect params to the function signature on creation
                 let Some(params) = &sig_val.type_params else {
                     todo!("error");
                 };

@@ -7,9 +7,18 @@ fun main with io.StdIo env.Args env.Environ = {
         io.print("Argument: ")
         io.print(cstr_to_str(arg))
         io.println
-    } else {
-        io.print("No argument given")
+    }
+
+    if env.has_next_arg {
+        io.print("Remaining arguments:")
         io.println
+        handle env.remaining_args with Yield[cstr[static,],] {
+            fun yield(arg cstr[static,]) = {
+                io.print("  ")
+                io.print(cstr_to_str(arg))
+                io.println
+            }
+        }
     }
 
     if env.get("HOME") { var ->

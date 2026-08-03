@@ -27,6 +27,7 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = {
 fun with_args(argc size, argv cstrs, fun body with env.Args) = {
     let current ^size = use regions.ref(0)
     handle body with env.Args {
+        fun has_next_arg bool = current^ < argc
         fun next_arg ?cstr[static,] = {
             if current^ < argc {
                 let arg = argv[current^]^
@@ -34,6 +35,13 @@ fun with_args(argc size, argv cstrs, fun body with env.Args) = {
                 some(arg)
             } else {
                 none
+            }
+        }
+        fun remaining_args with Yield[cstr[static,],] = {
+            unfounded while(current^ < argc) {
+                let arg = argv[current^]^
+                current^ += 1
+                yield(arg)
             }
         }
     }

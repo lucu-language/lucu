@@ -444,7 +444,6 @@ impl Ast for ast::Call {
                 visit_vec(&g.inner.elements, v, |v, (e, _)| v.visit(&**e))
             }),
             visit_option(&self.block, visitor, |v, e| v.visit(&**e)),
-            visit_option(&self.with_effects, visitor, |v, es| v.visit(es)),
         ])
     }
     fn node_name(&self) -> &'static str {

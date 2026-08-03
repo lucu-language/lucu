@@ -141,6 +141,21 @@ enum PathType {
     Function(FunctionSignature, Arc<[GenericArgument]>),
 }
 
+enum PathValue {
+    Expression(mu::Expression),
+    Intrinsic(IntrinsicFunction),
+    EffectFunction(Effect, u32),
+}
+
+impl PathValue {
+    fn unwrap_expression(self) -> mu::Expression {
+        match self {
+            PathValue::Expression(expression) => expression,
+            _ => panic!(),
+        }
+    }
+}
+
 impl From<FunctionParameter> for PathType {
     fn from(value: FunctionParameter) -> Self {
         match value {
@@ -316,7 +331,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .iter()
             .enumerate()
             .find_map(|(index, &var)| match var {
-                Var::Effect(e) if e == effect => Some(index as u32),
+                Var::Effect(e) if e == effect || self.lower.tt[e] == EffectEnum::Hole => {
+                    Some(index as u32)
+                }
                 _ => None,
             })
     }
@@ -329,10 +346,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 _ => None,
             })
     }
-    fn path(
-        &mut self,
-        path: &'a ast::Path,
-    ) -> Result<(Either<mu::Expression, IntrinsicFunction>, PathType)> {
+    fn path(&mut self, path: &'a ast::Path) -> Result<(PathValue, PathType)> {
         if let ast::PathOrigin::Local(local) = &path.origin
             && let Some((index, ty)) = self.find_named(local.as_str())
         {
@@ -340,7 +354,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 todo!("generic local function")
             }
             let mu_ty = self.function_param(ty);
-            Result::new((Either::Left(self.table.reference(mu_ty, index)), ty.into()))
+            Result::new((
+                PathValue::Expression(self.table.reference(mu_ty, index)),
+                ty.into(),
+            ))
         } else {
             let (module, name, item) = match self.lower.item_ref(path) {
                 Ok((module, name, item)) => (module, name, item),
@@ -363,7 +380,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     panic!("ICE: constant kind but not constant term")
                                 };
                                 Result::new((
-                                    Either::Left(self.constant(ty, c)),
+                                    PathValue::Expression(self.constant(ty, c)),
                                     PathType::Data(ty),
                                 ))
                             })
@@ -378,47 +395,29 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             let ty = PathType::Function(sig, generics);
                             Result::new((
                                 match effect {
-                                    // TODO: delay getting exact handler until we know the inferred generics
-                                    // add another option other than "mu::Expression" and "IntrinsicFunction" for effect functions
-                                    Some(e) => match self.find_effect(e) {
-                                        Some(index) => {
-                                            let effect_ty = self
-                                                .effect(e)
-                                                .expect("ICE: effect with body with no type")
-                                                .1;
-                                            let mu_effect = self.table.reference(effect_ty, index);
-
-                                            let EffectEnum::Item(item) = &self.lower.tt[e] else {
-                                                panic!("ICE: effect with body is not an item");
-                                            };
-                                            let effect_decl = self.effect_decl(item);
-                                            let function_index = effect_decl
-                                                .members
-                                                .iter()
-                                                .enumerate()
-                                                .find(|(_, m)| m.name.as_str() == name)
-                                                .expect("ICE: effect function not part of effect")
-                                                .0;
-                                            let mu_function =
-                                                self.table.member(mu_effect, function_index as u32);
-                                            Either::Left(mu_function)
-                                        }
-                                        None => {
-                                            return Result::error(
-                                                ProblemKind::MissingEffects(MissingEffects(e))
-                                                    .at(self.lower.module, path),
-                                            );
-                                        }
-                                    },
+                                    Some(e) => {
+                                        let EffectEnum::Item(item) = &self.lower.tt[e] else {
+                                            panic!("ICE: effect with body is not an item");
+                                        };
+                                        let effect_decl = self.effect_decl(item);
+                                        let function_index = effect_decl
+                                            .members
+                                            .iter()
+                                            .enumerate()
+                                            .find(|(_, m)| m.name.as_str() == name)
+                                            .expect("ICE: effect function not part of effect")
+                                            .0;
+                                        PathValue::EffectFunction(e, function_index as u32)
+                                    }
                                     None => match def {
-                                        FunctionDefinition::Intrinsic(i) => Either::Right(i),
+                                        FunctionDefinition::Intrinsic(i) => PathValue::Intrinsic(i),
                                         FunctionDefinition::Other => {
                                             let item = mu::Item {
                                                 module,
                                                 item: name.to_compact_string(),
                                             };
                                             let ty = self.function_type(sig, None);
-                                            Either::Left(self.table.operation(
+                                            PathValue::Expression(self.table.operation(
                                                 mu::Operation::Callable(
                                                     mu::Callable::ModuleFunction { item, ty },
                                                 ),
@@ -533,7 +532,17 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             };
             let sig_val = &self.lower.tt[sig];
 
-            let implicit_arity = sig_val.arity();
+            let implicit_arity = sig_val.arity()
+                // add parent effect generics too
+                + match fun {
+                    PathValue::EffectFunction(effect, _) => {
+                        let EffectEnum::Item(item) = &self.lower.tt[effect] else {
+                            panic!("ICE: effect with body is not an item");
+                        };
+                        item.apply.as_deref().map_or(0, |args| args.len())
+                    }
+                    _ => 0,
+                };
             let mut mono_args =
                 iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
 
@@ -671,9 +680,16 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     .map(|(lambda, _)| lambda)
                                     .unwrap_or_else(|| self.table.unreachable()),
                                 {
-                                    // FIXME: get user given function type
-                                    assert!(sig.no_holes(self.lower.tt));
-                                    FunctionParameter::Lambda(sig)
+                                    if sig.no_holes(self.lower.tt) {
+                                        FunctionParameter::Lambda(sig)
+                                    } else {
+                                        problems += ProblemKind::Other(format_compact!(
+                                            "holes in {}",
+                                            sig.display(self.lower.tt)
+                                        ))
+                                        .at(self.lower.module, arg);
+                                        FunctionParameter::Hole
+                                    }
                                 },
                             )
                         }
@@ -798,22 +814,57 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     missing.push(effect);
                 }
             }
-            if !missing.is_empty() {
-                problems += ProblemKind::MissingEffects(MissingEffects(
-                    self.lower.tt.insert_effect(EffectEnum::Row(missing.into())),
-                ))
-                .at(self.lower.module, path);
-            }
+            let mut missing_check = |missing: Vec<Effect>| {
+                if !missing.is_empty() {
+                    problems += ProblemKind::MissingEffects(MissingEffects(
+                        self.lower.tt.insert_effect(EffectEnum::Row(missing.into())),
+                    ))
+                    .at(self.lower.module, path);
+                }
+            };
 
             // call expression
             let mu = match fun {
-                Either::Left(fun) => self.table.apply(fun, args),
-                Either::Right(i) => {
+                PathValue::Expression(fun) => {
+                    missing_check(missing);
+                    self.table.apply(fun, args)
+                }
+                PathValue::Intrinsic(i) => {
+                    missing_check(missing);
                     let all_generics = mono_args
                         .into_iter()
                         .chain(generics.iter().copied())
                         .collect();
                     self.intrinsic(i, all_generics, args)
+                }
+                PathValue::EffectFunction(effect, function_index) => {
+                    let EffectEnum::Item(item) = &self.lower.tt[effect] else {
+                        panic!("ICE: effect with body is not an item");
+                    };
+                    let effect_args = mono_args
+                        .into_iter()
+                        .chain(generics.iter().copied())
+                        .take(item.apply.as_deref().map_or(0, |args| args.len()))
+                        .collect::<Arc<_>>();
+                    let effect_mono = effect.subst(self.lower.tt, 0, &effect_args);
+                    match self.find_effect(effect_mono) {
+                        Some(idx) => {
+                            missing_check(missing);
+                            self.table.apply(
+                                self.table.member(
+                                    self.table
+                                        .reference(self.effect(effect_mono).unwrap().1, idx),
+                                    function_index,
+                                ),
+                                args,
+                            )
+                        }
+                        None => {
+                            missing.push(effect_mono);
+                            missing_check(missing);
+                            self.table.unreachable()
+                        }
+                    }
                 }
             };
             problems.with((mu, sig_mono_val.thunk.returns))
@@ -1103,6 +1154,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         &mut self,
         effect: Effect,
         ast: &'a ast::Separated<ast::Item>,
+        error_pos: &'a ast::Path,
     ) -> Result<mu::Expression> {
         let EffectEnum::Item(item) = &self.lower.tt[effect] else {
             todo!("error: handler effect is not an item");
@@ -1138,7 +1190,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         "handler lacks member function '{}'",
                         member.name.as_str()
                     ))
-                    .at(self.lower.module, ast);
+                    .at(self.lower.module, error_pos);
                     return self.table.unreachable();
                 };
                 let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
@@ -1208,7 +1260,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     self.member_access(self.table.reference(self.r#type(ty), index), ty, rhs)
                 } else {
                     self.path(path).and_then(|(e, p)| match p {
-                        PathType::Data(ty) => Result::new((e.unwrap_left(), ty)),
+                        PathType::Data(ty) => Result::new((e.unwrap_expression(), ty)),
                         PathType::Function(_, _) => self.call(Either::Right(path), None, expected),
                     })
                 }
@@ -1639,7 +1691,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         };
                         self_inner.lower.effect(&handler.effect).and_then(|effect| {
                             self_inner
-                                .handler(effect, &handler.items.inner)
+                                .handler(effect, &handler.items.inner, &handler.effect)
                                 .and_then(|effect_mu| {
                                     self_inner.vars.push_front(Var::Effect(effect));
                                     self_inner.expression(expr, expected).map(|(e, t)| {

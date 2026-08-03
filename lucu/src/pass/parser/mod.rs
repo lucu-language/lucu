@@ -215,7 +215,7 @@ impl<'a> Parser<'a> {
                 Result::new(ast::FunctionDefinition::Intrinsic(self.skip()))
             }
             _ => self
-                .expression(true, true)
+                .expression(true)
                 .map(ast::FunctionDefinition::Expression),
         }
     }

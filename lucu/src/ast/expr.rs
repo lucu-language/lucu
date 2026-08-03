@@ -1,8 +1,6 @@
 use strum::IntoStaticStr;
 
-use crate::ast::{
-    Constant, Grouped, Handler, Identifier, Path, Sentinel, Separated, Token, Type, WithEffects,
-};
+use crate::ast::{Constant, Grouped, Handler, Identifier, Path, Sentinel, Separated, Token, Type};
 use crate::span::{HasSpan, Span};
 use crate::tokens::{SymbolAssign, SymbolEquality, SymbolInequality};
 
@@ -142,7 +140,6 @@ pub struct Call {
     pub fun: Path,
     pub args: Option<Grouped<Separated<Box<Expression>>>>,
     pub block: Option<Box<Expression>>,
-    pub with_effects: Option<WithEffects>,
 }
 
 impl Call {
@@ -168,7 +165,6 @@ impl From<Path> for Call {
             fun: value,
             args: None,
             block: None,
-            with_effects: None,
         }
     }
 }
@@ -251,10 +247,9 @@ impl HasSpan for Call {
     fn span(&self) -> Span {
         let start = self.fun.span().start;
         let end = self
-            .with_effects
+            .block
             .as_ref()
             .map(HasSpan::span)
-            .or_else(|| self.block.as_ref().map(HasSpan::span))
             .or_else(|| self.args.as_ref().map(HasSpan::span))
             .unwrap_or_else(|| self.fun.span())
             .end;

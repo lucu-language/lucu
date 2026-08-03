@@ -719,10 +719,6 @@ impl Ast for ast::Call {
             nodes.space();
             block.push_nodes(nodes);
         }
-        if let Some(with_effects) = &self.with_effects {
-            nodes.space();
-            with_effects.push_nodes(nodes);
-        }
     }
 }
 

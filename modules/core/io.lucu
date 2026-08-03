@@ -58,6 +58,7 @@ fun write_int(n int) with Sink = {
             }
             current^ -= 1
         }
+        unreachable
     }
 
     -- FIXME: write_all

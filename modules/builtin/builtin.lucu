@@ -148,7 +148,7 @@ effect Div
 fun loop(fun body) ! with Div
     = #intrinsic
 
-fun unfounded(fun body ! with Div) !
+fun unfounded[T](fun body T with Div) T
     = #intrinsic
 
 fun for(from size, to size, fun body(n size)) = {
@@ -172,7 +172,32 @@ fun for(from size, to size, fun body(n size)) = {
 fun unreachable !
     = #intrinsic
 
--- other utils
+fun while(fun cond bool, fun body) with Div = {
+    handle loop {
+        if !cond then raise
+        body
+    }
+}
+
+-- intrinsics that could be defined in-language one day
+
+fun len[T](slice ^#raw []T) size
+    = #intrinsic
+
+fun slice_from_raw_parts[#raw r, T](ptr ^@r T, length size) ^@r []T
+    = #intrinsic
+
+fun some[T](t T) ?T
+    = #intrinsic
+
+fun none[T] ?T
+    = #intrinsic
+
+-- other utils (should be moved outside of builtin at some point)
+
+effect Yield[T] = {
+    fun yield(t T)
+}
 
 effect Fail = {
     fun fail !
@@ -181,12 +206,6 @@ effect Fail = {
 -- fun try(fun body with Fail) = handle body with Fail {
 --     fun fail ! = raise
 -- }
-
-fun len[T](slice ^#raw []T) size
-    = #intrinsic
-
-fun slice_from_raw_parts[#raw r, T](ptr ^@r T, length size) ^@r []T
-    = #intrinsic
 
 fun abs(n int) int = if n >= 0 then n else -n
 
@@ -220,12 +239,6 @@ fun cstr_to_str[r](str cstr[r,]) str[r,] = {
     let len = strlen(str)
     slice_from_raw_parts(str[0], len)
 }
-
-fun some[T](t T) ?T
-    = #intrinsic
-
-fun none[T] ?T
-    = #intrinsic
 
 -- --# USAGE:
 -- --# ```

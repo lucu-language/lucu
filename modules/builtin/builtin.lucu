@@ -28,6 +28,7 @@ const false bool = types.false
 type nullptr = types.nullptr
 
 type str[r] = ^@r []i8
+type cstr[r] = ^@r [:0]i8
 
 -- regions
 
@@ -73,7 +74,7 @@ fun asm_pure[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U
 
 -- printing
 
-fun trace(buf ^[]i8)
+fun trace[r](buf str[r,])
     = #intrinsic
 
 fun trap !
@@ -109,13 +110,13 @@ fun trace_int(n int) = {
     })
 }
 
-fun assert(condition bool, msg ^[]i8) with CallerLocation = {
+fun assert[r](condition bool, msg str[r,]) with CallerLocation = {
     if !condition {
         panic(msg)
     }
 }
 
-fun panic(msg ^[]i8) ! with CallerLocation = {
+fun panic[r](msg str[r,]) ! with CallerLocation = {
     trace((caller).path)
     trace(":")
     trace_int((caller).line)
@@ -127,7 +128,7 @@ fun panic(msg ^[]i8) ! with CallerLocation = {
     trap
 }
 
-fun todo(msg ^[]i8) ! with CallerLocation = {
+fun todo[r](msg str[r,]) ! with CallerLocation = {
     trace((caller).path)
     trace(":")
     trace_int((caller).line)
@@ -206,7 +207,7 @@ fun str_eq[r](a str[r,], b str[r,]) bool = {
     }
 }
 
-fun strlen[r](str ^@r [:0]i8) size = {
+fun strlen[r](str cstr[r,]) size = {
     let len ^size = use regions.ref(0)
     handle unfounded loop {
         if str[len^]^ == 0 then raise
@@ -215,7 +216,7 @@ fun strlen[r](str ^@r [:0]i8) size = {
     len^
 }
 
-fun cstr_to_str[r](str ^@r [:0]i8) str[r,] = {
+fun cstr_to_str[r](str cstr[r,]) str[r,] = {
     let len = strlen(str)
     slice_from_raw_parts(str[0], len)
 }

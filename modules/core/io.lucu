@@ -1,7 +1,7 @@
 import "builtin:regions"
 
 effect Source = {
-    fun read(bytes ^#write []i8) size
+    fun read[#write r](bytes str[r,]) size
 }
 
 fun skip_line size with Source = {
@@ -15,7 +15,7 @@ fun skip_line size with Source = {
     total^
 }
 
-fun read_line(bytes ^#write []i8) size with Source = {
+fun read_line[#write r](bytes str[r,]) size with Source = {
     let total ^size = use regions.ref(0)
     let buf ^[1]i8 = use regions.ref(---)
     handle unfounded loop {
@@ -30,11 +30,11 @@ fun read_line(bytes ^#write []i8) size with Source = {
 }
 
 effect Sink = {
-    fun write(bytes ^[]i8) size
+    fun write[r](bytes str[r,]) size
     fun flush
 }
 
-fun write_all(bytes ^[]i8) with Fail = {
+fun write_all[r](bytes str[r,]) with Fail = {
     todo("write_all")
 }
 
@@ -69,13 +69,13 @@ fun write_int(n int) with Sink = {
     })
 }
 
-fun print(bytes ^[]i8) with StdIo = {
+fun print[r](bytes str[r,]) with StdIo = {
     use stdout
     -- FIXME: write_all
     discard write(bytes)
 }
 
-fun eprint(bytes ^[]i8) with StdIo = {
+fun eprint[r](bytes str[r,]) with StdIo = {
     use stderr
     -- FIXME: write_all
     discard write(bytes)
@@ -109,12 +109,12 @@ effect StdIo = {
     fun stderr(fun body with Sink)
 }
 
-fun buffered_sink(buffer ^mut []i8, fun body with Sink) with Sink = {
+fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink = {
     let current ^size = use regions.ref(0)
     -- FIXME: deal with super write not writing everything
     -- (we need a Queue probably)
     handle body with Sink {
-        fun write(bytes ^[]i8) size = {
+        fun write[r](bytes str[r,]) size = {
             for(0, len(bytes)) { i ->
                 if current^ == len(buffer) {
                     discard write(buffer)

@@ -24,10 +24,10 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = {
     }
 }
 
-fun with_args(argc size, argv CStrs, fun body with env.Args) = {
+fun with_args(argc size, argv cstrs, fun body with env.Args) = {
     let current ^size = use regions.ref(0)
     handle body with env.Args {
-        fun next_arg ?^@static [:0]i8 = {
+        fun next_arg ?cstr[static,] = {
             if current^ < argc {
                 let arg = argv[current^]^
                 current^ += 1
@@ -39,9 +39,9 @@ fun with_args(argc size, argv CStrs, fun body with env.Args) = {
     }
 }
 
-fun with_environ(envp CStrs, fun body with env.Environ) = {
+fun with_environ(envp cstrs, fun body with env.Environ) = {
     handle body with env.Environ {
-        fun get[r](key str[r,]) ?^@static [:0]i8 = {
+        fun get[r](key str[r,]) ?cstr[static,] = {
             let current ^size = use regions.ref(0)
             handle unfounded loop {
                 let next = envp[current^]^
@@ -63,7 +63,7 @@ fun with_environ(envp CStrs, fun body with env.Environ) = {
     }
 }
 
-fun entry(argc size, argv CStrs, envp CStrs) ! with World Div = {
+fun entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
     {
         use with_syscall_raw
         use with_syscall_nr
@@ -79,19 +79,18 @@ fun entry(argc size, argv CStrs, envp CStrs) ! with World Div = {
     unreachable
 }
 
-type CStr = ^@static [:0]i8
-type CStrs = ^@static [:0]^@static [:0]i8
+type cstrs = ^@static [:0]cstr[static,]
 
 type Args = struct(
     argc int,
-    argv0 CStr,
+    argv0 cstr[static,],
 )
 
 fun _start ! with World Div = {
     asm["", "{rbp}", int, unit](0)
     let rsp = asm_pure["", "={rsp},{rsp}", ^@static Args, ^@static Args](---)
     let argc size = #trunc rsp.argc^
-    let argv CStrs = #transmute rsp.argv0
-    let envp CStrs = #transmute argv[argc + 1]
+    let argv cstrs = #transmute rsp.argv0
+    let envp cstrs = #transmute argv[argc + 1]
     entry(argc, argv, envp)
 }

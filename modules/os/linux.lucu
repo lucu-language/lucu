@@ -12,26 +12,26 @@ effect SyscallRaw = {
 }
 
 effect Syscall = {
-    fun read(file addr, buf ^#write []i8) size
-    fun write(file addr, buf ^[]i8) size
+    fun read[#write r](file addr, buf str[r,]) size
+    fun write[r](file addr, buf str[r,]) size
     fun exit(code addr) !
     -- TODO: flags
-    fun getrandom(buf ^#write []i8) size
+    fun getrandom[#write r](buf str[r,]) size
 }
 
 fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = {
     handle body with Syscall {
-        fun read(file addr, buf ^#write []i8) size = {
+        fun read[#write r](file addr, buf str[r,]) size = {
             #trunc syscall(nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
         }
-        fun write(file addr, buf ^[]i8) size = {
+        fun write[r](file addr, buf str[r,]) size = {
             #trunc syscall(nr_write, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
         }
         fun exit(code addr) ! = {
             discard syscall(nr_exit, code, ---, ---, ---, ---, ---)
             unreachable
         }
-        fun getrandom(buf ^#write []i8) size = {
+        fun getrandom[#write r](buf str[r,]) size = {
             #trunc syscall(nr_getrandom, #transmute buf[0], #ext len(buf), 0, ---, ---, ---)
         }
     }
@@ -39,14 +39,14 @@ fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = {
 
 fun stdio(fun body with io.StdIo) with Syscall = handle body with io.StdIo {
     fun stdin(fun body with io.Source) = handle body with io.Source {
-        fun read(bytes ^#write []i8) size = read(0, bytes)
+        fun read[#write r](bytes str[r,]) size = read(0, bytes)
     }
     fun stdout(fun body with io.Sink) = handle body with io.Sink {
-        fun write(bytes ^[]i8) size = write(1, bytes)
+        fun write[r](bytes str[r,]) size = write(1, bytes)
         fun flush = {}
     }
     fun stderr(fun body with io.Sink) = handle body with io.Sink {
-        fun write(bytes ^[]i8) size = write(2, bytes)
+        fun write[r](bytes str[r,]) size = write(2, bytes)
         fun flush = {}
     }
 }

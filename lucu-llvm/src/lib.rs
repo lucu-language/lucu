@@ -13,8 +13,14 @@ use lucu::mu::{Base, Callable, Constant, Function, Item, Operation};
 use lucu::type_table::{IntSize, Integer};
 use mu::Table as _;
 
+#[derive(Clone, Copy)]
+enum BuilderFunction<'ctx> {
+    Call(FunctionValue<'ctx>),
+    Inline(mu::Expression),
+}
+
 pub struct Builder<'ctx> {
-    functions: OnceLock<HashMap<Item, FunctionValue<'ctx>>>,
+    functions: OnceLock<HashMap<Item, BuilderFunction<'ctx>>>,
 }
 
 impl<'ctx> Builder<'ctx> {
@@ -36,28 +42,34 @@ impl<'ctx> Builder<'ctx> {
         );
 
         let mut map = HashMap::new();
-        for fun in funs.iter() {
-            let fval = llvm.add_function(
-                fun.ty,
-                false,
-                None,
-                Some(
-                    fun.linkage
-                        .map(|l| match l {
-                            lucu::mu::Linkage::Internal => Linkage::Private,
-                            lucu::mu::Linkage::External => Linkage::External,
-                        })
-                        .unwrap_or(Linkage::Private),
-                ),
-            );
-            map.insert(fun.item.clone(), fval);
+        for fun in funs {
+            if fun.inline {
+                map.insert(fun.item.clone(), BuilderFunction::Inline(fun.body));
+            } else {
+                let fval = llvm.add_function(
+                    fun.ty,
+                    false,
+                    None,
+                    Some(
+                        fun.linkage
+                            .map(|l| match l {
+                                lucu::mu::Linkage::Internal => Linkage::Private,
+                                lucu::mu::Linkage::External => Linkage::External,
+                            })
+                            .unwrap_or(Linkage::Private),
+                    ),
+                );
+                map.insert(fun.item.clone(), BuilderFunction::Call(fval));
+            }
         }
         let Ok(_) = llvm.base.functions.set(map) else {
             panic!()
         };
-        for fun in funs.iter() {
+        for fun in funs {
             let fval = llvm.base.functions.get().unwrap()[&fun.item];
-            llvm.build_function(fun.ty, fval, fun.body);
+            if let BuilderFunction::Call(fval) = fval {
+                llvm.build_function(fun.ty, fval, fun.body);
+            }
         }
 
         llvm
@@ -247,7 +259,12 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
         match *op {
             Callable::ModuleFunction { ref item, .. } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
-                llvm.build_direct_call(fun, args.map(|v| v.build(llvm)))
+                match fun {
+                    BuilderFunction::Call(fval) => {
+                        llvm.build_direct_call(fval, args.map(|v| v.build(llvm)))
+                    }
+                    BuilderFunction::Inline(expr) => llvm.build_expression_bound(expr, args),
+                }
             }
             Callable::ArrayConstruct { ty, size } => match llvm.get_type(ty).basic_type(llvm) {
                 Some(ty) => {

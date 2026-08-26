@@ -80,7 +80,7 @@ impl<'ctx> Type<'ctx> {
 
 pub enum Value<'ctx, B: Builder<'ctx>> {
     Data(BasicValue<'ctx>),
-    Function(FunctionValue<'ctx>, Option<PointerValue<'ctx>>),
+    Abstract(mu::Expression, im::Vector<Value<'ctx, B>>),
     Callable(B::Callable),
     Raise(
         FunctionValue<'ctx>,
@@ -93,7 +93,7 @@ impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
     fn clone(&self) -> Self {
         match *self {
             Self::Data(arg0) => Self::Data(arg0),
-            Self::Function(arg0, arg1) => Self::Function(arg0, arg1),
+            Self::Abstract(arg0, ref arg1) => Self::Abstract(arg0, arg1.clone()),
             Self::Callable(ref arg0) => Self::Callable(arg0.clone()),
             Self::Raise(arg0, arg1, arg2) => Self::Raise(arg0, arg1, arg2),
         }
@@ -110,7 +110,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
     pub fn basic_value(self, llvm: &Context<'ctx, B>) -> BasicValue<'ctx> {
         match self {
             Value::Data(data) => data,
-            Value::Function(function, closure) => llvm.build_closure(function, closure),
+            Value::Abstract(e, refs) => llvm.build_abstract(e, &refs),
             Value::Callable(c) => {
                 // we create a small function that is just this operation cuz we need it as a closure
                 let function = match llvm.callables.read().unwrap().get(&c).copied() {
@@ -624,6 +624,17 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             }))
         })
     }
+    pub fn build_expression_bound(
+        &self,
+        e: mu::Expression,
+        args: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
+    ) -> Value<'ctx, B> {
+        let mut refs = im::Vector::new();
+        for val in args {
+            refs.push_front(val.build(self));
+        }
+        self.build_expression(e, &refs)
+    }
     fn build_expression(
         &self,
         e: mu::Expression,
@@ -820,109 +831,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     Enum::TaggedUnion(_) => todo!(),
                 }
             }
-            mu::ExpressionEnum::Abstract(from, body) => {
-                let current_fun = {
-                    let guard = self.function.read().unwrap();
-                    guard.unwrap()
-                };
-                let current_block = self.builder.get_insert_block().unwrap();
-
-                // create function
-                let fun =
-                    mu::FunctionType::new(from, body.get_type(self.table).unwrap(), self.table);
-                let function = self.add_function(fun, true, None, Some(Linkage::Private));
-                self.builder
-                    .position_at_end(self.context.append_basic_block(function, ""));
-                *self.function.write().unwrap() = Some(function);
-
-                // build closure
-                let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
-                e.get_captures(self.table, &mut captures);
-                let mut closure_members = Vec::new();
-                let mut closure_refs = Vec::new();
-                for (i, val) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
-                    match *val {
-                        Value::Data(Some(val)) => {
-                            closure_members.push(val);
-                            closure_refs.push(i);
-                        }
-                        Value::Function(_, Some(val)) => {
-                            closure_members.push(val.into());
-                            closure_refs.push(i);
-                        }
-                        _ => {}
-                    }
-                }
-
-                let mut refs_new = refs.clone();
-                let closure_type = (!closure_members.is_empty()).then(|| {
-                    let closure_pointer = function.get_last_param().unwrap().into_pointer_value();
-                    let closure_types = closure_members
-                        .iter()
-                        .map(|v| v.get_type())
-                        .collect::<Box<_>>();
-                    let closure_type = self.context.struct_type(&closure_types, false);
-                    let closure = self
-                        .builder
-                        .build_load(closure_type, closure_pointer, "")
-                        .unwrap()
-                        .into_struct_value();
-                    for (nth, i) in closure_refs.into_iter().enumerate() {
-                        match &mut refs_new[i] {
-                            Value::Data(Some(val)) => {
-                                *val = self
-                                    .builder
-                                    .build_extract_value(closure, nth as u32, "")
-                                    .unwrap();
-                            }
-                            Value::Function(_, Some(val)) => {
-                                *val = self
-                                    .builder
-                                    .build_extract_value(closure, nth as u32, "")
-                                    .unwrap()
-                                    .into_pointer_value();
-                            }
-                            _ => {}
-                        }
-                    }
-                    closure_type
-                });
-
-                // build function
-                for arg in self.function_arguments(fun, function) {
-                    refs_new.push_front(arg);
-                }
-                let out = self.build_expression(body, &refs_new).basic_value(self);
-                if !fun.never_returns(self.table) {
-                    self.builder
-                        .build_return(
-                            out.as_ref()
-                                .map(|e| e as &dyn inkwell::values::BasicValue)
-                                .filter(|_| function.get_type().get_return_type().is_some()),
-                        )
-                        .unwrap();
-                } else {
-                    self.builder.build_unreachable().unwrap();
-                }
-
-                // return
-                self.builder.position_at_end(current_block);
-                *self.function.write().unwrap() = Some(current_fun);
-                let closure_pointer = closure_type.map(|closure_type| {
-                    let closure_pointer = self.builder.build_alloca(closure_type, "").unwrap();
-                    let mut closure = closure_type.get_poison();
-                    for (nth, member) in closure_members.into_iter().enumerate() {
-                        closure = self
-                            .builder
-                            .build_insert_value(closure, member, nth as u32, "")
-                            .unwrap()
-                            .into_struct_value();
-                    }
-                    let _ = self.builder.build_store(closure_pointer, closure).unwrap();
-                    closure_pointer
-                });
-                Value::Function(function, closure_pointer)
-            }
+            mu::ExpressionEnum::Abstract(_, _) => Value::Abstract(e, refs.clone()),
             mu::ExpressionEnum::Try(ty, e) => {
                 let next = self.build_block("");
                 let phi = self.get_type(ty).basic_type(self).map(|ty| {
@@ -954,6 +863,111 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 Value::Data(phi.map(PhiValue::as_basic_value))
             }
         }
+    }
+    fn build_abstract(
+        &self,
+        e: mu::Expression,
+        refs: &im::Vector<Value<'ctx, B>>,
+    ) -> BasicValue<'ctx> {
+        let mu::ExpressionEnum::Abstract(from, body) = self.table[e] else {
+            panic!("ICE");
+        };
+
+        let current_fun = {
+            let guard = self.function.read().unwrap();
+            guard.unwrap()
+        };
+        let current_block = self.builder.get_insert_block().unwrap();
+
+        // create function
+        let fun = mu::FunctionType::new(from, body.get_type(self.table).unwrap(), self.table);
+        let function = self.add_function(fun, true, None, Some(Linkage::Private));
+        self.builder
+            .position_at_end(self.context.append_basic_block(function, ""));
+        *self.function.write().unwrap() = Some(function);
+
+        // build closure
+        let mut captures = iter::repeat_n(false, refs.len()).collect::<Box<_>>();
+        e.get_captures(self.table, &mut captures);
+        let mut closure_members = Vec::new();
+        let mut closure_refs = Vec::new();
+        for (i, val) in refs.iter().enumerate().filter(|&(i, _)| captures[i]) {
+            match *val {
+                Value::Data(Some(val)) => {
+                    closure_members.push(val);
+                    closure_refs.push(i);
+                }
+                Value::Abstract(_, _) => {
+                    todo!()
+                }
+                _ => {}
+            }
+        }
+
+        let mut refs_new = refs.clone();
+        let closure_type = (!closure_members.is_empty()).then(|| {
+            let closure_pointer = function.get_last_param().unwrap().into_pointer_value();
+            let closure_types = closure_members
+                .iter()
+                .map(|v| v.get_type())
+                .collect::<Box<_>>();
+            let closure_type = self.context.struct_type(&closure_types, false);
+            let closure = self
+                .builder
+                .build_load(closure_type, closure_pointer, "")
+                .unwrap()
+                .into_struct_value();
+            for (nth, i) in closure_refs.into_iter().enumerate() {
+                match &mut refs_new[i] {
+                    Value::Data(Some(val)) => {
+                        *val = self
+                            .builder
+                            .build_extract_value(closure, nth as u32, "")
+                            .unwrap();
+                    }
+                    Value::Abstract(_, _) => {
+                        todo!()
+                    }
+                    _ => {}
+                }
+            }
+            closure_type
+        });
+
+        // build function
+        for arg in self.function_arguments(fun, function) {
+            refs_new.push_front(arg);
+        }
+        let out = self.build_expression(body, &refs_new).basic_value(self);
+        if !fun.never_returns(self.table) {
+            self.builder
+                .build_return(
+                    out.as_ref()
+                        .map(|e| e as &dyn inkwell::values::BasicValue)
+                        .filter(|_| function.get_type().get_return_type().is_some()),
+                )
+                .unwrap();
+        } else {
+            self.builder.build_unreachable().unwrap();
+        }
+
+        // return
+        self.builder.position_at_end(current_block);
+        *self.function.write().unwrap() = Some(current_fun);
+        let closure_pointer = closure_type.map(|closure_type| {
+            let closure_pointer = self.builder.build_alloca(closure_type, "").unwrap();
+            let mut closure = closure_type.get_poison();
+            for (nth, member) in closure_members.into_iter().enumerate() {
+                closure = self
+                    .builder
+                    .build_insert_value(closure, member, nth as u32, "")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            let _ = self.builder.build_store(closure_pointer, closure).unwrap();
+            closure_pointer
+        });
+        self.build_closure(function, closure_pointer)
     }
     fn build_is_zero(&self, v: BasicValueEnum<'ctx>) -> IntValue<'ctx> {
         match v {
@@ -1085,15 +1099,14 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             Value::Data(data) => {
                 self.build_indirect_call(fun, data, vals.into_iter().map(|v| v.build(self)))
             }
-            Value::Function(function, closure) => {
-                let closure = closure
-                    .unwrap_or_else(|| self.context.ptr_type(AddressSpace::default()).get_poison());
-                self.build_direct_call(
-                    function,
-                    vals.into_iter()
-                        .map(|v| v.build(self))
-                        .chain(iter::once(Value::Data(Some(closure.into())))),
-                )
+            Value::Abstract(e, mut refs) => {
+                let mu::ExpressionEnum::Abstract(_, body) = self.table[e] else {
+                    panic!("ICE");
+                };
+                for val in vals {
+                    refs.push_front(val.build(self));
+                }
+                self.build_expression(body, &refs)
             }
             Value::Callable(c) => B::build_callable(&c, fun, vals, self),
             Value::Raise(f, block, phi) => {

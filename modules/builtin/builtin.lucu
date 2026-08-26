@@ -91,15 +91,14 @@ fun trace_int(n int) = {
     let remaining = use regions.ref(abs(n))
 
     let start size = handle {
-        let current ^size = use regions.ref(20)
-        unfounded loop {
-            buf[current^]^ = '0' + #trunc (remaining^ % 10)
+        for(21, 1) { current ->
+            buf[current]^ = '0' + #trunc (remaining^ % 10)
             remaining^ /= 10
             if remaining^ == 0 {
-                yeet current^
+                yeet current
             }
-            current^ -= 1
         }
+        unreachable
     }
 
     trace(if n < 0 {
@@ -151,7 +150,7 @@ fun loop(fun body) ! with Div
 fun unfounded[T](fun body T with Div) T
     = #intrinsic
 
-fun for(from size, to size, fun body(n size)) = {
+fun for(from size, to size, fun body(n size)) = #inline {
     if to >= from {
         let current = use regions.ref(from)
         handle unfounded loop {
@@ -172,14 +171,14 @@ fun for(from size, to size, fun body(n size)) = {
 fun unreachable !
     = #intrinsic
 
-fun while(fun cond bool, fun body) with Div = {
+fun while(fun cond bool, fun body) with Div = #inline {
     handle loop {
         if !cond then raise
         body
     }
 }
 
-fun until(fun cond bool, fun body) with Div = {
+fun until(fun cond bool, fun body) with Div = #inline {
     handle loop {
         if cond then raise
         body
@@ -221,24 +220,19 @@ fun and(a bool, b bool) bool = if a then b else false
 fun str_eq[r](a str[r,], b str[r,]) bool = {
     if len(a) != len(b) {
         false
-    } else {
-        let current ^size = use regions.ref(0)
-        handle unfounded loop {
-            if current^ == len(a) {
-                raise true
-            }
-            if a[current^]^ != b[current^]^ {
+    } else handle {
+        for(0, len(a)) { current ->
+            if a[current]^ != b[current]^ {
                 raise false
             }
-            current^ += 1
         }
+        true
     }
 }
 
 fun strlen[r](str cstr[r,]) size = {
     let len ^size = use regions.ref(0)
-    handle unfounded loop {
-        if str[len^]^ == 0 then raise
+    unfounded until(str[len^]^ == 0) {
         len^ += 1
     }
     len^

@@ -19,7 +19,7 @@ effect Syscall = {
     fun getrandom[#write r](buf str[r,]) size
 }
 
-fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = {
+fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = #inline {
     handle body with Syscall {
         fun read[#write r](file addr, buf str[r,]) size = {
             #trunc syscall(nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
@@ -37,7 +37,7 @@ fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = {
     }
 }
 
-fun stdio(fun body with io.StdIo) with Syscall = handle body with io.StdIo {
+fun stdio(fun body with io.StdIo) with Syscall = #inline handle body with io.StdIo {
     fun stdin(fun body with io.Source) = handle body with io.Source {
         fun read[#write r](bytes str[r,]) size = read(0, bytes)
     }

@@ -214,9 +214,15 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Intrinsic) => {
                 Result::new(ast::FunctionDefinition::Intrinsic(self.skip()))
             }
-            _ => self
-                .expression(true)
-                .map(ast::FunctionDefinition::Expression),
+            _ => {
+                let inline = if self.is_next(Keyword::Inline) {
+                    Some(self.skip())
+                } else {
+                    None
+                };
+                self.expression(true)
+                    .map(|body| ast::FunctionDefinition::Expression { inline, body })
+            }
         }
     }
     pub fn type_definition(&mut self) -> Result<ast::TypeDefinition> {

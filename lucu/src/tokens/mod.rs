@@ -150,6 +150,7 @@ impl TokenEnum {
                 | TokenEnum::Symbol(Symbol::Assign(_))
                 | TokenEnum::Symbol(Symbol::Equality(_))
                 | TokenEnum::Symbol(Symbol::Inequality(_))
+                | TokenEnum::Keyword(Keyword::Inline)
         )
     }
     pub fn prevent_semi_before(self) -> bool {
@@ -209,6 +210,8 @@ pub enum Keyword {
     Write,
     #[strum(serialize = "#raw")]
     Raw,
+    #[strum(serialize = "#inline")]
+    Inline,
     #[strum(disabled)]
     Unknown,
 }

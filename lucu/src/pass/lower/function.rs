@@ -175,7 +175,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         def: &'a ast::FunctionDefinition,
     ) -> Result<mu::Function> {
         match def {
-            ast::FunctionDefinition::Expression(body) => {
+            ast::FunctionDefinition::Expression { body, inline } => {
                 let ty = self.function_type(sig, Some(decl));
                 self.abstraction(
                     sig,
@@ -203,6 +203,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         } else {
                             None
                         },
+                        inline: inline.is_some(),
                     }
                 })
             }
@@ -1136,14 +1137,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     );
                 }
                 match def {
-                    ast::FunctionDefinition::Expression(expression) => self.abstraction(
+                    ast::FunctionDefinition::Expression { body, .. } => self.abstraction(
                         user_sig,
                         decl.name.generics.as_ref(),
                         decl.parameters
                             .iter()
                             .flat_map(|params| params.inner.iter())
                             .map(|param| (param.name(), None)),
-                        [&**expression],
+                        [&**body],
                     ),
                     ast::FunctionDefinition::Intrinsic(_) => todo!("error"),
                 }

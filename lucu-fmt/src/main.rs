@@ -261,7 +261,7 @@ trait Ast {
 fn is_heavy(def: &ast::Item) -> bool {
     match def {
         ast::Item::Function(_, def) => def.as_ref().is_some_and(|(_, def)| match def {
-            ast::FunctionDefinition::Expression(body) => {
+            ast::FunctionDefinition::Expression { body, .. } => {
                 matches!(**body, ast::Expression::Block(_))
             }
             ast::FunctionDefinition::Intrinsic(_) => false,
@@ -687,12 +687,12 @@ impl Ast for ast::Parameter {
 impl Definition for ast::FunctionDefinition {
     fn placement(&self) -> Placement {
         match self {
-            ast::FunctionDefinition::Expression(expression)
-                if matches!(**expression, ast::Expression::Block(_)) =>
+            ast::FunctionDefinition::Expression { body, .. }
+                if matches!(**body, ast::Expression::Block(_)) =>
             {
                 Placement::Inline
             }
-            ast::FunctionDefinition::Expression(_) => Placement::Choose,
+            ast::FunctionDefinition::Expression { .. } => Placement::Choose,
             ast::FunctionDefinition::Intrinsic(_) => Placement::Newline,
         }
     }
@@ -701,8 +701,12 @@ impl Definition for ast::FunctionDefinition {
 impl Ast for ast::FunctionDefinition {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
         match self {
-            ast::FunctionDefinition::Expression(expr) => {
-                expr.push_nodes(nodes);
+            ast::FunctionDefinition::Expression { inline, body } => {
+                if let Some(tk) = inline {
+                    nodes.token(*tk);
+                    nodes.space();
+                }
+                body.push_nodes(nodes);
             }
             ast::FunctionDefinition::Intrinsic(token) => {
                 nodes.token(*token);

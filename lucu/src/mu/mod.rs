@@ -53,6 +53,7 @@ pub struct Function {
     pub ty: mu::FunctionType,
     pub body: mu::Expression,
     pub linkage: Option<Linkage>,
+    pub inline: bool,
 }
 
 #[derive(Debug)]

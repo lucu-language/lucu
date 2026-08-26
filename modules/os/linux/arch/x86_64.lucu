@@ -3,7 +3,7 @@ import "os:linux"
 import "main:main"
 import "builtin:regions"
 
-fun with_syscall_raw(fun body with linux.SyscallRaw) with World = {
+fun with_syscall_raw(fun body with linux.SyscallRaw) with World = #inline {
     handle body with linux.SyscallRaw {
         fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
             = asm[
@@ -15,7 +15,7 @@ fun with_syscall_raw(fun body with linux.SyscallRaw) with World = {
     }
 }
 
-fun with_syscall_nr(fun body with linux.SyscallNR) = {
+fun with_syscall_nr(fun body with linux.SyscallNR) = #inline {
     handle body with linux.SyscallNR {
         fun nr_read addr = 0
         fun nr_write addr = 1
@@ -24,7 +24,7 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = {
     }
 }
 
-fun with_args(argc size, argv cstrs, fun body with env.Args) = {
+fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
     let current ^size = use regions.ref(0)
     handle body with env.Args {
         fun has_next_arg bool = current^ < argc
@@ -47,7 +47,7 @@ fun with_args(argc size, argv cstrs, fun body with env.Args) = {
     }
 }
 
-fun with_environ(envp cstrs, fun body with env.Environ) = {
+fun with_environ(envp cstrs, fun body with env.Environ) = #inline {
     handle body with env.Environ {
         fun get[r](key str[r,]) ?cstr[static,] = {
             let current ^size = use regions.ref(0)

@@ -49,14 +49,12 @@ fun write_int(n int) with Sink = {
     let remaining = use regions.ref(abs(n))
 
     let start size = handle {
-        let current ^size = use regions.ref(20)
-        unfounded loop {
-            buf[current^]^ = '0' + #trunc (remaining^ % 10)
+        for(21, 1) { current ->
+            buf[current]^ = '0' + #trunc (remaining^ % 10)
             remaining^ /= 10
             if remaining^ == 0 {
-                yeet current^
+                yeet current
             }
-            current^ -= 1
         }
         unreachable
     }
@@ -110,7 +108,7 @@ effect StdIo = {
     fun stderr(fun body with Sink)
 }
 
-fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink = {
+fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink = #inline {
     let current ^size = use regions.ref(0)
     -- FIXME: deal with super write not writing everything
     -- (we need a Queue probably)

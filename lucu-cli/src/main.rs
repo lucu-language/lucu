@@ -190,8 +190,10 @@ fn build(cmd: BuildCommand) -> bool {
 
     llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
 
-    // eprintln!(" --- LLVM --- ");
-    // llvm.eprint();
+    if cmd.debug {
+        eprintln!(" --- LLVM --- ");
+        llvm.eprint();
+    }
     llvm.verify().unwrap();
     llvm.optimize().unwrap();
     // eprintln!(" --- LLVM O3 --- ");

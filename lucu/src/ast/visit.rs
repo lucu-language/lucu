@@ -244,7 +244,7 @@ impl Ast for ast::EffectBody {
 impl Ast for ast::FunctionDefinition {
     fn visit<V: Visitor>(&self, visitor: V) -> V::Output<'_> {
         match self {
-            ast::FunctionDefinition::Expression(spanned) => visitor.visit(&**spanned),
+            ast::FunctionDefinition::Expression { body, .. } => visitor.visit(&**body),
             ast::FunctionDefinition::Intrinsic(_) => V::Output::default(),
         }
     }

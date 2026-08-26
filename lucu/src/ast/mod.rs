@@ -300,7 +300,10 @@ pub enum ConstantDefinition {
 #[derive(Debug, PartialEq, Eq, IntoStaticStr)]
 #[strum(prefix = "FunctionDefinition::")]
 pub enum FunctionDefinition {
-    Expression(Box<Expression>),
+    Expression {
+        inline: Option<Token>,
+        body: Box<Expression>,
+    },
     Intrinsic(Token),
 }
 
@@ -760,7 +763,13 @@ impl HasSpan for TypeDefinition {
 impl HasSpan for FunctionDefinition {
     fn span(&self) -> Span {
         match self {
-            FunctionDefinition::Expression(expression) => expression.span(),
+            FunctionDefinition::Expression { inline, body } => {
+                let start = inline
+                    .map(|t| t.span().start)
+                    .unwrap_or_else(|| body.span().start);
+                let end = body.span().end;
+                Span::new(start, end)
+            }
             FunctionDefinition::Intrinsic(token) => token.span(),
         }
     }

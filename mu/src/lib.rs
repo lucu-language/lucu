@@ -68,6 +68,16 @@ pub trait Table:
             self.push_expressions(exprs),
         ))
     }
+    fn construct_vtable(
+        &self,
+        types: Tuple,
+        exprs: impl IntoIterator<Item = Expression>,
+    ) -> Expression {
+        self.push_expression(ExpressionEnum::ConstructVTable(
+            types,
+            self.push_expressions(exprs),
+        ))
+    }
     fn construct_unit(&self) -> Expression {
         self.construct(self.insert_tuple([]), [])
     }
@@ -249,6 +259,8 @@ pub enum TypeEnum<B> {
     Base(B),
     Sum(Enum),
     Product(Tuple),
+    /// All tuple members are functions sharing the same bound variables
+    VTable(Tuple),
     Function(FunctionType),
 }
 
@@ -265,6 +277,8 @@ pub enum ExpressionEnum<O> {
     Sequence(Expressions, Expression),
     // (e1, e2, e3, ...)
     Construct(Tuple, Expressions),
+    // (e1, e2, e3, ...)
+    ConstructVTable(Tuple, Expressions),
     // (e1 e2)
     Apply(Expression, Expressions),
     // (pi e)
@@ -284,13 +298,13 @@ impl Type {
             TypeEnum::Base(_) => true,
             TypeEnum::Sum(sum) => mt[sum].iter().all(|ty| ty.is_first_order(mt)),
             TypeEnum::Product(product) => mt[product].iter().all(|ty| ty.is_first_order(mt)),
-            TypeEnum::Function(_) => false,
+            TypeEnum::VTable(_) | TypeEnum::Function(_) => false,
         }
     }
     #[must_use]
     pub fn into_product(self, mt: &(impl Table + ?Sized)) -> Option<Tuple> {
         match mt[self] {
-            TypeEnum::Product(types) => Some(types),
+            TypeEnum::Product(types) | TypeEnum::VTable(types) => Some(types),
             _ => None,
         }
     }
@@ -317,6 +331,9 @@ impl Expression {
             ExpressionEnum::Reference(ty, _) | ExpressionEnum::Try(ty, _) => Some(ty),
             ExpressionEnum::Let(_, e) | ExpressionEnum::Sequence(_, e) => e.get_type(mt),
             ExpressionEnum::Construct(types, _) => Some(mt.insert_type(TypeEnum::Product(types))),
+            ExpressionEnum::ConstructVTable(types, _) => {
+                Some(mt.insert_type(TypeEnum::VTable(types)))
+            }
             ExpressionEnum::Apply(f, _) => f
                 .get_type(mt)
                 .and_then(|t| t.into_function(mt))
@@ -367,7 +384,7 @@ impl Expression {
                 }
                 en.get_captures_inner(mt, offset, captures);
             }
-            ExpressionEnum::Construct(_, es) => {
+            ExpressionEnum::Construct(_, es) | ExpressionEnum::ConstructVTable(_, es) => {
                 for &e in &mt[es] {
                     e.get_captures_inner(mt, offset, captures);
                 }

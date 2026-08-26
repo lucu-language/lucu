@@ -438,7 +438,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .effect(self.caller_location)
             .expect("ICE: caller location effect has no type")
             .1;
-        let mu::TypeEnum::Product(tup) = self.table[ty] else {
+        let mu::TypeEnum::VTable(tup) = self.table[ty] else {
             panic!("ICE: caller location effect is not a mu product type")
         };
         let mu::TypeEnum::Function(fun_ty) = self.table[self.table[tup][0]] else {
@@ -454,7 +454,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         };
         let (line, column) = line_column::line_column(self.source, span.start as usize);
 
-        self.table.construct(
+        self.table.construct_vtable(
             tup,
             [self.table.lambda(
                 fun_ty.from(),
@@ -1158,7 +1158,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         error_pos: &'a ast::Path,
     ) -> Result<mu::Expression> {
         let EffectEnum::Item(item) = &self.lower.tt[effect] else {
-            todo!("error: handler effect is not an item");
+            return Result::error(
+                ProblemKind::Other(format_compact!(
+                    "error: handler effect is not an item: {}",
+                    effect.display(self.lower.tt)
+                ))
+                .at(self.lower.module, error_pos),
+            );
         };
         let effect_decl = self.effect_decl(item);
 
@@ -1171,12 +1177,12 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .effect(effect)
             .expect("ICE: effect with body with no type")
             .1;
-        let mu::TypeEnum::Product(effect_tys) = self.table[effect_ty] else {
+        let mu::TypeEnum::VTable(effect_tys) = self.table[effect_ty] else {
             panic!("ICE: effect with body is not a product type");
         };
 
         let mut problems = Problems::ok();
-        let constructed = self.table.construct(
+        let constructed = self.table.construct_vtable(
             effect_tys,
             effect_decl.members.iter().map(|member| {
                 let Some((decl, def)) = ast
@@ -2048,7 +2054,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Some((
                     name,
                     self.table
-                        .insert_type(mu::TypeEnum::Product(self.table.insert_tuple(members))),
+                        .insert_type(mu::TypeEnum::VTable(self.table.insert_tuple(members))),
                 ))
             }
             EffectEnum::Read(_)

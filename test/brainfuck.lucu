@@ -19,7 +19,7 @@ fun brainfuck[r](program str[r,]) with Div io.StdIo = {
         } else if char == '-' {
             buf[ptr^]^ -= 1
         } else if char == '.' {
-            io.print(buf[ptr^..ptr^+1])
+            try io.print(buf[ptr^..ptr^+1])
         } else if char == ',' {
             use io.stdin
             if io.read(buf[ptr^..ptr^+1]) == 0 {
@@ -63,7 +63,7 @@ fun main with Div io.StdIo env.Args = {
     if env.next_arg { arg ->
         brainfuck(cstr_to_str(arg))
     } else {
-        io.eprint("ERROR: did not provide program")
-        io.eprintln
+        try io.eprint("ERROR: did not provide program")
+        try io.eprintln
     }
 }

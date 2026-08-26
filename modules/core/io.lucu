@@ -34,16 +34,25 @@ effect Sink = {
     fun flush
 }
 
-fun write_all[r](bytes str[r,]) with Fail = {
-    todo("write_all")
+-- FIXME: all these currently need to be #inline,
+-- so that 'fail' jumps within the same function,
+-- but we don't want this in the end
+
+fun write_all[r](bytes str[r,]) with Sink Fail = #inline {
+    let remaining = use regions.ref(bytes)
+    unfounded until(len(remaining^) == 0) {
+        let written = write(remaining^)
+        if written == 0 then fail
+        remaining^ = remaining^[written..]
+    }
 }
 
-fun writeln size with Sink = {
+fun writeln with Sink Fail = #inline {
     let buf ^[1]i8 = use regions.ref([10])
-    write(buf[..])
+    write_all(buf[..])
 }
 
-fun write_int(n int) with Sink = {
+fun write_int(n int) with Sink Fail = #inline {
     let buf ^[21]i8 = use regions.ref(---)
 
     let remaining = use regions.ref(abs(n))
@@ -59,8 +68,7 @@ fun write_int(n int) with Sink = {
         unreachable
     }
 
-    -- FIXME: write_all
-    discard write(if n < 0 {
+    write_all(if n < 0 {
         buf[start - 1]^ = '-'
         buf[start - 1..]
     } else {
@@ -70,36 +78,32 @@ fun write_int(n int) with Sink = {
 
 fun print[r](bytes str[r,]) with StdIo = {
     use stdout
-    -- FIXME: write_all
-    discard write(bytes)
+    try write_all(bytes)
 }
 
 fun eprint[r](bytes str[r,]) with StdIo = {
     use stderr
-    -- FIXME: write_all
-    discard write(bytes)
+    try write_all(bytes)
 }
 
 fun println with StdIo = {
     use stdout
-    -- FIXME: write_all
-    discard writeln
+    try writeln
 }
 
 fun eprintln with StdIo = {
     use stderr
-    -- FIXME: write_all
-    discard writeln
+    try writeln
 }
 
 fun print_int(n int) with StdIo = {
     use stdout
-    write_int(n)
+    try write_int(n)
 }
 
 fun eprint_int(n int) with StdIo = {
     use stderr
-    write_int(n)
+    try write_int(n)
 }
 
 effect StdIo = {
@@ -108,15 +112,13 @@ effect StdIo = {
     fun stderr(fun body with Sink)
 }
 
-fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink = #inline {
+fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink Fail = #inline {
     let current ^size = use regions.ref(0)
-    -- FIXME: deal with super write not writing everything
-    -- (we need a Queue probably)
     handle body with Sink {
         fun write[r](bytes str[r,]) size = {
             for(0, len(bytes)) { i ->
                 if current^ == len(buffer) {
-                    discard write(buffer)
+                    write_all(buffer)
                     current^ = 0
                 }
                 buffer[current^]^ = bytes[i]^
@@ -126,7 +128,7 @@ fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink = #inline
         }
         fun flush = {
             if current^ > 0 {
-                discard write(buffer[0..current^])
+                write_all(buffer[0..current^])
                 current^ = 0
             }
             flush

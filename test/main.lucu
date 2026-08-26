@@ -2,6 +2,8 @@ import "brainfuck"
 import "core:io"
 import "core:env"
 
-fun main with Div io.StdIo env.Args = {
-    brainfuck.main
+import "main:env" main
+
+fun main with World Div io.StdIo env.Args env.Environ = {
+    main.main
 }

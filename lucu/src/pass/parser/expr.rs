@@ -8,24 +8,11 @@ use crate::tokens::{Group, Keyword, Symbol, SymbolAssign, TokenEnum};
 
 type Expr = Result<Box<ast::Expression>>;
 
-#[derive(PartialEq, Eq)]
-enum AllowLambda {
-    No,
-    Yes,
-    Force,
-}
-
-impl From<bool> for AllowLambda {
-    fn from(value: bool) -> Self {
-        if value { Self::Yes } else { Self::No }
-    }
-}
-
 impl<'a> Parser<'a> {
     pub fn call(&mut self, allow_lambda: bool) -> Result<ast::Call> {
         m! {
             fun <- self.path(false);
-            call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+            call <- self.call_suffix(fun, allow_lambda);
             return call.unwrap_or_else(Into::into);
         }
     }
@@ -33,30 +20,26 @@ impl<'a> Parser<'a> {
     fn call_suffix(
         &mut self,
         fun: ast::Path,
-        allow_lambda: AllowLambda,
+        allow_lambda: bool,
     ) -> Result<std::result::Result<ast::Call, ast::Path>> {
         m! {
             args <- self.when_next(TokenEnum::Open(Group::Parenthesis), |p| p.many_grouped(Group::Parenthesis, Symbol::Comma.into(), |p| p.expression(true)));
-            block <- if allow_lambda != AllowLambda::No
-                && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
+            block <- if allow_lambda && (self.is_next(TokenEnum::Identifier) || self.is_next(TokenEnum::Open(Group::Brace))) {
                 if self.is_next(TokenEnum::Identifier) {
                     // we allow identifiers here to make this possible:
                     // `unfounded loop { ... }`
                     let p = &mut *self;
                     m! {
                         fun <- p.path(false);
-                        call <- p.call_suffix(fun, AllowLambda::Force);
+                        call <- p.call_suffix(fun, true);
                         let call = call.unwrap_or_else(Into::into);
                         return Some(Box::new(ast::Expression::Call(call)));
                     }
                 } else {
                     self.expression_top(true).map(Some)
                 }
-            } else if allow_lambda != AllowLambda::Force {
-                Result::new(None)
             } else {
-                // NOTE: do we maybe want a more specific error here?
-                self.error(Expected::Token(TokenEnum::Open(Group::Brace)))
+                Result::new(None)
             };
             return if args.is_some() || block.is_some() {
                 Ok(ast::Call {
@@ -418,7 +401,7 @@ impl<'a> Parser<'a> {
                             })
                         }
                     };
-                    call <- self.call_suffix(fun, AllowLambda::from(allow_lambda));
+                    call <- self.call_suffix(fun, allow_lambda);
                     return Box::new(call.map_or_else(ast::Expression::Path, ast::Expression::Call));
                 }
             }

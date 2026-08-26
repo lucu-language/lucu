@@ -209,9 +209,9 @@ effect Fail = {
     fun fail !
 }
 
--- fun try(fun body with Fail) = handle body with Fail {
---     fun fail ! = raise
--- }
+fun try(fun body with Fail) = #inline handle body with Fail {
+    fun fail ! = raise
+}
 
 fun abs(n int) int = if n >= 0 then n else -n
 

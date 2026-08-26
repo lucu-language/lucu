@@ -61,7 +61,7 @@ pub struct Module {
     pub functions: Box<[Function]>,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Callable {
     /// ? -> ?
     ModuleFunction { item: Item, ty: mu::FunctionType },

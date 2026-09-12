@@ -1,8 +1,14 @@
 import "builtin:regions"
 import "libc:" c
+import "core:io"
 
 fun main with World = {
     use c.link
+    use c.stdio
+
+    io.print("Hello from C!")
+    io.println
+
     let time_ptr ^c.time_t = use regions.ref(0)
     discard c.time(some(time_ptr))
     let time_str = c.ctime(time_ptr)

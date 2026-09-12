@@ -31,3 +31,7 @@ type ulonglong = #intrinsic
 -- POINTER TYPES --
 
 type str[r] = ^@r [:0]char
+
+-- OTHER --
+
+type void = struct(_opaque u8)

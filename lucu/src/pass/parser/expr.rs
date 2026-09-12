@@ -55,13 +55,6 @@ impl<'a> Parser<'a> {
 
     pub fn statement(&mut self) -> Expr {
         match self.next().token {
-            TokenEnum::Keyword(Keyword::Discard) => {
-                m! {
-                    let tk_discard = self.skip();
-                    expr <- self.expression(true);
-                    return Box::new(ast::Expression::Discard { tk_discard, expr });
-                }
-            }
             TokenEnum::Keyword(Keyword::Let) => {
                 m! {
                     let tk_let = self.skip();
@@ -353,6 +346,13 @@ impl<'a> Parser<'a> {
                     let tk_raise = self.skip();
                     expr <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Semicolon)], |p| p.expression(allow_lambda));
                     return Box::new(ast::Expression::Raise { tk_raise, expr });
+                }
+            }
+            TokenEnum::Keyword(Keyword::Discard) => {
+                m! {
+                    let tk_discard = self.skip();
+                    expr <- self.expression(allow_lambda);
+                    return Box::new(ast::Expression::Discard { tk_discard, expr });
                 }
             }
             TokenEnum::Symbol(Symbol::TripleDash) => {

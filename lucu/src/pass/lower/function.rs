@@ -941,24 +941,42 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     [self.table.construct_vtable(
                         effect_tys,
                         effect_decl.members.iter().map(|member| {
-                            let ty = self.function_type(member.signature, None);
-                            self.table.lambda(
-                                ty.from(),
-                                self.table.call(
-                                    mu::Callable::ForeignFunction {
+                            if self.lower.tt[member.signature].params.is_none() {
+                                // external value
+                                let ty = self.lower.tt[member.signature].thunk.returns;
+                                let TypeEnum::Pointer(ty, _) = self.lower.tt[ty] else {
+                                    todo!("return error")
+                                };
+                                let ty = self.r#type(ty);
+                                self.table.lambda(
+                                    self.table.insert_tuple([]),
+                                    self.table.operation(mu::Operation::ForeignGlobal {
                                         lib: lib.clone(),
                                         name: member.name.clone(),
                                         ty,
-                                    },
-                                    self.table[ty.from()]
-                                        .iter()
-                                        .copied()
-                                        .rev()
-                                        .enumerate()
-                                        .rev()
-                                        .map(|(i, ty)| self.table.reference(ty, i as u32)),
-                                ),
-                            )
+                                    }),
+                                )
+                            } else {
+                                // external function
+                                let ty = self.function_type(member.signature, None);
+                                self.table.lambda(
+                                    ty.from(),
+                                    self.table.call(
+                                        mu::Callable::ForeignFunction {
+                                            lib: lib.clone(),
+                                            name: member.name.clone(),
+                                            ty,
+                                        },
+                                        self.table[ty.from()]
+                                            .iter()
+                                            .copied()
+                                            .rev()
+                                            .enumerate()
+                                            .rev()
+                                            .map(|(i, ty)| self.table.reference(ty, i as u32)),
+                                    ),
+                                )
+                            }
                         }),
                     )],
                     body,

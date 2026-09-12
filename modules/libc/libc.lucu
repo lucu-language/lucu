@@ -1,4 +1,5 @@
 import "builtin:"
+import "core:io"
 
 effect LibC = Time StdIo
 
@@ -13,14 +14,51 @@ fun link(fun body with LibC) with builtin.World = #inline {
 effect Time = {
     fun time(arg ?^#write time_t) time_t
     --# deprecated since C23
-    fun ctime(timer ^time_t) str[static]
+    fun ctime(timer ^time_t) str[static,]
 }
 
 -- we don't support targets vulnerable to the 2038 problem
-type time_t = struct(_timestamp int64_t)
+type time_t = struct(
+    _timestamp int64_t,
+)
 
 -- TODO: put these in libc/stdio.lucu
 
+type FILE = struct(
+    _opaque void,
+)
+
 effect StdIo = {
-    fun puts[r](str str[r]) int
+    -- FIXME: according to the C standard these streams are macros, not declarations
+    -- the following has only been tested to work on glibc
+    fun stdin ^@static ^@heap FILE
+    fun stdout ^@static ^@heap FILE
+    fun stderr ^@static ^@heap FILE
+    fun fwrite(buffer ^void, size size_t, count size_t, stream ^mut FILE) size_t
+    fun fread(buffer ^#write void, size size_t, count size_t, stream ^mut FILE) size_t
+    fun fflush(stream ^mut FILE) int
+    fun puts[r](str str[r,]) int
+}
+
+fun stdio(fun body with io.StdIo) with StdIo = #inline handle body with io.StdIo {
+    fun stdin(fun body with io.Source) = handle body with io.Source {
+        fun read[#write r](bytes builtin.str[r,]) builtin.size = {
+            let buffer ^@r void = #transmute bytes[0]
+            #transmute fread(buffer, 1, #transmute builtin.len(bytes), stdin^)
+        }
+    }
+    fun stdout(fun body with io.Sink) = handle body with io.Sink {
+        fun write[r](bytes builtin.str[r,]) builtin.size = {
+            let buffer ^@r void = #transmute bytes[0]
+            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stdout^)
+        }
+        fun flush = discard fflush(stdout^)
+    }
+    fun stderr(fun body with io.Sink) = handle body with io.Sink {
+        fun write[r](bytes builtin.str[r,]) builtin.size = {
+            let buffer ^@r void = #transmute bytes[0]
+            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stderr^)
+        }
+        fun flush = discard fflush(stderr^)
+    }
 }

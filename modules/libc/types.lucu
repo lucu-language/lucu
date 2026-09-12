@@ -5,6 +5,8 @@ import "builtin:c"
 -- important re-exports
 
 region static = regions.static
+region heap = regions.heap
+type void = c.void
 
 -- ARITHMETIC TYPES --
 

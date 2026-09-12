@@ -16,8 +16,8 @@ use inkwell::types::{
     BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, FunctionType, IntType, StructType,
 };
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue as _, BasicValueEnum, FunctionValue, IntValue, PhiValue,
-    PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValue as _, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
+    PhiValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
 use mu::{Table as _, Typed as _};
@@ -500,6 +500,8 @@ impl<'ctx, B: Builder<'ctx>> From<Value<'ctx, B>> for ValueOrExpression<'ctx, B>
     }
 }
 
+type ForeignFunctionCache<'ctx> = HashMap<String, FunctionValue<'ctx>>;
+type ForeignGlobalCache<'ctx> = HashMap<String, GlobalValue<'ctx>>;
 type CallableCache<'ctx, C> = HashMap<C, FunctionValue<'ctx>>;
 type EnumCache<'ctx> = HashMap<mu::Enum, (Box<[Type<'ctx>]>, Enum<'ctx>)>;
 type StructCache<'ctx> = HashMap<mu::Tuple, (Box<[Type<'ctx>]>, Option<StructType<'ctx>>)>;
@@ -539,6 +541,8 @@ pub struct Context<'ctx, B: Builder<'ctx>> {
     structs: RwLock<StructCache<'ctx>>,
     enums: RwLock<EnumCache<'ctx>>,
     callables: RwLock<CallableCache<'ctx, B::Callable>>,
+    foreign_functions: RwLock<ForeignFunctionCache<'ctx>>,
+    foreign_globals: RwLock<ForeignGlobalCache<'ctx>>,
     // TODO: remove this from here
     syscalls: Box<[(FunctionType<'ctx>, PointerValue<'ctx>)]>,
 }
@@ -628,6 +632,8 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             enums: RwLock::new(HashMap::new()),
             callables: RwLock::new(HashMap::new()),
             function: RwLock::new(None),
+            foreign_functions: RwLock::new(HashMap::new()),
+            foreign_globals: RwLock::new(HashMap::new()),
         }
     }
     pub fn take_linked(&mut self) -> HashSet<String> {
@@ -701,9 +707,11 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         name: &str,
         fun: mu::FunctionType,
     ) -> FunctionValue<'ctx> {
-        // TODO: cache these?
-        // we don't need to cache them right now because B::Callable is already being cached
-        // but this might bite us in the butt later
+        let hash_map = self.foreign_functions.read().unwrap();
+        if let Some(function) = hash_map.get(name).copied() {
+            return function;
+        }
+        drop(hash_map);
 
         let ty = self.get_function_type(fun, false);
         let function = self.module.add_function(name, ty, Some(Linkage::External));
@@ -711,7 +719,31 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         // FIXME: add wasm-import-module attribute when on wasm
 
         self.linked.write().unwrap().insert(lib.to_string());
+        self.foreign_functions
+            .write()
+            .unwrap()
+            .insert(name.to_string(), function);
         function
+    }
+    pub fn get_foreign_global(&self, lib: &str, name: &str, ty: mu::Type) -> GlobalValue<'ctx> {
+        let hash_map = self.foreign_globals.read().unwrap();
+        if let Some(global) = hash_map.get(name).copied() {
+            return global;
+        }
+        drop(hash_map);
+
+        let ty = self.get_type(ty).basic_type(self).unwrap();
+        let global = self.module.add_global(ty, None, name);
+        global.set_linkage(Linkage::External);
+
+        // FIXME: add wasm-import-module attribute when on wasm
+
+        self.linked.write().unwrap().insert(lib.to_string());
+        self.foreign_globals
+            .write()
+            .unwrap()
+            .insert(name.to_string(), global);
+        global
     }
     pub fn add_function(
         &self,

@@ -908,7 +908,62 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.table
                     .call(mu::Callable::LetAlloca { ty, to }, [val, lambda])
             }
-            IntrinsicFunction::Link => todo!(),
+            IntrinsicFunction::Link => {
+                let Term::Constant(lib) = generics[0].term() else {
+                    panic!()
+                };
+                let ConstantEnum::String(lib) = &self.lower.tt[lib] else {
+                    panic!()
+                };
+                let Term::Effect(effect) = generics[1].term() else {
+                    panic!()
+                };
+                let EffectEnum::Item(item) = &self.lower.tt[effect] else {
+                    todo!("return error")
+                };
+                let effect_decl = self.effect_decl(item);
+
+                let mu::ExpressionEnum::Abstract(_, body) =
+                    self.table[args.into_iter().next().unwrap()]
+                else {
+                    panic!("ICE: link arg is not a function")
+                };
+
+                let effect_ty = self
+                    .effect(effect)
+                    .expect("ICE: effect with body with no type")
+                    .1;
+                let mu::TypeEnum::VTable(effect_tys) = self.table[effect_ty] else {
+                    panic!("ICE: effect with body is not a product type");
+                };
+
+                self.table.let_chain(
+                    [self.table.construct_vtable(
+                        effect_tys,
+                        effect_decl.members.iter().map(|member| {
+                            let ty = self.function_type(member.signature, None);
+                            self.table.lambda(
+                                ty.from(),
+                                self.table.call(
+                                    mu::Callable::ForeignFunction {
+                                        lib: lib.clone(),
+                                        name: member.name.clone(),
+                                        ty,
+                                    },
+                                    self.table[ty.from()]
+                                        .iter()
+                                        .copied()
+                                        .rev()
+                                        .enumerate()
+                                        .rev()
+                                        .map(|(i, ty)| self.table.reference(ty, i as u32)),
+                                ),
+                            )
+                        }),
+                    )],
+                    body,
+                )
+            }
             IntrinsicFunction::Asm | IntrinsicFunction::AsmPure => {
                 let Term::Constant(assembly) = generics[0].term() else {
                     panic!()

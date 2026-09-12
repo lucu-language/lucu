@@ -1,8 +1,7 @@
-import "brainfuck"
 import "core:io"
 import "core:env"
 
-import "main:env" main
+import "main:c" main
 
 fun main with World Div io.StdIo env.Args env.Environ = {
     main.main

@@ -1,5 +1,10 @@
 import "builtin:types"
+import "builtin:regions"
 import "builtin:c"
+
+-- important re-exports
+
+region static = regions.static
 
 -- ARITHMETIC TYPES --
 

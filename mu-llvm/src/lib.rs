@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter;
@@ -38,7 +38,6 @@ where
     ) -> Value<'ctx, Self>;
     fn build_callable(
         op: &Self::Callable,
-        op_ty: mu::FunctionType,
         params: impl IntoIterator<Item = ValueOrExpression<'ctx, Self>>,
         llvm: &Context<'ctx, Self>,
     ) -> Value<'ctx, Self>;
@@ -396,7 +395,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                         let params = llvm
                             .function_arguments(fun, function)
                             .map(ValueOrExpression::Value);
-                        let out = B::build_callable(&c, fun, params, llvm).basic_value(llvm);
+                        let out = B::build_callable(&c, params, llvm).basic_value(llvm);
                         if !fun.never_returns(llvm.table) {
                             llvm.builder
                                 .build_return(
@@ -535,6 +534,7 @@ pub struct Context<'ctx, B: Builder<'ctx>> {
     pub target_machine: TargetMachine,
     pub target_data: TargetData,
 
+    linked: RwLock<HashSet<String>>,
     function: RwLock<Option<FunctionValue<'ctx>>>,
     structs: RwLock<StructCache<'ctx>>,
     enums: RwLock<EnumCache<'ctx>>,
@@ -623,11 +623,15 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     (ty, asm)
                 })
                 .collect(),
+            linked: RwLock::new(HashSet::new()),
             structs: RwLock::new(HashMap::new()),
             enums: RwLock::new(HashMap::new()),
             callables: RwLock::new(HashMap::new()),
             function: RwLock::new(None),
         }
+    }
+    pub fn take_linked(&mut self) -> HashSet<String> {
+        std::mem::take(&mut self.linked).into_inner().unwrap()
     }
     pub fn eprint(&self) {
         self.module.print_to_stderr();
@@ -690,6 +694,24 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .unwrap()
             .into_pointer_value();
         (fptr, cptr)
+    }
+    pub fn get_foreign_function(
+        &self,
+        lib: &str,
+        name: &str,
+        fun: mu::FunctionType,
+    ) -> FunctionValue<'ctx> {
+        // TODO: cache these?
+        // we don't need to cache them right now because B::Callable is already being cached
+        // but this might bite us in the butt later
+
+        let ty = self.get_function_type(fun, false);
+        let function = self.module.add_function(name, ty, Some(Linkage::External));
+
+        // FIXME: add wasm-import-module attribute when on wasm
+
+        self.linked.write().unwrap().insert(lib.to_string());
+        function
     }
     pub fn add_function(
         &self,
@@ -1397,7 +1419,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 Value::Data(out)
             }
             Value::VTable(_, _) => panic!("ICE"),
-            Value::Callable(c) => B::build_callable(&c, fun, vals, self),
+            Value::Callable(c) => B::build_callable(&c, vals, self),
             Value::Raise(f, block, phi) => {
                 if self.current_function() == Some(f) {
                     let val = vals.into_iter().next().unwrap().build(self);

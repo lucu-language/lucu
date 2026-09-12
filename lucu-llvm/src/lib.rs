@@ -248,10 +248,8 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
         }
     }
-
     fn build_callable(
         op: &Callable,
-        _op_ty: mu::FunctionType,
         args: impl IntoIterator<Item = mu_llvm::ValueOrExpression<'ctx, Self>>,
         llvm: &mu_llvm::Context<'ctx, Self>,
     ) -> mu_llvm::Value<'ctx, Self> {
@@ -265,6 +263,14 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     }
                     BuilderFunction::Inline(expr) => llvm.build_expression_bound(expr, args),
                 }
+            }
+            Callable::ForeignFunction {
+                ref lib,
+                ref name,
+                ty,
+            } => {
+                let fun = llvm.get_foreign_function(lib, name, ty);
+                llvm.build_direct_call(fun, args.map(|v| v.build(llvm)))
             }
             Callable::ArrayConstruct { ty, size } => match llvm.get_type(ty).basic_type(llvm) {
                 Some(ty) => {

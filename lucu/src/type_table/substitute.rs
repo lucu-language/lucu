@@ -45,19 +45,20 @@ impl GenericParameter {
         let old = *arg;
 
         // TODO: proper hole filling thing
-        let do_subst = match old {
-            GenericArgument::Instance { term, .. } => match term {
-                Term::Type(ty) => tt[ty] == TypeEnum::Hole,
-                Term::Region(region) => tt[region] == RegionEnum::Hole,
-                Term::Effect(effect) => tt[effect] == EffectEnum::Hole,
-                Term::Constant(constant) => tt[constant] == ConstantEnum::Hole,
-                Term::Thunk(thunk) => {
-                    tt[thunk.returns] == TypeEnum::Hole && tt[thunk.effect] == EffectEnum::Hole
-                }
-                Term::Hole => true,
-            },
-            GenericArgument::Hole => true,
-        };
+        let do_subst = from.no_holes(tt)
+            || match old {
+                GenericArgument::Instance { term, .. } => match term {
+                    Term::Type(ty) => tt[ty] == TypeEnum::Hole,
+                    Term::Region(region) => tt[region] == RegionEnum::Hole,
+                    Term::Effect(effect) => tt[effect] == EffectEnum::Hole,
+                    Term::Constant(constant) => tt[constant] == ConstantEnum::Hole,
+                    Term::Thunk(thunk) => {
+                        tt[thunk.returns] == TypeEnum::Hole && tt[thunk.effect] == EffectEnum::Hole
+                    }
+                    Term::Hole => true,
+                },
+                GenericArgument::Hole => true,
+            };
         if do_subst {
             *arg = new;
             true

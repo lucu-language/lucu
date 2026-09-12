@@ -171,7 +171,7 @@ fn build(cmd: BuildCommand) -> bool {
         .unwrap();
 
     let context = Context::create();
-    let llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
+    let mut llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
 
     if let Some(fun) = llvm.module.get_function("_start") {
         fun.add_attribute(
@@ -201,8 +201,12 @@ fn build(cmd: BuildCommand) -> bool {
 
     llvm.write_asm(Path::new("out.asm")).unwrap();
     llvm.write_object(Path::new("out.o")).unwrap();
+
+    let linked = llvm.take_linked();
+
     std::process::Command::new("ld")
         .arg("out.o")
+        .args(linked.into_iter().map(|lib| format!("-l{lib}")))
         .arg("-o")
         .arg("out")
         .arg("-e_start")

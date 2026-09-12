@@ -1,0 +1,26 @@
+import "builtin:"
+
+effect LibC = Time StdIo
+
+fun link(fun body with LibC) with builtin.World = #inline {
+    use builtin.link["c", Time]
+    use builtin.link["c", StdIo]
+    body
+}
+
+-- TODO: put these in libc/time.lucu
+
+effect Time = {
+    fun time(arg ?^#write time_t) time_t
+    --# deprecated since C23
+    fun ctime(timer ^time_t) str[static]
+}
+
+-- we don't support targets vulnerable to the 2038 problem
+type time_t = struct(_timestamp int64_t)
+
+-- TODO: put these in libc/stdio.lucu
+
+effect StdIo = {
+    fun puts[r](str str[r]) int
+}

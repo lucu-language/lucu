@@ -65,6 +65,12 @@ pub struct Module {
 pub enum Callable {
     /// ? -> ?
     ModuleFunction { item: Item, ty: mu::FunctionType },
+    /// ? -> ?
+    ForeignFunction {
+        lib: CompactString,
+        name: CompactString,
+        ty: mu::FunctionType,
+    },
     /// (a x a x a x ...) -> [N]a
     ArrayConstruct { ty: mu::Type, size: u32 },
     /// a -> b
@@ -139,7 +145,9 @@ impl mu::Typed for Callable {
     type Base = Base;
     fn get_type(&self, mt: &(impl mu::Table<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
-            Callable::ModuleFunction { ty, .. } => mt.insert_type(mu::TypeEnum::Function(ty)),
+            Callable::ModuleFunction { ty, .. } | Callable::ForeignFunction { ty, .. } => {
+                mt.insert_type(mu::TypeEnum::Function(ty))
+            }
             Callable::ArrayConstruct { ty, size } => {
                 let arr = mt.base(Base::Array(ty, size));
                 mt.function(mt.insert_tuple(iter::repeat_n(ty, size as usize)), arr)

@@ -1,0 +1,10 @@
+import "builtin:regions"
+import "libc:" c
+
+fun main with World = {
+    use c.link
+    let time_ptr ^c.time_t = use regions.ref(0)
+    discard c.time(some(time_ptr))
+    let time_str = c.ctime(time_ptr)
+    discard c.puts(time_str)
+}

@@ -1165,7 +1165,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 let mu_ty = self.table.base(mu::Base::Integer(i));
                 let value = match i {
-                    Integer::CChar | Integer::Integer(_, IntSize::Exact(8) | IntSize::CChar) => {
+                    Integer::CChar | Integer::Integer(_, IntSize::Exact(8)) => {
                         let &[byte] = str.as_bytes() else {
                             panic!("ICE: character constant is not a single byte")
                         };

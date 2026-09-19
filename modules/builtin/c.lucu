@@ -1,8 +1,8 @@
 -- ARITHMETIC TYPES --
 
 type char = #intrinsic
-type schar = #intrinsic
-type uchar = #intrinsic
+type schar = i8
+type uchar = u8
 
 type short = #intrinsic
 type ushort = #intrinsic

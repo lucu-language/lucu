@@ -124,10 +124,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     // NOTE: this assumes a 64-bit system
                     Some(llvm.context.i64_type().into())
                 }
-                Integer::Integer(_, IntSize::CChar) | Integer::CChar => {
-                    // TODO
-                    Some(llvm.context.i8_type().into())
-                }
+                Integer::CChar => Some(llvm.context.i8_type().into()),
                 Integer::Integer(_, IntSize::CShort) => {
                     // TODO
                     Some(llvm.context.i16_type().into())

@@ -599,8 +599,6 @@ impl<'a, 'b> Lower<'a, 'b> {
             ("builtin:types", "unit") => TypeEnum::Unit,
             ("builtin:types", "nullptr") => TypeEnum::NullPointer,
             ("builtin:c", "char") => TypeEnum::Integer(Integer::CChar),
-            ("builtin:c", "schar") => TypeEnum::Integer(Integer::signed(IntSize::CChar)),
-            ("builtin:c", "uchar") => TypeEnum::Integer(Integer::unsigned(IntSize::CChar)),
             ("builtin:c", "short") => TypeEnum::Integer(Integer::signed(IntSize::CShort)),
             ("builtin:c", "ushort") => TypeEnum::Integer(Integer::unsigned(IntSize::CShort)),
             ("builtin:c", "int") => TypeEnum::Integer(Integer::signed(IntSize::CInt)),

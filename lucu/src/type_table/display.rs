@@ -38,19 +38,17 @@ impl fmt::Display for Integer {
             Integer::Integer(signed, size) => {
                 let prefix = if signed { "I" } else { "U" };
                 let c_prefix = if signed { "" } else { "U" };
-                match (signed, size) {
-                    (_, IntSize::Exact(size)) => write!(f, "{prefix}{size}"),
+                match size {
+                    IntSize::Exact(size) => write!(f, "{prefix}{size}"),
 
-                    (_, IntSize::Size) => write!(f, "{c_prefix}Size"),
-                    (_, IntSize::Address) => write!(f, "{c_prefix}Addr"),
-                    (_, IntSize::Register) => write!(f, "{c_prefix}Int"),
+                    IntSize::Size => write!(f, "{c_prefix}Size"),
+                    IntSize::Address => write!(f, "{c_prefix}Addr"),
+                    IntSize::Register => write!(f, "{c_prefix}Int"),
 
-                    (true, IntSize::CChar) => write!(f, "c.SChar"),
-                    (false, IntSize::CChar) => write!(f, "c.UChar"),
-                    (_, IntSize::CShort) => write!(f, "c.{c_prefix}Short"),
-                    (_, IntSize::CInt) => write!(f, "c.{c_prefix}Int"),
-                    (_, IntSize::CLong) => write!(f, "c.{c_prefix}Long"),
-                    (_, IntSize::CLongLong) => write!(f, "c.{c_prefix}LongLong"),
+                    IntSize::CShort => write!(f, "c.{c_prefix}Short"),
+                    IntSize::CInt => write!(f, "c.{c_prefix}Int"),
+                    IntSize::CLong => write!(f, "c.{c_prefix}Long"),
+                    IntSize::CLongLong => write!(f, "c.{c_prefix}LongLong"),
                 }
             }
             Integer::CChar => write!(f, "c.Char"),

@@ -38,11 +38,6 @@ pub enum IntSize {
     /// At least 16 bits
     Register,
 
-    /// Equivalent of a C char
-    /// Smallest addressable unit of the machine
-    /// At least 8 bits
-    /// At most IntSize::CShort
-    CChar,
     /// Equivalent of a C short int
     /// At least 16 bits
     /// At most IntSize::CInt
@@ -64,8 +59,8 @@ pub enum IntSize {
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum Integer {
     Integer(bool, IntSize),
-    /// Integer of the same size as a C char
-    /// Unknown sign
+    /// 8-bit integer
+    /// Unknown sign, determined by C compiler
     CChar,
 }
 
@@ -82,7 +77,6 @@ impl IntSize {
             (IntSize::Exact(a), IntSize::Exact(b)) => a < b,
             (IntSize::Exact(n), IntSize::Size | IntSize::Address | IntSize::Register) => n < 16,
 
-            (IntSize::Exact(n), IntSize::CChar) => n < 8,
             (IntSize::Exact(n), IntSize::CShort | IntSize::CInt) => n < 16,
             (IntSize::Exact(n), IntSize::CLong) => n < 32,
             (IntSize::Exact(n), IntSize::CLongLong) => n < 64,
@@ -100,12 +94,10 @@ impl IntSize {
             (IntSize::Address, IntSize::Address | IntSize::Register) => true,
             (IntSize::Register, IntSize::Register) => true,
 
-            (IntSize::Exact(n), IntSize::CChar) => n <= 8,
             (IntSize::Exact(n), IntSize::CShort | IntSize::CInt) => n <= 16,
             (IntSize::Exact(n), IntSize::CLong) => n <= 32,
             (IntSize::Exact(n), IntSize::CLongLong) => n <= 64,
 
-            (IntSize::CChar, IntSize::CChar | IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
             (IntSize::CShort, IntSize::CShort | IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
             (IntSize::CInt, IntSize::CInt | IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
             (IntSize::CLong, IntSize::CLong | IntSize::CLongLong | IntSize::Register) => true,
@@ -142,10 +134,10 @@ impl Integer {
                 }
             }
             (Integer::Integer(sign, int_size), Integer::CChar) => {
-                !sign && int_size.smaller_than(IntSize::CChar)
+                !sign && int_size.smaller_than(IntSize::Exact(8))
             }
             (Integer::CChar, Integer::Integer(sign, int_size)) => {
-                sign && IntSize::CChar.smaller_than(int_size)
+                sign && IntSize::Exact(8).smaller_than(int_size)
             }
             (Integer::CChar, Integer::CChar) => true,
         }

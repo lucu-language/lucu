@@ -243,11 +243,18 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 ))
             }
             Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
-            Operation::ForeignGlobal { lib, name, ty } => mu_llvm::Value::Data(Some(
-                llvm.get_foreign_global(lib, name, *ty)
-                    .as_pointer_value()
-                    .into(),
-            )),
+            Operation::ForeignGlobal { lib, name, ty } => {
+                let ty = llvm.get_type(*ty).basic_type(llvm).unwrap();
+                mu_llvm::Value::Data(Some(
+                    llvm.builder
+                        .build_load(
+                            ty,
+                            llvm.get_foreign_global(lib, name, ty).as_pointer_value(),
+                            "",
+                        )
+                        .unwrap(),
+                ))
+            }
         }
     }
     fn build_callable(

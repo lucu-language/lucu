@@ -139,7 +139,6 @@ pub enum Operation {
     Unreachable,
     Constant(mu::Type, Constant),
     Callable(Callable),
-    /// ^?
     ForeignGlobal {
         lib: CompactString,
         name: CompactString,
@@ -260,7 +259,7 @@ impl mu::Typed for Operation {
             Operation::Unreachable => mt.never(),
             Operation::Constant(ty, _) => ty,
             Operation::Callable(ref callable) => callable.get_type(mt),
-            Operation::ForeignGlobal { ty, .. } => mt.base(Base::Pointer(ty)),
+            Operation::ForeignGlobal { ty, .. } => ty,
         }
     }
 }

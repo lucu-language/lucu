@@ -725,14 +725,18 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .insert(name.to_string(), function);
         function
     }
-    pub fn get_foreign_global(&self, lib: &str, name: &str, ty: mu::Type) -> GlobalValue<'ctx> {
+    pub fn get_foreign_global(
+        &self,
+        lib: &str,
+        name: &str,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> GlobalValue<'ctx> {
         let hash_map = self.foreign_globals.read().unwrap();
         if let Some(global) = hash_map.get(name).copied() {
             return global;
         }
         drop(hash_map);
 
-        let ty = self.get_type(ty).basic_type(self).unwrap();
         let global = self.module.add_global(ty, None, name);
         global.set_linkage(Linkage::External);
 

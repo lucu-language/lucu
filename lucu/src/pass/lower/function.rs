@@ -944,9 +944,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             if self.lower.tt[member.signature].params.is_none() {
                                 // external value
                                 let ty = self.lower.tt[member.signature].thunk.returns;
-                                let TypeEnum::Pointer(ty, _) = self.lower.tt[ty] else {
-                                    todo!("return error")
-                                };
                                 let ty = self.r#type(ty);
                                 self.table.lambda(
                                     self.table.insert_tuple([]),

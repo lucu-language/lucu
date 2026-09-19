@@ -31,9 +31,9 @@ type FILE = struct(
 effect StdIo = {
     -- FIXME: according to the C standard these streams are macros, not declarations
     -- the following has only been tested to work on glibc
-    fun stdin ^@static ^@heap FILE
-    fun stdout ^@static ^@heap FILE
-    fun stderr ^@static ^@heap FILE
+    fun stdin ^@heap FILE
+    fun stdout ^@heap FILE
+    fun stderr ^@heap FILE
     fun fwrite(buffer ^void, size size_t, count size_t, stream ^mut FILE) size_t
     fun fread(buffer ^#write void, size size_t, count size_t, stream ^mut FILE) size_t
     fun fflush(stream ^mut FILE) int
@@ -44,21 +44,21 @@ fun stdio(fun body with io.StdIo) with StdIo = #inline handle body with io.StdIo
     fun stdin(fun body with io.Source) = handle body with io.Source {
         fun read[#write r](bytes builtin.str[r,]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
-            #transmute fread(buffer, 1, #transmute builtin.len(bytes), stdin^)
+            #transmute fread(buffer, 1, #transmute builtin.len(bytes), stdin)
         }
     }
     fun stdout(fun body with io.Sink) = handle body with io.Sink {
         fun write[r](bytes builtin.str[r,]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
-            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stdout^)
+            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stdout)
         }
-        fun flush = discard fflush(stdout^)
+        fun flush = discard fflush(stdout)
     }
     fun stderr(fun body with io.Sink) = handle body with io.Sink {
         fun write[r](bytes builtin.str[r,]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
-            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stderr^)
+            #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stderr)
         }
-        fun flush = discard fflush(stderr^)
+        fun flush = discard fflush(stderr)
     }
 }

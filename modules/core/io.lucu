@@ -54,26 +54,7 @@ fun writeln with Sink Fail = #inline {
 
 fun write_int(n int) with Sink Fail = #inline {
     let buf ^[21]i8 = use regions.ref(---)
-
-    let remaining = use regions.ref(abs(n))
-
-    let start size = handle {
-        for(21, 1) { current ->
-            buf[current]^ = '0' + #trunc (remaining^ % 10)
-            remaining^ /= 10
-            if remaining^ == 0 {
-                yeet current
-            }
-        }
-        unreachable
-    }
-
-    write_all(if n < 0 {
-        buf[start - 1]^ = '-'
-        buf[start - 1..]
-    } else {
-        buf[start..]
-    })
+    write_all(_show_int(n, buf))
 }
 
 fun print[r](bytes str[r,]) with StdIo = {

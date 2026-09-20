@@ -486,6 +486,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             Some(ast_params) => ast_params
                 .iter()
                 .map(|ast_param| match &ast_param.ty {
+                    // FIXME: shift type
                     Some(ty) => self.lower.r#type(ty, true).map(FunctionParameter::Data),
                     None => Result::new(FunctionParameter::Hole),
                 })

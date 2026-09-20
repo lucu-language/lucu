@@ -35,11 +35,29 @@ impl GenericParameter {
             GenericArgument::Hole => Term::Hole,
         }
     }
-    fn infer_arg(self, from: Term, tt: &TypeTable, arg: &mut GenericArgument) -> bool {
+    fn infer_arg(
+        self,
+        from: Term,
+        tt: &TypeTable,
+        start: usize,
+        arg: &mut GenericArgument,
+    ) -> bool {
         let arity = self.apply.as_deref().map(<[_]>::len);
         let inner = match self.apply {
             Some(_) => todo!(),
-            None => from,
+            None => {
+                // unshift term
+                // we assume there are no inner generics mentioned
+                // FIXME: this assumption is currently NOT CHECKED FOR, so we'll just get unclear hole errors
+                // FIXME: we should not be allocating here, add a custom 'unshift' function maybe
+                if start > 0 {
+                    let args =
+                        std::iter::repeat_n(GenericArgument::Hole, start).collect::<Box<_>>();
+                    from.subst(tt, 0, &args)
+                } else {
+                    from
+                }
+            }
         };
         let new = GenericArgument::Instance { term: inner, arity };
         let old = *arg;
@@ -382,6 +400,7 @@ impl Substitute for Constant {
             (ConstantEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
                 Term::Constant(from),
                 tt,
+                start,
                 &mut args[args.len() - 1 - (param.index - start)],
             ),
             (ConstantEnum::Generic(a), ConstantEnum::Generic(b)) => {
@@ -522,6 +541,7 @@ impl Substitute for Type {
             (TypeEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
                 Term::Type(from),
                 tt,
+                start,
                 &mut args[args.len() - 1 - (param.index - start)],
             ),
             (TypeEnum::Generic(a), TypeEnum::Generic(b)) => {
@@ -611,6 +631,7 @@ impl Substitute for Region {
             (RegionEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
                 Term::Region(from),
                 tt,
+                start,
                 &mut args[args.len() - 1 - (param.index - start)],
             ),
             (RegionEnum::Generic(a), RegionEnum::Generic(b)) => {
@@ -694,6 +715,7 @@ impl Substitute for Effect {
             (EffectEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
                 Term::Effect(from),
                 tt,
+                start,
                 &mut args[args.len() - 1 - (param.index - start)],
             ),
             (EffectEnum::Generic(a), EffectEnum::Generic(b)) => {

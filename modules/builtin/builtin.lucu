@@ -91,9 +91,7 @@ fun traceln = {
     trace(buf[..])
 }
 
-fun trace_int(n int) = {
-    let buf ^[21]i8 = use regions.ref(---)
-
+fun _show_int[#write r](n int, buf ^@r [21]i8) ^@r []i8 = {
     let remaining = use regions.ref(abs(n))
 
     let start size = handle {
@@ -107,12 +105,17 @@ fun trace_int(n int) = {
         unreachable
     }
 
-    trace(if n < 0 {
+    if n < 0 {
         buf[start - 1]^ = '-'
         buf[start - 1..]
     } else {
         buf[start..]
-    })
+    }
+}
+
+fun trace_int(n int) = {
+    let buf ^[21]i8 = use regions.ref(---)
+    trace(_show_int(n, buf))
 }
 
 fun assert[r](condition bool, msg str[r,]) with CallerLocation = {

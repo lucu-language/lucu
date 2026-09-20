@@ -651,8 +651,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn optimize(&self) -> Result<(), LLVMString> {
         let opts = PassBuilderOptions::create();
-        self.module
-            .run_passes("default<O3>", &self.target_machine, opts)
+        opts.set_merge_functions(true);
+        self.module.run_passes(
+            "default<O3>,cgscc(inline),function(instcombine,simplifycfg),globaldce",
+            &self.target_machine,
+            opts,
+        )
     }
     pub fn write_asm(&self, path: &Path) -> Result<(), LLVMString> {
         self.target_machine

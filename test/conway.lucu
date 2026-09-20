@@ -69,7 +69,7 @@ fun next_state(old ^[]i8, new ^mut []i8, stride size) = {
     }
 }
 
-fun main(stride size) with Div io.StdIo linux.Syscall = {
+fun main(stride size) with Div io.StdIo linux.Syscall = #inline {
     use io.stdin
     use io.stdout
 

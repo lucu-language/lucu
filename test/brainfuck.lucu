@@ -58,7 +58,7 @@ fun brainfuck[r](program str[r,]) with Div io.StdIo = {
     }
 }
 
-fun main with Div io.StdIo env.Args = {
+fun main with Div io.StdIo env.Args = #inline {
     discard env.next_arg
     if env.next_arg { arg ->
         brainfuck(cstr_to_str(arg))

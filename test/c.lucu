@@ -2,7 +2,7 @@ import "builtin:regions"
 import "libc:" c
 import "core:io"
 
-fun main with World = {
+fun main with World = #inline {
     use c.link
     use c.stdio
 

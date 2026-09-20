@@ -1,7 +1,7 @@
 import "core:io"
 import "builtin:regions"
 
-fun main with io.StdIo = {
+fun main with io.StdIo = #inline {
     use io.stdin
     use io.stdout
 

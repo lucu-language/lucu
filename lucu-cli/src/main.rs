@@ -197,8 +197,8 @@ fn build(cmd: BuildCommand) -> bool {
     }
     llvm.verify().unwrap();
     llvm.optimize().unwrap();
-    // eprintln!(" --- LLVM O3 --- ");
-    // llvm.eprint();
+    eprintln!(" --- LLVM O3 --- ");
+    llvm.eprint();
 
     llvm.write_asm(Path::new("out.asm")).unwrap();
     llvm.write_object(Path::new("out.o")).unwrap();

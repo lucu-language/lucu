@@ -1,7 +1,7 @@
 import "raylib:"
 import "builtin:c"
 
-fun main with World Div = {
+fun main with World Div = #inline {
     use link_library["c",]
     use raylib.link
 

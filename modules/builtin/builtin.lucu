@@ -63,7 +63,13 @@ handle CallerLocation {
 effect World
     = #intrinsic
 
-fun link[LIB str[static,], E effect](fun body with E) with World
+effect Linked[LIB str[static,]]
+    = #intrinsic
+
+fun link_library[LIB str[static,]](fun body with Linked[LIB,]) with World
+    = #intrinsic
+
+fun declare[E effect](fun body with E) with World
     = #intrinsic
 
 fun asm[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U with World

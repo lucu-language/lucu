@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
+use inkwell::llvm_sys::LLVMCallConv;
 use inkwell::module::Linkage;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::support::LLVMString;
@@ -636,6 +637,9 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             foreign_globals: RwLock::new(HashMap::new()),
         }
     }
+    pub fn internal_calling_convention(&self) -> LLVMCallConv {
+        LLVMCallConv::LLVMFastCallConv
+    }
     pub fn take_linked(&mut self) -> HashSet<String> {
         std::mem::take(&mut self.linked).into_inner().unwrap()
     }
@@ -701,11 +705,14 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .into_pointer_value();
         (fptr, cptr)
     }
+    pub fn add_linked(&self, lib: &str) {
+        self.linked.write().unwrap().insert(lib.to_string());
+    }
     pub fn get_foreign_function(
         &self,
-        lib: &str,
         name: &str,
         fun: mu::FunctionType,
+        cc: LLVMCallConv,
     ) -> FunctionValue<'ctx> {
         let hash_map = self.foreign_functions.read().unwrap();
         if let Some(function) = hash_map.get(name).copied() {
@@ -715,22 +722,17 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
         let ty = self.get_function_type(fun, false);
         let function = self.module.add_function(name, ty, Some(Linkage::External));
+        function.set_call_conventions(cc as u32);
 
         // FIXME: add wasm-import-module attribute when on wasm
 
-        self.linked.write().unwrap().insert(lib.to_string());
         self.foreign_functions
             .write()
             .unwrap()
             .insert(name.to_string(), function);
         function
     }
-    pub fn get_foreign_global(
-        &self,
-        lib: &str,
-        name: &str,
-        ty: BasicTypeEnum<'ctx>,
-    ) -> GlobalValue<'ctx> {
+    pub fn get_foreign_global(&self, name: &str, ty: BasicTypeEnum<'ctx>) -> GlobalValue<'ctx> {
         let hash_map = self.foreign_globals.read().unwrap();
         if let Some(global) = hash_map.get(name).copied() {
             return global;
@@ -742,7 +744,6 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
         // FIXME: add wasm-import-module attribute when on wasm
 
-        self.linked.write().unwrap().insert(lib.to_string());
         self.foreign_globals
             .write()
             .unwrap()
@@ -763,6 +764,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             function_type,
             linkage,
         );
+        function.set_call_conventions(self.internal_calling_convention() as u32);
 
         // set parameter names
         let params = Iterator::zip(
@@ -1419,9 +1421,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         vals: impl IntoIterator<Item = ValueOrExpression<'ctx, B>>,
     ) -> Value<'ctx, B> {
         match fval {
-            Value::Data(data) => {
-                self.build_indirect_call(fun, data, vals.into_iter().map(|v| v.build(self)))
-            }
+            Value::Data(data) => self.build_indirect_call(
+                fun,
+                data,
+                self.internal_calling_convention(),
+                vals.into_iter().map(|v| v.build(self)),
+            ),
             Value::Abstract(e, captures) => {
                 let mu::ExpressionEnum::Abstract(_, body) = self.table[e] else {
                     panic!("ICE");
@@ -1446,12 +1451,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                             .into(),
                     ))
                     .collect::<Box<_>>();
-                let out = self
+                let call = self
                     .builder
                     .build_indirect_call(function_type, function, &args, "")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .basic();
+                    .unwrap();
+                call.set_call_convention(self.internal_calling_convention() as u32);
+                let out = call.try_as_basic_value().basic();
                 Value::Data(out)
             }
             Value::VTable(_, _) => panic!("ICE"),
@@ -1484,6 +1489,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     pub fn build_direct_call(
         &self,
         fval: FunctionValue<'ctx>,
+        cc: LLVMCallConv,
         vals: impl IntoIterator<Item = Value<'ctx, B>>,
     ) -> Value<'ctx, B> {
         let args = vals
@@ -1491,18 +1497,16 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .filter_map(|v| v.basic_value(self))
             .map(BasicMetadataValueEnum::from)
             .collect::<Box<_>>();
-        let out = self
-            .builder
-            .build_call(fval, &args, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic();
+        let call = self.builder.build_call(fval, &args, "").unwrap();
+        call.set_call_convention(cc as u32);
+        let out = call.try_as_basic_value().basic();
         Value::Data(out)
     }
     pub fn build_indirect_call(
         &self,
         fun: mu::FunctionType,
         fval: BasicValue<'ctx>,
+        cc: LLVMCallConv,
         vals: impl IntoIterator<Item = Value<'ctx, B>>,
     ) -> Value<'ctx, B> {
         let function_type = self.get_function_type(fun, true);
@@ -1513,12 +1517,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             .map(BasicMetadataValueEnum::from)
             .chain(iter::once(closure.into()))
             .collect::<Box<_>>();
-        let out = self
+        let call = self
             .builder
             .build_indirect_call(function_type, fptr, &args, "")
-            .unwrap()
-            .try_as_basic_value()
-            .basic();
+            .unwrap();
+        call.set_call_convention(cc as u32);
+        let out = call.try_as_basic_value().basic();
         Value::Data(out)
     }
     pub fn build_block(&self, name: &str) -> BasicBlock<'ctx> {

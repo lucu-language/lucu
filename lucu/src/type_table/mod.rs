@@ -110,6 +110,7 @@ impl IntSize {
 
 impl Integer {
     pub const I8: Self = Integer::signed(IntSize::Exact(8));
+    pub const U8: Self = Integer::unsigned(IntSize::Exact(8));
     pub const INT: Self = Integer::signed(IntSize::Register);
     pub const SIZE: Self = Integer::signed(IntSize::Size);
     pub const ADDR: Self = Integer::signed(IntSize::Address);
@@ -174,6 +175,8 @@ pub enum TypeEnum {
 
 impl TypeEnum {
     pub const I8: Self = Self::Integer(Integer::I8);
+    pub const U8: Self = Self::Integer(Integer::U8);
+    pub const C_CHAR: Self = Self::Integer(Integer::CChar);
     pub const INT: Self = Self::Integer(Integer::INT);
     pub const SIZE: Self = Self::Integer(Integer::SIZE);
     pub const ADDR: Self = Self::Integer(Integer::ADDR);
@@ -186,8 +189,8 @@ impl Type {
     pub fn is_never(self, tt: &TypeTable) -> bool {
         tt[self] == TypeEnum::Never
     }
-    pub fn is_i8(self, tt: &TypeTable) -> bool {
-        tt[self] == TypeEnum::I8
+    pub fn is_8_bits_wide(self, tt: &TypeTable) -> bool {
+        tt[self] == TypeEnum::I8 || tt[self] == TypeEnum::U8 || tt[self] == TypeEnum::C_CHAR
     }
 }
 
@@ -206,6 +209,7 @@ pub enum EffectEnum {
     Row(Arc<[Effect]>),
     Read(Region),
     Write(Region),
+    Linked(Constant),
     Divergent,
     World,
     Hole,
@@ -367,6 +371,7 @@ impl Effect {
             EffectEnum::Item(_) => false,
             EffectEnum::Read(_)
             | EffectEnum::Write(_)
+            | EffectEnum::Linked(_)
             | EffectEnum::Divergent
             | EffectEnum::World => true,
             EffectEnum::Generic(_) => panic!("ICE: asked if effect generic is a marker"),

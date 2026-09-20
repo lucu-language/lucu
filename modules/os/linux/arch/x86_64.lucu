@@ -20,6 +20,7 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = #inline {
         fun nr_read addr = 0
         fun nr_write addr = 1
         fun nr_exit addr = 60
+        fun nr_exit_group addr = 231
         fun nr_getrandom addr = 318
     }
 }
@@ -82,7 +83,7 @@ fun entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
         use with_environ(envp)
 
         main.main
-        linux.exit(0)
+        linux.exit_group(0)
     }
     unreachable
 }

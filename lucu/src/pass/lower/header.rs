@@ -548,7 +548,8 @@ impl<'a, 'b> Lower<'a, 'b> {
         match (module.as_str(), name.ident.as_str()) {
             ("builtin:regions", "ref") => Some(IntrinsicFunction::Ref),
             ("builtin:regions", "alloca") => Some(IntrinsicFunction::Alloca),
-            ("builtin:builtin", "link") => Some(IntrinsicFunction::Link),
+            ("builtin:builtin", "link_library") => Some(IntrinsicFunction::LinkLibrary),
+            ("builtin:builtin", "declare") => Some(IntrinsicFunction::Declare),
             ("builtin:builtin", "asm") => Some(IntrinsicFunction::Asm),
             ("builtin:builtin", "asm_pure") => Some(IntrinsicFunction::AsmPure),
             ("builtin:builtin", "trace") => Some(IntrinsicFunction::Trace),
@@ -620,6 +621,15 @@ impl<'a, 'b> Lower<'a, 'b> {
         let effect = match (module.as_str(), name.ident.as_str()) {
             ("builtin:builtin", "Div") => EffectEnum::Divergent,
             ("builtin:builtin", "World") => EffectEnum::World,
+            ("builtin:builtin", "Linked") => {
+                let library = self
+                    .tt
+                    .insert_constant(ConstantEnum::Generic(GenericParameter {
+                        index: 0,
+                        apply: None,
+                    }));
+                EffectEnum::Linked(library)
+            }
             ("builtin:regions", "Read") => {
                 let region = self.tt.insert_region(RegionEnum::Generic(GenericParameter {
                     index: 0,

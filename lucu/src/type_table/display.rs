@@ -157,6 +157,7 @@ impl fmt::Display for Interned<'_, Effect> {
             }
             EffectEnum::Read(region) => write!(f, "read {}", region.display(self.1)),
             EffectEnum::Write(region) => write!(f, "write {}", region.display(self.1)),
+            EffectEnum::Linked(lib) => write!(f, "linked {}", lib.display(self.1)),
             EffectEnum::Divergent => write!(f, "div"),
             EffectEnum::World => write!(f, "world"),
             EffectEnum::Hole => write!(f, "_"),
@@ -312,6 +313,7 @@ impl Effect {
             EffectEnum::Row(_) => true,
             EffectEnum::Read(_) => true,
             EffectEnum::Write(_) => true,
+            EffectEnum::Linked(_) => true,
             EffectEnum::Divergent => false,
             EffectEnum::World => false,
             EffectEnum::Hole => false,

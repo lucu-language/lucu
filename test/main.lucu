@@ -1,8 +1,9 @@
 import "core:io"
 import "core:env"
+import "os:linux"
 
-import "main:c" main
+import "main:raylib" main
 
-fun main with World Div io.StdIo env.Args env.Environ = {
+fun main with World Div io.StdIo env.Args env.Environ linux.Syscall = {
     main.main
 }

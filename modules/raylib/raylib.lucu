@@ -1,0 +1,27 @@
+import "builtin:c"
+
+-- FIXME: once ABI lowering is fixed, make this a struct again
+fun Color(r u8, g u8, b u8, a u8) u32 = {
+    (#ext r) | (#ext g << 8) | (#ext b << 16) | (#ext a << 24)
+}
+
+effect Raylib = {
+    -- Window-related functions
+    fun InitWindow[r](width c.int, height c.int, title ?c.str[r,])
+    fun WindowShouldClose() bool
+    fun CloseWindow()
+
+    -- Drawing-related functions
+    fun ClearBackground(color u32)
+    fun BeginDrawing()
+    fun EndDrawing()
+
+    -- Timing-related functions
+    fun SetTargetFPS(fps c.int)
+}
+
+fun link(fun body with Linked["raylib",] Raylib) with World Linked["c",] = #inline {
+    use link_library["raylib",]
+    use declare[Raylib,]
+    body
+}

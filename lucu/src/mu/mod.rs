@@ -67,10 +67,11 @@ pub enum Callable {
     ModuleFunction { item: Item, ty: mu::FunctionType },
     /// ? -> ?
     ForeignFunction {
-        lib: CompactString,
         name: CompactString,
         ty: mu::FunctionType,
     },
+    /// (() -> ()) -> ()
+    Link { lib: CompactString },
     /// (a x a x a x ...) -> [N]a
     ArrayConstruct { ty: mu::Type, size: u32 },
     /// a -> b
@@ -139,11 +140,7 @@ pub enum Operation {
     Unreachable,
     Constant(mu::Type, Constant),
     Callable(Callable),
-    ForeignGlobal {
-        lib: CompactString,
-        name: CompactString,
-        ty: mu::Type,
-    },
+    ForeignGlobal { name: CompactString, ty: mu::Type },
 }
 
 impl mu::Typed for Callable {
@@ -158,6 +155,10 @@ impl mu::Typed for Callable {
                 mt.function(mt.insert_tuple(iter::repeat_n(ty, size as usize)), arr)
             }
             Callable::Asm { from, to, .. } => mt.function(mt.insert_tuple([from]), to),
+            Callable::Link { .. } => mt.function(
+                mt.insert_tuple([mt.function(mt.insert_tuple([]), mt.unit())]),
+                mt.unit(),
+            ),
             Callable::Loop => mt.function(
                 mt.insert_tuple([mt.function(mt.insert_tuple([]), mt.unit())]),
                 mt.never(),

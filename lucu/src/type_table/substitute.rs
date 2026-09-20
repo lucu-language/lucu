@@ -655,6 +655,7 @@ impl Substitute for Effect {
             }
             EffectEnum::Read(region) => EffectEnum::Read(region.subst(tt, start, args)),
             EffectEnum::Write(region) => EffectEnum::Write(region.subst(tt, start, args)),
+            EffectEnum::Linked(lib) => EffectEnum::Linked(lib.subst(tt, start, args)),
             EffectEnum::Divergent | EffectEnum::World | EffectEnum::Hole => return self,
         };
         tt.insert_effect(changed)
@@ -668,6 +669,7 @@ impl Substitute for Effect {
             EffectEnum::Row(ref row) => EffectEnum::Row(row.clone().shift(tt, start, offset)),
             EffectEnum::Read(region) => EffectEnum::Read(region.shift(tt, start, offset)),
             EffectEnum::Write(region) => EffectEnum::Write(region.shift(tt, start, offset)),
+            EffectEnum::Linked(lib) => EffectEnum::Linked(lib.shift(tt, start, offset)),
             EffectEnum::Divergent | EffectEnum::World | EffectEnum::Hole => return self,
         };
         tt.insert_effect(changed)
@@ -682,6 +684,7 @@ impl Substitute for Effect {
                 (EffectEnum::Row(_a), EffectEnum::Row(_b)) => todo!(),
                 (EffectEnum::Read(a), EffectEnum::Read(b)) => a.subtype(*b, tt),
                 (EffectEnum::Write(a), EffectEnum::Write(b)) => a.subtype(*b, tt),
+                (EffectEnum::Linked(a), EffectEnum::Linked(b)) => a.subtype(*b, tt),
                 (EffectEnum::Hole, _) | (_, EffectEnum::Hole) => true,
                 _ => false,
             }
@@ -702,6 +705,7 @@ impl Substitute for Effect {
             (EffectEnum::Row(a), EffectEnum::Row(b)) if a.is_empty() && b.is_empty() => true,
             (EffectEnum::Read(a), EffectEnum::Read(b)) => a.infer(*b, tt, start, args),
             (EffectEnum::Write(a), EffectEnum::Write(b)) => a.infer(*b, tt, start, args),
+            (EffectEnum::Linked(a), EffectEnum::Linked(b)) => a.infer(*b, tt, start, args),
             (EffectEnum::Divergent, EffectEnum::Divergent) => true,
             (EffectEnum::World, EffectEnum::World) => true,
             (EffectEnum::Row(_), _) => {
@@ -721,6 +725,7 @@ impl Substitute for Effect {
             EffectEnum::Item(item) => item.clone().no_holes(tt),
             EffectEnum::Row(effects) => effects.iter().all(|e| e.no_holes(tt)),
             EffectEnum::Read(region) | EffectEnum::Write(region) => region.no_holes(tt),
+            EffectEnum::Linked(lib) => lib.no_holes(tt),
             EffectEnum::Divergent => true,
             EffectEnum::World => true,
             EffectEnum::Hole => false,

@@ -739,9 +739,14 @@ impl<'a, 'b> Lower<'a, 'b> {
             },
             // TODO: escaping!
             ast::Constant::String(string) => {
+                let mut value = string.value.clone();
                 let ty = match self.tt[expected] {
-                    TypeEnum::PointerSlice(inner, _, sentinel) if inner.is_i8(self.tt) =>
-                        self.tt.insert_type(TypeEnum::PointerSlice(inner, self.tt.insert_region(RegionEnum::Static), sentinel)),
+                    TypeEnum::PointerSlice(inner, _, sentinel) if inner.is_8_bits_wide(self.tt) => {
+                        if sentinel.is_some() {
+                            value.push(0 as char);
+                        }
+                        self.tt.insert_type(TypeEnum::PointerSlice(inner, self.tt.insert_region(RegionEnum::Static), sentinel))
+                    },
                     TypeEnum::Hole =>
                         self.tt.insert_type(TypeEnum::PointerSlice(self.tt.insert_type(TypeEnum::I8), self.tt.insert_region(RegionEnum::Static), None)),
                     _ => return Result::error(ProblemKind::LiteralMismatch(LiteralMismatch {
@@ -751,7 +756,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 };
                 Result::new(
                     (self.tt
-                        .insert_constant(ConstantEnum::String(string.value.clone())), ty),
+                        .insert_constant(ConstantEnum::String(value)), ty),
                 )
             },
             ast::Constant::Character(character) => {

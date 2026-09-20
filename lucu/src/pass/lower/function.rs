@@ -908,14 +908,18 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 self.table
                     .call(mu::Callable::LetAlloca { ty, to }, [val, lambda])
             }
-            IntrinsicFunction::Link => {
+            IntrinsicFunction::LinkLibrary => {
                 let Term::Constant(lib) = generics[0].term() else {
                     panic!()
                 };
                 let ConstantEnum::String(lib) = &self.lower.tt[lib] else {
                     panic!()
                 };
-                let Term::Effect(effect) = generics[1].term() else {
+                self.table
+                    .call(mu::Callable::Link { lib: lib.clone() }, args)
+            }
+            IntrinsicFunction::Declare => {
+                let Term::Effect(effect) = generics[0].term() else {
                     panic!()
                 };
                 let EffectEnum::Item(item) = &self.lower.tt[effect] else {
@@ -948,7 +952,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 self.table.lambda(
                                     self.table.insert_tuple([]),
                                     self.table.operation(mu::Operation::ForeignGlobal {
-                                        lib: lib.clone(),
                                         name: member.name.clone(),
                                         ty,
                                     }),
@@ -960,7 +963,6 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     ty.from(),
                                     self.table.call(
                                         mu::Callable::ForeignFunction {
-                                            lib: lib.clone(),
                                             name: member.name.clone(),
                                             ty,
                                         },
@@ -1151,11 +1153,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ConstantEnum::Integer(int) => self
                 .table
                 .constant(self.r#type(ty), mu::Constant::Integer(int)),
-            ConstantEnum::String(ref str) => {
-                // FIXME: if the type has a sentinel we need to add that to the end
-                self.table
-                    .constant(self.r#type(ty), mu::Constant::String(str.clone()))
-            }
+            ConstantEnum::String(ref str) => self
+                .table
+                .constant(self.r#type(ty), mu::Constant::String(str.clone())),
             ConstantEnum::Character(ref str) => {
                 let TypeEnum::Integer(i) = self.lower.tt[ty] else {
                     panic!("ICE: character constant is not of integer type");
@@ -2129,6 +2129,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             }
             EffectEnum::Read(_)
             | EffectEnum::Write(_)
+            | EffectEnum::Linked(_)
             | EffectEnum::Divergent
             | EffectEnum::World
             | EffectEnum::Hole => None,

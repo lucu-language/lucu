@@ -4,6 +4,7 @@ effect SyscallNR = {
     fun nr_read addr
     fun nr_write addr
     fun nr_exit addr
+    fun nr_exit_group addr
     fun nr_getrandom addr
 }
 
@@ -15,6 +16,7 @@ effect Syscall = {
     fun read[#write r](file addr, buf str[r,]) size
     fun write[r](file addr, buf str[r,]) size
     fun exit(code addr) !
+    fun exit_group(code addr) !
     -- TODO: flags
     fun getrandom[#write r](buf str[r,]) size
 }
@@ -29,6 +31,10 @@ fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = #inline {
         }
         fun exit(code addr) ! = {
             discard syscall(nr_exit, code, ---, ---, ---, ---, ---)
+            unreachable
+        }
+        fun exit_group(code addr) ! = {
+            discard syscall(nr_exit_group, code, ---, ---, ---, ---, ---)
             unreachable
         }
         fun getrandom[#write r](buf str[r,]) size = {

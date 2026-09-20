@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use asta_handle_map::HandleSet;
@@ -202,16 +203,49 @@ fn build(cmd: BuildCommand) -> bool {
     llvm.write_asm(Path::new("out.asm")).unwrap();
     llvm.write_object(Path::new("out.o")).unwrap();
 
-    let linked = llvm.take_linked();
+    let mut linked = llvm.take_linked();
+    if cmd.debug {
+        eprintln!("--- LINKED ---");
+        for link in &linked {
+            eprintln!("{link}");
+        }
+    }
+    let link_libc = linked.remove("c");
 
-    std::process::Command::new("ld")
+    let flags = if linked.is_empty() {
+        String::new()
+    } else {
+        let output = std::process::Command::new("pkg-config")
+            .arg("--libs")
+            .args(linked)
+            .stderr(Stdio::inherit())
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            panic!();
+        }
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let mut command = std::process::Command::new("ld");
+    command
         .arg("out.o")
-        .args(linked.into_iter().map(|lib| format!("-l{lib}")))
+        .args(
+            flags
+                .split(' ')
+                .filter_map(|s| {
+                    let trim = s.trim();
+                    (!trim.is_empty()).then_some(trim)
+                })
+                .chain(link_libc.then_some("-lc")),
+        )
         .arg("-o")
         .arg("out")
-        .arg("-e_start")
-        .status()
-        .unwrap();
+        .arg("-e_start");
+    if cmd.debug {
+        eprintln!("{command:?}");
+    }
+    command.status().unwrap();
 
     true
 }

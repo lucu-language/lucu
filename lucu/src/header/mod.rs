@@ -57,7 +57,8 @@ pub enum ItemDecl {
 pub enum IntrinsicFunction {
     Ref,
     Alloca,
-    Link,
+    LinkLibrary,
+    Declare,
     Asm,
     AsmPure,
     Len,

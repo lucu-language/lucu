@@ -5,30 +5,29 @@ import "os:linux"
 fun dec(n size, stride size) size = if n == 0 then stride - 1 else n - 1
 fun inc(n size, stride size) size = if n == stride - 1 then 0 else n + 1
 
-fun write_state(state ^[]i8, stride size) with io.Sink = {
-    discard io.write("-")
+fun write_state(state ^[]i8, stride size) with io.Sink Fail = #inline {
+    io.write_all("-")
     for(0, stride) { x ->
-        discard io.write("--")
+        io.write_all("--")
     }
-    discard io.write("-")
-    discard io.writeln
+    io.write_all("-")
+    io.writeln
 
     for(0, stride) { y ->
-        discard io.write("|")
+        io.write_all("|")
         for(0, stride) { x ->
-            discard io.write(if state[x + y * stride]^ == 1 then "[]" else "  ")
+            io.write_all(if state[x + y * stride]^ == 1 then "[]" else "  ")
         }
-        discard io.write("|")
-        discard io.writeln
+        io.write_all("|")
+        io.writeln
     }
 
-    discard io.write("-")
+    io.write_all("-")
     for(0, stride) { x ->
-        discard io.write("--")
+        io.write_all("--")
     }
-    discard io.write("-")
-    discard io.writeln
-    io.flush
+    io.write_all("-")
+    io.writeln
 }
 
 fun clear_state(state ^mut []i8, stride size) = {
@@ -96,10 +95,12 @@ fun main(stride size) with Div io.StdIo linux.Syscall = {
     }
 
     loop {
-        write_state(board_a, stride)
+        try write_state(board_a, stride)
+        io.flush
         discard io.skip_line
         next_state(board_a, board_b, stride)
-        write_state(board_b, stride)
+        try write_state(board_b, stride)
+        io.flush
         discard io.skip_line
         next_state(board_b, board_a, stride)
     }

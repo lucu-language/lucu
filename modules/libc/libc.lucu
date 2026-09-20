@@ -1,11 +1,12 @@
 import "builtin:"
 import "core:io"
 
-effect LibC = Time StdIo
+effect LibC = builtin.Linked["c"] Time StdIo
 
 fun link(fun body with LibC) with builtin.World = #inline {
-    use builtin.link["c", Time]
-    use builtin.link["c", StdIo]
+    use builtin.link_library["c"]
+    use builtin.declare[Time]
+    use builtin.declare[StdIo]
     body
 }
 

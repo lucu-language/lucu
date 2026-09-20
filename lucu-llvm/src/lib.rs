@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
+use inkwell::llvm_sys::LLVMCallConv;
 use inkwell::module::Linkage;
 use inkwell::targets::TargetMachine;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum};
@@ -243,15 +244,11 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 ))
             }
             Operation::Callable(callable) => mu_llvm::Value::Callable(callable.clone()),
-            Operation::ForeignGlobal { lib, name, ty } => {
+            Operation::ForeignGlobal { name, ty } => {
                 let ty = llvm.get_type(*ty).basic_type(llvm).unwrap();
                 mu_llvm::Value::Data(Some(
                     llvm.builder
-                        .build_load(
-                            ty,
-                            llvm.get_foreign_global(lib, name, ty).as_pointer_value(),
-                            "",
-                        )
+                        .build_load(ty, llvm.get_foreign_global(name, ty).as_pointer_value(), "")
                         .unwrap(),
                 ))
             }
@@ -267,19 +264,30 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             Callable::ModuleFunction { ref item, .. } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
                 match fun {
-                    BuilderFunction::Call(fval) => {
-                        llvm.build_direct_call(fval, args.map(|v| v.build(llvm)))
-                    }
+                    BuilderFunction::Call(fval) => llvm.build_direct_call(
+                        fval,
+                        llvm.internal_calling_convention(),
+                        args.map(|v| v.build(llvm)),
+                    ),
                     BuilderFunction::Inline(expr) => llvm.build_expression_bound(expr, args),
                 }
             }
-            Callable::ForeignFunction {
-                ref lib,
-                ref name,
-                ty,
-            } => {
-                let fun = llvm.get_foreign_function(lib, name, ty);
-                llvm.build_direct_call(fun, args.map(|v| v.build(llvm)))
+            Callable::ForeignFunction { ref name, ty } => {
+                let cc = LLVMCallConv::LLVMCCallConv;
+                let fun = llvm.get_foreign_function(name, ty, cc);
+                llvm.build_direct_call(fun, cc, args.map(|v| v.build(llvm)))
+            }
+            Callable::Link { ref lib } => {
+                llvm.add_linked(lib);
+                args.next().unwrap().build_call(
+                    mu::FunctionType::new(
+                        llvm.table.insert_tuple([]),
+                        llvm.table.unit(),
+                        llvm.table,
+                    ),
+                    [],
+                    llvm,
+                )
             }
             Callable::ArrayConstruct { ty, size } => match llvm.get_type(ty).basic_type(llvm) {
                 Some(ty) => {

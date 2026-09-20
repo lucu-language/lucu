@@ -1,0 +1,17 @@
+import "raylib:"
+import "builtin:c"
+
+fun main with World Div = {
+    use link_library["c",]
+    use raylib.link
+
+    let title c.str[static,] = "Lucu Raylib Bindings"
+    raylib.InitWindow(640, 480, some(title))
+    raylib.SetTargetFPS(60)
+    while(!raylib.WindowShouldClose()) {
+        raylib.BeginDrawing()
+        raylib.ClearBackground(raylib.Color(245, 245, 245, 255))
+        raylib.EndDrawing()
+    }
+    raylib.CloseWindow()
+}

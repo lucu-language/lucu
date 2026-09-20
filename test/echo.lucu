@@ -7,5 +7,5 @@ fun main with io.StdIo = {
 
     let buffer ^[]i8 = use regions.alloca(1000)
     let total = io.read_line(buffer)
-    discard io.write(buffer[..total])
+    try io.write_all(buffer[..total])
 }

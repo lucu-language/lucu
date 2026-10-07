@@ -189,7 +189,7 @@ impl Substitute for GenericParameter {
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         // FIXME: this assumes all generics are covariant
-        self.index == from.index
+        self.index == (from.index + args.len())
             && self
                 .apply
                 .clone()
@@ -397,12 +397,16 @@ impl Substitute for Constant {
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (&tt[self], &tt[from]) {
-            (ConstantEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
-                Term::Constant(from),
-                tt,
-                start,
-                &mut args[args.len() - 1 - (param.index - start)],
-            ),
+            (ConstantEnum::Generic(param), _)
+                if param.index >= start && param.index < start + args.len() =>
+            {
+                param.clone().infer_arg(
+                    Term::Constant(from),
+                    tt,
+                    start,
+                    &mut args[args.len() - 1 - (param.index - start)],
+                )
+            }
             (ConstantEnum::Generic(a), ConstantEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
@@ -538,12 +542,16 @@ impl Substitute for Type {
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (&tt[self], &tt[from]) {
-            (TypeEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
-                Term::Type(from),
-                tt,
-                start,
-                &mut args[args.len() - 1 - (param.index - start)],
-            ),
+            (TypeEnum::Generic(param), _)
+                if param.index >= start && param.index < start + args.len() =>
+            {
+                param.clone().infer_arg(
+                    Term::Type(from),
+                    tt,
+                    start,
+                    &mut args[args.len() - 1 - (param.index - start)],
+                )
+            }
             (TypeEnum::Generic(a), TypeEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
@@ -628,12 +636,16 @@ impl Substitute for Region {
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (&tt[self], &tt[from]) {
-            (RegionEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
-                Term::Region(from),
-                tt,
-                start,
-                &mut args[args.len() - 1 - (param.index - start)],
-            ),
+            (RegionEnum::Generic(param), _)
+                if param.index >= start && param.index < start + args.len() =>
+            {
+                param.clone().infer_arg(
+                    Term::Region(from),
+                    tt,
+                    start,
+                    &mut args[args.len() - 1 - (param.index - start)],
+                )
+            }
             (RegionEnum::Generic(a), RegionEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }
@@ -712,12 +724,16 @@ impl Substitute for Effect {
     }
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool {
         match (&tt[self], &tt[from]) {
-            (EffectEnum::Generic(param), _) if param.index >= start => param.clone().infer_arg(
-                Term::Effect(from),
-                tt,
-                start,
-                &mut args[args.len() - 1 - (param.index - start)],
-            ),
+            (EffectEnum::Generic(param), _)
+                if param.index >= start && param.index < start + args.len() =>
+            {
+                param.clone().infer_arg(
+                    Term::Effect(from),
+                    tt,
+                    start,
+                    &mut args[args.len() - 1 - (param.index - start)],
+                )
+            }
             (EffectEnum::Generic(a), EffectEnum::Generic(b)) => {
                 a.clone().infer(b.clone(), tt, start, args)
             }

@@ -1963,6 +1963,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             else {
                 todo!("error")
             };
+            let member_ty = match item.apply.as_deref() {
+                Some(apply) => member.ty.subst(self.lower.tt, 0, apply),
+                None => member.ty,
+            };
             Result::new((
                 self.table.call(
                     mu::Callable::PointerMember {
@@ -1973,7 +1977,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 ),
                 self.lower
                     .tt
-                    .insert_type(TypeEnum::Pointer(member.ty, region)),
+                    .insert_type(TypeEnum::Pointer(member_ty, region)),
             ))
         } else {
             let TypeEnum::Item(item) = &self.lower.tt[ty] else {
@@ -1988,7 +1992,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             else {
                 todo!("error")
             };
-            Result::new((self.table.member(lhs, idx as u32), member.ty))
+            let member_ty = match item.apply.as_deref() {
+                Some(apply) => member.ty.subst(self.lower.tt, 0, apply),
+                None => member.ty,
+            };
+            Result::new((self.table.member(lhs, idx as u32), member_ty))
         }
     }
     fn statements(

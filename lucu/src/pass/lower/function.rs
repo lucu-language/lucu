@@ -483,24 +483,29 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             effect: self.lower.tt.insert_effect(EffectEnum::Hole),
         };
         match ast {
-            Some(ast_params) => ast_params
-                .iter()
-                .map(|ast_param| match &ast_param.ty {
-                    // FIXME: shift type
-                    Some(ty) => self.lower.r#type(ty, true).map(FunctionParameter::Data),
-                    None => Result::new(FunctionParameter::Hole),
-                })
-                .collect::<Result<_>>()
-                .map(|params| {
-                    self.lower
-                        .tt
-                        .insert_function_signature(FunctionSignatureValue {
-                            type_params,
-                            implicit_regions,
-                            params: Some(params),
-                            thunk,
-                        })
-                }),
+            Some(ast_params) => {
+                let arity = type_params.as_deref().map(<[_]>::len).unwrap_or(0) + implicit_regions;
+                ast_params
+                    .iter()
+                    .map(|ast_param| match &ast_param.ty {
+                        Some(ty) => self
+                            .lower
+                            .r#type(ty, true)
+                            .map(|ty| FunctionParameter::Data(ty.shift(self.lower.tt, 0, arity))),
+                        None => Result::new(FunctionParameter::Hole),
+                    })
+                    .collect::<Result<_>>()
+                    .map(|params| {
+                        self.lower
+                            .tt
+                            .insert_function_signature(FunctionSignatureValue {
+                                type_params,
+                                implicit_regions,
+                                params: Some(params),
+                                thunk,
+                            })
+                    })
+            }
             None => Result::new(
                 self.lower
                     .tt

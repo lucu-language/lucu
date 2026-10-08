@@ -26,6 +26,10 @@ struct CheckCommand {
     #[facet(args::named)]
     #[facet(default = AsRef::<Path>::as_ref(&env!("CARGO_MANIFEST_DIR")).join("../modules"))]
     stdlib: PathBuf,
+    /// Further libraries
+    #[facet(args::named)]
+    #[facet(default)]
+    lib: Vec<PathBuf>,
     /// Print compiler output in plaintext, without color
     #[facet(args::named)]
     plaintext: bool,
@@ -61,6 +65,10 @@ struct BuildCommand {
     #[facet(args::named)]
     #[facet(default = AsRef::<Path>::as_ref(&env!("CARGO_MANIFEST_DIR")).join("../modules"))]
     stdlib: PathBuf,
+    /// Further libraries
+    #[facet(args::named, args::short = 'l')]
+    #[facet(default)]
+    lib: Vec<PathBuf>,
     /// Print compiler output in plaintext, without color
     #[facet(args::named)]
     plaintext: bool,
@@ -123,6 +131,13 @@ fn build(cmd: BuildCommand) -> bool {
         Library::MAIN,
         LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
     );
+    for lib in cmd.lib {
+        let name = lib.file_name().unwrap().to_string_lossy();
+        dirs.insert(
+            Library::new(&name),
+            LibraryDir::new(lib).with_preamble(Module::BUILTIN),
+        );
+    }
 
     let entry = match cmd.entry {
         Some(entry) => Module::from_import(&Module::MAIN, &entry),
@@ -260,6 +275,13 @@ fn watch(cmd: CheckCommand) {
         Library::MAIN,
         LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
     );
+    for lib in cmd.lib {
+        let name = lib.file_name().unwrap().to_string_lossy();
+        dirs.insert(
+            Library::new(&name),
+            LibraryDir::new(lib).with_preamble(Module::BUILTIN),
+        );
+    }
 
     let mut watcher = FileWatcher::new(dirs, Duration::from_secs_f32(0.1));
 

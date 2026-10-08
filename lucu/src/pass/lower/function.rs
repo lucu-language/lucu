@@ -1111,7 +1111,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 )
             }
             IntrinsicFunction::Len => {
-                let Term::Type(ty) = generics[1].term() else {
+                let Term::Type(ty) = generics[0].term() else {
                     panic!()
                 };
                 self.table.call(

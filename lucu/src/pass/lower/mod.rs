@@ -86,7 +86,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         }
         for (index, (ident, kind)) in generics.enumerate() {
             // generics have *reversed* indices
-            lower.generics.insert(ident, (len - (index + 1), kind));
+            lower.generics.insert(ident, (len - (index + 1) + implicit_regions, kind));
         }
         inner(&mut lower)
     }
@@ -852,7 +852,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         l.implicit_effects = Some(&mut implicit_effects);
         l.kind_params(sig.name.generics.as_ref()).and_then(|type_params| {
             let implicit_regions = l.count_implicit_regions(sig);
-            l.next_implicit_region = Some(implicit_regions + type_params.as_ref().map(|params| params.len()).unwrap_or(0));
+            l.next_implicit_region = Some(implicit_regions);
             l.implicit_region_offset = 0;
 
             l.with_name(implicit_regions, type_params.clone().as_ref(), sig.name.generics.as_ref(), |l| m! {

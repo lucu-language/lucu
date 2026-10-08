@@ -1,6 +1,7 @@
 use std::iter;
 
 use compact_str::CompactString;
+use petgraph::graph::NodeIndex;
 
 use crate::ast;
 use crate::type_table::Integer;
@@ -38,7 +39,8 @@ pub enum Constant {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Item {
     pub module: crate::module::Module,
-    pub item: CompactString,
+    pub node: NodeIndex,
+    // pub apply: Arc<[GenericArgument]>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -56,13 +58,28 @@ pub struct Function {
     pub inline: bool,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Handler {
+    pub item: Item,
+    pub ty: mu::Tuple,
+    pub body: mu::Expressions,
+    pub closure: mu::Tuple,
+}
+
 #[derive(Debug)]
 pub struct Module {
     pub functions: Box<[Function]>,
+    pub handlers: Box<[Handler]>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Callable {
+    /// ? -> ?
+    GlobalHandler {
+        item: Item,
+        ty: mu::Tuple,
+        closure: mu::Tuple,
+    },
     /// ? -> ?
     ModuleFunction { item: Item, ty: mu::FunctionType },
     /// ? -> ?
@@ -147,6 +164,9 @@ impl mu::Typed for Callable {
     type Base = Base;
     fn get_type(&self, mt: &(impl mu::Table<Base = Self::Base> + ?Sized)) -> mu::Type {
         match *self {
+            Callable::GlobalHandler { ty, closure, .. } => {
+                mt.function(closure, mt.insert_type(mu::TypeEnum::VTable(ty)))
+            }
             Callable::ModuleFunction { ty, .. } | Callable::ForeignFunction { ty, .. } => {
                 mt.insert_type(mu::TypeEnum::Function(ty))
             }

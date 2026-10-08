@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::module::Module;
 use crate::type_table::{
     Constant, ConstantEnum, Effect, EffectEnum, FunctionParameter, FunctionSignature,
     FunctionSignatureValue, GenericArgument, GenericParameter, Item, Region, RegionEnum, Term,
@@ -12,6 +14,7 @@ pub trait Substitute {
     fn subtype(self, to: Self, tt: &TypeTable) -> bool;
     fn infer(self, from: Self, tt: &TypeTable, start: usize, args: &mut [GenericArgument]) -> bool;
     fn no_holes(self, tt: &TypeTable) -> bool;
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>);
 }
 
 impl GenericParameter {
@@ -107,6 +110,9 @@ where
     fn no_holes(self, tt: &TypeTable) -> bool {
         self.iter().all(|t| t.no_holes(tt))
     }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        self.iter().for_each(|t| t.referenced_modules(tt, modules));
+    }
 }
 
 impl<T> Substitute for Option<T>
@@ -129,6 +135,11 @@ where
     }
     fn no_holes(self, tt: &TypeTable) -> bool {
         self.is_none_or(|t| t.no_holes(tt))
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        if let Some(t) = self {
+            t.referenced_modules(tt, modules)
+        }
     }
 }
 
@@ -159,6 +170,9 @@ impl Substitute for Item {
     }
     fn no_holes(self, tt: &TypeTable) -> bool {
         self.apply.no_holes(tt)
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        self.apply.referenced_modules(tt, modules);
     }
 }
 
@@ -197,6 +211,9 @@ impl Substitute for GenericParameter {
     }
     fn no_holes(self, tt: &TypeTable) -> bool {
         self.apply.no_holes(tt)
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        self.apply.referenced_modules(tt, modules);
     }
 }
 
@@ -261,6 +278,12 @@ impl Substitute for GenericArgument {
             GenericArgument::Hole => false,
         }
     }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match self {
+            GenericArgument::Instance { term, .. } => term.referenced_modules(tt, modules),
+            GenericArgument::Hole => {}
+        }
+    }
 }
 
 impl Substitute for Thunk {
@@ -285,6 +308,10 @@ impl Substitute for Thunk {
     }
     fn no_holes(self, tt: &TypeTable) -> bool {
         self.returns.no_holes(tt) && self.effect.no_holes(tt)
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        self.returns.referenced_modules(tt, modules);
+        self.effect.referenced_modules(tt, modules);
     }
 }
 
@@ -339,6 +366,16 @@ impl Substitute for Term {
             Term::Constant(constant) => constant.no_holes(tt),
             Term::Thunk(thunk) => thunk.no_holes(tt),
             Term::Hole => false,
+        }
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match self {
+            Term::Type(ty) => ty.referenced_modules(tt, modules),
+            Term::Region(region) => region.referenced_modules(tt, modules),
+            Term::Effect(effect) => effect.referenced_modules(tt, modules),
+            Term::Constant(constant) => constant.referenced_modules(tt, modules),
+            Term::Thunk(thunk) => thunk.referenced_modules(tt, modules),
+            Term::Hole => {}
         }
     }
 }
@@ -430,6 +467,20 @@ impl Substitute for Constant {
             ConstantEnum::Character(_) => true,
             ConstantEnum::Zero => true,
             ConstantEnum::Hole => false,
+        }
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match &tt[self] {
+            ConstantEnum::Generic(generic_parameter) => {
+                generic_parameter.clone().referenced_modules(tt, modules)
+            }
+            ConstantEnum::True
+            | ConstantEnum::False
+            | ConstantEnum::Integer(_)
+            | ConstantEnum::String(_)
+            | ConstantEnum::Character(_)
+            | ConstantEnum::Zero
+            | ConstantEnum::Hole => {}
         }
     }
 }
@@ -592,6 +643,38 @@ impl Substitute for Type {
             TypeEnum::Hole => false,
         }
     }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match &tt[self] {
+            TypeEnum::Generic(generic_parameter) => {
+                generic_parameter.clone().referenced_modules(tt, modules)
+            }
+            TypeEnum::Item(item) => {
+                modules.insert(&item.module);
+                item.apply.clone().referenced_modules(tt, modules);
+            }
+            TypeEnum::Integer(_)
+            | TypeEnum::Boolean
+            | TypeEnum::Unit
+            | TypeEnum::Never
+            | TypeEnum::NullPointer
+            | TypeEnum::Hole => {}
+            TypeEnum::Pointer(ty, region) => {
+                ty.referenced_modules(tt, modules);
+                region.referenced_modules(tt, modules);
+            }
+            TypeEnum::PointerSlice(ty, region, _) => {
+                ty.referenced_modules(tt, modules);
+                region.referenced_modules(tt, modules);
+            }
+            TypeEnum::Array(ty, constant, _) => {
+                ty.referenced_modules(tt, modules);
+                constant.referenced_modules(tt, modules);
+            }
+            TypeEnum::Maybe(ty) => {
+                ty.referenced_modules(tt, modules);
+            }
+        }
+    }
 }
 
 impl Substitute for Region {
@@ -661,6 +744,14 @@ impl Substitute for Region {
             RegionEnum::Static => true,
             RegionEnum::Heap => true,
             RegionEnum::Hole => false,
+        }
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match &tt[self] {
+            RegionEnum::Generic(generic_parameter) => {
+                generic_parameter.clone().referenced_modules(tt, modules)
+            }
+            RegionEnum::Static | RegionEnum::Heap | RegionEnum::Hole => {}
         }
     }
 }
@@ -769,6 +860,22 @@ impl Substitute for Effect {
             EffectEnum::Hole => false,
         }
     }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match &tt[self] {
+            EffectEnum::Generic(generic_parameter) => {
+                generic_parameter.clone().referenced_modules(tt, modules)
+            }
+            EffectEnum::Item(item) => {
+                modules.insert(&item.module);
+                item.apply.clone().referenced_modules(tt, modules);
+            }
+            EffectEnum::Row(effects) => effects.clone().referenced_modules(tt, modules),
+            EffectEnum::Read(region) => region.referenced_modules(tt, modules),
+            EffectEnum::Write(region) => region.referenced_modules(tt, modules),
+            EffectEnum::Linked(constant) => constant.referenced_modules(tt, modules),
+            EffectEnum::Divergent | EffectEnum::World | EffectEnum::Hole => {}
+        }
+    }
 }
 
 impl Substitute for FunctionParameter {
@@ -811,6 +918,15 @@ impl Substitute for FunctionParameter {
             FunctionParameter::Data(ty) => ty.no_holes(tt),
             FunctionParameter::Lambda(function_signature) => function_signature.no_holes(tt),
             FunctionParameter::Hole => false,
+        }
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        match self {
+            FunctionParameter::Data(ty) => ty.referenced_modules(tt, modules),
+            FunctionParameter::Lambda(function_signature) => {
+                function_signature.referenced_modules(tt, modules)
+            }
+            FunctionParameter::Hole => {}
         }
     }
 }
@@ -887,6 +1003,11 @@ impl Substitute for FunctionSignature {
     fn no_holes(self, tt: &TypeTable) -> bool {
         let sig = tt[self].clone();
         sig.params.no_holes(tt) && sig.thunk.no_holes(tt)
+    }
+    fn referenced_modules<'a>(self, tt: &'a TypeTable, modules: &mut HashSet<&'a Module>) {
+        let sig = tt[self].clone();
+        sig.params.referenced_modules(tt, modules);
+        sig.thunk.referenced_modules(tt, modules);
     }
 }
 

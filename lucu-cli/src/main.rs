@@ -143,12 +143,14 @@ fn build(cmd: BuildCommand) -> bool {
     let mt = unsafe { mu::table::Table::new() };
 
     let mut functions = Vec::new();
+    let mut handlers = Vec::new();
     if let Some(postorder) = graph.postorder().value() {
         for module in postorder {
             if let Some(stages) = graph.stages(module)
                 && let Some(mu) = stages.mu(&graph, &tt, &mt)
             {
-                functions.extend(mu.functions.iter().cloned())
+                functions.extend(mu.functions.iter().cloned());
+                handlers.extend(mu.handlers.iter().cloned());
             }
         }
     }
@@ -172,7 +174,7 @@ fn build(cmd: BuildCommand) -> bool {
         .unwrap();
 
     let context = Context::create();
-    let mut llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions);
+    let mut llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions, &handlers);
 
     if let Some(fun) = llvm.module.get_function("_start") {
         fun.add_attribute(

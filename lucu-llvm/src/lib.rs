@@ -6,11 +6,11 @@ use inkwell::llvm_sys::LLVMCallConv;
 use inkwell::module::Linkage;
 use inkwell::targets::TargetMachine;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, GlobalValue};
 use inkwell::{AddressSpace, IntPredicate};
 use lucu::ast::{self, Cast};
 use lucu::mu::table::Table;
-use lucu::mu::{Base, Callable, Constant, Function, Item, Operation};
+use lucu::mu::{Base, Callable, Constant, Function, Handler, Item, Operation};
 use lucu::type_table::{IntSize, Integer};
 use mu::Table as _;
 
@@ -22,6 +22,7 @@ enum BuilderFunction<'ctx> {
 
 pub struct Builder<'ctx> {
     functions: OnceLock<HashMap<Item, BuilderFunction<'ctx>>>,
+    handlers: OnceLock<HashMap<Item, Option<GlobalValue<'ctx>>>>,
 }
 
 impl<'ctx> Builder<'ctx> {
@@ -31,17 +32,20 @@ impl<'ctx> Builder<'ctx> {
         target_machine: TargetMachine,
         module_name: &str,
         funs: &[Function],
+        handlers: &[Handler],
     ) -> mu_llvm::Context<'ctx, Self> {
         let llvm = mu_llvm::Context::new(
             context,
             table,
             Builder {
                 functions: OnceLock::new(),
+                handlers: OnceLock::new(),
             },
             target_machine,
             module_name,
         );
 
+        // declare functions
         let mut map = HashMap::new();
         for fun in funs {
             if fun.inline {
@@ -66,10 +70,39 @@ impl<'ctx> Builder<'ctx> {
         let Ok(_) = llvm.base.functions.set(map) else {
             panic!()
         };
+
+        // declare handlers
+        let mut map = HashMap::new();
+        for handler in handlers {
+            let ty = llvm.get_vtable_type(handler.ty).basic_type(&llvm);
+            let hval = ty.map(|ty| {
+                let global = llvm.module.add_global(ty, None, "");
+                global.set_linkage(Linkage::Internal);
+                global.set_constant(true);
+                global
+            });
+            map.insert(handler.item.clone(), hval);
+        }
+        let Ok(_) = llvm.base.handlers.set(map) else {
+            panic!()
+        };
+
+        // define functions
         for fun in funs {
             let fval = llvm.base.functions.get().unwrap()[&fun.item];
             if let BuilderFunction::Call(fval) = fval {
                 llvm.build_function(fun.ty, fval, fun.body);
+            }
+        }
+
+        // define handlers
+        for handler in handlers {
+            let hval = llvm.base.handlers.get().unwrap()[&handler.item];
+            if let Some(global) = hval {
+                // FIXME: use `handler.closure`
+                let closure = mu_llvm::Closure::default();
+                let const_vtable = llvm.build_vtable(handler.body, closure).unwrap();
+                global.set_initializer(&const_vtable);
             }
         }
 
@@ -261,6 +294,23 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
     ) -> mu_llvm::Value<'ctx, Self> {
         let mut args = args.into_iter();
         match *op {
+            Callable::GlobalHandler { ref item, .. } => {
+                let vtable = llvm.base.handlers.get().unwrap()[item];
+                mu_llvm::Value::Data(vtable.map(|global| {
+                    // FIXME: use args for vtable closure
+                    let mut array = llvm
+                        .context
+                        .ptr_type(AddressSpace::default())
+                        .array_type(2)
+                        .get_poison();
+                    array = llvm
+                        .builder
+                        .build_insert_value(array, global.as_pointer_value(), 0, "vtable pointer")
+                        .unwrap()
+                        .into_array_value();
+                    array.as_basic_value_enum()
+                }))
+            }
             Callable::ModuleFunction { ref item, .. } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
                 match fun {

@@ -295,10 +295,10 @@ impl Type {
     #[must_use]
     pub fn is_first_order(self, mt: &(impl Table + ?Sized)) -> bool {
         match mt[self] {
-            TypeEnum::Base(_) => true,
+            TypeEnum::Base(_) | TypeEnum::VTable(_) => true,
             TypeEnum::Sum(sum) => mt[sum].iter().all(|ty| ty.is_first_order(mt)),
             TypeEnum::Product(product) => mt[product].iter().all(|ty| ty.is_first_order(mt)),
-            TypeEnum::VTable(_) | TypeEnum::Function(_) => false,
+            TypeEnum::Function(_) => false,
         }
     }
     #[must_use]

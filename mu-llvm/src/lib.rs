@@ -324,55 +324,38 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                 Some(array.into())
             }
             Value::VTable(es, captures) => {
-                if llvm.table[es].is_empty() {
-                    return None;
-                }
-
                 let closure = captures.build(llvm);
                 let closure_ptr = closure.alloca(llvm);
+                llvm.build_vtable(es, closure).map(|const_vtable| {
+                    let global_vtable = llvm.module.add_global(const_vtable.get_type(), None, "");
+                    global_vtable.set_linkage(Linkage::Internal);
+                    global_vtable.set_constant(true);
+                    global_vtable.set_initializer(&const_vtable);
 
-                let functions = llvm.table[es]
-                    .iter()
-                    .map(|&e| {
-                        llvm.build_abstract(e, closure.clone())
-                            .as_global_value()
-                            .as_pointer_value()
-                            .as_basic_value_enum()
-                    })
-                    .collect::<Box<_>>();
-                let function_types = functions.iter().map(|e| e.get_type()).collect::<Box<_>>();
-                // TODO: named vtable type?
-                let vtable_type = llvm.context.struct_type(&function_types, false);
-
-                let const_vtable = vtable_type.const_named_struct(&functions);
-                let global_vtable = llvm.module.add_global(vtable_type, None, "");
-                global_vtable.set_linkage(Linkage::Internal);
-                global_vtable.set_constant(true);
-                global_vtable.set_initializer(&const_vtable);
-
-                let mut array = llvm
-                    .context
-                    .ptr_type(AddressSpace::default())
-                    .array_type(2)
-                    .get_poison();
-                array = llvm
-                    .builder
-                    .build_insert_value(
-                        array,
-                        global_vtable.as_pointer_value(),
-                        0,
-                        "vtable pointer",
-                    )
-                    .unwrap()
-                    .into_array_value();
-                if let Some(closure_ptr) = closure_ptr {
+                    let mut array = llvm
+                        .context
+                        .ptr_type(AddressSpace::default())
+                        .array_type(2)
+                        .get_poison();
                     array = llvm
                         .builder
-                        .build_insert_value(array, closure_ptr, 1, "vtable closure")
+                        .build_insert_value(
+                            array,
+                            global_vtable.as_pointer_value(),
+                            0,
+                            "vtable pointer",
+                        )
                         .unwrap()
                         .into_array_value();
-                }
-                Some(array.into())
+                    if let Some(closure_ptr) = closure_ptr {
+                        array = llvm
+                            .builder
+                            .build_insert_value(array, closure_ptr, 1, "vtable closure")
+                            .unwrap()
+                            .into_array_value();
+                    }
+                    array.into()
+                })
             }
             Value::Callable(c) => {
                 // we create a small function that is just this operation cuz we need it as a closure
@@ -879,6 +862,43 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             }
         }
     }
+    pub fn build_vtable(
+        &self,
+        es: mu::Expressions,
+        closure: Closure<'ctx>,
+    ) -> Option<StructValue<'ctx>> {
+        let functions = self.table[es]
+            .iter()
+            .map(|&e| {
+                self.build_abstract(e, closure.clone())
+                    .as_global_value()
+                    .as_pointer_value()
+                    .as_basic_value_enum()
+            })
+            .collect::<Box<_>>();
+        (!functions.is_empty()).then(|| {
+            let function_types = functions.iter().map(|e| e.get_type()).collect::<Box<_>>();
+            // TODO: named vtable type?
+            let vtable_type = self.context.struct_type(&function_types, false);
+            vtable_type.const_named_struct(&functions)
+        })
+    }
+    pub fn get_vtable_type(&self, tys: mu::Tuple) -> Type<'ctx> {
+        let len = self.table[tys].len();
+        Type::Data((len > 0).then(|| {
+            let fields = iter::repeat_n(
+                self.context
+                    .ptr_type(AddressSpace::default())
+                    .as_basic_type_enum(),
+                len,
+            )
+            .collect::<Box<_>>();
+            // TODO: named vtable type
+            self.context
+                .struct_type(&fields, false)
+                .as_basic_type_enum()
+        }))
+    }
     pub fn get_type(&self, ty: mu::Type) -> Type<'ctx> {
         match self.table[ty] {
             mu::TypeEnum::Base(ref base) => B::get_type(base, self),
@@ -1217,16 +1237,16 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             }
         }
     }
-    fn build_abstract(&self, e: mu::Expression, closure: Closure<'ctx>) -> FunctionValue<'ctx> {
+    pub fn build_abstract(&self, e: mu::Expression, closure: Closure<'ctx>) -> FunctionValue<'ctx> {
         let mu::ExpressionEnum::Abstract(from, body) = self.table[e] else {
             panic!("ICE");
         };
 
         let current_fun = {
             let guard = self.function.read().unwrap();
-            guard.unwrap()
+            *guard
         };
-        let current_block = self.builder.get_insert_block().unwrap();
+        let current_block = self.builder.get_insert_block();
 
         // create function
         let fun = mu::FunctionType::new(from, body.get_type(self.table).unwrap(), self.table);
@@ -1254,8 +1274,10 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         }
 
         // return
-        self.builder.position_at_end(current_block);
-        *self.function.write().unwrap() = Some(current_fun);
+        if let Some(current_block) = current_block {
+            self.builder.position_at_end(current_block);
+        }
+        *self.function.write().unwrap() = current_fun;
         function
     }
     fn build_is_zero(&self, v: BasicValueEnum<'ctx>) -> IntValue<'ctx> {

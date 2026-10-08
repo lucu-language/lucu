@@ -291,6 +291,12 @@ impl<T> Result<T> {
             }
         })
     }
+    pub fn zip<U>(self, other: Result<U>) -> Result<(T, U)> {
+        Result {
+            value: self.value.zip(other.value),
+            problems: self.problems + other.problems,
+        }
+    }
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Result<U> {
         Result {
             value: self.value.map(f),

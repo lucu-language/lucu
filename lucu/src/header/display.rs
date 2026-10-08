@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::header::{Header, ItemDecl};
+use crate::header::{Header, NamedItemDecl};
 use crate::type_table::{EffectEnum, TypeTable};
 
 #[derive(Clone, Copy)]
@@ -8,15 +8,15 @@ struct Interned<'a, T>(T, &'a TypeTable);
 
 impl fmt::Display for Interned<'_, &'_ Header> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, (name, item)) in self.0.items.iter().enumerate() {
-            if let ItemDecl::Function(_, Some(_), _, _) = item {
+        for (i, (name, item)) in self.0.named_items.iter().enumerate() {
+            if let NamedItemDecl::Function(_, Some(_), _, _) = item {
                 continue;
             }
             if i > 0 {
                 writeln!(f)?;
             }
             match *item {
-                ItemDecl::Alias(kind, term) => {
+                NamedItemDecl::Alias(kind, term) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -29,7 +29,7 @@ impl fmt::Display for Interned<'_, &'_ Header> {
                     }
                     writeln!(f, "{}", term.display(self.1))?;
                 }
-                ItemDecl::Struct(kind, ref def) => {
+                NamedItemDecl::Struct(kind, ref def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -46,7 +46,7 @@ impl fmt::Display for Interned<'_, &'_ Header> {
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDecl::Effect(kind, ref def) => {
+                NamedItemDecl::Effect(kind, ref def) => {
                     writeln!(f, "{name} :: {}", kind.display(self.1))?;
                     write!(f, "{name} = ")?;
                     for _ in 0..self.1[kind]
@@ -69,7 +69,7 @@ impl fmt::Display for Interned<'_, &'_ Header> {
                     }
                     writeln!(f, "}}")?;
                 }
-                ItemDecl::Function(sign, _, _, _) => {
+                NamedItemDecl::Function(sign, _, _, _) => {
                     writeln!(f, "{name} :: {}", sign.display(self.1))?;
                 }
             }

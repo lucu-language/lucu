@@ -1,0 +1,47 @@
+import "builtin:c"
+import "core:io"
+
+effect Show[T] = {
+    -- TODO: `with Fail`
+    fun write(t T) with io.Sink
+}
+
+handle[r] Show[str[r,],] {
+    fun write(s str[r,]) with io.Sink = {
+        try io.write_all(s)
+    }
+}
+
+handle Show[int,] {
+    fun write(i int) with io.Sink = {
+        try io.write_int(i)
+    }
+}
+
+handle Show[bool,] {
+    fun write(b bool) with io.Sink = {
+        write(if b then "true" else "false")
+    }
+}
+
+handle[r] Show[cstr[r,],] {
+    fun write(s cstr[r,]) with io.Sink = {
+        write(cstr_to_str(s))
+    }
+}
+
+handle[r] Show[c.str[r,],] {
+    fun write(s c.str[r,]) with io.Sink = {
+        write(cstr_to_str[r,](#transmute s))
+    }
+}
+
+handle Show[SourceLocation,] {
+    fun write(loc SourceLocation) with io.Sink = {
+        write(loc.path)
+        write(":")
+        write(loc.line)
+        write(":")
+        write(loc.column)
+    }
+}

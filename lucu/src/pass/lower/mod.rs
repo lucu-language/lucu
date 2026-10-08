@@ -8,7 +8,7 @@ use crate::ast;
 use crate::ast::visit::{Ast, Visitor};
 use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{
-    Header, ItemDecl,
+    Header, NamedItemDecl,
 };
 use crate::module::Module;
 use crate::pass::imports::Imports;
@@ -144,7 +144,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn item_ref<'ast>(
         &self,
         path: &'ast ast::Path,
-    ) -> std::result::Result<(&Module, &'ast str, &ItemDecl), Problems> {
+    ) -> std::result::Result<(&Module, &'ast str, &NamedItemDecl), Problems> {
         let (module, preamble, name) = match &path.origin {
             ast::PathOrigin::Package(pkg, _, name) => match self.imports.get(pkg.as_str()) {
                 Some(module) => match self.query.header(module, self.tt) {
@@ -167,7 +167,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         };
 
         for (module, ir) in iter::once(module).chain(preamble) {
-            if let Some(item) = ir.get(name) {
+            if let Some(item) = ir.get_named(name) {
                 return Ok((module, name, item));
             }
         }
@@ -301,8 +301,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                     Err(problems) => return problems.error(),
                 };
                 match *item {
-                    ItemDecl::Alias(item_kind, term) => (item_kind, term),
-                    ItemDecl::Struct(item_kind, _) => {
+                    NamedItemDecl::Alias(item_kind, term) => (item_kind, term),
+                    NamedItemDecl::Struct(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
                         let base = self.tt.insert_type(TypeEnum::Item(Item {
@@ -312,7 +312,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }));
                         (item_kind, Term::Type(base))
                     }
-                    ItemDecl::Effect(item_kind, _) => {
+                    NamedItemDecl::Effect(item_kind, _) => {
                         let module = module.clone();
                         let generics = self.dummy_args(item_kind);
                         let base = self.tt.insert_effect(EffectEnum::Item(Item {
@@ -322,7 +322,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         }));
                         (item_kind, Term::Effect(base))
                     }
-                    ItemDecl::Function(_, _, _, _) => todo!("error"),
+                    NamedItemDecl::Function(_, _, _, _) => todo!("error"),
                 }
             }
         };

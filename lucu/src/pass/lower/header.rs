@@ -6,8 +6,8 @@ use petgraph::graph::NodeIndex;
 use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
 use crate::header::{
-    EffectDecl, EffectMember, FunctionDefinition, HandlerDecl, Header, IntrinsicFunction, ItemDecl,
-    StructDecl, StructMember,
+    EffectDecl, EffectMember, FunctionDefinition, HandlerDecl, Header, IntrinsicFunction,
+    NamedItemDecl, StructDecl, StructMember,
 };
 use crate::module::Module;
 use crate::pass::defs::Definitions;
@@ -63,7 +63,7 @@ impl Header {
 }
 
 enum Decl {
-    Item(CompactString, ItemDecl),
+    Item(CompactString, NamedItemDecl),
     Handler(HandlerDecl),
 }
 
@@ -92,7 +92,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         l.item_pass1(node, def, parent, &header)
                             .map(|decl| match decl {
                                 Some(Decl::Item(name, decl)) => {
-                                    header.insert(name, decl.clone());
+                                    header.insert_named(name, decl.clone());
                                     Some(decl)
                                 }
                                 Some(Decl::Handler(decl)) => {
@@ -160,7 +160,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 name.generics.as_ref(),
                                 |l| {
                                     problems.append(l.region(path)).map(|region| {
-                                        let item = ItemDecl::Alias(kind, Term::Region(region));
+                                        let item = NamedItemDecl::Alias(kind, Term::Region(region));
                                         Decl::Item(name.ident.as_str().into(), item)
                                     })
                                 },
@@ -171,7 +171,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     Some((_, ast::RegionDefinition::Intrinsic(_))) => {
                         let region = problems.append(self.intrinsic_region(name));
                         if let (Some(kind), Some(region)) = (kind, region) {
-                            let item = ItemDecl::Alias(kind, Term::Region(region));
+                            let item = NamedItemDecl::Alias(kind, Term::Region(region));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -200,7 +200,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 |l| {
                                     let ty = problems.append(l.r#type(ast, false));
                                     if let Some(ty) = ty {
-                                        let item = ItemDecl::Alias(kind, Term::Type(ty));
+                                        let item = NamedItemDecl::Alias(kind, Term::Type(ty));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
                                     } else {
                                         None
@@ -212,7 +212,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     }
                     Some((_, ast::TypeDefinition::Struct(_))) => {
                         if let Some(kind) = kind {
-                            let item = ItemDecl::Struct(kind, Arc::new(OnceLock::new()));
+                            let item = NamedItemDecl::Struct(kind, Arc::new(OnceLock::new()));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -220,7 +220,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     Some((_, ast::TypeDefinition::Intrinsic(_))) => {
                         let ty = problems.append(self.intrinsic_type(name));
                         if let (Some(kind), Some(ty)) = (kind, ty) {
-                            let item = ItemDecl::Alias(kind, Term::Type(ty));
+                            let item = NamedItemDecl::Alias(kind, Term::Type(ty));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -245,10 +245,10 @@ impl<'a, 'b> Lower<'a, 'b> {
                         let Some(parent_name) = parent.name() else {
                             todo!()
                         };
-                        let Some(item) = header.get(parent_name.ident.as_str()) else {
+                        let Some(item) = header.get_named(parent_name.ident.as_str()) else {
                             todo!()
                         };
-                        let &ItemDecl::Effect(kind, _) = item else {
+                        let &NamedItemDecl::Effect(kind, _) = item else {
                             todo!()
                         };
 
@@ -266,7 +266,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                                         apply,
                                     }));
 
-                                    let item = ItemDecl::Function(sig, Some(effect), node, def);
+                                    let item =
+                                        NamedItemDecl::Function(sig, Some(effect), node, def);
                                     Some(Decl::Item(decl.name.ident.as_str().into(), item))
                                 } else {
                                     None
@@ -283,7 +284,7 @@ impl<'a, 'b> Lower<'a, 'b> {
 
                         let sig = problems.append(self.function_signature(decl));
                         if let Some(sig) = sig {
-                            let item = ItemDecl::Function(sig, None, node, def);
+                            let item = NamedItemDecl::Function(sig, None, node, def);
                             return problems
                                 .with(Some(Decl::Item(decl.name.ident.as_str().into(), item)));
                         }
@@ -302,7 +303,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 match def {
                     Some((_, ast::EffectDefinition::Body(_))) => {
                         if let Some(kind) = kind {
-                            let item = ItemDecl::Effect(kind, Arc::new(OnceLock::new()));
+                            let item = NamedItemDecl::Effect(kind, Arc::new(OnceLock::new()));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -322,7 +323,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                     );
                                     if let Some(effects) = effects {
                                         let effect = Effect::row(effects.iter(), l.tt);
-                                        let item = ItemDecl::Alias(kind, Term::Effect(effect));
+                                        let item = NamedItemDecl::Alias(kind, Term::Effect(effect));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
                                     } else {
                                         None
@@ -335,7 +336,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     Some((_, ast::EffectDefinition::Intrinsic(_))) => {
                         let eff = problems.append(self.intrinsic_effect(name));
                         if let (Some(kind), Some(eff)) = (kind, eff) {
-                            let item = ItemDecl::Alias(kind, Term::Effect(eff));
+                            let item = NamedItemDecl::Alias(kind, Term::Effect(eff));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -368,7 +369,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 |l| {
                                     let constant = problems.append(l.constant(constant, ty));
                                     if let Some((constant, _)) = constant {
-                                        let item = ItemDecl::Alias(kind, Term::Constant(constant));
+                                        let item =
+                                            NamedItemDecl::Alias(kind, Term::Constant(constant));
                                         Some(Decl::Item(name.ident.as_str().into(), item))
                                     } else {
                                         None
@@ -381,7 +383,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                     Some((_, ast::ConstantDefinition::Intrinsic(_))) => {
                         let constant = problems.append(self.intrinsic_constant(name));
                         if let (Some(kind), Some(constant)) = (kind, constant) {
-                            let item = ItemDecl::Alias(kind, Term::Constant(constant));
+                            let item = NamedItemDecl::Alias(kind, Term::Constant(constant));
                             return problems
                                 .with(Some(Decl::Item(name.ident.as_str().into(), item)));
                         }
@@ -444,6 +446,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                     implicit_regions,
                                     effect,
                                     with_effect,
+                                    node,
                                 };
                                 Some(Decl::Handler(handler))
                             } else {
@@ -461,7 +464,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn item_pass2(
         &mut self,
         item: &'a ast::Item,
-        partial: Option<ItemDecl>,
+        partial: Option<NamedItemDecl>,
         header: &Header,
     ) -> Problems {
         let mut problems = Problems::ok();
@@ -469,7 +472,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         match item {
             ast::Item::Type(_, name, def) => {
                 if let Some((_, ast::TypeDefinition::Struct(struc))) = def {
-                    let Some(ItemDecl::Struct(kind, idx)) = partial else {
+                    let Some(NamedItemDecl::Struct(kind, idx)) = partial else {
                         return problems;
                     };
 
@@ -496,7 +499,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
             ast::Item::Effect(_, _, defs) => {
                 if let Some((_, ast::EffectDefinition::Body(body))) = defs {
-                    let Some(ItemDecl::Effect(_, eff)) = partial else {
+                    let Some(NamedItemDecl::Effect(_, eff)) = partial else {
                         return problems;
                     };
 
@@ -510,8 +513,8 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 panic!("ICE: what why are you not a function")
                             };
                             let name = &decl.name;
-                            let &ItemDecl::Function(sig, _, _, _) =
-                                header.get(name.ident.as_str())?
+                            let &NamedItemDecl::Function(sig, _, _, _) =
+                                header.get_named(name.ident.as_str())?
                             else {
                                 return None;
                             };

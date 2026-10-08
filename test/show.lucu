@@ -1,0 +1,11 @@
+import "core:io"
+import "core:fmt"
+
+fun main with io.StdIo = #inline {
+    use io.stdout
+    fmt.write("funny number = ")
+    fmt.write(69)
+    try io.writeln
+    fmt.write(caller)
+    try io.writeln
+}

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::iter;
 use std::path::Path;
@@ -6,10 +7,11 @@ use std::sync::Arc;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use do_notation::m;
 use itertools::Either;
+use petgraph::graph::NodeIndex;
 
 use crate::ast;
 use crate::error::{ProblemKind, Problems, Result};
-use crate::header::{EffectDecl, FunctionDefinition, IntrinsicFunction, ItemDecl, StructDecl};
+use crate::header::{EffectDecl, FunctionDefinition, IntrinsicFunction, NamedItemDecl, StructDecl};
 use crate::module::Module;
 use crate::mu::{self, Table as _};
 use crate::pass::defs::Definitions;
@@ -111,22 +113,78 @@ impl mu::Module {
             .markers
             .push_front(tt.insert_effect(EffectEnum::Write(tt.insert_region(RegionEnum::Heap))));
 
-        query
+        let header = query
             .header(module, tt)
-            .expect("ICE: could not query own header")
-            .items()
+            .expect("ICE: could not query own header");
+
+        let functions = header
+            .named_items()
             .filter_map(|(name, decl)| {
                 // TODO: effect functions
-                let &ItemDecl::Function(sig, None, node, FunctionDefinition::Other) = decl else {
+                let &NamedItemDecl::Function(sig, None, node, FunctionDefinition::Other) = decl
+                else {
                     return None;
                 };
                 let ast::Item::Function(decl, Some((_, def))) = defs.item(node, ast) else {
                     return None;
                 };
-                Some(lower.function(name, sig, decl, def))
+                Some(lower.function(name, sig, decl, def, node))
             })
-            .collect::<Result<_>>()
-            .map(|functions| mu::Module { functions })
+            .collect::<Result<_>>();
+        let handlers = header
+            .global_handlers()
+            .filter(|_| {
+                // TODO: be more specific here?
+                // we do this to filter out the global handler for CallerLocation
+                module != &Module::BUILTIN
+            })
+            .map(|decl| {
+                let ast::Item::Handle(_, name, handler) = defs.item(decl.node, ast) else {
+                    panic!("ICE: handler is not an Item::Handle ast node")
+                };
+                lower.with_name(
+                    decl.implicit_regions,
+                    decl.type_params.as_ref(),
+                    name.as_ref(),
+                    |lower| {
+                        // TODO: support closure
+                        // there are a few FIXME's in mu_llvm that need solving to support this
+                        let closure = lower.table.insert_tuple([]);
+                        for effect in decl.with_effect.effects(lower.lower.tt) {
+                            if effect.is_marker(lower.lower.tt) {
+                                lower.markers.push_front(effect);
+                            } else {
+                                lower.vars.push_front(Var::Effect(effect));
+                                todo!("error: no support for handler with_effects yet");
+                            }
+                        }
+                        lower
+                            .handler(decl.effect, &handler.items.inner, &handler.effect)
+                            .map(|handler| {
+                                let mu::ExpressionEnum::ConstructVTable(ty, body) =
+                                    lower.table[handler]
+                                else {
+                                    panic!("ICE: handler is not a vtable construction")
+                                };
+                                mu::Handler {
+                                    item: mu::Item {
+                                        module: module.clone(),
+                                        node: decl.node,
+                                    },
+                                    ty,
+                                    body,
+                                    closure,
+                                }
+                            })
+                    },
+                )
+            })
+            .collect::<Result<_>>();
+
+        Result::zip(functions, handlers).map(|(functions, handlers)| mu::Module {
+            functions,
+            handlers,
+        })
     }
 }
 
@@ -173,6 +231,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         sig: FunctionSignature,
         decl: &'a ast::FunctionDeclaration,
         def: &'a ast::FunctionDefinition,
+        node: NodeIndex,
     ) -> Result<mu::Function> {
         match def {
             ast::FunctionDefinition::Expression { body, inline } => {
@@ -193,7 +252,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     mu::Function {
                         item: mu::Item {
                             module: self.lower.module.clone(),
-                            item: name.into(),
+                            node,
                         },
                         ty,
                         body,
@@ -325,17 +384,66 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 .into()
         }
     }
-    fn find_effect(&self, effect: Effect) -> Option<u32> {
-        // TODO: global effect handlers
-        // return either u32 index or some global handler
+    fn find_effect(&self, effect: Effect, location_effect_span: Span) -> Option<mu::Expression> {
         self.vars
             .iter()
             .enumerate()
             .find_map(|(index, &var)| match var {
                 Var::Effect(e) if e == effect || self.lower.tt[e] == EffectEnum::Hole => {
-                    Some(index as u32)
+                    let effect_ty = self
+                        .effect(effect)
+                        .expect("ICE: non-marker effect has no type")
+                        .1;
+                    Some(self.table.reference(effect_ty, index as u32))
                 }
                 _ => None,
+            })
+            .or_else(|| {
+                (effect == self.caller_location)
+                    .then(|| self.caller_location_effect(location_effect_span))
+            })
+            .or_else(|| {
+                // check for global effect handlers
+                let mut set = HashSet::new();
+                effect.referenced_modules(self.lower.tt, &mut set);
+                set.into_iter().find_map(|module| {
+                    self.lower
+                        .query
+                        .header(module, self.lower.tt)
+                        .expect("ICE: unknown header for referenced module")
+                        .find_global_handlers(effect, self.lower.tt)
+                        .find_map(|(decl, args)| {
+                            // FIXME: check `decl.with_effects`
+                            Some((module.clone(), decl, args, self.table.push_expressions([])))
+                        })
+                        .map(|(module, decl, args, closure)| {
+                            let effect_ty = self
+                                .effect(effect)
+                                .expect("ICE: non-marker effect has no type")
+                                .1;
+                            let mu::TypeEnum::VTable(ty) = self.table[effect_ty] else {
+                                panic!("ICE: non-marker effect is not a vtable type")
+                            };
+                            self.table.push_expression(mu::ExpressionEnum::Apply(
+                                self.table.operation(mu::Operation::Callable(
+                                    mu::Callable::GlobalHandler {
+                                        item: mu::Item {
+                                            module,
+                                            node: decl.node,
+                                        },
+                                        ty,
+                                        closure: self.table.insert_tuple(
+                                            self.table[closure].iter().map(|e| {
+                                                e.get_type(self.table)
+                                                    .expect("ICE: mu expression is invalid")
+                                            }),
+                                        ),
+                                    },
+                                )),
+                                closure,
+                            ))
+                        })
+                })
             })
     }
     fn find_raise(&self) -> Option<(u32, Type)> {
@@ -365,7 +473,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 Err(problems) => return problems.error(),
             };
             match *item {
-                ItemDecl::Alias(kind, term) => self
+                NamedItemDecl::Alias(kind, term) => self
                     .lower
                     .apply(kind, term, path.generics.as_ref())
                     .and_then(|(kind, term)| {
@@ -386,9 +494,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 ))
                             })
                     }),
-                ItemDecl::Struct(_, _) => todo!("struct constructor"),
-                ItemDecl::Effect(_, _) => todo!("error"),
-                ItemDecl::Function(sig, effect, _, def) => {
+                NamedItemDecl::Struct(_, _) => todo!("struct constructor"),
+                NamedItemDecl::Effect(_, _) => todo!("error"),
+                NamedItemDecl::Function(sig, effect, node, def) => {
                     let module = module.clone();
                     self.lower
                         .apply_sig(sig, effect, path.generics.as_ref())
@@ -413,10 +521,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                     None => match def {
                                         FunctionDefinition::Intrinsic(i) => PathValue::Intrinsic(i),
                                         FunctionDefinition::Other => {
-                                            let item = mu::Item {
-                                                module,
-                                                item: name.to_compact_string(),
-                                            };
+                                            let item = mu::Item { module, node };
                                             let ty = self.function_type(sig, None);
                                             PathValue::Expression(self.table.operation(
                                                 mu::Operation::Callable(
@@ -800,23 +905,18 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             // FIXME: check if args are subtypes of inferred params
 
             // effects
+            let location_effect_span = match call {
+                Either::Left(call) => call.span(),
+                Either::Right(path) => path.span(),
+            };
             let mut missing = Vec::new();
             for effect in sig_mono_val.thunk.effect.effects(self.lower.tt) {
                 if effect.is_marker(self.lower.tt) {
                     if !self.has_marker_effect(effect) {
                         missing.push(effect);
                     }
-                } else if let Some(idx) = self.find_effect(effect) {
-                    let effect_ty = self
-                        .effect(effect)
-                        .expect("ICE: non-marker effect has no type")
-                        .1;
-                    args.push(self.table.reference(effect_ty, idx));
-                } else if effect == self.caller_location {
-                    args.push(self.caller_location_effect(match call {
-                        Either::Left(call) => call.span(),
-                        Either::Right(path) => path.span(),
-                    }));
+                } else if let Some(e) = self.find_effect(effect, location_effect_span) {
+                    args.push(e);
                 } else {
                     missing.push(effect);
                 }
@@ -854,17 +954,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         .take(item.apply.as_deref().map_or(0, |args| args.len()))
                         .collect::<Arc<_>>();
                     let effect_mono = effect.subst(self.lower.tt, 0, &effect_args);
-                    match self.find_effect(effect_mono) {
-                        Some(idx) => {
+                    match self.find_effect(effect_mono, location_effect_span) {
+                        Some(e) => {
                             missing_check(missing);
-                            self.table.apply(
-                                self.table.member(
-                                    self.table
-                                        .reference(self.effect(effect_mono).unwrap().1, idx),
-                                    function_index,
-                                ),
-                                args,
-                            )
+                            self.table.apply(self.table.member(e, function_index), args)
                         }
                         None => {
                             missing.push(effect_mono);
@@ -2194,7 +2287,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .query
             .header(&item.module, self.lower.tt)
             .expect("ICE: cannot get header of item module");
-        let Some(ItemDecl::Struct(_, decl)) = header.get(&item.name) else {
+        let Some(NamedItemDecl::Struct(_, decl)) = header.get_named(&item.name) else {
             panic!("ICE: type item does not have struct item decl")
         };
         decl.get().expect("ICE: struct decl is uninitialized")
@@ -2205,7 +2298,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             .query
             .header(&item.module, self.lower.tt)
             .expect("ICE: cannot get header of item module");
-        let Some(ItemDecl::Effect(_, decl)) = header.get(&item.name) else {
+        let Some(NamedItemDecl::Effect(_, decl)) = header.get_named(&item.name) else {
             panic!("ICE: effect item does not have effect item decl")
         };
         decl.get().expect("ICE: effect decl is uninitialized")

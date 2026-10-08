@@ -1228,6 +1228,47 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     args.into_iter().next().unwrap(),
                 ))
             }
+            IntrinsicFunction::ForEach => {
+                let mut args = args.into_iter();
+                let generator = args.next().unwrap();
+                let body = args.next().unwrap();
+                self.table.apply(
+                    generator,
+                    [self.table.construct_vtable(
+                        self.table
+                            .insert_tuple([body.get_type(self.table).unwrap()]),
+                        [body],
+                    )],
+                )
+            }
+            IntrinsicFunction::TryOr => {
+                let Term::Type(ty) = generics[0].term() else {
+                    panic!()
+                };
+                let ty = self.r#type(ty);
+                let mut args = args.into_iter();
+                let body = args.next().unwrap().shift(self.table, 0);
+                let otherwise = args.next().unwrap().shift(self.table, 0);
+                let unit_to_never = self
+                    .table
+                    .function(self.table.insert_tuple([]), self.table.never());
+                self.table.try_break(
+                    ty,
+                    self.table.apply(
+                        body,
+                        [self.table.construct_vtable(
+                            self.table.insert_tuple([unit_to_never]),
+                            [self.table.lambda(
+                                self.table.insert_tuple([]),
+                                self.table.apply(
+                                    self.table.reference(unit_to_never, 0),
+                                    [self.table.apply(otherwise, [])],
+                                ),
+                            )],
+                        )],
+                    ),
+                )
+            }
         }
     }
     fn constant(&self, ty: Type, c: Constant) -> mu::Expression {

@@ -566,6 +566,8 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
             ("builtin:builtin", "none") => Some(IntrinsicFunction::None),
             ("builtin:builtin", "some") => Some(IntrinsicFunction::Some),
+            ("builtin:builtin", "for_each") => Some(IntrinsicFunction::ForEach),
+            ("builtin:builtin", "try_or") => Some(IntrinsicFunction::TryOr),
             _ => None,
         }
     }

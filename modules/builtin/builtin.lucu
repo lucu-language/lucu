@@ -208,6 +208,12 @@ fun some[T](t T) ?T
 fun none[T] ?T
     = #intrinsic
 
+fun for_each[T](fun generator with Yield[T,], fun body(t T))
+    = #intrinsic
+
+fun try_or[T](fun body T with Fail, fun otherwise T) T
+    = #intrinsic
+
 -- other utils (should be moved outside of builtin at some point)
 
 effect Yield[T] = {
@@ -220,6 +226,13 @@ effect Fail = {
 
 fun try(fun body with Fail) = #inline handle body with Fail {
     fun fail ! = raise
+}
+
+fun test(fun body with Fail) bool = #inline handle {
+    body
+    true
+} with Fail {
+    fun fail ! = raise false
 }
 
 fun abs(n int) int = if n >= 0 then n else -n

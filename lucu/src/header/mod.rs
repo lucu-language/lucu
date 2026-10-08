@@ -98,6 +98,8 @@ pub enum IntrinsicFunction {
     Trap,
     None,
     Some,
+    ForEach,
+    TryOr,
 }
 
 #[derive(Debug, Clone, Copy)]

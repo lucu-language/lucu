@@ -325,6 +325,39 @@ impl Type {
 }
 
 impl Expression {
+    #[must_use]
+    pub fn shift<B>(self, mt: &(impl Table<Base = B> + ?Sized), offset: u32) -> Self {
+        use ExpressionEnum as EE;
+        mt.push_expression(match mt[self] {
+            EE::Reference(ty, index) if index >= offset => EE::Reference(ty, index + 1),
+            EE::Operation(_) | EE::Reference(_, _) => return self,
+            EE::Let(e1, e2) => EE::Let(e1.shift(mt, offset), e2.shift(mt, offset + 1)),
+            EE::Sequence(es, e) => EE::Sequence(
+                mt.push_expressions(mt[es].iter().map(|e| e.shift(mt, offset))),
+                e.shift(mt, offset),
+            ),
+            EE::Construct(tuple, es) => EE::Construct(
+                tuple,
+                mt.push_expressions(mt[es].iter().map(|e| e.shift(mt, offset))),
+            ),
+            EE::ConstructVTable(tuple, es) => EE::ConstructVTable(
+                tuple,
+                mt.push_expressions(mt[es].iter().map(|e| e.shift(mt, offset))),
+            ),
+            EE::Apply(e, es) => EE::Apply(e.shift(mt, offset), {
+                mt.push_expressions(mt[es].iter().map(|e| e.shift(mt, offset)))
+            }),
+            EE::Member(e, nth) => EE::Member(e.shift(mt, offset), nth),
+            EE::Match(e, es) => EE::Match(e.shift(mt, offset), {
+                mt.push_expressions(mt[es].iter().map(|e| e.shift(mt, offset + 1)))
+            }),
+            EE::Variant(ty, nth, e) => EE::Variant(ty, nth, e.shift(mt, offset)),
+            EE::Abstract(tuple, e) => {
+                EE::Abstract(tuple, e.shift(mt, offset + mt[tuple].len() as u32))
+            }
+            EE::Try(ty, e) => EE::Try(ty, e.shift(mt, offset + 1)),
+        })
+    }
     pub fn get_type<B>(self, mt: &(impl Table<Base = B> + ?Sized)) -> Option<Type> {
         match mt[self] {
             ExpressionEnum::Operation(ref o) => Some(o.get_type(mt)),

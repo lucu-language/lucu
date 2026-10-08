@@ -257,7 +257,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                             self.tt[kind].params.as_ref(),
                             parent_name.generics.as_ref(),
                             |l| {
-                                let sig = problems.append(l.function_signature(decl));
+                                let sig = problems.append(l.function_signature(decl, Some(kind)));
                                 if let Some(sig) = sig {
                                     let apply = l.dummy_args(kind);
                                     let effect = l.tt.insert_effect(EffectEnum::Item(Item {
@@ -282,7 +282,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                                 ProblemKind::MissingItemDefinition(()).at(self.module, &decl.name);
                         }
 
-                        let sig = problems.append(self.function_signature(decl));
+                        let sig = problems.append(self.function_signature(decl, None));
                         if let Some(sig) = sig {
                             let item = NamedItemDecl::Function(sig, None, node, def);
                             return problems

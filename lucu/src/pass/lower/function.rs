@@ -644,17 +644,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             };
             let sig_val = &self.lower.tt[sig];
 
-            let implicit_arity = sig_val.arity()
-                // add parent effect generics too
-                + match fun {
-                    PathValue::EffectFunction(effect, _) => {
-                        let EffectEnum::Item(item) = &self.lower.tt[effect] else {
-                            panic!("ICE: effect with body is not an item");
-                        };
-                        item.apply.as_deref().map_or(0, |args| args.len())
-                    }
-                    _ => 0,
-                };
+            let implicit_arity = sig_val.arity();
             let mut mono_args =
                 iter::repeat_n(GenericArgument::Hole, implicit_arity).collect::<Box<_>>();
 
@@ -938,9 +928,11 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 }
                 PathValue::Intrinsic(i) => {
                     missing_check(missing);
-                    let all_generics = mono_args
+                    let all_generics = generics
+                        .iter()
+                        .copied()
                         .into_iter()
-                        .chain(generics.iter().copied())
+                        .chain(mono_args.into_iter())
                         .collect();
                     self.intrinsic(i, all_generics, args)
                 }
@@ -948,9 +940,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     let EffectEnum::Item(item) = &self.lower.tt[effect] else {
                         panic!("ICE: effect with body is not an item");
                     };
-                    let effect_args = mono_args
-                        .into_iter()
-                        .chain(generics.iter().copied())
+                    let effect_args = generics
+                        .iter()
+                        .copied()
+                        .chain(mono_args.into_iter())
                         .take(item.apply.as_deref().map_or(0, |args| args.len()))
                         .collect::<Arc<_>>();
                     let effect_mono = effect.subst(self.lower.tt, 0, &effect_args);
@@ -1335,7 +1328,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         def: &'a ast::FunctionDefinition,
     ) -> Result<mu::Expression> {
         self.lower
-            .function_signature(decl)
+            .function_signature(decl, None)
             .and_then(|user_sig| {
                 if !sig.subtype(user_sig, self.lower.tt) {
                     return Result::error(
@@ -1419,7 +1412,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         // TODO: if we have dependent kinds these need to be substituted too
                         type_params: sig_val
                             .type_params
-                            .map(|params| params.iter().copied().skip(args.len()).collect()),
+                            .map(|params| params.iter().copied().skip(args.len()).collect())
+                            .filter(|params: &Arc<[Kind]>| params.len() > 0),
                         implicit_regions: sig_val.implicit_regions,
                         params: sig_val.params.subst(self.lower.tt, 0, args),
                         thunk: sig_val.thunk.subst(self.lower.tt, 0, args),

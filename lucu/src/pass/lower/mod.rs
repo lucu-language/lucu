@@ -185,8 +185,6 @@ impl<'a, 'b> Lower<'a, 'b> {
         match ast {
             Some(ast) => {
                 let sig_val = self.tt[sig].clone();
-                // FIXME: prepend `effect` params
-                // OR prepend the effect params to the function signature on creation
                 let Some(params) = &sig_val.type_params else {
                     todo!("error");
                 };
@@ -846,6 +844,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn function_signature(
         &mut self,
         sig: &'a ast::FunctionDeclaration,
+        parent: Option<Kind>,
     ) -> Result<FunctionSignature> {
         let mut l = self.reborrow();
         let mut implicit_effects = Vec::new();
@@ -873,7 +872,13 @@ impl<'a, 'b> Lower<'a, 'b> {
                     .collect::<Result<Box<_>>>();
                 let effect = Effect::row(iter::once(&thunk.effect).chain(&effects).chain(l.implicit_effects.as_ref().map(|v| &***v).unwrap_or_default()), l.tt);
                 return l.tt.insert_function_signature(FunctionSignatureValue {
-                    type_params,
+                    type_params: match type_params {
+                        Some(type_params) => match parent.and_then(|parent| l.tt[parent].params.as_deref()) {
+                            Some(parent_params) => Some(parent_params.iter().copied().chain(type_params.iter().copied()).collect()),
+                            None => Some(type_params),
+                        },
+                        None => parent.and_then(|parent| l.tt[parent].params.clone())
+                    },
                     implicit_regions,
                     params,
                     thunk: Thunk {
@@ -938,7 +943,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                 .r#type(ty, false)
                 .map(FunctionParameter::Data),
             ast::Parameter::Lambda(decl) => self
-                .function_signature(decl)
+                .function_signature(decl, None)
                 .map(FunctionParameter::Lambda),
         }
     }

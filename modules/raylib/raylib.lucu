@@ -18,6 +18,10 @@ effect Raylib = {
 
     -- Timing-related functions
     fun SetTargetFPS(fps c.int)
+
+    -- Text drawing functions
+    fun DrawFPS(posX c.int, posY c.int)
+    fun DrawText[r](text c.str[r,], posX c.int, posY c.int, fontSize c.int, color u32)
 }
 
 fun link(fun body with Linked["raylib",] Raylib) with World Linked["c",] = #inline {

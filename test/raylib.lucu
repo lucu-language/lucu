@@ -8,9 +8,11 @@ fun main with World Div = #inline {
     let title c.str[static,] = "Lucu Raylib Bindings"
     raylib.InitWindow(640, 480, some(title))
     raylib.SetTargetFPS(60)
-    while(!raylib.WindowShouldClose()) {
+    until(raylib.WindowShouldClose()) {
         raylib.BeginDrawing()
         raylib.ClearBackground(raylib.Color(245, 245, 245, 255))
+        raylib.DrawFPS(4, 4)
+        raylib.DrawText("Hello raylib!", 4, 32, 30, raylib.Color(0, 0, 0, 255))
         raylib.EndDrawing()
     }
     raylib.CloseWindow()

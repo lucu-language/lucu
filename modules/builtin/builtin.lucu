@@ -35,8 +35,8 @@ type cstr[r] = ^@r [:0]i8
 region static = regions.static
 region heap = regions.heap
 
-effect Read[r] = regions.Read[r,]
-effect Write[r] = regions.Write[r,]
+effect Read[r] = regions.Read[r]
+effect Write[r] = regions.Write[r]
 
 -- fun ref[T, U](val T, fun body(ptr ^mut T) U) U
 -- 	= regions.ref[T, U](val, body)
@@ -44,7 +44,7 @@ effect Write[r] = regions.Write[r,]
 -- source location
 
 type SourceLocation = struct(
-    path str[static,],
+    path str[static],
     line int,
     column int,
 )
@@ -63,24 +63,24 @@ handle CallerLocation {
 effect World
     = #intrinsic
 
-effect Linked[LIB str[static,]]
+effect Linked[LIB str[static]]
     = #intrinsic
 
-fun link_library[LIB str[static,]](fun body with Linked[LIB,]) with World
+fun link_library[LIB str[static]](fun body with Linked[LIB]) with World
     = #intrinsic
 
 fun declare[E effect](fun body with E) with World
     = #intrinsic
 
-fun asm[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U with World
+fun asm[ASSEMBLY str[static], CONSTRAINTS str[static], T, U](t T) U with World
     = #intrinsic
 
-fun asm_pure[ASSEMBLY str[static,], CONSTRAINTS str[static,], T, U](t T) U
+fun asm_pure[ASSEMBLY str[static], CONSTRAINTS str[static], T, U](t T) U
     = #intrinsic
 
 -- printing
 
-fun trace[r](buf str[r,])
+fun trace[r](buf str[r])
     = #intrinsic
 
 fun trap !
@@ -118,13 +118,13 @@ fun trace_int(n int) = {
     trace(_show_int(n, buf))
 }
 
-fun assert[r](condition bool, msg str[r,]) with CallerLocation = {
+fun assert[r](condition bool, msg str[r]) with CallerLocation = {
     if !condition {
         panic(msg)
     }
 }
 
-fun panic[r](msg str[r,]) ! with CallerLocation = {
+fun panic[r](msg str[r]) ! with CallerLocation = {
     trace((caller).path)
     trace(":")
     trace_int((caller).line)
@@ -136,7 +136,7 @@ fun panic[r](msg str[r,]) ! with CallerLocation = {
     trap
 }
 
-fun todo[r](msg str[r,]) ! with CallerLocation = {
+fun todo[r](msg str[r]) ! with CallerLocation = {
     trace((caller).path)
     trace(":")
     trace_int((caller).line)
@@ -208,7 +208,7 @@ fun some[T](t T) ?T
 fun none[T] ?T
     = #intrinsic
 
-fun for_each[T](fun generator with Yield[T,], fun body(t T))
+fun for_each[T](fun generator with Yield[T], fun body(t T))
     = #intrinsic
 
 fun try_or[T](fun body T with Fail, fun otherwise T) T
@@ -239,7 +239,7 @@ fun abs(n int) int = if n >= 0 then n else -n
 
 fun and(a bool, b bool) bool = if a then b else false
 
-fun str_eq[r](a str[r,], b str[r,]) bool = {
+fun str_eq[r](a str[r], b str[r]) bool = {
     if len(a) != len(b) {
         false
     } else handle {
@@ -252,7 +252,7 @@ fun str_eq[r](a str[r,], b str[r,]) bool = {
     }
 }
 
-fun strlen[r](str cstr[r,]) size = {
+fun strlen[r](str cstr[r]) size = {
     let len ^size = use regions.ref(0)
     unfounded until(str[len^]^ == 0) {
         len^ += 1
@@ -260,7 +260,7 @@ fun strlen[r](str cstr[r,]) size = {
     len^
 }
 
-fun cstr_to_str[r](str cstr[r,]) str[r,] = {
+fun cstr_to_str[r](str cstr[r]) str[r] = {
     let len = strlen(str)
     slice_from_raw_parts(str[0], len)
 }

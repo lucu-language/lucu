@@ -28,7 +28,7 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = #inline {
 fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
     let current ^size = use regions.ref(0)
     handle body with env.Args {
-        fun peek_arg ?cstr[static,] = {
+        fun peek_arg ?cstr[static] = {
             if current^ < argc {
                 some(argv[current^]^)
             } else {
@@ -38,7 +38,7 @@ fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
         fun skip_arg = {
             current^ += 1
         }
-        fun remaining_args with Yield[cstr[static,],] = {
+        fun remaining_args with Yield[cstr[static]] = {
             unfounded while(current^ < argc) {
                 let arg = argv[current^]^
                 current^ += 1
@@ -50,7 +50,7 @@ fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
 
 fun with_environ(envp cstrs, fun body with env.Environ) = #inline {
     handle body with env.Environ {
-        fun get[r](key str[r,]) ?cstr[static,] = {
+        fun get[r](key str[r]) ?cstr[static] = {
             let current ^size = use regions.ref(0)
             handle unfounded loop {
                 let next = envp[current^]^
@@ -88,11 +88,11 @@ fun entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
     unreachable
 }
 
-type cstrs = ^@static [:0]cstr[static,]
+type cstrs = ^@static [:0]cstr[static]
 
 type Args = struct(
     argc int,
-    argv0 cstr[static,],
+    argv0 cstr[static],
 )
 
 fun _start ! with World Div = {

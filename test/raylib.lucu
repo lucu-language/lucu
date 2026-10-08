@@ -5,7 +5,7 @@ fun main with World Div = #inline {
     use link_library["c",]
     use raylib.link
 
-    let title c.str[static,] = "Lucu Raylib Bindings"
+    let title c.str[static] = "Lucu Raylib Bindings"
     raylib.InitWindow(640, 480, some(title))
     raylib.SetTargetFPS(60)
     until(raylib.WindowShouldClose()) {

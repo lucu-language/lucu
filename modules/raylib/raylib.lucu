@@ -7,7 +7,7 @@ fun Color(r u8, g u8, b u8, a u8) u32 = {
 
 effect Raylib = {
     -- Window-related functions
-    fun InitWindow[r](width c.int, height c.int, title ?c.str[r,])
+    fun InitWindow[r](width c.int, height c.int, title ?c.str[r])
     fun WindowShouldClose() bool
     fun CloseWindow()
 
@@ -21,10 +21,10 @@ effect Raylib = {
 
     -- Text drawing functions
     fun DrawFPS(posX c.int, posY c.int)
-    fun DrawText[r](text c.str[r,], posX c.int, posY c.int, fontSize c.int, color u32)
+    fun DrawText[r](text c.str[r], posX c.int, posY c.int, fontSize c.int, color u32)
 }
 
-fun link(fun body with Linked["raylib",] Raylib) with World Linked["c",] = #inline {
+fun link(fun body with Linked["raylib"] Raylib) with World Linked["c"] = #inline {
     use link_library["raylib",]
     use declare[Raylib,]
     body

@@ -41,6 +41,7 @@ fn main() -> Result<(), io::Error> {
         comments: comments.clone(),
         last_token: 0,
         no_wrap: false,
+        extra_comma_for_args: false,
     };
     let ast = ast.value().unwrap();
     ast.push_nodes(&mut nodes);
@@ -81,6 +82,7 @@ struct Nodes<'a> {
     comments: VecDeque<Span>,
     last_token: u32,
     no_wrap: bool,
+    extra_comma_for_args: bool,
 }
 
 impl<'a> Nodes<'a> {
@@ -133,6 +135,15 @@ impl<'a> Nodes<'a> {
             self.no_wrap = true;
             f(self);
             self.no_wrap = false;
+        }
+    }
+    fn extra_comma_for_args(&mut self, b: bool, f: impl FnOnce(&mut Self)) {
+        if self.extra_comma_for_args == b {
+            f(self);
+        } else {
+            self.extra_comma_for_args = b;
+            f(self);
+            self.extra_comma_for_args = !b;
         }
     }
     fn indent_on_wrap(&mut self, f: impl FnOnce(&mut Self)) {
@@ -402,9 +413,13 @@ where
         } else if self.inner.elements.len() < 2 && !nodes.contains_comments(self.span()) {
             nodes.token(self.open);
             for param in self.inner.iter() {
-                param.push_nodes(nodes);
+                nodes.extra_comma_for_args(false, |nodes| {
+                    param.push_nodes(nodes);
+                });
             }
-            if TypeId::of::<T>() == TypeId::of::<ast::GenericArgument>() {
+            if TypeId::of::<T>() == TypeId::of::<ast::GenericArgument>()
+                && nodes.extra_comma_for_args
+            {
                 nodes.push(Node::Text(Chunk::COMMA));
             }
             nodes.token(self.close);
@@ -417,10 +432,13 @@ where
                         if i > 0 {
                             nodes.comma();
                         }
-                        param.push_nodes(nodes);
+                        nodes.extra_comma_for_args(false, |nodes| {
+                            param.push_nodes(nodes);
+                        });
                     }
                     if TypeId::of::<T>() == TypeId::of::<ast::GenericArgument>()
                         && self.inner.elements.len() < 2
+                        && nodes.extra_comma_for_args
                     {
                         nodes.push(Node::Text(Chunk::COMMA));
                         nodes.line_on_wrap();
@@ -717,7 +735,9 @@ impl Ast for ast::FunctionDefinition {
 
 impl Ast for ast::Call {
     fn push_nodes<'a>(&'a self, nodes: &mut Nodes<'a>) {
-        self.fun.push_nodes(nodes);
+        nodes.extra_comma_for_args(true, |nodes| {
+            self.fun.push_nodes(nodes);
+        });
         self.args.push_nodes(nodes);
         if let Some(block) = &self.block {
             nodes.space();
@@ -767,7 +787,9 @@ impl Ast for ast::Expression {
         match self {
             ast::Expression::Constant(constant) => constant.push_nodes(nodes),
             ast::Expression::Uninit(token) => nodes.token(*token),
-            ast::Expression::Path(path) => path.push_nodes(nodes),
+            ast::Expression::Path(path) => {
+                nodes.extra_comma_for_args(true, |nodes| path.push_nodes(nodes));
+            }
             ast::Expression::Block(group) => {
                 nodes.token(group.open);
                 if let Some((ref lambda, tk_arrow)) = group.inner.params {

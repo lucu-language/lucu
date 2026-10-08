@@ -4,9 +4,9 @@ import "core:io"
 effect LibC = builtin.Linked["c"] Time StdIo
 
 fun link(fun body with LibC) with builtin.World = #inline {
-    use builtin.link_library["c"]
-    use builtin.declare[Time]
-    use builtin.declare[StdIo]
+    use builtin.link_library["c",]
+    use builtin.declare[Time,]
+    use builtin.declare[StdIo,]
     body
 }
 
@@ -15,7 +15,7 @@ fun link(fun body with LibC) with builtin.World = #inline {
 effect Time = {
     fun time(arg ?^#write time_t) time_t
     --# deprecated since C23
-    fun ctime(timer ^time_t) str[static,]
+    fun ctime(timer ^time_t) str[static]
 }
 
 -- we don't support targets vulnerable to the 2038 problem
@@ -38,25 +38,25 @@ effect StdIo = {
     fun fwrite(buffer ^void, size size_t, count size_t, stream ^mut FILE) size_t
     fun fread(buffer ^#write void, size size_t, count size_t, stream ^mut FILE) size_t
     fun fflush(stream ^mut FILE) int
-    fun puts[r](str str[r,]) int
+    fun puts[r](str str[r]) int
 }
 
 fun stdio(fun body with io.StdIo) with StdIo = #inline handle body with io.StdIo {
     fun stdin(fun body with io.Source) = handle body with io.Source {
-        fun read[#write r](bytes builtin.str[r,]) builtin.size = {
+        fun read[#write r](bytes builtin.str[r]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
             #transmute fread(buffer, 1, #transmute builtin.len(bytes), stdin)
         }
     }
     fun stdout(fun body with io.Sink) = handle body with io.Sink {
-        fun write[r](bytes builtin.str[r,]) builtin.size = {
+        fun write[r](bytes builtin.str[r]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
             #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stdout)
         }
         fun flush = discard fflush(stdout)
     }
     fun stderr(fun body with io.Sink) = handle body with io.Sink {
-        fun write[r](bytes builtin.str[r,]) builtin.size = {
+        fun write[r](bytes builtin.str[r]) builtin.size = {
             let buffer ^@r void = #transmute bytes[0]
             #transmute fwrite(buffer, 1, #transmute builtin.len(bytes), stderr)
         }

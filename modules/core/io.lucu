@@ -1,7 +1,7 @@
 import "builtin:regions"
 
 effect Source = {
-    fun read[#write r](bytes str[r,]) size
+    fun read[#write r](bytes str[r]) size
 }
 
 fun skip_line size with Source = {
@@ -15,7 +15,7 @@ fun skip_line size with Source = {
     total^
 }
 
-fun read_line[#write r](bytes str[r,]) size with Source = {
+fun read_line[#write r](bytes str[r]) size with Source = {
     let total ^size = use regions.ref(0)
     let buf ^[1]i8 = use regions.ref(---)
     handle unfounded loop {
@@ -30,7 +30,7 @@ fun read_line[#write r](bytes str[r,]) size with Source = {
 }
 
 effect Sink = {
-    fun write[r](bytes str[r,]) size
+    fun write[r](bytes str[r]) size
     fun flush
 }
 
@@ -38,7 +38,7 @@ effect Sink = {
 -- so that 'fail' jumps within the same function,
 -- but we don't want this in the end
 
-fun write_all[r](bytes str[r,]) with Sink Fail = #inline {
+fun write_all[r](bytes str[r]) with Sink Fail = #inline {
     let remaining = use regions.ref(bytes)
     unfounded until(len(remaining^) == 0) {
         let written = write(remaining^)
@@ -57,12 +57,12 @@ fun write_int(n int) with Sink Fail = #inline {
     write_all(_show_int(n, buf))
 }
 
-fun print[r](bytes str[r,]) with StdIo = {
+fun print[r](bytes str[r]) with StdIo = {
     use stdout
     try write_all(bytes)
 }
 
-fun eprint[r](bytes str[r,]) with StdIo = {
+fun eprint[r](bytes str[r]) with StdIo = {
     use stderr
     try write_all(bytes)
 }
@@ -93,10 +93,10 @@ effect StdIo = {
     fun stderr(fun body with Sink)
 }
 
-fun buffered_sink[mut r](buffer str[r,], fun body with Sink) with Sink Fail = #inline {
+fun buffered_sink[mut r](buffer str[r], fun body with Sink) with Sink Fail = #inline {
     let current ^size = use regions.ref(0)
     handle body with Sink {
-        fun write[r](bytes str[r,]) size = {
+        fun write[r](bytes str[r]) size = {
             for(0, len(bytes)) { i ->
                 if current^ == len(buffer) {
                     write_all(buffer)

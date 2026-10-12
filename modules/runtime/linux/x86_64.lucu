@@ -1,9 +1,10 @@
 import "core:env"
 import "os:linux"
+import "os:linux/core"
 import "main:main"
 import "builtin:regions"
 
-fun with_syscall_raw(fun body with linux.SyscallRaw) with World = #inline {
+fun handle_syscall_raw(fun body with linux.SyscallRaw) with World = #inline {
     handle body with linux.SyscallRaw {
         fun syscall(nr addr, arg1 addr, arg2 addr, arg3 addr, arg4 addr, arg5 addr, arg6 addr) addr
             = asm[
@@ -15,7 +16,7 @@ fun with_syscall_raw(fun body with linux.SyscallRaw) with World = #inline {
     }
 }
 
-fun with_syscall_nr(fun body with linux.SyscallNR) = #inline {
+fun handle_syscall_nr(fun body with linux.SyscallNR) = #inline {
     handle body with linux.SyscallNR {
         fun nr_read addr = 0
         fun nr_write addr = 1
@@ -25,7 +26,7 @@ fun with_syscall_nr(fun body with linux.SyscallNR) = #inline {
     }
 }
 
-fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
+fun handle_args(argc size, argv cstrs, fun body with env.Args) = #inline {
     let current ^size = use regions.ref(0)
     handle body with env.Args {
         fun peek_arg ?cstr[static] = {
@@ -48,7 +49,7 @@ fun with_args(argc size, argv cstrs, fun body with env.Args) = #inline {
     }
 }
 
-fun with_environ(envp cstrs, fun body with env.Environ) = #inline {
+fun handle_environ(envp cstrs, fun body with env.Environ) = #inline {
     handle body with env.Environ {
         fun get[r](key str[r]) ?cstr[static] = {
             let current ^size = use regions.ref(0)
@@ -74,13 +75,14 @@ fun with_environ(envp cstrs, fun body with env.Environ) = #inline {
 
 fun entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
     {
-        use with_syscall_raw
-        use with_syscall_nr
-        use linux.with_syscall
-        use linux.stdio
+        use handle_syscall_raw
+        use handle_syscall_nr
+        use linux.handle_syscall
+        use core.handle_stdio
+        use core.handle_rng
 
-        use with_args(argc, argv)
-        use with_environ(envp)
+        use handle_args(argc, argv)
+        use handle_environ(envp)
 
         main.main
         linux.exit_group(0)

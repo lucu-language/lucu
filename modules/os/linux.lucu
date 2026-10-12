@@ -1,5 +1,3 @@
-import "core:io"
-
 effect SyscallNR = {
     fun nr_read addr
     fun nr_write addr
@@ -18,10 +16,10 @@ effect Syscall = {
     fun exit(code addr) !
     fun exit_group(code addr) !
     -- TODO: flags
-    fun getrandom[#write r](buf str[r]) size
+    fun getrandom(buf ^#write []i8) size
 }
 
-fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = #inline {
+fun handle_syscall(fun body with Syscall) with SyscallNR SyscallRaw = #inline {
     handle body with Syscall {
         fun read[#write r](file addr, buf str[r]) size = {
             #trunc syscall(nr_read, file, #transmute buf[0], #ext len(buf), ---, ---, ---)
@@ -37,22 +35,8 @@ fun with_syscall(fun body with Syscall) with SyscallNR SyscallRaw = #inline {
             discard syscall(nr_exit_group, code, ---, ---, ---, ---, ---)
             unreachable
         }
-        fun getrandom[#write r](buf str[r]) size = {
+        fun getrandom(buf ^#write []i8) size = {
             #trunc syscall(nr_getrandom, #transmute buf[0], #ext len(buf), 0, ---, ---, ---)
         }
-    }
-}
-
-fun stdio(fun body with io.StdIo) with Syscall = #inline handle body with io.StdIo {
-    fun stdin(fun body with io.Source) = handle body with io.Source {
-        fun read[#write r](bytes str[r]) size = read(0, bytes)
-    }
-    fun stdout(fun body with io.Sink) = handle body with io.Sink {
-        fun write[r](bytes str[r]) size = write(1, bytes)
-        fun flush = {}
-    }
-    fun stderr(fun body with io.Sink) = handle body with io.Sink {
-        fun write[r](bytes str[r]) size = write(2, bytes)
-        fun flush = {}
     }
 }

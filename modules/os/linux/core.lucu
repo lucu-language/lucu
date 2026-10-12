@@ -1,0 +1,27 @@
+import "os:linux"
+import "core:io"
+import "core:random"
+
+fun handle_stdio(fun body with io.StdIo) with linux.Syscall = #inline handle body with io.StdIo {
+    fun stdin(fun body with io.Source) = handle body with io.Source {
+        fun read[#write r](bytes str[r]) size = linux.read(0, bytes)
+    }
+    fun stdout(fun body with io.Sink) = handle body with io.Sink {
+        fun write[r](bytes str[r]) size = linux.write(1, bytes)
+        fun flush = {}
+    }
+    fun stderr(fun body with io.Sink) = handle body with io.Sink {
+        fun write[r](bytes str[r]) size = linux.write(2, bytes)
+        fun flush = {}
+    }
+}
+
+fun handle_rng(fun body with random.Rng) with linux.Syscall = #inline handle body with random.Rng {
+    fun next int = {
+        todo("random.next")
+    }
+    fun fill_bytes(buf ^#write []i8) = {
+        -- TODO: what do we do if we didn't fill everything?
+        discard linux.getrandom(buf)
+    }
+}

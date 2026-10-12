@@ -1,9 +1,10 @@
 import "core:io"
 import "core:env"
+import "core:random"
 import "os:linux"
 
-import "main:show" main
+import "main:conway" main
 
-fun main with World Div io.StdIo env.Args env.Environ linux.Syscall = #inline {
+fun main with World Div io.StdIo env.Args env.Environ random.Rng = #inline {
     main.main
 }

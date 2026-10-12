@@ -141,7 +141,7 @@ fn build(cmd: BuildCommand) -> bool {
 
     let entry = match cmd.entry {
         Some(entry) => Module::from_import(&Module::MAIN, &entry),
-        None => Module::new(Library::OS, "linux/arch/x86_64"),
+        None => Module::new(Library::RUNTIME, "linux/x86_64"),
     };
 
     let modules = HandleSet::<Module>::new();

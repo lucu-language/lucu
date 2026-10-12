@@ -1,58 +1,68 @@
 import "builtin:regions"
 import "core:io"
-import "os:linux"
+import "core:random"
+import "core:fmt"
+
+type Board[r] = struct(
+    bytes ^@r []i8,
+    stride size,
+)
+
+handle[r] fmt.ShowMultiline[Board[r]] {
+    fun write_multiline(board Board[r]) with io.Sink Fail = {
+        fmt.write("-")
+        for(0, board.stride) { x ->
+            fmt.write("--")
+        }
+        fmt.write("-")
+        fmt.writeln
+
+        for(0, board.stride) { y ->
+            fmt.write("|")
+            for(0, board.stride) { x ->
+                fmt.write(if board.bytes[x + y * board.stride]^ == 1 then "[]" else "  ")
+            }
+            fmt.write("|")
+            fmt.writeln
+        }
+
+        fmt.write("-")
+        for(0, board.stride) { x ->
+            fmt.write("--")
+        }
+        fmt.write("-")
+    }
+}
 
 fun dec(n size, stride size) size = if n == 0 then stride - 1 else n - 1
 fun inc(n size, stride size) size = if n == stride - 1 then 0 else n + 1
 
-fun write_state(state ^[]i8, stride size) with io.Sink Fail = #inline {
-    io.write_all("-")
-    for(0, stride) { x ->
-        io.write_all("--")
-    }
-    io.write_all("-")
-    io.writeln
-
-    for(0, stride) { y ->
-        io.write_all("|")
-        for(0, stride) { x ->
-            io.write_all(if state[x + y * stride]^ == 1 then "[]" else "  ")
-        }
-        io.write_all("|")
-        io.writeln
-    }
-
-    io.write_all("-")
-    for(0, stride) { x ->
-        io.write_all("--")
-    }
-    io.write_all("-")
-    io.writeln
-}
-
-fun clear_state(state ^mut []i8, stride size) = {
-    for(0, stride) { y ->
-        for(0, stride) { x ->
-            state[x + y * stride]^ = 0
+fun board_clear[mut r](board Board[r]) = {
+    for(0, board.stride) { y ->
+        for(0, board.stride) { x ->
+            board.bytes[x + y * board.stride]^ = 0
         }
     }
 }
 
-fun next_state(old ^[]i8, new ^mut []i8, stride size) = {
+fun board_next[a, mut b](old Board[a], new Board[b]) = {
+    assert(old.stride == new.stride, "strides are different")
+    let stride = old.stride
+
     for(0, stride) { y ->
         for(0, stride) { x ->
             let neighbors ^size = use regions.ref(0)
 
-            if old[dec(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
-            if old[    x          + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
-            if old[inc(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
-            if old[dec(x, stride) +     y          * stride]^ == 1 then neighbors^ += 1
-            if old[inc(x, stride) +     y          * stride]^ == 1 then neighbors^ += 1
-            if old[dec(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
-            if old[    x          + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
-            if old[inc(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[dec(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[x + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[inc(x, stride) + dec(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[dec(x, stride) + y * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[inc(x, stride) + y * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[dec(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[x + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
+            if old.bytes[inc(x, stride) + inc(y, stride) * stride]^ == 1 then neighbors^ += 1
 
-            new[x + y * stride]^ = if old[x + y * stride]^ == 1 {
+            new.bytes[x + y * stride]^ = if old.bytes[x + y * stride]^ == 1 {
                 if neighbors^ == 2 {
                     1
                 } else if neighbors^ == 3 {
@@ -69,39 +79,56 @@ fun next_state(old ^[]i8, new ^mut []i8, stride size) = {
     }
 }
 
-fun main(stride size) with Div io.StdIo linux.Syscall = #inline {
+fun _alloca_board[r](stride size, bytes ^@r []i8) Board[r] = {
+    let board ^Board[r] = use regions.ref(0)
+    board.bytes^ = bytes
+    board.stride^ = stride
+    board^
+}
+
+fun alloca_board(stride size, fun body[mut r](board Board[r])) = {
+    let bytes ^[]i8 = use regions.alloca(stride * stride)
+    body(_alloca_board(stride, bytes))
+}
+
+fun main with Div io.StdIo random.Rng = #inline {
+    let stride size = 32
+
     use io.stdin
     use io.stdout
 
     -- create buffers
-    let board_a ^[]i8 = use regions.alloca(stride * stride)
-    let board_b ^[]i8 = use regions.alloca(stride * stride)
+    let board_a = use alloca_board(stride)
+    let board_b = use alloca_board(stride)
 
     -- init state
     if true {
         -- random
-        discard linux.getrandom(board_a)
-        for(0, len(board_a)) { i ->
-            board_a[i]^ &= 1
+        random.fill_bytes(board_a.bytes)
+        for(0, len(board_a.bytes)) { i ->
+            board_a.bytes[i]^ &= 1
         }
     } else {
         -- glider
-        clear_state(board_a, stride)
-        board_a[0 + 0 * stride]^ = 1
-        board_a[1 + 1 * stride]^ = 1
-        board_a[2 + 1 * stride]^ = 1
-        board_a[0 + 2 * stride]^ = 1
-        board_a[1 + 2 * stride]^ = 1
+        board_clear(board_a)
+        board_a.bytes[0 + 0 * stride]^ = 1
+        board_a.bytes[1 + 1 * stride]^ = 1
+        board_a.bytes[2 + 1 * stride]^ = 1
+        board_a.bytes[0 + 2 * stride]^ = 1
+        board_a.bytes[1 + 2 * stride]^ = 1
     }
 
     loop {
-        try write_state(board_a, stride)
+        try fmt.write_multiline(board_a)
+        try fmt.writeln
         io.flush
         discard io.skip_line
-        next_state(board_a, board_b, stride)
-        try write_state(board_b, stride)
+        board_next(board_a, board_b)
+
+        try fmt.write_multiline(board_b)
+        try fmt.writeln
         io.flush
         discard io.skip_line
-        next_state(board_b, board_a, stride)
+        board_next(board_b, board_a)
     }
 }

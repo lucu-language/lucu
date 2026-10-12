@@ -1,8 +1,14 @@
 import "builtin:c"
 import "core:io"
 
+fun writeln with io.Sink Fail = #inline io.writeln
+
 effect Show[T] = {
     fun write(t T) with io.Sink Fail
+}
+
+effect ShowMultiline[T] = {
+    fun write_multiline(t T) with io.Sink Fail
 }
 
 handle[r] Show[str[r]] {

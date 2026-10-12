@@ -1,0 +1,4 @@
+effect Rng = {
+    fun next int
+    fun fill_bytes(buf ^#write []i8)
+}

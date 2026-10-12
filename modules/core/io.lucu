@@ -34,10 +34,6 @@ effect Sink = {
     fun flush
 }
 
--- FIXME: all these currently need to be #inline,
--- so that 'fail' jumps within the same function,
--- but we don't want this in the end
-
 fun write_all[r](bytes str[r]) with Sink Fail = #inline {
     let remaining = use regions.ref(bytes)
     unfounded until(len(remaining^) == 0) {

@@ -43,7 +43,8 @@ impl<'ctx> Builder<'ctx> {
             },
             target_machine,
             module_name,
-        );
+        )
+        .raise_lowering_with_globals();
 
         // declare functions
         let mut map = HashMap::new();
@@ -314,18 +315,16 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             Callable::ModuleFunction { ref item, .. } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
                 match fun {
-                    BuilderFunction::Call(fval) => llvm.build_direct_call(
-                        fval,
-                        llvm.internal_calling_convention(),
-                        args.map(|v| v.build(llvm)),
-                    ),
+                    BuilderFunction::Call(fval) => {
+                        llvm.build_direct_call(fval, None, args.map(|v| v.build(llvm)))
+                    }
                     BuilderFunction::Inline(expr) => llvm.build_expression_bound(expr, args),
                 }
             }
             Callable::ForeignFunction { ref name, ty } => {
                 let cc = LLVMCallConv::LLVMCCallConv;
                 let fun = llvm.get_foreign_function(name, ty, cc);
-                llvm.build_direct_call(fun, cc, args.map(|v| v.build(llvm)))
+                llvm.build_direct_call(fun, Some(cc), args.map(|v| v.build(llvm)))
             }
             Callable::Link { ref lib } => {
                 llvm.add_linked(lib);

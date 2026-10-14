@@ -3,22 +3,37 @@ import "core:env"
 import "core:env/argparse" ap
 import "core:io"
 
-fun main with env.Args io.StdIo = {
+fun main with env.Args io.StdIo = handle {
     env.skip_arg
-    if ap.subcommand("help") {
-        io.print("no help will be given")
+
+    let file ^?cstr[static] = use regions.ref(none)
+    ap.command {
+        ap.arg("FILE", true, "some lovely file") { arg ->
+            file^ = some(arg)
+        }
+        ap.arg("TEST", false, "argument i have no love for") { arg -> }
+        ap.args("TRACEME", "arguments i do love and will trace to stderr") { arg ->
+            trace(cstr_to_str(arg))
+            traceln
+        }
+        ap.category("some lovely flags") {
+            ap.flag("help", some("h"), "print out this message") {
+                ap.print_usage("./out")
+                raise
+            }
+            ap.flag("ehelp", none, "print out this message, but to stderr this time") {
+                ap.eprint_usage("./out")
+                raise
+            }
+        }
+    }
+
+    if file^ { file ->
+        io.print("file: ")
+        io.print(cstr_to_str(file))
         io.println
     } else {
-        let help = use regions.ref(false)
-        ap.command {
-            ap.flag(help, "help")
-        }
-        if help^ {
-            io.print("no help will be given")
-            io.println
-        } else {
-            io.print("what?")
-            io.println
-        }
+        io.print("./out --help")
+        io.println
     }
 }

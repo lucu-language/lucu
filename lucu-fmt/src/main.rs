@@ -797,6 +797,9 @@ impl Ast for ast::Expression {
                     lambda.push_nodes(nodes);
                     nodes.space();
                     nodes.token(tk_arrow);
+                    if group.inner.stmts.elements.is_empty() {
+                        nodes.space();
+                    }
                 }
                 match group.inner.stmts.elements.as_slice() {
                     [] if !nodes.contains_comments(group.span()) => {}

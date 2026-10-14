@@ -1,4 +1,7 @@
+import "builtin:regions"
 import "core:env"
+import "core:io"
+import "core:fmt"
 
 fun subcommand[r](cmd str[r]) bool with env.Args = {
     if env.peek_arg { arg ->
@@ -15,9 +18,28 @@ fun subcommand[r](cmd str[r]) bool with env.Args = {
     }
 }
 
-effect CmdBuilder = {
-    fun flag[r](flag ^#write bool, name str[r])
+effect CmdArg = {
+    fun write_usage[r](command str[r]) with Fail io.Sink
 }
+
+fun print_usage[r](command str[r]) with CmdArg io.StdIo = {
+    use io.stdout
+    try write_usage(command)
+}
+
+fun eprint_usage[r](command str[r]) with CmdArg io.StdIo = {
+    use io.stderr
+    try write_usage(command)
+}
+
+effect CmdBuilder = {
+    fun category[r](desc str[r], fun body)
+    fun flag[r](name str[r], short ?str[r], desc str[r], fun on_flag with CmdArg)
+    fun arg[r](name str[r], required bool, desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
+    fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
+}
+
+fun _is_flag(arg cstr[static]) bool = arg[0]^ == '-'
 
 fun _starts_flag[r](arg cstr[static], name str[r]) bool = {
     and(
@@ -29,21 +51,179 @@ fun _starts_flag[r](arg cstr[static], name str[r]) bool = {
     )
 }
 
+fun _starts_flag_short[r](arg cstr[static], name str[r], short ?str[r]) bool = {
+    or(if short { short ->
+        _starts_flag(arg, short)
+    } else {
+        false
+    }, _starts_flag(arg, name))
+}
+
 fun command(fun builder with CmdBuilder) with env.Args CallerLocation = {
+    let positional_args_seen ^size = use regions.ref(0)
     for_each[cstr[static],](env.remaining_args) { arg ->
+        let positional_arg_index ^size = use regions.ref(0)
         handle {
-            builder
-            trace("got flag: ")
-            trace(cstr_to_str(arg))
-            traceln
-            panic("unknown flag")
-        } with CmdBuilder {
-            fun flag[r](flag ^#write bool, name str[r]) = {
-                if _starts_flag(arg, name) {
-                    flag^ = true
-                    raise
+            handle {
+                builder
+                trace("got flag: ")
+                trace(cstr_to_str(arg))
+                traceln
+                panic("unknown flag")
+            } with CmdBuilder {
+                fun category[r](desc str[r], fun body) = body
+                fun flag[r](name str[r], short ?str[r], desc str[r], fun on_flag with CmdArg) = {
+                    if _starts_flag_short(arg, name, short) {
+                        on_flag
+                        raise
+                    }
+                }
+                fun arg[r](
+                    name str[r],
+                    required bool,
+                    desc str[r],
+                    fun on_arg(arg cstr[static]) with CmdArg,
+                ) = {
+                    if and(!_is_flag(arg), positional_arg_index^ == positional_args_seen^) {
+                        on_arg(arg)
+                        raise
+                    }
+                    positional_arg_index^ += 1
+                }
+                fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg) = {
+                    if and(!_is_flag(arg), positional_arg_index^ <= positional_args_seen^) {
+                        on_arg(arg)
+                        raise
+                    }
                 }
             }
+        } with CmdArg {
+            fun write_usage[r](command str[r]) with Fail io.Sink = {
+                -- usage
+                fmt.write("Usage: ")
+                fmt.write(command)
+
+                let has_options = use regions.ref(false)
+                handle builder with CmdBuilder {
+                    fun category[r](desc str[r], fun body) = body
+                    fun flag[r](
+                        name str[r],
+                        short ?str[r],
+                        desc str[r],
+                        fun on_flag with CmdArg,
+                    ) = {
+                        has_options^ = true
+                    }
+                    fun arg[r](
+                        name str[r],
+                        required bool,
+                        desc str[r],
+                        fun on_arg(arg cstr[static]) with CmdArg,
+                    ) = {
+                        fmt.write(" ")
+                        if !required {
+                            fmt.write("[")
+                        }
+                        fmt.write(name)
+                        if !required {
+                            fmt.write("]")
+                        }
+                    }
+                    fun args[r](
+                        name str[r],
+                        desc str[r],
+                        fun on_arg(arg cstr[static]) with CmdArg,
+                    ) = {
+                        fmt.write(" [")
+                        fmt.write(name)
+                        fmt.write("...]")
+                    }
+                }
+                if has_options^ {
+                    fmt.write(" [OPTION...]")
+                }
+                fmt.writeln
+
+                -- list options
+                fmt.writeln
+                handle builder with CmdBuilder {
+                    fun category[r](desc str[r], fun body) = {
+                        fmt.writeln
+                        fmt.write(" ")
+                        fmt.write(desc)
+                        fmt.write(":")
+                        fmt.writeln
+                        body
+                    }
+                    fun flag[r](
+                        name str[r],
+                        short ?str[r],
+                        desc str[r],
+                        fun on_flag with CmdArg,
+                    ) = {
+                        -- name(s)
+                        fmt.write("  ")
+                        if short { short ->
+                            fmt.write("-")
+                            fmt.write(short)
+                            fmt.write(", ")
+                        } else {
+                            fmt.write("    ")
+                        }
+                        fmt.write("--")
+                        fmt.write(name)
+                        fmt.writeln
+
+                        -- description
+                        fmt.write("         ")
+                        fmt.write(desc)
+                        fmt.writeln
+                    }
+                    fun arg[r](
+                        name str[r],
+                        required bool,
+                        desc str[r],
+                        fun on_arg(arg cstr[static]) with CmdArg,
+                    ) = {
+                        -- name
+                        fmt.write("       ")
+                        if !required {
+                            fmt.write("[")
+                        } else {
+                            fmt.write(" ")
+                        }
+                        fmt.write(name)
+                        if !required {
+                            fmt.write("]")
+                        }
+                        fmt.writeln
+
+                        -- description
+                        fmt.write("         ")
+                        fmt.write(desc)
+                        fmt.writeln
+                    }
+                    fun args[r](
+                        name str[r],
+                        desc str[r],
+                        fun on_arg(arg cstr[static]) with CmdArg,
+                    ) = {
+                        -- name
+                        fmt.write("       [")
+                        fmt.write(name)
+                        fmt.write("...]")
+                        fmt.writeln
+
+                        -- description
+                        fmt.write("         ")
+                        fmt.write(desc)
+                        fmt.writeln
+                    }
+                }
+            }
+        }
+        if !_is_flag(arg) {
+            positional_args_seen^ += 1
         }
     }
 }

@@ -10,8 +10,8 @@ fun main with env.Args io.StdIo = {
         io.println
     } else {
         let help = use regions.ref(false)
-        ap.flags {
-            ap.flag_bool(help, "help")
+        ap.command {
+            ap.flag(help, "help")
         }
         if help^ {
             io.print("no help will be given")

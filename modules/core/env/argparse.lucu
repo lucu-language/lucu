@@ -15,15 +15,21 @@ fun subcommand[r](cmd str[r]) bool with env.Args = {
     }
 }
 
-effect FlagBuilder = {
-    fun flag_bool[r](flag ^#write bool, name str[r])
+effect CmdBuilder = {
+    fun flag[r](flag ^#write bool, name str[r])
 }
 
 fun _starts_flag[r](arg cstr[static], name str[r]) bool = {
-    and(arg[0]^ == '-', str_eq(cstr_to_str(arg[1..]), name))
+    and(
+        arg[0]^ == '-',
+        or(
+            and(arg[1]^ == '-', str_eq(cstr_to_str(arg[2..]), name)),
+            str_eq(cstr_to_str(arg[1..]), name),
+        ),
+    )
 }
 
-fun flags(fun builder with FlagBuilder) with env.Args CallerLocation = {
+fun command(fun builder with CmdBuilder) with env.Args CallerLocation = {
     for_each[cstr[static],](env.remaining_args) { arg ->
         handle {
             builder
@@ -31,13 +37,13 @@ fun flags(fun builder with FlagBuilder) with env.Args CallerLocation = {
             trace(cstr_to_str(arg))
             traceln
             panic("unknown flag")
-        } with FlagBuilder {
-            fun flag_bool[r](flag ^#write bool, name str[r]) = {
+        } with CmdBuilder {
+            fun flag[r](flag ^#write bool, name str[r]) = {
                 if _starts_flag(arg, name) {
                     flag^ = true
                     raise
                 }
             }
         }
-    } 
+    }
 }

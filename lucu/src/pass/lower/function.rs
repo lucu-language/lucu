@@ -257,7 +257,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                         ty,
                         body,
                         // TODO: specify this in the language
-                        linkage: if name == "_start" {
+                        linkage: if name == "__start" {
                             Some(mu::Linkage::External)
                         } else {
                             None

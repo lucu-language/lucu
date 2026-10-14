@@ -73,7 +73,7 @@ fun handle_environ(envp cstrs, fun body with env.Environ) = #inline {
     }
 }
 
-fun entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
+fun __entry(argc size, argv cstrs, envp cstrs) ! with World Div = {
     {
         use handle_syscall_raw
         use handle_syscall_nr
@@ -97,11 +97,11 @@ type Args = struct(
     argv0 cstr[static],
 )
 
-fun _start ! with World Div = {
+fun __start ! with World Div = {
     asm["", "{rbp}", int, unit](0)
     let rsp = asm_pure["", "={rsp},{rsp}", ^@static Args, ^@static Args](---)
     let argc size = #trunc rsp.argc^
     let argv cstrs = #transmute rsp.argv0
     let envp cstrs = #transmute argv[argc + 1]
-    entry(argc, argv, envp)
+    __entry(argc, argv, envp)
 }

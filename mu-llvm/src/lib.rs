@@ -245,7 +245,7 @@ pub enum Value<'ctx, B: Builder<'ctx>> {
     VTable(mu::Expressions, Captures<'ctx, B>),
     Function(PointerValue<'ctx>, Option<PointerValue<'ctx>>),
     Callable(B::Callable),
-    Raise,
+    Raise(Handler<'ctx>),
 }
 
 impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
@@ -256,7 +256,7 @@ impl<'ctx, B: Builder<'ctx>> Clone for Value<'ctx, B> {
             Self::Function(arg0, arg1) => Self::Function(arg0, arg1),
             Self::VTable(arg0, ref arg1) => Self::VTable(arg0, arg1.clone()),
             Self::Callable(ref arg0) => Self::Callable(arg0.clone()),
-            Self::Raise => Self::Raise,
+            Self::Raise(arg0) => Self::Raise(arg0),
         }
     }
 }
@@ -273,7 +273,7 @@ impl<'ctx, B: Builder<'ctx>> Debug for Value<'ctx, B> {
                 f.debug_tuple("Function").field(arg0).field(arg1).finish()
             }
             Self::Callable(arg0) => f.debug_tuple("Callable").field(arg0).finish(),
-            Self::Raise => write!(f, "Raise"),
+            Self::Raise(arg0) => f.debug_tuple("Raise").field(arg0).finish(),
         }
     }
 }
@@ -396,7 +396,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                 };
                 llvm.build_closure(function, None)
             }
-            Value::Raise => match llvm.raise_lowering_strat {
+            Value::Raise(handler) => match llvm.raise_lowering_strat {
                 RaiseLoweringStrategy::None => todo!(),
                 RaiseLoweringStrategy::Globals { current_idx, .. } => {
                     let idx = llvm
@@ -407,8 +407,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                             "raise index",
                         )
                         .unwrap();
-                    let ptr = llvm.current_handler().unwrap().catch_raise_ptr;
-                    let struct_type = match ptr {
+                    let struct_type = match handler.catch_raise_ptr {
                         Some(ptr) => llvm.context.struct_type(
                             &[idx.get_type(), ptr.get_type().as_basic_type_enum()],
                             false,
@@ -422,7 +421,7 @@ impl<'ctx, B: Builder<'ctx>> Value<'ctx, B> {
                         .build_insert_value(struc, idx, 0, "")
                         .unwrap()
                         .into_struct_value();
-                    if let Some(ptr) = ptr {
+                    if let Some(ptr) = handler.catch_raise_ptr {
                         struc = llvm
                             .builder
                             .build_insert_value(struc, ptr, 1, "")
@@ -553,7 +552,7 @@ pub enum RaiseLoweringStrategy<'ctx> {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Handler<'ctx> {
     pub block: BasicBlock<'ctx>,
     pub phi: Option<PhiValue<'ctx>>,
@@ -672,8 +671,8 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             foreign_functions: RwLock::new(HashMap::new()),
             foreign_globals: RwLock::new(HashMap::new()),
 
-            handler: RwLock::new(None),
             function: RwLock::new(None),
+            handler: RwLock::new(None),
         }
     }
     pub fn raise_lowering_with_globals(mut self) -> Self {
@@ -1022,7 +1021,6 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     ) {
         self.builder
             .position_at_end(self.context.append_basic_block(val, ""));
-        *self.handler.write().unwrap() = None;
         *self.function.write().unwrap() = Some(val);
         let mut refs = im::Vector::new();
         for arg in self.function_arguments(fun, val) {
@@ -1041,7 +1039,6 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             self.builder.build_unreachable().unwrap();
         }
         self.builder.clear_insertion_position();
-        *self.handler.write().unwrap() = None;
         *self.function.write().unwrap() = None;
     }
     pub fn function_arguments(
@@ -1413,18 +1410,19 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 });
 
                 let mut refs_new = refs.clone();
-                refs_new.push_front(Value::Raise);
+                let handler = Handler {
+                    block: next,
+                    phi,
+                    catch_raise_block: raising_blocks.map(|(_, start, _, _, _)| start),
+                    catch_raise_ptr: raising_blocks.and_then(|(_, _, _, ptr, _)| ptr),
+                };
+                refs_new.push_front(Value::Raise(handler));
 
                 let current_fun = {
                     let guard = self.handler.read().unwrap();
                     *guard
                 };
-                *self.handler.write().unwrap() = Some(Handler {
-                    block: next,
-                    phi,
-                    catch_raise_block: raising_blocks.map(|(_, start, _, _, _)| start),
-                    catch_raise_ptr: raising_blocks.and_then(|(_, _, _, ptr, _)| ptr),
-                });
+                *self.handler.write().unwrap() = Some(handler);
                 let val = self.build_expression(e, &refs_new);
                 *self.handler.write().unwrap() = current_fun;
 
@@ -1764,27 +1762,23 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
             }
             Value::VTable(_, _) => panic!("ICE"),
             Value::Callable(c) => B::build_callable(&c, vals, self),
-            Value::Raise => {
-                if let Some(handler) = self.current_handler() {
-                    let val = vals.into_iter().next().unwrap().build(self);
-                    let current_block = self.builder.get_insert_block().unwrap();
-                    self.builder
-                        .build_unconditional_branch(handler.block)
-                        .unwrap();
-                    if let Some(phi) = handler.phi {
-                        phi.add_incoming(&[(
-                            &val.basic_value(self)
-                                .unwrap_or_else(|| phi.as_basic_value().get_type().const_zero()),
-                            current_block,
-                        )]);
-                    }
-
-                    let next = self.build_block("");
-                    self.builder.position_at_end(next);
-                    Value::Data(None)
-                } else {
-                    todo!()
+            Value::Raise(handler) => {
+                let val = vals.into_iter().next().unwrap().build(self);
+                let current_block = self.builder.get_insert_block().unwrap();
+                self.builder
+                    .build_unconditional_branch(handler.block)
+                    .unwrap();
+                if let Some(phi) = handler.phi {
+                    phi.add_incoming(&[(
+                        &val.basic_value(self)
+                            .unwrap_or_else(|| phi.as_basic_value().get_type().const_zero()),
+                        current_block,
+                    )]);
                 }
+
+                let next = self.build_block("");
+                self.builder.position_at_end(next);
+                Value::Data(None)
             }
         }
     }

@@ -159,7 +159,7 @@ fun loop(fun body) ! with Div
 fun unfounded[T](fun body T with Div) T
     = #intrinsic
 
-fun for(from size, to size, fun body(n size)) = {
+fun for(from size, to size, fun body(n size)) = #inline {
     if to >= from {
         let current = use regions.ref(from)
         handle unfounded loop {
@@ -238,6 +238,8 @@ fun test(fun body with Fail) bool = #inline handle {
 fun abs(n int) int = #inline if n >= 0 then n else -n
 
 fun and(a bool, fun b bool) bool = #inline if a then b else false
+
+fun or(a bool, fun b bool) bool = #inline if a then true else b
 
 fun str_eq[ra, rb](a str[ra], b str[rb]) bool = {
     if len(a) != len(b) {

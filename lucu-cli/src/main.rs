@@ -191,7 +191,7 @@ fn build(cmd: BuildCommand) -> bool {
     let context = Context::create();
     let mut llvm = lucu_llvm::Builder::build(&context, &mt, machine, "main", &functions, &handlers);
 
-    if let Some(fun) = llvm.module.get_function("_start") {
+    if let Some(fun) = llvm.module.get_function("__start") {
         fun.add_attribute(
             AttributeLoc::Function,
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("noreturn"), 0),
@@ -205,7 +205,7 @@ fn build(cmd: BuildCommand) -> bool {
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("naked"), 0),
         );
     }
-    if let Some(fun) = llvm.module.get_function("entry") {
+    if let Some(fun) = llvm.module.get_function("__entry") {
         fun.add_attribute(
             AttributeLoc::Function,
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("noinline"), 0),
@@ -266,7 +266,7 @@ fn build(cmd: BuildCommand) -> bool {
         )
         .arg("-o")
         .arg("out")
-        .arg("-e_start");
+        .arg("-e__start");
     if cmd.debug {
         eprintln!("{command:?}");
     }

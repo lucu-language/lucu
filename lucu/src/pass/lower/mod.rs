@@ -807,6 +807,7 @@ impl<'a, 'b> Lower<'a, 'b> {
     fn kind_params(
         &mut self,
         name: Option<&ast::GenericParameters>,
+        implicit_regions: usize,
     ) -> Result<Option<Arc<[Kind]>>> {
         match name {
             Some(params) => params
@@ -821,7 +822,7 @@ impl<'a, 'b> Lower<'a, 'b> {
                         ast::GenericParameter::Region(kind, _) => {
                             self.implicit_region(
                                 kind.as_ref(),
-                                (index, index),
+                                (index + implicit_regions, index + implicit_regions),
                             ).map(|_| SimpleKind::Region)
                         }
                         ast::GenericParameter::Other(_, kind) => self.simple_kind(kind),
@@ -838,7 +839,7 @@ impl<'a, 'b> Lower<'a, 'b> {
         name: Option<&ast::GenericParameters>,
         output: SimpleKind,
     ) -> Result<Kind> {
-        self.kind_params(name)
+        self.kind_params(name, 0)
             .map(|params| self.tt.insert_kind(KindEnum { params, output }))
     }
     fn function_signature(
@@ -849,8 +850,8 @@ impl<'a, 'b> Lower<'a, 'b> {
         let mut l = self.reborrow();
         let mut implicit_effects = Vec::new();
         l.implicit_effects = Some(&mut implicit_effects);
-        l.kind_params(sig.name.generics.as_ref()).and_then(|type_params| {
-            let implicit_regions = l.count_implicit_regions(sig);
+        let implicit_regions = l.count_implicit_regions(sig);
+        l.kind_params(sig.name.generics.as_ref(), implicit_regions).and_then(|type_params| {
             l.next_implicit_region = Some(implicit_regions);
             l.implicit_region_offset = 0;
 

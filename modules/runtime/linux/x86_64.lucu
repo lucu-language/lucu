@@ -1,8 +1,8 @@
-import "core:env"
-import "os:linux"
-import "os:linux/core"
-import "main:main"
 import "builtin:regions"
+import "core:env"
+import "linux:"
+import "linux:core"
+import "main:"
 
 fun handle_syscall_raw(fun body with linux.SyscallRaw) with World = #inline {
     handle body with linux.SyscallRaw {
@@ -63,7 +63,7 @@ fun handle_environ(envp cstrs, fun body with env.Environ) = #inline {
 
                 if strlen(next) > len(key) {
                     if next[len(key)]^ == '=' {
-                        if str_eq(key, #transmute next[..len(key)]) {
+                        if str_eq(key, next[..len(key)]) {
                             raise some(next[len(key) + 1..])
                         }
                     }

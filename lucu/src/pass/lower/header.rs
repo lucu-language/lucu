@@ -403,14 +403,14 @@ impl<'a, 'b> Lower<'a, 'b> {
                 let mut l = self.reborrow();
                 let mut implicit_effects = Vec::new();
                 l.implicit_effects = Some(&mut implicit_effects);
-                let type_params = problems.append(l.kind_params(params.as_ref()));
+                let implicit_regions = l.count_implicit_regions(&handler.effect)
+                    + handler
+                        .with_effects
+                        .as_ref()
+                        .map(|es| l.count_implicit_regions(es))
+                        .unwrap_or(0);
+                let type_params = problems.append(l.kind_params(params.as_ref(), implicit_regions));
                 let decl = type_params.and_then(|type_params| {
-                    let implicit_regions = l.count_implicit_regions(&handler.effect)
-                        + handler
-                            .with_effects
-                            .as_ref()
-                            .map(|es| l.count_implicit_regions(es))
-                            .unwrap_or(0);
                     l.next_implicit_region = Some(
                         implicit_regions
                             + type_params.as_ref().map(|params| params.len()).unwrap_or(0),

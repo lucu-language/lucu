@@ -205,6 +205,12 @@ fn build(cmd: BuildCommand) -> bool {
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("naked"), 0),
         );
     }
+    if let Some(fun) = llvm.module.get_function("entry") {
+        fun.add_attribute(
+            AttributeLoc::Function,
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("noinline"), 0),
+        );
+    }
 
     llvm.build_functions_that_llvm_tries_to_call_for_some_reason();
 

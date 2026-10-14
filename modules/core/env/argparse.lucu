@@ -1,0 +1,43 @@
+import "core:env"
+
+fun subcommand[r](cmd str[r]) bool with env.Args = {
+    if env.peek_arg { arg ->
+        if and(strlen(arg) == len(cmd), str_eq(arg[..len(cmd)], cmd)) {
+            env.skip_arg
+            true
+        } else {
+            -- incorrect arg
+            false
+        }
+    } else {
+        -- no more args
+        false
+    }
+}
+
+effect FlagBuilder = {
+    fun flag_bool[r](flag ^#write bool, name str[r])
+}
+
+fun _starts_flag[r](arg cstr[static], name str[r]) bool = {
+    and(arg[0]^ == '-', str_eq(cstr_to_str(arg[1..]), name))
+}
+
+fun flags(fun builder with FlagBuilder) with env.Args CallerLocation = {
+    for_each[cstr[static],](env.remaining_args) { arg ->
+        handle {
+            builder
+            trace("got flag: ")
+            trace(cstr_to_str(arg))
+            traceln
+            panic("unknown flag")
+        } with FlagBuilder {
+            fun flag_bool[r](flag ^#write bool, name str[r]) = {
+                if _starts_flag(arg, name) {
+                    flag^ = true
+                    raise
+                }
+            }
+        }
+    } 
+}

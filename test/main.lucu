@@ -1,9 +1,8 @@
 import "core:io"
 import "core:env"
 import "core:random"
-import "os:linux"
 
-import "main:conway" main
+import "main:argparse" main
 
 fun main with World Div io.StdIo env.Args env.Environ random.Rng = #inline {
     main.main

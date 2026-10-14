@@ -1,0 +1,24 @@
+import "builtin:regions"
+import "core:env"
+import "core:env/argparse" ap
+import "core:io"
+
+fun main with env.Args io.StdIo = {
+    env.skip_arg
+    if ap.subcommand("help") {
+        io.print("no help will be given")
+        io.println
+    } else {
+        let help = use regions.ref(false)
+        ap.flags {
+            ap.flag_bool(help, "help")
+        }
+        if help^ {
+            io.print("no help will be given")
+            io.println
+        } else {
+            io.print("what?")
+            io.println
+        }
+    }
+}

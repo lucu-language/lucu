@@ -1321,34 +1321,37 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                         // RAISE HANDLER
                         // get super raising block
-                        let block_raise_continue = match self.current_handler() {
-                            Some(handler) => handler.catch_raise_block.unwrap(),
-                            None => {
+                        let block_raise_continue =
+                            {
                                 let block_raise_continue = self.build_block("raise continue");
                                 self.builder.position_at_end(block_raise_continue);
+
+                                // reset index
                                 self.builder
-                                    .build_return(
-                                        self.poison_return()
-                                            .as_ref()
-                                            .map(|d| d as &dyn inkwell::values::BasicValue<'ctx>),
-                                    )
+                                    .build_store(current_idx.as_pointer_value(), current_idx_val)
                                     .unwrap();
+                                match self.current_handler() {
+                                    Some(handler) => {
+                                        self.builder
+                                            .build_unconditional_branch(
+                                                handler.catch_raise_block.unwrap(),
+                                            )
+                                            .unwrap();
+                                    }
+                                    None => {
+                                        self.builder
+                                            .build_return(self.poison_return().as_ref().map(|d| {
+                                                d as &dyn inkwell::values::BasicValue<'ctx>
+                                            }))
+                                            .unwrap();
+                                    }
+                                }
                                 block_raise_continue
-                            }
-                        };
+                            };
 
                         // check if indices are equal
                         let try_catch_raise = self.build_block("try catch raise");
                         self.builder.position_at_end(try_catch_raise);
-                        let current_idx_val = self
-                            .builder
-                            .build_load(
-                                self.context.i64_type(),
-                                current_idx.as_pointer_value(),
-                                "current handler idx",
-                            )
-                            .unwrap()
-                            .into_int_value();
                         let raising_idx_val = self
                             .builder
                             .build_load(
@@ -1363,22 +1366,9 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                             .build_int_compare(
                                 IntPredicate::EQ,
                                 raising_idx_val,
-                                current_idx_val,
+                                next_idx,
                                 "raising to current handler",
                             )
-                            .unwrap();
-
-                        // decrease index
-                        let next_idx = self
-                            .builder
-                            .build_int_sub(
-                                current_idx_val,
-                                self.context.i64_type().const_int(1, false),
-                                "",
-                            )
-                            .unwrap();
-                        self.builder
-                            .build_store(current_idx.as_pointer_value(), next_idx)
                             .unwrap();
 
                         // jump
@@ -1388,6 +1378,12 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                             .unwrap();
 
                         self.builder.position_at_end(caught_raise);
+                        self.builder
+                            .build_store(
+                                raising_to.as_pointer_value(),
+                                self.context.i64_type().const_zero(),
+                            )
+                            .unwrap();
                         let raised_value = raised_value_pointer.map(|ptr| {
                             self.builder
                                 .build_load(basic_type.unwrap(), ptr, "raised value")
@@ -1397,6 +1393,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
 
                         self.builder.position_at_end(current_block);
                         Some((
+                            current_idx_val,
                             try_catch_raise,
                             caught_raise,
                             raised_value_pointer,
@@ -1408,7 +1405,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 let phi = basic_type.map(|ty| {
                     self.builder.position_at_end(next);
                     let phi = self.builder.build_phi(ty, "").unwrap();
-                    if let Some((_, end, _, Some(value))) = raising_blocks {
+                    if let Some((_, _, end, _, Some(value))) = raising_blocks {
                         phi.add_incoming(&[(&value, end)]);
                     }
                     self.builder.position_at_end(current_block);
@@ -1425,38 +1422,11 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                 *self.handler.write().unwrap() = Some(Handler {
                     block: next,
                     phi,
-                    catch_raise_block: raising_blocks.map(|(start, _, _, _)| start),
-                    catch_raise_ptr: raising_blocks.and_then(|(_, _, ptr, _)| ptr),
+                    catch_raise_block: raising_blocks.map(|(_, start, _, _, _)| start),
+                    catch_raise_ptr: raising_blocks.and_then(|(_, _, _, ptr, _)| ptr),
                 });
                 let val = self.build_expression(e, &refs_new);
                 *self.handler.write().unwrap() = current_fun;
-
-                match self.raise_lowering_strat {
-                    RaiseLoweringStrategy::None => {}
-                    RaiseLoweringStrategy::Globals { current_idx, .. } => {
-                        // decrease current idx
-                        let current_idx_val = self
-                            .builder
-                            .build_load(
-                                self.context.i64_type(),
-                                current_idx.as_pointer_value(),
-                                "current handler idx",
-                            )
-                            .unwrap()
-                            .into_int_value();
-                        let next_idx = self
-                            .builder
-                            .build_int_sub(
-                                current_idx_val,
-                                self.context.i64_type().const_int(1, false),
-                                "",
-                            )
-                            .unwrap();
-                        self.builder
-                            .build_store(current_idx.as_pointer_value(), next_idx)
-                            .unwrap();
-                    }
-                }
 
                 let old_block = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(next).unwrap();
@@ -1469,6 +1439,18 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                         old_block,
                     )]);
                 }
+
+                match self.raise_lowering_strat {
+                    RaiseLoweringStrategy::None => {}
+                    RaiseLoweringStrategy::Globals { current_idx, .. } => {
+                        // reset current idx
+                        let current_idx_val = raising_blocks.unwrap().0;
+                        self.builder
+                            .build_store(current_idx.as_pointer_value(), current_idx_val)
+                            .unwrap();
+                    }
+                }
+
                 Value::Data(phi.map(PhiValue::as_basic_value))
             }
         }
@@ -1777,6 +1759,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     .unwrap();
                 call.set_call_convention(self.internal_calling_convention() as u32);
                 let out = call.try_as_basic_value().basic();
+                self.check_raising();
                 Value::Data(out)
             }
             Value::VTable(_, _) => panic!("ICE"),

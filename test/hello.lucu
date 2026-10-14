@@ -1,0 +1,6 @@
+import "core:io"
+
+fun main with io.StdIo = {
+    io.print("Hello!")
+    io.println
+}

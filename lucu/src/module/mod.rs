@@ -16,7 +16,7 @@ impl Library {
 
     pub const BUILTIN: Library = Library::const_new("builtin");
     pub const CORE: Library = Library::const_new("core");
-    pub const OS: Library = Library::const_new("os");
+    pub const LINUX: Library = Library::const_new("linux");
     pub const RUNTIME: Library = Library::const_new("runtime");
 
     pub const LIBC: Library = Library::const_new("libc");
@@ -243,8 +243,8 @@ impl LibraryDir {
             LibraryDir::new(location.join("core")).with_preamble(Module::BUILTIN),
         );
         dirs.insert(
-            Library::OS,
-            LibraryDir::new(location.join("os")).with_preamble(Module::BUILTIN),
+            Library::LINUX,
+            LibraryDir::new(location.join("linux")).with_preamble(Module::BUILTIN),
         );
         dirs.insert(
             Library::RUNTIME,

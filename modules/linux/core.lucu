@@ -1,4 +1,4 @@
-import "os:linux"
+import "linux:"
 import "core:io"
 import "core:random"
 

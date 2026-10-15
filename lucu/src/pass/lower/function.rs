@@ -2251,7 +2251,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
 
         let to = self.r#type(val.thunk.returns);
 
-        mu::FunctionType::new(from, to, self.table)
+        mu::FunctionType::new(from, to)
     }
     fn effect(&self, e: Effect) -> Option<(&'a str, mu::Type)> {
         match self.lower.tt[e] {

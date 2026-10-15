@@ -55,7 +55,7 @@ pub trait Table:
         self.insert_type(TypeEnum::Sum(self.insert_enum([])))
     }
     fn function(&self, from: Tuple, to: Type) -> Type {
-        self.insert_type(TypeEnum::Function(FunctionType::new(from, to, self)))
+        self.insert_type(TypeEnum::Function(FunctionType::new(from, to)))
     }
     fn base(&self, base: Self::Base) -> Type {
         self.insert_type(TypeEnum::Base(base))
@@ -228,16 +228,8 @@ pub struct FunctionType(Tuple, Type);
 
 impl FunctionType {
     /// Creates a new [`FunctionType`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if type `to` is not first-order.
     #[must_use]
-    pub fn new(from: Tuple, to: Type, mt: &(impl Table + ?Sized)) -> Self {
-        // TODO: add a new FirstOrderType or something
-        // that is then convertible to Type
-        // same with FirstOrderTuple and FirstOrderEnum
-        assert!(to.is_first_order(mt));
+    pub fn new(from: Tuple, to: Type) -> Self {
         Self(from, to)
     }
     #[must_use]
@@ -295,10 +287,10 @@ impl Type {
     #[must_use]
     pub fn is_first_order(self, mt: &(impl Table + ?Sized)) -> bool {
         match mt[self] {
-            TypeEnum::Base(_) | TypeEnum::VTable(_) => true,
+            TypeEnum::Base(_) => true,
             TypeEnum::Sum(sum) => mt[sum].iter().all(|ty| ty.is_first_order(mt)),
             TypeEnum::Product(product) => mt[product].iter().all(|ty| ty.is_first_order(mt)),
-            TypeEnum::Function(_) => false,
+            TypeEnum::Function(_) | TypeEnum::VTable(_) => false,
         }
     }
     #[must_use]
@@ -377,7 +369,7 @@ impl Expression {
                 .and_then(|types| mt[types].get(n as usize).copied()),
             ExpressionEnum::Abstract(from, e) => e
                 .get_type(mt)
-                .map(|to| mt.insert_type(TypeEnum::Function(FunctionType::new(from, to, mt)))),
+                .map(|to| mt.insert_type(TypeEnum::Function(FunctionType::new(from, to)))),
             ExpressionEnum::Match(_, es) => mt[es]
                 .first()
                 .map_or_else(|| Some(mt.never()), |e| e.get_type(mt)),

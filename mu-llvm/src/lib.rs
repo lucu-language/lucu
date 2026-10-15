@@ -1469,7 +1469,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         let current_block = self.builder.get_insert_block();
 
         // create function
-        let fun = mu::FunctionType::new(from, body.get_type(self.table).unwrap(), self.table);
+        let fun = mu::FunctionType::new(from, body.get_type(self.table).unwrap());
         let function = self.add_function(fun, true, None, Some(Linkage::Private));
         self.builder
             .position_at_end(self.context.append_basic_block(function, ""));
@@ -1757,7 +1757,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     .unwrap();
                 call.set_call_convention(self.internal_calling_convention() as u32);
                 let out = call.try_as_basic_value().basic();
-                self.check_raising();
+                self.check_raising(fun);
                 Value::Data(out)
             }
             Value::VTable(_, _) => panic!("ICE"),
@@ -1790,6 +1790,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
     }
     pub fn build_direct_call(
         &self,
+        fun: mu::FunctionType,
         fval: FunctionValue<'ctx>,
         cc: Option<LLVMCallConv>,
         vals: impl IntoIterator<Item = Value<'ctx, B>>,
@@ -1803,7 +1804,7 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         call.set_call_convention(cc.unwrap_or(self.internal_calling_convention()) as u32);
         let out = call.try_as_basic_value().basic();
         if cc.is_none() {
-            self.check_raising();
+            self.check_raising(fun);
         }
         Value::Data(out)
     }
@@ -1829,56 +1830,88 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
         call.set_call_convention(cc.unwrap_or(self.internal_calling_convention()) as u32);
         let out = call.try_as_basic_value().basic();
         if cc.is_none() {
-            self.check_raising();
+            self.check_raising(fun);
         }
         Value::Data(out)
     }
-    fn check_raising(&self) {
+    fn check_raising(&self, fun: mu::FunctionType) {
         match self.raise_lowering_strat {
             RaiseLoweringStrategy::None => {}
             RaiseLoweringStrategy::Globals { raising_to, .. } => {
-                let raising_idx = self
-                    .builder
-                    .build_load(
-                        self.context.i64_type(),
-                        raising_to.as_pointer_value(),
-                        "raising to idx",
-                    )
-                    .unwrap()
-                    .into_int_value();
-                let raising = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::NE,
-                        raising_idx,
-                        self.context.i64_type().const_zero(),
-                        "raising",
-                    )
-                    .unwrap();
+                if self.table[fun.from()]
+                    .iter()
+                    .all(|t| t.is_first_order(self.table))
+                {
+                    // no functions as arguments, so we do not expect to raise through the call
+                    // TODO: we could even check lambda arguments to see if they contain a 'raise' or not
+                    return;
+                }
 
                 let block_next = self.build_block("");
-                if let Some(handler) = self.current_handler() {
-                    self.builder
-                        .build_conditional_branch(
-                            raising,
-                            handler.catch_raise_block.unwrap(),
-                            block_next,
-                        )
-                        .unwrap();
+                if fun.never_returns(self.table) {
+                    // never returns, so we assume we must be raising here
+                    if let Some(handler) = self.current_handler() {
+                        self.builder
+                            .build_unconditional_branch(handler.catch_raise_block.unwrap())
+                            .unwrap();
+                    } else {
+                        let block_raise_continue = self.build_block("raise continue");
+                        self.builder
+                            .build_unconditional_branch(block_raise_continue)
+                            .unwrap();
+
+                        self.builder.position_at_end(block_raise_continue);
+                        self.builder
+                            .build_return(
+                                self.poison_return()
+                                    .as_ref()
+                                    .map(|d| d as &dyn inkwell::values::BasicValue<'ctx>),
+                            )
+                            .unwrap();
+                    }
                 } else {
-                    let block_raise_continue = self.build_block("raise continue");
-                    self.builder
-                        .build_conditional_branch(raising, block_raise_continue, block_next)
+                    let raising_idx = self
+                        .builder
+                        .build_load(
+                            self.context.i64_type(),
+                            raising_to.as_pointer_value(),
+                            "raising to idx",
+                        )
+                        .unwrap()
+                        .into_int_value();
+                    let raising = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            raising_idx,
+                            self.context.i64_type().const_zero(),
+                            "raising",
+                        )
                         .unwrap();
 
-                    self.builder.position_at_end(block_raise_continue);
-                    self.builder
-                        .build_return(
-                            self.poison_return()
-                                .as_ref()
-                                .map(|d| d as &dyn inkwell::values::BasicValue<'ctx>),
-                        )
-                        .unwrap();
+                    if let Some(handler) = self.current_handler() {
+                        self.builder
+                            .build_conditional_branch(
+                                raising,
+                                handler.catch_raise_block.unwrap(),
+                                block_next,
+                            )
+                            .unwrap();
+                    } else {
+                        let block_raise_continue = self.build_block("raise continue");
+                        self.builder
+                            .build_conditional_branch(raising, block_raise_continue, block_next)
+                            .unwrap();
+
+                        self.builder.position_at_end(block_raise_continue);
+                        self.builder
+                            .build_return(
+                                self.poison_return()
+                                    .as_ref()
+                                    .map(|d| d as &dyn inkwell::values::BasicValue<'ctx>),
+                            )
+                            .unwrap();
+                    }
                 }
 
                 self.builder.position_at_end(block_next);

@@ -312,11 +312,11 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     array.as_basic_value_enum()
                 }))
             }
-            Callable::ModuleFunction { ref item, .. } => {
+            Callable::ModuleFunction { ref item, ty } => {
                 let fun = llvm.base.functions.get().unwrap()[item];
                 match fun {
                     BuilderFunction::Call(fval) => {
-                        llvm.build_direct_call(fval, None, args.map(|v| v.build(llvm)))
+                        llvm.build_direct_call(ty, fval, None, args.map(|v| v.build(llvm)))
                     }
                     BuilderFunction::Inline(expr) => llvm.build_expression_bound(expr, args),
                 }
@@ -324,16 +324,12 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
             Callable::ForeignFunction { ref name, ty } => {
                 let cc = LLVMCallConv::LLVMCCallConv;
                 let fun = llvm.get_foreign_function(name, ty, cc);
-                llvm.build_direct_call(fun, Some(cc), args.map(|v| v.build(llvm)))
+                llvm.build_direct_call(ty, fun, Some(cc), args.map(|v| v.build(llvm)))
             }
             Callable::Link { ref lib } => {
                 llvm.add_linked(lib);
                 args.next().unwrap().build_call(
-                    mu::FunctionType::new(
-                        llvm.table.insert_tuple([]),
-                        llvm.table.unit(),
-                        llvm.table,
-                    ),
+                    mu::FunctionType::new(llvm.table.insert_tuple([]), llvm.table.unit()),
                     [],
                     llvm,
                 )
@@ -433,11 +429,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 llvm.builder.build_unconditional_branch(block).unwrap();
                 llvm.builder.position_at_end(block);
                 args.next().unwrap().build_call(
-                    mu::FunctionType::new(
-                        llvm.table.insert_tuple([]),
-                        llvm.table.unit(),
-                        llvm.table,
-                    ),
+                    mu::FunctionType::new(llvm.table.insert_tuple([]), llvm.table.unit()),
                     [],
                     llvm,
                 );
@@ -582,11 +574,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 .into()
             }
             Callable::LogicOp { op } => {
-                let ty = mu::FunctionType::new(
-                    llvm.table.insert_tuple([]),
-                    llvm.table.bool(),
-                    llvm.table,
-                );
+                let ty = mu::FunctionType::new(llvm.table.insert_tuple([]), llvm.table.bool());
                 let lhs = args
                     .next()
                     .unwrap()
@@ -703,7 +691,6 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     llvm.table
                         .insert_tuple([llvm.table.base(Base::Pointer(ty))]),
                     to,
-                    llvm.table,
                 );
                 let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(ptr).into()], llvm)
@@ -743,8 +730,7 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                     .unwrap()
                     .into_struct_value();
 
-                let fun =
-                    mu::FunctionType::new(llvm.table.insert_tuple([ptr_slice]), to, llvm.table);
+                let fun = mu::FunctionType::new(llvm.table.insert_tuple([ptr_slice]), to);
                 let fval = args.next().unwrap();
                 fval.build_call(fun, [mu_llvm::Value::Data(Some(out.into())).into()], llvm)
             }

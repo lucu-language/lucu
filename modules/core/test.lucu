@@ -1,0 +1,10 @@
+import "core:io"
+
+effect Testing = {
+    fun test[r](name str[r], fun body with Test)
+}
+
+effect Test = {
+    fun assert(predicate bool) with CallerLocation
+    fun assert_writes[r](fun body with io.Sink, expect str[r]) with CallerLocation
+}

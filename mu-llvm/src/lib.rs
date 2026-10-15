@@ -1146,16 +1146,16 @@ impl<'ctx, B: Builder<'ctx>> Context<'ctx, B> {
                     Enum::TaggedUnion(_) => todo!(),
                 }
             }
-            mu::ExpressionEnum::Match(e, es) => {
-                let sum = e
+            mu::ExpressionEnum::Match(me, es) => {
+                let sum = me
                     .get_type(self.table)
                     .unwrap()
                     .into_sum(self.table)
                     .unwrap();
-                let variant = self.build_expression(e, refs);
+                let variant = self.build_expression(me, refs);
 
                 let out = self
-                    .get_type(self.table[es][0].get_type(self.table).unwrap())
+                    .get_type(e.get_type(self.table).unwrap())
                     .basic_type(self);
                 match self.get_enum(sum) {
                     Enum::Empty => Value::Data(None),

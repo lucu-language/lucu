@@ -13,6 +13,7 @@ pub struct Library(CompactString);
 
 impl Library {
     pub const MAIN: Library = Library::const_new("main");
+    pub const TEST: Library = Library::const_new("test");
 
     pub const BUILTIN: Library = Library::const_new("builtin");
     pub const CORE: Library = Library::const_new("core");

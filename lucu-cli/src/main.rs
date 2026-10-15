@@ -84,6 +84,7 @@ enum SubCommand {
     Watch(CheckCommand),
     Build(BuildCommand),
     Run(BuildCommand),
+    Test(BuildCommand),
 }
 
 #[derive(Facet)]
@@ -113,24 +114,40 @@ fn main() {
         SubCommand::Check(check_command) => todo!(),
         SubCommand::Watch(check_command) => watch(check_command),
         SubCommand::Build(build_command) => {
-            if build(build_command) {
+            if build(build_command, false) {
                 println!("COMPILED");
             }
         }
         SubCommand::Run(build_command) => {
-            if build(build_command) {
+            if build(build_command, false) {
+                std::process::Command::new("./out").status().unwrap();
+            }
+        }
+        SubCommand::Test(build_command) => {
+            if build(build_command, true) {
                 std::process::Command::new("./out").status().unwrap();
             }
         }
     }
 }
 
-fn build(cmd: BuildCommand) -> bool {
-    let mut dirs = LibraryDir::stdlib(cmd.stdlib);
-    dirs.insert(
-        Library::MAIN,
-        LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
-    );
+fn build(cmd: BuildCommand, test: bool) -> bool {
+    let mut dirs = LibraryDir::stdlib(cmd.stdlib.clone());
+    if test {
+        dirs.insert(
+            Library::MAIN,
+            LibraryDir::new(cmd.stdlib.join("test")).with_preamble(Module::BUILTIN),
+        );
+        dirs.insert(
+            Library::TEST,
+            LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
+        );
+    } else {
+        dirs.insert(
+            Library::MAIN,
+            LibraryDir::new(cmd.main).with_preamble(Module::BUILTIN),
+        );
+    }
     for lib in cmd.lib {
         let name = lib.file_name().unwrap().to_string_lossy();
         dirs.insert(

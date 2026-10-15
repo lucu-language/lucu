@@ -242,7 +242,7 @@ impl FunctionType {
     }
     #[must_use]
     pub fn never_returns(self, mt: &(impl Table + ?Sized)) -> bool {
-        matches!(mt[self.to()], TypeEnum::Sum(tys) if mt[tys].is_empty())
+        self.to().is_never(mt)
     }
 }
 
@@ -292,6 +292,10 @@ impl Type {
             TypeEnum::Product(product) => mt[product].iter().all(|ty| ty.is_first_order(mt)),
             TypeEnum::Function(_) | TypeEnum::VTable(_) => false,
         }
+    }
+    #[must_use]
+    pub fn is_never(self, mt: &(impl Table + ?Sized)) -> bool {
+        matches!(mt[self], TypeEnum::Sum(sum) if mt[sum].is_empty())
     }
     #[must_use]
     pub fn into_product(self, mt: &(impl Table + ?Sized)) -> Option<Tuple> {
@@ -370,9 +374,15 @@ impl Expression {
             ExpressionEnum::Abstract(from, e) => e
                 .get_type(mt)
                 .map(|to| mt.insert_type(TypeEnum::Function(FunctionType::new(from, to)))),
-            ExpressionEnum::Match(_, es) => mt[es]
-                .first()
-                .map_or_else(|| Some(mt.never()), |e| e.get_type(mt)),
+            ExpressionEnum::Match(_, es) => {
+                // FIXME: propagate invalid types
+                Some(
+                    mt[es]
+                        .iter()
+                        .find_map(|e| e.get_type(mt).filter(|t| !t.is_never(mt)))
+                        .unwrap_or_else(|| mt.never()),
+                )
+            }
             ExpressionEnum::Variant(types, _, _) => Some(mt.insert_type(TypeEnum::Sum(types))),
         }
     }

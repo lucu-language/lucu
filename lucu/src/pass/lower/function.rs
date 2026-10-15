@@ -2086,7 +2086,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 }
                                 None => Result::new((
                                     self_inner.table.if_stmt(condition, then_branch),
-                                    ty,
+                                    unit_t,
                                 )),
                             }
                         })

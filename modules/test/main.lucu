@@ -1,0 +1,90 @@
+import "core:test"
+import "core:io"
+import "core:fmt"
+import "test:" main
+import "builtin:regions"
+
+fun main with io.StdIo = handle main.test with test.Testing {
+    fun test[r](name str[r], fun body with test.Test) = {
+        io.print(name)
+        io.print(":")
+        try {
+            handle {
+                body
+                io.print(" SUCCESS")
+                io.println
+            } with test.Test {
+                fun assert(predicate bool) with CallerLocation = {
+                    if !predicate {
+                        io.print(" FAILED")
+                        io.println
+                        io.print("  ")
+                        io.stdout {
+                            try fmt.write(caller)
+                        }
+                        io.println
+                        fail
+                    }
+                }
+                fun assert_writes[r](fun body with io.Sink, expect str[r])
+                    with CallerLocation = {
+                    let current ^size = use regions.ref(0)
+                    let failed = use regions.ref(false)
+                    handle body with io.Sink {
+                        fun write[r](bytes str[r]) size = {
+                            if failed^ {
+                                io.print(bytes)
+                            } else if current^ + len(bytes) <= len(expect) and str_eq(
+                                bytes,
+                                expect[current^..current^ + len(bytes)],
+                            ) {
+                                current^ += len(bytes)
+                            } else {
+                                io.print(" FAILED")
+                                io.println
+                                io.print("  ")
+                                io.stdout {
+                                    try fmt.write(caller)
+                                }
+                                io.println
+
+                                io.print("  expected: ")
+                                io.print(expect)
+                                io.println
+
+                                io.print("     found: ")
+                                io.print(expect[..current^])
+                                io.print(bytes)
+                                failed^ = true
+                            }
+                            len(bytes)
+                        }
+                        fun flush = {}
+                    }
+                    if failed^ {
+                        io.println
+                        fail
+                        {}
+                    } else if current^ < len(expect) {
+                        io.print(" FAILED")
+                        io.println
+                        io.print("  ")
+                        io.stdout {
+                            try fmt.write(caller)
+                        }
+                        io.println
+
+                        io.print("  expected: ")
+                        io.print(expect)
+                        io.println
+
+                        io.print("     found: ")
+                        io.print(expect[..current^])
+                        io.println
+                        fail
+                    }
+                }
+            }
+        }
+    }
+}

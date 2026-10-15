@@ -2003,48 +2003,53 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let TypeEnum::Maybe(ty) = self.lower.tt[maybe_ty] else {
                     panic!("ICE: not a maybe :(")
                 };
-                let mut self_inner = self.reborrow();
-                self_inner
-                    .vars
-                    .push_front(Var::Named(param.var.as_str(), FunctionParameter::Data(ty)));
-                self_inner
-                    .statements(
-                        &mut block.inner.stmts.iter().map(|e| &**e).peekable(),
-                        expected,
-                    )
-                    .recover_with(|| (self_inner.table.unreachable(), expected))
-                    .and_then(|(then_branch, ty)| {
-                        let unit_t = self_inner.lower.tt.insert_type(TypeEnum::Unit);
-                        match branch_false {
-                            Some(branch_false) => {
-                                self_inner
-                                    .expression(branch_false, ty)
-                                    .map(|(else_branch, _)| {
-                                        (
-                                            self_inner
-                                                .table
-                                                .r#match(maybe_mu, [else_branch, then_branch]),
-                                            ty,
-                                        )
-                                    })
-                            }
-                            None if !ty.subtype(unit_t, self_inner.lower.tt) => {
-                                ProblemKind::TypeMismatch(TypeMismatch {
-                                    expected: unit_t,
-                                    found: ty,
+                {
+                    // push some variant
+                    let mut self_inner = self.reborrow();
+                    self_inner
+                        .vars
+                        .push_front(Var::Named(param.var.as_str(), FunctionParameter::Data(ty)));
+                    self_inner
+                        .statements(
+                            &mut block.inner.stmts.iter().map(|e| &**e).peekable(),
+                            expected,
+                        )
+                        .recover_with(|| (self_inner.table.unreachable(), expected))
+                }
+                .and_then(|(then_branch, ty)| {
+                    let unit_t = self.lower.tt.insert_type(TypeEnum::Unit);
+                    match branch_false {
+                        Some(branch_false) => {
+                            // this is a match expression under the hood
+                            // so we need to push the unit none variant on the var stack
+                            let mut self_inner = self.reborrow();
+                            self_inner.vars.push_front(Var::Unit);
+                            self_inner
+                                .expression(branch_false, ty)
+                                .map(|(else_branch, _)| {
+                                    (
+                                        self_inner
+                                            .table
+                                            .r#match(maybe_mu, [else_branch, then_branch]),
+                                        ty,
+                                    )
                                 })
-                                .at(self_inner.lower.module, branch_true)
-                                .with((self_inner.table.unreachable(), unit_t))
-                            }
-                            None => Result::new((
-                                self_inner.table.r#match(
-                                    maybe_mu,
-                                    [self_inner.table.construct_unit(), then_branch],
-                                ),
-                                ty,
-                            )),
                         }
-                    })
+                        None if !ty.subtype(unit_t, self.lower.tt) => {
+                            ProblemKind::TypeMismatch(TypeMismatch {
+                                expected: unit_t,
+                                found: ty,
+                            })
+                            .at(self.lower.module, branch_true)
+                            .with((self.table.unreachable(), unit_t))
+                        }
+                        None => Result::new((
+                            self.table
+                                .r#match(maybe_mu, [self.table.construct_unit(), then_branch]),
+                            ty,
+                        )),
+                    }
+                })
             })
         } else {
             // boolean condition

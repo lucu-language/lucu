@@ -8,13 +8,13 @@ fun main with env.Args io.StdIo = handle {
 
     let file ^?cstr[static] = use regions.ref(none)
     ap.command {
-        ap.arg("FILE", true, "some lovely file") { arg ->
-            file^ = some(arg)
-        }
         ap.arg("TEST", false, "argument i have no love for") { arg -> }
         ap.args("TRACEME", "arguments i do love and will trace to stderr") { arg ->
             trace(cstr_to_str(arg))
             traceln
+        }
+        ap.string("file", some("f"), "FILE", "some lovely file") { arg ->
+            file^ = some(arg)
         }
         ap.category("some lovely flags") {
             ap.flag("help", some("h"), "print out this message") {

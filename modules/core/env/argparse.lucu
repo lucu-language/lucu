@@ -35,6 +35,13 @@ fun eprint_usage[r](command str[r]) with CmdArg io.StdIo = {
 effect CmdBuilder = {
     fun category[r](desc str[r], fun body)
     fun flag[r](name str[r], short ?str[r], desc str[r], fun on_flag with CmdArg)
+    fun string[r](
+        name str[r],
+        short ?str[r],
+        field_name str[r],
+        desc str[r],
+        fun on_arg(arg cstr[static]) with CmdArg,
+    )
     fun arg[r](name str[r], required bool, desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
     fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
 }
@@ -56,22 +63,41 @@ fun _starts_flag_short[r](arg cstr[static], name str[r], short ?str[r]) bool = {
     } or _starts_flag(arg, name)
 }
 
-fun command(fun builder with CmdBuilder) with env.Args CallerLocation
+fun command(fun builder with CmdBuilder) with env.Args
     = handle {
         let positional_args_seen ^size = use regions.ref(0)
         for_each[cstr[static],](env.remaining_args) { arg ->
             let positional_arg_index ^size = use regions.ref(0)
             handle {
                 builder
-                trace("got flag: ")
+                trace("got arg: ")
                 trace(cstr_to_str(arg))
                 traceln
-                panic("unknown flag")
+                panic("unknown arg")
             } with CmdBuilder {
                 fun category[r](desc str[r], fun body) = body
                 fun flag[r](name str[r], short ?str[r], desc str[r], fun on_flag with CmdArg) = {
                     if _starts_flag_short(arg, name, short) {
                         on_flag
+                        raise
+                    }
+                }
+                fun string[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(arg cstr[static]) with CmdArg,
+                ) = {
+                    if _starts_flag_short(arg, name, short) {
+                        if env.next_arg { arg ->
+                            on_arg(arg)
+                        } else {
+                            trace("got arg: ")
+                            trace(cstr_to_str(arg))
+                            traceln
+                            panic("no value given")
+                        }
                         raise
                     }
                 }
@@ -108,6 +134,15 @@ fun command(fun builder with CmdBuilder) with env.Args CallerLocation
             handle builder with CmdBuilder {
                 fun category[r](desc str[r], fun body) = body
                 fun flag[r](name str[r], short ?str[r], desc str[r], fun on_flag with CmdArg) = {
+                    has_options^ = true
+                }
+                fun string[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(arg cstr[static]) with CmdArg,
+                ) = {
                     has_options^ = true
                 }
                 fun arg[r](
@@ -159,6 +194,33 @@ fun command(fun builder with CmdBuilder) with env.Args CallerLocation
                     }
                     fmt.write("--")
                     fmt.write(name)
+                    fmt.writeln
+
+                    -- description
+                    fmt.write("         ")
+                    fmt.write(desc)
+                    fmt.writeln
+                }
+                fun string[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(arg cstr[static]) with CmdArg,
+                ) = {
+                    -- name
+                    fmt.write("  ")
+                    if short { short ->
+                        fmt.write("-")
+                        fmt.write(short)
+                        fmt.write(", ")
+                    } else {
+                        fmt.write("    ")
+                    }
+                    fmt.write("--")
+                    fmt.write(name)
+                    fmt.write(" ")
+                    fmt.write(field_name)
                     fmt.writeln
 
                     -- description

@@ -114,6 +114,8 @@ pub enum Callable {
     PredicateOp { ty: mu::Type, op: ast::PredicateOp },
     /// (a x a) -> a
     MathOp { ty: mu::Type, op: ast::MathOp },
+    /// ((() -> Bool) x (() -> Bool)) -> Bool
+    LogicOp { op: ast::LogicOp },
     // TODO: inline assembly
     /// (UPtr x UPtr x UPtr x ...) -> UPtr
     Syscall { args: u8 },
@@ -187,6 +189,11 @@ impl mu::Typed for Callable {
             Callable::UnOp { ty, .. } => mt.function(mt.insert_tuple([ty]), ty),
             Callable::PredicateOp { ty, .. } => mt.function(mt.insert_tuple([ty, ty]), mt.bool()),
             Callable::MathOp { ty, .. } => mt.function(mt.insert_tuple([ty, ty]), ty),
+            Callable::LogicOp { .. } => {
+                let bool = mt.bool();
+                let to_bool = mt.function(mt.insert_tuple([]), bool);
+                mt.function(mt.insert_tuple([to_bool, to_bool]), bool)
+            }
             Callable::Syscall { args } => {
                 let uptr = mt.base(Base::ADDR);
                 mt.function(

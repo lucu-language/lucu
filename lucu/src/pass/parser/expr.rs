@@ -119,7 +119,29 @@ impl<'a> Parser<'a> {
 
     fn expression_pipe(&mut self, allow_lambda: bool) -> Expr {
         // TODO: pipe operator
-        self.expression_equality(allow_lambda)
+        self.expression_or(allow_lambda)
+    }
+
+    fn expression_or(&mut self, allow_lambda: bool) -> Expr {
+        self.expression_left_recurse(
+            &|p| p.expression_and(allow_lambda),
+            &|t| match t {
+                TokenEnum::Keyword(Keyword::Or) => Some(ast::LogicOp::Or),
+                _ => None,
+            },
+            &ast::Expression::LogicOp,
+        )
+    }
+
+    fn expression_and(&mut self, allow_lambda: bool) -> Expr {
+        self.expression_left_recurse(
+            &|p| p.expression_equality(allow_lambda),
+            &|t| match t {
+                TokenEnum::Keyword(Keyword::And) => Some(ast::LogicOp::And),
+                _ => None,
+            },
+            &ast::Expression::LogicOp,
+        )
     }
 
     fn expression_equality(&mut self, allow_lambda: bool) -> Expr {
@@ -363,16 +385,21 @@ impl<'a> Parser<'a> {
                     let tk_if = self.skip();
                     condition <- self.expression(false);
                     branch_true <- match self.next().token {
+                        TokenEnum::Open(Group::Brace) => self
+                            .grouped(Group::Brace, Self::block)
+                            .map(|block| (None, Box::new(ast::Expression::Block(block)))),
                         TokenEnum::Keyword(Keyword::Then) => {
                             let tk_then = self.skip();
                             self.expression(allow_lambda).map(|branch| (Some(tk_then), branch))
                         },
-                        TokenEnum::Open(Group::Brace) => self
-                            .grouped(Group::Brace, Self::block)
-                            .map(|block| (None, Box::new(ast::Expression::Block(block)))),
                         _ => self.error(Expected::IfBlock),
                     };
-                    branch_false <- self.consume_next(Keyword::Else, |p| p.expression(allow_lambda));
+                    branch_false <- self.consume_next(Keyword::Else, |p| match p.next().token {
+                        TokenEnum::Open(Group::Brace) => p
+                            .grouped(Group::Brace, Self::block)
+                            .map(|block| Box::new(ast::Expression::Block(block))),
+                        _ => p.expression(allow_lambda),
+                    });
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });
                 }
             }

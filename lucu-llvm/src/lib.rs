@@ -581,6 +581,57 @@ impl<'ctx> mu_llvm::Builder<'ctx> for Builder<'ctx> {
                 })
                 .into()
             }
+            Callable::LogicOp { op } => {
+                let ty = mu::FunctionType::new(
+                    llvm.table.insert_tuple([]),
+                    llvm.table.bool(),
+                    llvm.table,
+                );
+                let lhs = args
+                    .next()
+                    .unwrap()
+                    .build_call(ty, [], llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+
+                let block_lhs = llvm.builder.get_insert_block().unwrap();
+                let block_rhs = llvm.build_block("");
+                let block_next = llvm.build_block("");
+
+                match op {
+                    ast::LogicOp::And => {
+                        llvm.builder
+                            .build_conditional_branch(lhs, block_rhs, block_next)
+                            .unwrap();
+                    }
+                    ast::LogicOp::Or => {
+                        llvm.builder
+                            .build_conditional_branch(lhs, block_next, block_rhs)
+                            .unwrap();
+                    }
+                }
+
+                llvm.builder.position_at_end(block_rhs);
+                let rhs = args
+                    .next()
+                    .unwrap()
+                    .build_call(ty, [], llvm)
+                    .basic_value(llvm)
+                    .unwrap()
+                    .into_int_value();
+                let block_rhs = llvm.builder.get_insert_block().unwrap();
+                llvm.builder.build_unconditional_branch(block_next).unwrap();
+
+                llvm.builder.position_at_end(block_next);
+                let phi = llvm
+                    .builder
+                    .build_phi(llvm.context.bool_type(), "")
+                    .unwrap();
+                phi.add_incoming(&[(&lhs, block_lhs), (&rhs, block_rhs)]);
+
+                mu_llvm::Value::Data(Some(phi.as_basic_value()))
+            }
             Callable::MathOp { ty, op } => {
                 let lhs = args.next().unwrap().build(llvm).basic_value(llvm);
                 let rhs = args.next().unwrap().build(llvm).basic_value(llvm);

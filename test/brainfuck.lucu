@@ -29,7 +29,7 @@ fun brainfuck[r](program str[r]) with Div io.StdIo = {
             if buf[ptr^]^ == 0 {
                 ip^ += 1
                 let layer ^int = use regions.ref(0)
-                until(and(layer^ == 0, program[ip^]^ == ']')) {
+                until(layer^ == 0 and program[ip^]^ == ']') {
                     let char = program[ip^]^
                     if char == '[' {
                         layer^ += 1
@@ -43,7 +43,7 @@ fun brainfuck[r](program str[r]) with Div io.StdIo = {
             if buf[ptr^]^ != 0 {
                 ip^ -= 1
                 let layer ^int = use regions.ref(0)
-                until(and(layer^ == 0, program[ip^]^ == '[')) {
+                until(layer^ == 0 and program[ip^]^ == '[') {
                     let char = program[ip^]^
                     if char == '[' {
                         layer^ -= 1

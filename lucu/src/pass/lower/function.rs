@@ -1598,6 +1598,21 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     })
                 })
             }
+            ast::Expression::LogicOp(op, lhs, _, rhs) => {
+                let bool = self.lower.tt.insert_type(TypeEnum::Boolean);
+                self.expression(lhs, bool).and_then(|(lhs, _)| {
+                    self.expression(rhs, bool).map(|(rhs, _)| {
+                        let empty = self.table.insert_tuple([]);
+                        (
+                            self.table.call(
+                                mu::Callable::LogicOp { op: *op },
+                                [self.table.lambda(empty, lhs), self.table.lambda(empty, rhs)],
+                            ),
+                            bool,
+                        )
+                    })
+                })
+            }
             ast::Expression::UnOp { op, expr, .. } => {
                 // TODO: check if type valid
                 self.expression(expr, expected).map(|(e, ty)| {

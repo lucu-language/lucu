@@ -494,7 +494,8 @@ impl Ast for ast::Expression {
             ]),
             ast::Expression::AssignOp(_, lhs, _, rhs)
             | ast::Expression::PredicateOp(_, lhs, _, rhs)
-            | ast::Expression::MathOp(_, lhs, _, rhs) => {
+            | ast::Expression::MathOp(_, lhs, _, rhs)
+            | ast::Expression::LogicOp(_, lhs, _, rhs) => {
                 V::Output::combine([visitor.visit(&**lhs), visitor.visit(&**rhs)])
             }
             ast::Expression::Index { array, index } => {

@@ -20,6 +20,12 @@ pub enum MathOp {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+pub enum LogicOp {
+    And,
+    Or,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
 pub enum AssignOp {
     Assign,
     Math(MathOp),
@@ -208,6 +214,7 @@ pub enum Expression {
     AssignOp(AssignOp, Box<Self>, Token, Box<Self>),
     PredicateOp(PredicateOp, Box<Self>, Token, Box<Self>),
     MathOp(MathOp, Box<Self>, Token, Box<Self>),
+    LogicOp(LogicOp, Box<Self>, Token, Box<Self>),
     UnOp {
         op: UnOp,
         tk_op: Token,
@@ -284,7 +291,8 @@ impl HasSpan for Expression {
             }
             Expression::AssignOp(_, lhs, _, rhs)
             | Expression::PredicateOp(_, lhs, _, rhs)
-            | Expression::MathOp(_, lhs, _, rhs) => Span::new(lhs.span().start, rhs.span().end),
+            | Expression::MathOp(_, lhs, _, rhs)
+            | Expression::LogicOp(_, lhs, _, rhs) => Span::new(lhs.span().start, rhs.span().end),
             Expression::UnOp { tk_op, expr, .. } => Span::new(tk_op.span().start, expr.span().end),
             Expression::Dereference { expr, tk_caret } => {
                 Span::new(expr.span().start, tk_caret.span().end)

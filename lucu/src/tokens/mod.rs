@@ -195,6 +195,8 @@ pub enum Keyword {
     Region,
     Thunk,
     Handle,
+    And,
+    Or,
     #[strum(serialize = "raise", serialize = "yeet")]
     Raise,
     Use,

@@ -874,7 +874,8 @@ impl Ast for ast::Expression {
             }
             ast::Expression::AssignOp(_, lhs, tk_op, rhs)
             | ast::Expression::PredicateOp(_, lhs, tk_op, rhs)
-            | ast::Expression::MathOp(_, lhs, tk_op, rhs) => {
+            | ast::Expression::MathOp(_, lhs, tk_op, rhs)
+            | ast::Expression::LogicOp(_, lhs, tk_op, rhs) => {
                 lhs.push_nodes(nodes);
                 nodes.space();
                 nodes.token(*tk_op);

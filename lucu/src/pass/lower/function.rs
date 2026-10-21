@@ -1405,18 +1405,20 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 };
                 let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
                 let sig_val = self.lower.tt[member.signature].clone();
+                // TODO: if we have dependent kinds these need to be substituted too
+                let type_params = sig_val
+                    .type_params
+                    .map(|params| params.iter().copied().skip(args.len()).collect());
+                let arity =
+                    type_params.as_deref().map(<[_]>::len).unwrap_or(0) + sig_val.implicit_regions;
                 let partial = self
                     .lower
                     .tt
                     .insert_function_signature(FunctionSignatureValue {
-                        // TODO: if we have dependent kinds these need to be substituted too
-                        type_params: sig_val
-                            .type_params
-                            .map(|params| params.iter().copied().skip(args.len()).collect())
-                            .filter(|params: &Arc<[Kind]>| params.len() > 0),
+                        type_params,
                         implicit_regions: sig_val.implicit_regions,
-                        params: sig_val.params.subst(self.lower.tt, 0, args),
-                        thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
+                        params: sig_val.params.subst(self.lower.tt, arity, args),
+                        thunk: sig_val.thunk.subst(self.lower.tt, arity, args),
                     });
                 problems
                     .append(self.handler_function(partial, &item.module, member.span, decl, def))
@@ -2268,17 +2270,20 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let args: &[GenericArgument] = item.apply.as_ref().map_or(&[], |args| &**args);
                 let members = decl.members.iter().map(|member| {
                     let sig_val = self.lower.tt[member.signature].clone();
+                    // TODO: if we have dependent kinds these need to be substituted too
+                    let type_params = sig_val
+                        .type_params
+                        .map(|params| params.iter().copied().skip(args.len()).collect());
+                    let arity = type_params.as_deref().map(<[_]>::len).unwrap_or(0)
+                        + sig_val.implicit_regions;
                     let partial = self
                         .lower
                         .tt
                         .insert_function_signature(FunctionSignatureValue {
-                            // TODO: if we have dependent kinds these need to be substituted too
-                            type_params: sig_val
-                                .type_params
-                                .map(|params| params.iter().copied().skip(args.len()).collect()),
+                            type_params,
                             implicit_regions: sig_val.implicit_regions,
-                            params: sig_val.params.subst(self.lower.tt, 0, args),
-                            thunk: sig_val.thunk.subst(self.lower.tt, 0, args),
+                            params: sig_val.params.subst(self.lower.tt, arity, args),
+                            thunk: sig_val.thunk.subst(self.lower.tt, arity, args),
                         });
                     self.table
                         .insert_type(mu::TypeEnum::Function(self.function_type(partial, None)))

@@ -1,0 +1,19 @@
+import "builtin:regions"
+
+effect Parse[T] = {
+    fun from_str[r](s str[r]) T with Fail
+}
+
+handle Parse[int] {
+    fun from_str[r](s str[r]) int with Fail = {
+        let out = use regions.ref(0)
+        let negative = s[0]^ == '-'
+        for(if negative then 1 else 0, len(s)) { i ->
+            let char = s[i]^
+            if char < '0' or char > '9' then fail
+            out^ *= 10
+            out^ += #ext (char - '0')
+        }
+        if negative then -out^ else out^
+    }
+}

@@ -1,0 +1,54 @@
+import "core:io"
+import "core:parse"
+import "builtin:regions"
+
+const DIAL_START int = 50
+const DIAL_SIZE int = 100
+
+fun rotate(dial int, offset int) int = {
+    let new_dial = (dial + offset) % DIAL_SIZE
+    if new_dial < 0 {
+        new_dial + DIAL_SIZE
+    } else {
+        new_dial
+    }
+}
+
+fun main with io.StdIo Div = {
+    use io.stdin
+
+    let line_buf ^[]i8 = use regions.alloca(10)
+    let dial ^int = use regions.ref(DIAL_START)
+    let password_part1 ^int = use regions.ref(0)
+    let password_part2 ^int = use regions.ref(0)
+
+    handle try loop {
+        let read = io.read_line(line_buf)
+        if read < 3 then raise
+
+        let leftwards = line_buf[0]^ == 'L'
+        let num int = parse.from_str(line_buf[1..read - 1])
+
+        let dial_increasing = if leftwards then (DIAL_SIZE - dial^) % DIAL_SIZE else dial^
+        let increased = dial_increasing + num
+        let past_zero = increased / DIAL_SIZE
+        password_part2^ += past_zero
+
+        dial^ = rotate(dial^, if leftwards then -num else num)
+        if dial^ == 0 then password_part1^ += 1
+
+        -- trace_int(dial^)
+        -- trace(" ")
+        -- trace_int(password_part1^)
+        -- trace(" ")
+        -- trace_int(password_part2^)
+        -- traceln
+    }
+
+    io.print("Part 1: ")
+    io.print_int(password_part1^)
+    io.println
+    io.print("Part 2: ")
+    io.print_int(password_part2^)
+    io.println
+}

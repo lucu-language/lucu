@@ -92,11 +92,11 @@ fun traceln = {
 }
 
 fun _show_int[#write r](n int, buf ^@r [21]i8) ^@r []i8 = {
-    let remaining = use regions.ref(abs(n))
+    let remaining = use regions.ref(if n < 0 then n else -n)
 
     let start size = handle {
         for(21, 1) { current ->
-            buf[current]^ = '0' + #trunc (remaining^ % 10)
+            buf[current]^ = '0' + #trunc -(remaining^ % 10)
             remaining^ /= 10
             if remaining^ == 0 {
                 yeet current

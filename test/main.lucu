@@ -2,7 +2,7 @@ import "core:io"
 import "core:env"
 import "core:random"
 
-import "main:aoc/2025/day1" main
+import "main:argparse" main
 
 fun main with World Div io.StdIo env.Args env.Environ random.Rng = #inline {
     main.main

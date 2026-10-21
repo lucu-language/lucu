@@ -7,6 +7,7 @@ fun main with env.Args io.StdIo = handle {
     env.skip_arg
 
     let file ^?cstr[static] = use regions.ref(none)
+    let love ^int = use regions.ref(0)
     ap.command {
         ap.arg("TEST", false, "argument i have no love for") { arg -> }
         ap.args("TRACEME", "arguments i do love and will trace to stderr") { arg ->
@@ -15,6 +16,9 @@ fun main with env.Args io.StdIo = handle {
         }
         ap.string("file", some("f"), "FILE", "some lovely file") { arg ->
             file^ = some(arg)
+        }
+        ap.integer("love", some("l"), "AMOUNT", "how much love do we give the file") { arg ->
+            love^ = arg
         }
         ap.category("some lovely flags") {
             ap.flag("help", some("h"), "print out this message") {
@@ -31,6 +35,9 @@ fun main with env.Args io.StdIo = handle {
     if file^ { file ->
         io.print("file: ")
         io.print(cstr_to_str(file))
+        io.println
+        io.print("love: ")
+        io.print_int(love^)
         io.println
     } else {
         io.print("./out --help")

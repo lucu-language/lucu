@@ -10,10 +10,30 @@ handle Parse[int] {
         let negative = s[0]^ == '-'
         for(if negative then 1 else 0, len(s)) { i ->
             let char = s[i]^
-            if char < '0' or char > '9' then fail
-            out^ *= 10
-            out^ += #ext (char - '0')
+            if char != '_' {
+                if char < '0' or char > '9' then fail
+                let old = out^
+                out^ *= 10
+                out^ -= #ext (char - '0')
+                -- check for overflow
+                if out^ > old then fail
+            }
         }
-        if negative then -out^ else out^
+        if negative then out^ else {
+            -- FIXME: fail if out^ is the minimum integer
+            -out^
+        }
+    }
+}
+
+handle Parse[bool] {
+    fun from_str[r](s str[r]) bool with Fail = {
+        if str_eq(s, "true") {
+            true
+        } else if str_eq(s, "false") {
+            false
+        } else {
+            fail
+        }
     }
 }

@@ -1408,7 +1408,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 // TODO: if we have dependent kinds these need to be substituted too
                 let type_params = sig_val
                     .type_params
-                    .map(|params| params.iter().copied().skip(args.len()).collect());
+                    .map(|params| params.iter().copied().skip(args.len()).collect())
+                    .filter(|params: &Arc<[Kind]>| params.len() > 0);
                 let arity =
                     type_params.as_deref().map(<[_]>::len).unwrap_or(0) + sig_val.implicit_regions;
                 let partial = self
@@ -2273,7 +2274,8 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     // TODO: if we have dependent kinds these need to be substituted too
                     let type_params = sig_val
                         .type_params
-                        .map(|params| params.iter().copied().skip(args.len()).collect());
+                        .map(|params| params.iter().copied().skip(args.len()).collect())
+                        .filter(|params: &Arc<[Kind]>| params.len() > 0);
                     let arity = type_params.as_deref().map(<[_]>::len).unwrap_or(0)
                         + sig_val.implicit_regions;
                     let partial = self

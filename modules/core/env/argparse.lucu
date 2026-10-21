@@ -2,6 +2,7 @@ import "builtin:regions"
 import "core:env"
 import "core:io"
 import "core:fmt"
+import "core:parse"
 
 fun subcommand[r](cmd str[r]) bool with env.Args = {
     if env.peek_arg { arg ->
@@ -40,10 +41,17 @@ effect CmdBuilder = {
         short ?str[r],
         field_name str[r],
         desc str[r],
-        fun on_arg(arg cstr[static]) with CmdArg,
+        fun on_arg(val cstr[static]) with CmdArg,
     )
-    fun arg[r](name str[r], required bool, desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
-    fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg)
+    fun integer[r](
+        name str[r],
+        short ?str[r],
+        field_name str[r],
+        desc str[r],
+        fun on_arg(val int) with CmdArg,
+    )
+    fun arg[r](name str[r], required bool, desc str[r], fun on_arg(val cstr[static]) with CmdArg)
+    fun args[r](name str[r], desc str[r], fun on_arg(val cstr[static]) with CmdArg)
 }
 
 fun _is_flag(arg cstr[static]) bool = arg[0]^ == '-'
@@ -87,11 +95,39 @@ fun command(fun builder with CmdBuilder) with env.Args
                     short ?str[r],
                     field_name str[r],
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
                 ) = {
                     if _starts_flag_short(arg, name, short) {
-                        if env.next_arg { arg ->
-                            on_arg(arg)
+                        if env.next_arg { val ->
+                            on_arg(val)
+                        } else {
+                            trace("got arg: ")
+                            trace(cstr_to_str(arg))
+                            traceln
+                            panic("no value given")
+                        }
+                        raise
+                    }
+                }
+                fun integer[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(val int) with CmdArg,
+                ) = {
+                    if _starts_flag_short(arg, name, short) {
+                        if env.next_arg { val ->
+                            let num int = try_or(parse.from_str(cstr_to_str(val))) {
+                                trace("got arg: ")
+                                trace(cstr_to_str(arg))
+                                traceln
+                                trace("got value: ")
+                                trace(cstr_to_str(val))
+                                traceln
+                                panic("value not an integer")
+                            }
+                            on_arg(num)
                         } else {
                             trace("got arg: ")
                             trace(cstr_to_str(arg))
@@ -105,7 +141,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                     name str[r],
                     required bool,
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
                 ) = {
                     if !_is_flag(arg) and positional_arg_index^ == positional_args_seen^ {
                         on_arg(arg)
@@ -113,7 +149,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                     }
                     positional_arg_index^ += 1
                 }
-                fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg) = {
+                fun args[r](name str[r], desc str[r], fun on_arg(val cstr[static]) with CmdArg) = {
                     if !_is_flag(arg) and positional_arg_index^ <= positional_args_seen^ {
                         on_arg(arg)
                         raise
@@ -141,7 +177,16 @@ fun command(fun builder with CmdBuilder) with env.Args
                     short ?str[r],
                     field_name str[r],
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
+                ) = {
+                    has_options^ = true
+                }
+                fun integer[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(val int) with CmdArg,
                 ) = {
                     has_options^ = true
                 }
@@ -149,7 +194,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                     name str[r],
                     required bool,
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
                 ) = {
                     fmt.write(" ")
                     if !required {
@@ -160,7 +205,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                         fmt.write("]")
                     }
                 }
-                fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg) = {
+                fun args[r](name str[r], desc str[r], fun on_arg(val cstr[static]) with CmdArg) = {
                     fmt.write(" [")
                     fmt.write(name)
                     fmt.write("...]")
@@ -206,7 +251,34 @@ fun command(fun builder with CmdBuilder) with env.Args
                     short ?str[r],
                     field_name str[r],
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
+                ) = {
+                    -- name
+                    fmt.write("  ")
+                    if short { short ->
+                        fmt.write("-")
+                        fmt.write(short)
+                        fmt.write(", ")
+                    } else {
+                        fmt.write("    ")
+                    }
+                    fmt.write("--")
+                    fmt.write(name)
+                    fmt.write(" ")
+                    fmt.write(field_name)
+                    fmt.writeln
+
+                    -- description
+                    fmt.write("         ")
+                    fmt.write(desc)
+                    fmt.writeln
+                }
+                fun integer[r](
+                    name str[r],
+                    short ?str[r],
+                    field_name str[r],
+                    desc str[r],
+                    fun on_arg(val int) with CmdArg,
                 ) = {
                     -- name
                     fmt.write("  ")
@@ -232,7 +304,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                     name str[r],
                     required bool,
                     desc str[r],
-                    fun on_arg(arg cstr[static]) with CmdArg,
+                    fun on_arg(val cstr[static]) with CmdArg,
                 ) = {
                     -- name
                     fmt.write("       ")
@@ -252,7 +324,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                     fmt.write(desc)
                     fmt.writeln
                 }
-                fun args[r](name str[r], desc str[r], fun on_arg(arg cstr[static]) with CmdArg) = {
+                fun args[r](name str[r], desc str[r], fun on_arg(val cstr[static]) with CmdArg) = {
                     -- name
                     fmt.write("       [")
                     fmt.write(name)

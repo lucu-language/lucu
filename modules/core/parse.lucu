@@ -1,4 +1,5 @@
 import "builtin:regions"
+import "builtin:types"
 
 effect Parse[T] = {
     fun from_str[r](s str[r]) T with Fail
@@ -20,7 +21,7 @@ handle Parse[int] {
             }
         }
         if negative then out^ else {
-            -- FIXME: fail if out^ is the minimum integer
+            if out^ == types.INT_MIN then fail
             -out^
         }
     }

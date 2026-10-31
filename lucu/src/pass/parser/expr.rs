@@ -4,7 +4,7 @@ use crate::ast::{self, LambdaParameter};
 use crate::error::Result;
 use crate::pass::parser::Parser;
 use crate::pass::parser::err::Expected;
-use crate::tokens::{Group, Keyword, Symbol, SymbolAssign, TokenEnum};
+use crate::tokens::{Group, Keyword, Literal, Symbol, SymbolAssign, TokenEnum};
 
 type Expr = Result<Box<ast::Expression>>;
 
@@ -59,7 +59,7 @@ impl<'a> Parser<'a> {
                 m! {
                     let tk_let = self.skip();
                     var <- self.ident();
-                    ty <- self.unless_next(&[TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals))], Self::r#type);
+                    ty <- self.unless_next(&[TokenEnum::Symbol(Symbol::Assign(SymbolAssign::Equals))], |p| p.r#type(Expected::Type));
                     let end = self.last_token_end;
                     tk_equals <- self.consume(Symbol::Assign(SymbolAssign::Equals));
                     match self.next().token {
@@ -239,14 +239,29 @@ impl<'a> Parser<'a> {
                 })
             }
             TokenEnum::Symbol(Symbol::Dash) => {
-                let tk_op = self.skip();
-                self.expression_prefix(allow_lambda).map(|expr| {
-                    Box::new(ast::Expression::UnOp {
-                        op: ast::UnOp::Negate,
-                        tk_op,
-                        expr,
+                if self.tokens.get(1).is_some_and(|t| {
+                    matches!(
+                        t.token,
+                        TokenEnum::Literal(Literal::Zero | Literal::Integer)
+                    )
+                }) {
+                    // negative integer constant
+                    self.integer().map(|i| {
+                        Box::new(ast::Expression::Constant(Box::new(ast::Constant::Integer(
+                            i,
+                        ))))
                     })
-                })
+                } else {
+                    // negation operator
+                    let tk_op = self.skip();
+                    self.expression_prefix(allow_lambda).map(|expr| {
+                        Box::new(ast::Expression::UnOp {
+                            op: ast::UnOp::Negate,
+                            tk_op,
+                            expr,
+                        })
+                    })
+                }
             }
             TokenEnum::Keyword(Keyword::Extend) => {
                 let tk_cast = self.skip();
@@ -432,10 +447,9 @@ impl<'a> Parser<'a> {
                     return Box::new(call.map_or_else(ast::Expression::Path, ast::Expression::Call));
                 }
             }
-            _ if self.starts_constant() => self
+            _ => self
                 .constant(Expected::Expression)
                 .map(|constant| Box::new(ast::Expression::Constant(constant))),
-            _ => self.error(Expected::Expression),
         }
     }
 
@@ -453,7 +467,7 @@ impl<'a> Parser<'a> {
     pub fn lambda_parameter(&mut self) -> Result<ast::LambdaParameter> {
         m! {
             var <- self.ident_or_underscore();
-            ty <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Arrow)], Parser::r#type);
+            ty <- self.unless_next(&[TokenEnum::Symbol(Symbol::Comma), TokenEnum::Symbol(Symbol::Arrow)], |p| p.r#type(Expected::Type));
             return ast::LambdaParameter { var, ty };
         }
     }

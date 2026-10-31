@@ -46,6 +46,11 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn integer(&mut self) -> Result<ast::Integer> {
+        let negative = if self.is_next(Symbol::Dash) {
+            Some(self.skip())
+        } else {
+            None
+        };
         match self.next().token {
             TokenEnum::Literal(Literal::Zero) => Result::new(ast::Integer {
                 token: self.skip(),
@@ -61,6 +66,13 @@ impl<'a> Parser<'a> {
             }
             _ => self.error(Expected::Token(TokenEnum::Literal(Literal::Integer))),
         }
+        .map(|mut value| {
+            if let Some(token) = negative {
+                value.token.0.start = token.0.start;
+                value.value = value.value.wrapping_neg();
+            }
+            value
+        })
     }
     pub fn ident(&mut self) -> Result<ast::Identifier> {
         m! {
@@ -133,7 +145,7 @@ impl<'a> Parser<'a> {
                 m! {
                     let token = self.skip();
                     name <- self.name(false);
-                    ty <- self.r#type();
+                    ty <- self.r#type(Expected::Type);
                     definition <- self.consume_next(Symbol::Assign(SymbolAssign::Equals), Parser::constant_definition);
                     return ast::Item::Constant(token, name, ty, definition);
                 }
@@ -231,7 +243,7 @@ impl<'a> Parser<'a> {
                 Result::new(ast::TypeDefinition::Intrinsic(self.skip()))
             }
             TokenEnum::Keyword(Keyword::Struct) => self.r#struct().map(ast::TypeDefinition::Struct),
-            _ => self.r#type().map(ast::TypeDefinition::Type),
+            _ => self.r#type(Expected::Type).map(ast::TypeDefinition::Type),
         }
     }
     pub fn path_origin(&mut self) -> Result<ast::PathOrigin> {
@@ -273,7 +285,6 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn generic_argument(&mut self) -> Result<ast::GenericArgument> {
-        // TODO: array constants
         match self.next().token {
             TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
@@ -284,13 +295,13 @@ impl<'a> Parser<'a> {
             }
             _ if self.starts_type() => {
                 m! {
-                    ty <- self.r#type();
+                    ty <- self.r#type(Expected::GenericArgument);
                     effects <- self.when_next(Keyword::With, Parser::with_effects);
                     return ast::GenericArgument::Type(ty, effects);
                 }
             }
             _ if self.starts_constant() => self
-                .constant(Expected::Constant)
+                .constant(Expected::GenericArgument)
                 .map(ast::GenericArgument::Constant),
             _ => self.error(Expected::GenericArgument),
         }
@@ -298,7 +309,10 @@ impl<'a> Parser<'a> {
     fn starts_constant(&self) -> bool {
         matches!(
             self.next().token,
-            TokenEnum::Identifier | TokenEnum::Underscore | TokenEnum::Literal(_)
+            TokenEnum::Identifier
+                | TokenEnum::Underscore
+                | TokenEnum::Literal(_)
+                | TokenEnum::Symbol(Symbol::Dash)
         )
     }
     fn starts_type(&self) -> bool {
@@ -362,10 +376,12 @@ impl<'a> Parser<'a> {
         }
     }
     pub fn constant(&mut self, expected: Expected) -> Result<Box<ast::Constant>> {
+        // TODO: array constants
         match self.next().token {
             TokenEnum::Identifier | TokenEnum::Underscore => {
                 self.path(false).map(ast::Constant::Path)
             }
+            TokenEnum::Symbol(Symbol::Dash) => self.integer().map(ast::Constant::Integer),
             TokenEnum::Literal(l) => match l {
                 Literal::String => self.string().map(ast::Constant::String),
                 Literal::Character => self.character().map(ast::Constant::Character),
@@ -376,14 +392,14 @@ impl<'a> Parser<'a> {
         }
         .map(Box::new)
     }
-    pub fn r#type(&mut self) -> Result<Box<ast::Type>> {
+    pub fn r#type(&mut self, expected: Expected) -> Result<Box<ast::Type>> {
         match self.next().token {
             TokenEnum::Identifier | TokenEnum::Underscore => self.path(false).map(ast::Type::Path),
             TokenEnum::Symbol(Symbol::Question) => {
                 // Maybe
                 m! {
                     let maybe = self.skip();
-                    inner <- self.r#type();
+                    inner <- self.r#type(Expected::Type);
                     return ast::Type::Maybe(maybe, inner);
                 }
             }
@@ -392,7 +408,7 @@ impl<'a> Parser<'a> {
                 m! {
                     let pointer = self.skip();
                     region <- self.when(Parser::starts_pointer_region, Parser::pointer_region);
-                    inner <- self.r#type();
+                    inner <- self.r#type(Expected::Type);
                     return ast::Type::Pointer(pointer, region, inner);
                 }
             }
@@ -400,11 +416,11 @@ impl<'a> Parser<'a> {
                 // Array
                 m! {
                     properties <- self.grouped(Group::Bracket, Parser::array_properties);
-                    inner <- self.r#type();
+                    inner <- self.r#type(Expected::Type);
                     return ast::Type::Array(properties, inner);
                 }
             }
-            _ => self.error(Expected::Type),
+            _ => self.error(expected),
         }
         .map(Box::new)
     }
@@ -418,7 +434,7 @@ impl<'a> Parser<'a> {
     pub fn struct_member(&mut self) -> Result<ast::StructMember> {
         m! {
             name <- self.ident();
-            ty <- self.r#type();
+            ty <- self.r#type(Expected::Type);
             return ast::StructMember::Data(name, ty);
         }
     }
@@ -430,7 +446,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Identifier | TokenEnum::Underscore => {
                 m! {
                     name <- self.ident_or_underscore();
-                    ty <- self.r#type();
+                    ty <- self.r#type(Expected::Type);
                     return ast::Parameter::Data(name, ty);
                 }
             }
@@ -457,13 +473,7 @@ impl<'a> Parser<'a> {
                 self.path(false).map(ast::Returns::Path)
             }
             TokenEnum::Symbol(Symbol::Bang) => Result::new(ast::Returns::Never(self.skip())),
-            _ => {
-                if self.starts_type() {
-                    self.r#type().map(ast::Returns::Type)
-                } else {
-                    self.error(Expected::Returns)
-                }
-            }
+            _ => self.r#type(Expected::Returns).map(ast::Returns::Type),
         }
     }
     pub fn name(&mut self, underscore: bool) -> Result<ast::Name> {
@@ -516,13 +526,7 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Effect) => Result::new(ast::Kind::Effect(self.skip())),
             TokenEnum::Keyword(Keyword::Region) => Result::new(ast::Kind::Region(self.skip())),
             TokenEnum::Keyword(Keyword::Thunk) => Result::new(ast::Kind::Thunk(self.skip())),
-            _ => {
-                if self.starts_type() {
-                    self.r#type().map(ast::Kind::Constant)
-                } else {
-                    self.error(Expected::Kind)
-                }
-            }
+            _ => self.r#type(Expected::Kind).map(ast::Kind::Constant),
         }
     }
 

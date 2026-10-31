@@ -1,22 +1,57 @@
 -- integer types
-
 type u8 = #intrinsic
 type u16 = #intrinsic
 type u32 = #intrinsic
 type u64 = #intrinsic
 
+const U8_MAX u8 = 255
+const U16_MAX u16 = 65535
+const U32_MAX u32 = 4294967295
+const U64_MAX u64 = 18446744073709551615
+
 type uint = #intrinsic
 type uaddr = #intrinsic
 type usize = #intrinsic
+
+fun UINT_MAX uint = {
+    let i int = -1
+    #transmute i
+}
+
+fun UADDR_MAX uaddr = {
+    let i addr = -1
+    #transmute i
+}
+
+fun USIZE_MAX usize = {
+    let i size = -1
+    #transmute i
+}
 
 type i8 = #intrinsic
 type i16 = #intrinsic
 type i32 = #intrinsic
 type i64 = #intrinsic
 
+const I8_MAX i8 = 127
+const I8_MIN i8 = -128
+const I16_MAX i16 = 32767
+const I16_MIN i16 = -32768
+const I32_MAX i32 = 2147483647
+const I32_MIN i32 = -2147483648
+const I64_MAX i64 = 9223372036854775807
+const I64_MIN i64 = -9223372036854775808
+
 type int = #intrinsic
 type addr = #intrinsic
 type size = #intrinsic
+
+fun INT_MAX int = #transmute (UINT_MAX / 2)
+fun INT_MIN int = -INT_MAX - 1
+fun ADDR_MAX addr = #transmute (UADDR_MAX / 2)
+fun ADDR_MIN addr = -ADDR_MIN - 1
+fun SIZE_MAX size = #transmute (USIZE_MAX / 2)
+fun SIZE_MIN size = -SIZE_MIN - 1
 
 -- other types
 

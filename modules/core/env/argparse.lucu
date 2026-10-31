@@ -125,7 +125,7 @@ fun command(fun builder with CmdBuilder) with env.Args
                                 trace("got value: ")
                                 trace(cstr_to_str(val))
                                 traceln
-                                panic("value not an integer")
+                                panic("value not an integer within bounds")
                             }
                             on_arg(num)
                         } else {

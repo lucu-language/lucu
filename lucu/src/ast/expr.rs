@@ -187,7 +187,10 @@ pub enum Expression {
         tk_dot: Token,
         rhs: Identifier,
     },
-    Block(Grouped<Block>),
+    Block {
+        type_params: Option<Grouped<Separated<Identifier>>>,
+        block: Grouped<Block>,
+    },
     Enclosed(Grouped<Box<Self>>),
     Let {
         tk_let: Token,
@@ -234,6 +237,7 @@ pub enum Expression {
     Use {
         params: Option<(Token, Separated<LambdaParameter>, Token)>,
         tk_use: Token,
+        type_params: Option<Grouped<Separated<Identifier>>>,
         call: Call,
         tk_newline: Token,
         block: Separated<Box<Self>>,
@@ -268,7 +272,13 @@ impl HasSpan for Expression {
     fn span(&self) -> Span {
         match self {
             Expression::Constant(c) => c.span(),
-            Expression::Block(group) => group.span(),
+            Expression::Block { type_params, block } => {
+                if let Some(type_params) = type_params {
+                    Span::new(type_params.span().start, block.span().end)
+                } else {
+                    block.span()
+                }
+            }
             Expression::Enclosed(group) => group.span(),
             Expression::Uninit(token) => token.span(),
             Expression::Let { tk_let, value, .. } => {

@@ -157,7 +157,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                             let decl = self.with_name(
                                 0,
                                 self.tt[kind].params.as_ref(),
-                                name.generics.as_ref(),
+                                name.generics
+                                    .as_ref()
+                                    .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                                 |l| {
                                     problems.append(l.region(path)).map(|region| {
                                         let item = NamedItemDecl::Alias(kind, Term::Region(region));
@@ -196,7 +198,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                             let decl = self.with_name(
                                 0,
                                 self.tt[kind].params.as_ref(),
-                                name.generics.as_ref(),
+                                name.generics
+                                    .as_ref()
+                                    .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                                 |l| {
                                     let ty = problems.append(l.r#type(ast, false));
                                     if let Some(ty) = ty {
@@ -255,7 +259,10 @@ impl<'a, 'b> Lower<'a, 'b> {
                         let decl = self.with_name(
                             0,
                             self.tt[kind].params.as_ref(),
-                            parent_name.generics.as_ref(),
+                            parent_name
+                                .generics
+                                .as_ref()
+                                .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                             |l| {
                                 let sig = problems.append(l.function_signature(decl, Some(kind)));
                                 if let Some(sig) = sig {
@@ -313,7 +320,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                             let decl = self.with_name(
                                 0,
                                 self.tt[kind].params.as_ref(),
-                                name.generics.as_ref(),
+                                name.generics
+                                    .as_ref()
+                                    .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                                 |l| {
                                     let effects = problems.append(
                                         effects
@@ -365,7 +374,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                             let decl = self.with_name(
                                 0,
                                 self.tt[kind].params.as_ref(),
-                                name.generics.as_ref(),
+                                name.generics
+                                    .as_ref()
+                                    .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                                 |l| {
                                     let constant = problems.append(l.constant(constant, ty));
                                     if let Some((constant, _)) = constant {
@@ -420,7 +431,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                     l.with_name(
                         implicit_regions,
                         type_params.clone().as_ref(),
-                        params.as_ref(),
+                        params
+                            .as_ref()
+                            .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                         |l| {
                             let effect = problems.append(l.effect(&handler.effect));
                             let with_effects = problems.append(
@@ -479,7 +492,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                     self.with_name(
                         0,
                         self.tt[kind].params.as_ref(),
-                        name.generics.as_ref(),
+                        name.generics
+                            .as_ref()
+                            .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                         |l| {
                             let members = problems
                                 .append(

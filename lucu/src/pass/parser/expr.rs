@@ -53,6 +53,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn type_params(&mut self) -> Result<ast::Grouped<ast::Separated<ast::Identifier>>> {
+        self.many_grouped(
+            Group::Bracket,
+            TokenEnum::Symbol(Symbol::Comma),
+            Parser::ident_or_underscore,
+        )
+    }
+
     pub fn statement(&mut self) -> Expr {
         match self.next().token {
             TokenEnum::Keyword(Keyword::Let) => {
@@ -66,12 +74,14 @@ impl<'a> Parser<'a> {
                         // FIXME: allow multiple values
                         TokenEnum::Keyword(Keyword::Use) => m! {
                             let tk_use = self.skip();
+                            type_params <- self.when_next(TokenEnum::Open(Group::Bracket), Parser::type_params);
                             call <- self.call(true);
                             tk_newline <- self.consume(Symbol::Semicolon);
                             block <- self.many(Symbol::Semicolon.into(), Self::statement);
                             return Box::new(ast::Expression::Use {
                                 params: Some((tk_let, ast::Separated { elements: vec![(LambdaParameter { var, ty }, None)], end }, tk_equals)),
                                 tk_use,
+                                type_params,
                                 call,
                                 tk_newline,
                                 block,
@@ -86,12 +96,14 @@ impl<'a> Parser<'a> {
             TokenEnum::Keyword(Keyword::Use) => {
                 m! {
                     let tk_use = self.skip();
+                    type_params <- self.when_next(TokenEnum::Open(Group::Bracket), Parser::type_params);
                     call <- self.call(true);
                     tk_newline <- self.consume(Symbol::Semicolon);
                     block <- self.many(Symbol::Semicolon.into(), Self::statement);
                     return Box::new(ast::Expression::Use {
                         params: None,
                         tk_use,
+                        type_params,
                         call,
                         tk_newline,
                         block,
@@ -364,9 +376,12 @@ impl<'a> Parser<'a> {
             TokenEnum::Open(Group::Parenthesis) => self
                 .grouped(Group::Parenthesis, |p| p.expression(true))
                 .map(|expr| Box::new(ast::Expression::Enclosed(expr))),
-            TokenEnum::Open(Group::Brace) => self
-                .grouped(Group::Brace, Self::block)
-                .map(|block| Box::new(ast::Expression::Block(block))),
+            TokenEnum::Open(Group::Brace) => self.grouped(Group::Brace, Self::block).map(|block| {
+                Box::new(ast::Expression::Block {
+                    type_params: None,
+                    block,
+                })
+            }),
             TokenEnum::Open(Group::Bracket) => self
                 .many_grouped(Group::Bracket, Symbol::Comma.into(), |p| p.expression(true))
                 .map(|exprs| Box::new(ast::Expression::Array(exprs))),
@@ -402,7 +417,7 @@ impl<'a> Parser<'a> {
                     branch_true <- match self.next().token {
                         TokenEnum::Open(Group::Brace) => self
                             .grouped(Group::Brace, Self::block)
-                            .map(|block| (None, Box::new(ast::Expression::Block(block)))),
+                            .map(|block| (None, Box::new(ast::Expression::Block { type_params: None, block }))),
                         TokenEnum::Keyword(Keyword::Then) => {
                             let tk_then = self.skip();
                             self.expression(allow_lambda).map(|branch| (Some(tk_then), branch))
@@ -412,7 +427,7 @@ impl<'a> Parser<'a> {
                     branch_false <- self.consume_next(Keyword::Else, |p| match p.next().token {
                         TokenEnum::Open(Group::Brace) => p
                             .grouped(Group::Brace, Self::block)
-                            .map(|block| Box::new(ast::Expression::Block(block))),
+                            .map(|block| Box::new(ast::Expression::Block { type_params: None, block })),
                         _ => p.expression(allow_lambda),
                     });
                     return Box::new(ast::Expression::If { tk_if, condition, branch_true, branch_false });

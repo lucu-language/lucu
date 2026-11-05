@@ -273,7 +273,7 @@ fn is_heavy(def: &ast::Item) -> bool {
     match def {
         ast::Item::Function(_, def) => def.as_ref().is_some_and(|(_, def)| match def {
             ast::FunctionDefinition::Expression { body, .. } => {
-                matches!(**body, ast::Expression::Block(_))
+                matches!(**body, ast::Expression::Block { .. })
             }
             ast::FunctionDefinition::Intrinsic(_) => false,
         }),
@@ -706,7 +706,7 @@ impl Definition for ast::FunctionDefinition {
     fn placement(&self) -> Placement {
         match self {
             ast::FunctionDefinition::Expression { body, .. }
-                if matches!(**body, ast::Expression::Block(_)) =>
+                if matches!(**body, ast::Expression::Block { .. }) =>
             {
                 Placement::Inline
             }
@@ -790,19 +790,32 @@ impl Ast for ast::Expression {
             ast::Expression::Path(path) => {
                 nodes.extra_comma_for_args(true, |nodes| path.push_nodes(nodes));
             }
-            ast::Expression::Block(group) => {
-                nodes.token(group.open);
-                if let Some((ref lambda, tk_arrow)) = group.inner.params {
+            ast::Expression::Block { type_params, block } => {
+                if let Some(type_params) = type_params {
+                    nodes.no_wrap(|nodes| {
+                        nodes.token(type_params.open);
+                        for (i, id) in type_params.inner.iter().enumerate() {
+                            if i > 0 {
+                                nodes.comma();
+                            }
+                            nodes.token(id.token);
+                        }
+                        nodes.token(type_params.close);
+                    });
+                    nodes.space();
+                }
+                nodes.token(block.open);
+                if let Some((ref lambda, tk_arrow)) = block.inner.params {
                     nodes.space();
                     lambda.push_nodes(nodes);
                     nodes.space();
                     nodes.token(tk_arrow);
-                    if group.inner.stmts.elements.is_empty() {
+                    if block.inner.stmts.elements.is_empty() {
                         nodes.space();
                     }
                 }
-                match group.inner.stmts.elements.as_slice() {
-                    [] if !nodes.contains_comments(group.span()) => {}
+                match block.inner.stmts.elements.as_slice() {
+                    [] if !nodes.contains_comments(block.span()) => {}
                     // [(single, _)] if !matches!(**single, ast::Expression::Use { .. }) => {
                     //     nodes.group(false, |nodes| {
                     //         nodes.indent_on_wrap(|nodes| {
@@ -815,18 +828,18 @@ impl Ast for ast::Expression {
                     // }
                     _ => {
                         nodes.indent(|nodes| {
-                            for expr in group.inner.stmts.iter() {
+                            for expr in block.inner.stmts.iter() {
                                 nodes.line();
                                 nodes.comments(expr.span());
                                 nodes.optional_empty_line(expr.span());
                                 expr.push_nodes(nodes);
                             }
                             nodes.line();
-                            nodes.comments(group.close.span())
+                            nodes.comments(block.close.span())
                         });
                     }
                 }
-                nodes.token(group.close);
+                nodes.token(block.close);
             }
             ast::Expression::Enclosed(grouped) => {
                 grouped.push_nodes(nodes);
@@ -903,6 +916,7 @@ impl Ast for ast::Expression {
             ast::Expression::Use {
                 params,
                 tk_use,
+                type_params,
                 call,
                 block,
                 ..
@@ -916,6 +930,19 @@ impl Ast for ast::Expression {
                     nodes.space();
                 }
                 nodes.token(*tk_use);
+                if let Some(type_params) = type_params {
+                    nodes.no_wrap(|nodes| {
+                        nodes.token(type_params.open);
+                        for (i, id) in type_params.inner.iter().enumerate() {
+                            if i > 0 {
+                                nodes.comma();
+                            }
+                            nodes.token(id.token);
+                        }
+                        nodes.token(type_params.close);
+                    });
+                    nodes.space();
+                }
                 nodes.space();
                 call.push_nodes(nodes);
                 for expr in block.iter() {

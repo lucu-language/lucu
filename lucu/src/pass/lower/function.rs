@@ -145,7 +145,8 @@ impl mu::Module {
                 lower.with_name(
                     decl.implicit_regions,
                     decl.type_params.as_ref(),
-                    name.as_ref(),
+                    name.as_ref()
+                        .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                     |lower| {
                         // TODO: support closure
                         // there are a few FIXME's in mu_llvm that need solving to support this
@@ -190,6 +191,7 @@ impl mu::Module {
 
 #[derive(Clone, Copy)]
 struct UseArg<'a> {
+    type_params: Option<&'a ast::Separated<ast::Identifier>>,
     params: Option<&'a ast::Separated<ast::LambdaParameter>>,
     block: &'a ast::Separated<Box<ast::Expression>>,
 }
@@ -238,7 +240,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 let ty = self.function_type(sig, Some(decl));
                 self.abstraction(
                     sig,
-                    decl.name.generics.as_ref(),
+                    decl.name
+                        .generics
+                        .as_ref()
+                        .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                     decl.parameters
                         .iter()
                         .flat_map(|params| params.inner.iter())
@@ -273,7 +278,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         &mut self,
         implicit_regions: usize,
         params: Option<&Arc<[Kind]>>,
-        name: Option<&'a ast::GenericParameters>,
+        name: Option<impl ExactSizeIterator<Item = &'a str>>,
         inner: impl FnOnce(&mut MuLower<'a, '_>) -> T,
     ) -> T {
         let offset = implicit_regions + params.map_or(0, |kinds| kinds.len());
@@ -315,7 +320,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
     fn abstraction(
         &mut self,
         sig: FunctionSignature,
-        name: Option<&'a ast::GenericParameters>,
+        name: Option<impl ExactSizeIterator<Item = &'a str>>,
         params: impl IntoIterator<Item = (&'a ast::Identifier, Option<&'a ast::Type>)>,
         body: impl IntoIterator<IntoIter = impl ExactSizeIterator<Item = &'a ast::Expression>>,
     ) -> Result<(mu::Expression, Type)> {
@@ -750,7 +755,13 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             }) {
                                 todo!("error: no support for generics yet")
                             }
-                            let e = if let ast::Expression::Block(block) = arg {
+                            let e = if let ast::Expression::Block { type_params, block } = arg {
+                                if let Some(type_params) = type_params
+                                    && sig_val.type_params.as_deref().map(<[_]>::len)
+                                        != Some(type_params.inner.elements.len())
+                                {
+                                    todo!("error")
+                                }
                                 if block
                                     .inner
                                     .params
@@ -762,7 +773,9 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                                 }
                                 self.abstraction(
                                     sig,
-                                    None,
+                                    type_params
+                                        .as_ref()
+                                        .map(|g| g.inner.iter().map(|i| i.as_str())),
                                     block
                                         .inner
                                         .params
@@ -774,7 +787,7 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                             } else if sig_val.params.is_some() {
                                 todo!("error")
                             } else {
-                                self.abstraction(sig, None, [], [arg])
+                                self.abstraction(sig, Option::<iter::Empty<_>>::None, [], [arg])
                             };
                             (
                                 problems
@@ -815,28 +828,23 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     }) {
                         todo!("error: no support for generics yet")
                     }
+                    if let Some(type_params) = arg.type_params
+                        && mono_sig_val.type_params.as_deref().map(<[_]>::len)
+                            != Some(type_params.elements.len())
+                    {
+                        todo!("error")
+                    }
                     if arg.params.map(|params| params.elements.len())
                         != mono_sig_val.params.as_ref().map(|params| params.len())
                     {
                         todo!("error")
                     }
 
-                    let mono_param = sig_mono_val
-                        .params
-                        .as_ref()
-                        .unwrap()
-                        .last()
-                        .copied()
-                        .unwrap();
-                    let FunctionParameter::Lambda(mono_sig) = mono_param else {
-                        panic!()
-                    };
-
                     let (user_arg, user_returns) = problems
                         .append(
                             self.abstraction(
                                 mono_sig,
-                                None,
+                                arg.type_params.map(|g| g.iter().map(|i| i.as_str())),
                                 arg.params
                                     .into_iter()
                                     .flat_map(|lambda| lambda.iter())
@@ -1342,7 +1350,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                 match def {
                     ast::FunctionDefinition::Expression { body, .. } => self.abstraction(
                         user_sig,
-                        decl.name.generics.as_ref(),
+                        decl.name
+                            .generics
+                            .as_ref()
+                            .map(|g| g.inner.iter().map(|p| p.ident().as_str())),
                         decl.parameters
                             .iter()
                             .flat_map(|params| params.inner.iter())
@@ -1479,7 +1490,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
                     })
                 }
             }
-            ast::Expression::Block(block) => {
+            ast::Expression::Block { type_params, block } => {
+                if let Some(_type_params) = type_params {
+                    todo!("error")
+                }
                 if let Some(_params) = &block.inner.params {
                     todo!("error")
                 }
@@ -1897,12 +1911,14 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
             ast::Expression::Call(call) => self.call(Either::Left(call), None, expected),
             ast::Expression::Use {
                 params,
+                type_params,
                 call,
                 block,
                 ..
             } => self.call(
                 Either::Left(call),
                 Some(UseArg {
+                    type_params: type_params.as_ref().map(|g| &g.inner),
                     params: params.as_ref().map(|(_, params, _)| params),
                     block,
                 }),
@@ -1987,7 +2003,10 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         branch_true: &'a ast::Expression,
         branch_false: Option<&'a ast::Expression>,
     ) -> Result<(mu::Expression, Type)> {
-        if let ast::Expression::Block(block) = branch_true
+        if let ast::Expression::Block {
+            type_params: None,
+            block,
+        } = branch_true
             && let Some(params) = &block.inner.params
         {
             let [(param, _)] = params.0.elements.as_slice() else {

@@ -457,11 +457,13 @@ impl Ast for ast::Expression {
             ast::Expression::Constant(constant) => visitor.visit(&**constant),
             ast::Expression::Uninit(_) => V::Output::default(),
             ast::Expression::Path(path) => visitor.visit_path(path),
-            ast::Expression::Block(g) => V::Output::combine([
-                visit_option(&g.inner.params, visitor, |v, (params, _)| {
+            ast::Expression::Block { block, .. } => V::Output::combine([
+                visit_option(&block.inner.params, visitor, |v, (params, _)| {
                     visit_vec(&params.elements, v, |v, (t, _)| v.visit(t))
                 }),
-                visit_vec(&g.inner.stmts.elements, visitor, |v, (e, _)| v.visit(&**e)),
+                visit_vec(&block.inner.stmts.elements, visitor, |v, (e, _)| {
+                    v.visit(&**e)
+                }),
             ]),
             ast::Expression::Enclosed(grouped) => visitor.visit(&*grouped.inner),
             ast::Expression::Let { ty, value, .. } => V::Output::combine([

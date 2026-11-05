@@ -90,14 +90,13 @@ impl<'a, 'b> Lower<'a, 'b> {
         }
         inner(&mut lower)
     }
-    fn with_name<T>(&mut self, implicit_regions: usize, params: Option<&Arc<[Kind]>>, name: Option<&'a ast::GenericParameters>, inner: impl FnOnce(&mut Lower<'a, '_>) -> T) -> T {
+    fn with_name<T>(&mut self, implicit_regions: usize, params: Option<&Arc<[Kind]>>, name: Option<impl ExactSizeIterator<Item = &'a str>>, inner: impl FnOnce(&mut Lower<'a, '_>) -> T) -> T {
         match (params, name) {
             (Some(params), Some(generics)) => {
-                assert_eq!(params.len(), generics.inner.elements.len());
+                assert_eq!(params.len(), generics.len());
                 self.with_generics(
                     implicit_regions,
-                    Iterator::zip(generics.inner.iter(), params.iter())
-                        .map(|(ast, &kind)| (ast.ident().as_str(), kind)),
+                    Iterator::zip(generics, params.iter().copied()),
                      inner,
                  )
             }
@@ -855,7 +854,7 @@ impl<'a, 'b> Lower<'a, 'b> {
             l.next_implicit_region = Some(implicit_regions);
             l.implicit_region_offset = 0;
 
-            l.with_name(implicit_regions, type_params.clone().as_ref(), sig.name.generics.as_ref(), |l| m! {
+            l.with_name(implicit_regions, type_params.clone().as_ref(), sig.name.generics.as_ref().map(|g| g.inner.iter().map(|p| p.ident().as_str())), |l| m! {
                 params <- match &sig.parameters {
                     Some(params) => params.inner
                         .iter()

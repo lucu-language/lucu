@@ -322,6 +322,7 @@ impl Type {
 
 impl Expression {
     #[must_use]
+    #[expect(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
     pub fn shift<B>(self, mt: &(impl Table<Base = B> + ?Sized), offset: u32) -> Self {
         use ExpressionEnum as EE;
         mt.push_expression(match mt[self] {

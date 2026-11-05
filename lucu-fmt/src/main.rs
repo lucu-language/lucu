@@ -802,7 +802,6 @@ impl Ast for ast::Expression {
                         }
                         nodes.token(type_params.close);
                     });
-                    nodes.space();
                 }
                 nodes.token(block.open);
                 if let Some((ref lambda, tk_arrow)) = block.inner.params {
@@ -941,7 +940,6 @@ impl Ast for ast::Expression {
                         }
                         nodes.token(type_params.close);
                     });
-                    nodes.space();
                 }
                 nodes.space();
                 call.push_nodes(nodes);

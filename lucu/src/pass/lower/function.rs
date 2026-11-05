@@ -464,14 +464,35 @@ impl<'a, 'scope> MuLower<'a, 'scope> {
         if let ast::PathOrigin::Local(local) = &path.origin
             && let Some((index, ty)) = self.find_named(local.as_str())
         {
-            if let Some(_generics) = &path.generics {
-                todo!("generic local function")
+            if let Some(generics) = &path.generics {
+                let FunctionParameter::Lambda(sig) = ty else {
+                    todo!("error")
+                };
+                let kinds = self.lower.tt[sig].type_params.as_deref();
+                if kinds.map(<[_]>::len) != Some(generics.inner.elements.len()) {
+                    todo!("error")
+                }
+                Iterator::zip(
+                    kinds.iter().copied().flatten().copied(),
+                    generics.inner.iter(),
+                )
+                .map(|(k, a)| self.lower.generic_argument(k, a))
+                .collect::<Result<Box<_>>>()
+                .map(|args| {
+                    let sig_mono = sig.apply_explicit(self.lower.tt, &args);
+                    let mu_ty = self.function_param(FunctionParameter::Lambda(sig_mono));
+                    (
+                        PathValue::Expression(self.table.reference(mu_ty, index)),
+                        PathType::from(FunctionParameter::Lambda(sig_mono)),
+                    )
+                })
+            } else {
+                let mu_ty = self.function_param(ty);
+                Result::new((
+                    PathValue::Expression(self.table.reference(mu_ty, index)),
+                    ty.into(),
+                ))
             }
-            let mu_ty = self.function_param(ty);
-            Result::new((
-                PathValue::Expression(self.table.reference(mu_ty, index)),
-                ty.into(),
-            ))
         } else {
             let (module, name, item) = match self.lower.item_ref(path) {
                 Ok((module, name, item)) => (module, name, item),

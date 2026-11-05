@@ -943,6 +943,17 @@ impl FunctionSignature {
             thunk,
         })
     }
+    pub fn apply_explicit(self, tt: &TypeTable, args: &[GenericArgument]) -> Self {
+        let sig = tt[self].clone();
+        let params = sig.params.subst(tt, sig.implicit_regions, args);
+        let thunk = sig.thunk.subst(tt, sig.implicit_regions, args);
+        tt.insert_function_signature(FunctionSignatureValue {
+            type_params: None,
+            implicit_regions: sig.implicit_regions,
+            params,
+            thunk,
+        })
+    }
     pub fn infer_params(
         self,
         from: &[FunctionParameter],
